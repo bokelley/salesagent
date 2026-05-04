@@ -22,13 +22,13 @@ The advertiser is the GAM `Company(type='ADVERTISER')` row that invoices appear 
 
 | `Account.billing` | Natural key | Why |
 |---|---|---|
-| `operator` (default today) | `(operator, brand.domain, brand.brand_id, sandbox)` | Operator is invoiced. Different agents pulling the same brand share one GAM advertiser — they're all selling into the same operator/brand relationship and the operator's books need one row per brand they're paid for. |
-| `agent` | `(governance_agent, operator, brand.domain, brand.brand_id, sandbox)` | The buyer agent is invoiced. Different agents on the same `(operator, brand)` are different commercial relationships — different rate cards, commissions, audit trails. They MUST be different GAM advertisers so finance can split the books. |
+| `operator` (default today) | `(operator, brand.domain, brand.brand_id, sandbox)` | Operator is invoiced. Different buyer agents pulling the same brand share one GAM advertiser — they're all selling into the same operator/brand relationship and the operator's books need one row per brand they're paid for. |
+| `agent` | `(buyer_agent_principal_id, operator, brand.domain, brand.brand_id, sandbox)` | The buyer agent is invoiced. The buyer agent is the calling principal — `identity.principal_id` from the request's auth chain. Different buyer agents on the same `(operator, brand)` are different commercial relationships — different rate cards, commissions, audit trails. They MUST be different GAM advertisers so finance can split the books. |
 | any with `sandbox=true` | route to a single per-tenant `__sandbox__` advertiser | Sandbox traffic must never bill, never appear in production reports, never count against publisher inventory caps. Keep all sandbox media buys against one synthetic advertiser the salesagent owns. |
 
 **`account_scope` already encodes this** in our schema (`operator | brand | operator_brand | agent` — `models.py:875`). The natural key above maps onto it: agent-billed → `agent` scope, operator-billed → `operator_brand` scope, sandbox → ignore scope, route to sandbox bucket.
 
-**Open question 1:** when `billing=agent` but no `governance_agents` populated on the request, who owns the relationship? Default to the calling principal (`identity.principal_id`) — that's the agent who synced. Document this in the doc; flag in a `BR-RULE-XXX` if AdCP's spec doesn't already cover it.
+**Note on `governance_agents`:** that AdCP field is unrelated — it lists agents with audit/oversight authority over the Account (delegation), not the buyer agent in the billing relationship. The buyer agent for `billing=agent` is unambiguously the calling principal; there's no fallback question to resolve.
 
 ## Lifecycle
 
@@ -146,11 +146,10 @@ Code changes:
 
 ## Open questions
 
-1. **Default agent for `billing=agent` without `governance_agents`** — use `identity.principal_id`? Confirm AdCP spec position; otherwise document as salesagent default.
-2. **GAM dry-run semantics** — does `dry_run=true` on order create produce visible-but-non-serving Orders, or reject at the API? Affects whether sandbox shares the production GAM network or needs its own.
-3. **Cross-agent advertiser sharing on operator-billed accounts** — when two agents sync the same `(operator, brand_domain, brand_id)` with `billing=operator`, do they end up sharing one Account row (current natural key) or get separate AgentAccountAccess rows pointing at one Account? Today it's the latter; confirm that's still right for managed mode.
-4. **Provisioning idempotency** — what happens if the GAM `CompanyService.createCompanies` call succeeds but the salesagent's commit-to-DB fails? On retry we'd duplicate the advertiser. Mitigation: `create_advertiser` always queries existing-by-name first, OR persist intent before the GAM call (`Account.platform_mappings.advertiser_create_pending=true`) and reconcile on retry.
-5. **Manual mapping UX** — the Admin UI's existing GAM advertiser picker shows all advertisers in the network. For large publishers (10k+ advertisers), it needs search. Out of scope here; flag for the Admin UI sprint.
+1. **GAM dry-run semantics** — does `dry_run=true` on order create produce visible-but-non-serving Orders, or reject at the API? Affects whether sandbox shares the production GAM network or needs its own.
+2. **Cross-agent advertiser sharing on operator-billed accounts** — when two buyer agents sync the same `(operator, brand_domain, brand_id)` with `billing=operator`, do they end up sharing one Account row (current natural key) or get separate `AgentAccountAccess` rows pointing at one Account? Today it's the latter; confirm that's still right for managed mode.
+3. **Provisioning idempotency** — what happens if the GAM `CompanyService.createCompanies` call succeeds but the salesagent's commit-to-DB fails? On retry we'd duplicate the advertiser. Mitigation: `create_advertiser` always queries existing-by-name first, OR persist intent before the GAM call (`Account.platform_mappings.advertiser_create_pending=true`) and reconcile on retry.
+4. **Manual mapping UX** — the Admin UI's existing GAM advertiser picker shows all advertisers in the network. For large publishers (10k+ advertisers), it needs search. Out of scope here; flag for the Admin UI sprint.
 
 ## Sprint placement
 
