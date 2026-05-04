@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from adcp import CreativeFilters
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-from adcp.types.generated_poc.creative.list_creatives_request import (
+from adcp.types import ContextObject
+from adcp.types import PaginationRequest
+from adcp.types import (
     Field1 as FieldModel,
 )
-from adcp.types.generated_poc.creative.list_creatives_request import (
+from adcp.types import (
     Sort,
 )
 from fastmcp.server.context import Context
@@ -85,8 +85,8 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
-    from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
+    from adcp.types import PaginationRequest as LibraryPagination
+    from adcp.types import Sort as LibrarySort
 
     from src.core.schemas import ListCreativesRequest
 

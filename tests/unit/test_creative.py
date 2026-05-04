@@ -55,7 +55,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format_id import FormatId as AdcpFormatId
+from adcp.types import FormatId as AdcpFormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError

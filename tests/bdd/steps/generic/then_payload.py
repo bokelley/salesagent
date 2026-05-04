@@ -129,7 +129,7 @@ def then_format_assets(ctx: dict) -> None:
     formats_with_assets = [f for f in formats if hasattr(f, "assets") and f.assets]
     for f in formats_with_assets:
         for a in f.assets:
-            # Assets are typed (Assets, Assets5=video, etc.) — check the asset_id value, not just presence
+            # ImageFormatAsset are typed (ImageFormatAsset, VideoFormatAsset=video, etc.) — check the asset_id value, not just presence
             asset_id = getattr(a, "asset_id", None)
             assert asset_id is not None and str(asset_id), (
                 f"Asset in format '{_fmt_name(f)}' has empty/missing asset_id"

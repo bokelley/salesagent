@@ -9,6 +9,16 @@ After the identity-at-transport-boundary refactor (salesagent-anjp), handlers re
 a pre-resolved identity parameter rather than resolving auth internally.
 """
 
+import pytest
+
+pytest.skip(
+    "Legacy A2A server (a2a-sdk 0.3) is retired by greenfield rebuild. "
+    "Replaced in M2 by adcp.server.serve(transport='a2a') (a2a-sdk 1.0). "
+    "See core/README.md.",
+    allow_module_level=True,
+)
+
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

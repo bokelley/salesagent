@@ -25,10 +25,10 @@ from adcp import PushNotificationConfig
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
 from adcp.types import Error
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.targeting import TargetingOverlay
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from adcp.types.generated_poc.media_buy.package_update import PackageUpdate as UpdatePackage
+from adcp.types import ContextObject
+from adcp.types import TargetingOverlay
+from adcp.types import CreativeAction
+from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError

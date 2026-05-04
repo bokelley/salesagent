@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 from adcp.types.generated_poc.core.format import (
-    Assets5,
+    VideoFormatAsset,
     Assets18,
     Assets19,
     Assets22,
@@ -249,7 +249,7 @@ class TestFormatsAssetTypes:
 
     def test_mixed_individual_and_group_assets(self, integration_db):
         """Covers: T-UC-005-inv4-group — mixed format matches both asset types."""
-        individual = Assets5(item_type="individual", asset_id="hero_video", required=True)
+        individual = VideoFormatAsset(item_type="individual", asset_id="hero_video", required=True)
         group = Assets18(
             item_type="repeatable_group",
             asset_group_id="product_group",

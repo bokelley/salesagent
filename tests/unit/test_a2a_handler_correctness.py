@@ -8,6 +8,16 @@ beads: salesagent-yu73
 """
 
 import pytest
+
+pytest.skip(
+    "Legacy A2A server (a2a-sdk 0.3) is retired by greenfield rebuild. "
+    "Replaced in M2 by adcp.server.serve(transport='a2a') (a2a-sdk 1.0). "
+    "See core/README.md.",
+    allow_module_level=True,
+)
+
+
+import pytest
 from a2a.utils.errors import ServerError
 
 

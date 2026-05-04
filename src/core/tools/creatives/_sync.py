@@ -6,9 +6,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
+from adcp.types import ContextObject
+from adcp.types import CreativeAsset
+from adcp.types import CreativeAction
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW

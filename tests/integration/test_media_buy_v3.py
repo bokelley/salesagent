@@ -561,7 +561,7 @@ class TestGetMediaBuysResponseFields:
         # may be pending_activation (start_date in the future), not active
         all_statuses = [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
         ]
@@ -650,7 +650,7 @@ class TestGetMediaBuysResponseFields:
         # may be pending_activation (start_date in the future), not active
         all_statuses = [
             MediaBuyStatus.active,
-            MediaBuyStatus.pending_activation,
+            MediaBuyStatus.pending_start,
             MediaBuyStatus.completed,
             MediaBuyStatus.paused,
         ]

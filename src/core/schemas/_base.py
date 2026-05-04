@@ -42,9 +42,8 @@ from adcp.types.aliases import (
 from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
+from adcp.types import ContextObject, MediaBuyStatus
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -2103,7 +2102,7 @@ PROPERTY_ERROR_MESSAGES = {
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
 # V3: Property uses property-specific Identifier, not generic Identifier
-from adcp.types.generated_poc.core.property import Identifier as PropertySpecificIdentifier
+from adcp.types import Identifier as PropertySpecificIdentifier
 
 PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
 Property: TypeAlias = LibraryProperty

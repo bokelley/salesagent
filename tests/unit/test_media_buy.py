@@ -3898,7 +3898,7 @@ class TestGetMediaBuysStatusComputation:
             created_at=None,
             updated_at=None,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
         """GMB-ST02: within flight dates -> active.
@@ -3973,7 +3973,7 @@ class TestGetMediaBuysStatusComputation:
             created_at=None,
             updated_at=None,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_activation
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
 
 class TestGetMediaBuysStatusFilter:

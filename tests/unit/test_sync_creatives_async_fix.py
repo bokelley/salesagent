@@ -11,7 +11,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.core.format_id import FormatId
+from adcp.types import FormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.resolved_identity import ResolvedIdentity

@@ -335,7 +335,7 @@ class XandrAdapter(AdServerAdapter):
             # Use V3 consolidated pricing types
             from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
             from adcp.types.generated_poc.core.publisher_property_selector import PublisherPropertySelector1
-            from adcp.types.generated_poc.pricing_options.price_guidance import (
+            from adcp.types import (
                 PriceGuidance as AdCPPriceGuidance,
             )
 

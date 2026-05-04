@@ -9,6 +9,16 @@ Regression prevention: https://github.com/prebid/salesagent/pull/1066
 Beads: salesagent-2yt6
 """
 
+import pytest
+
+pytest.skip(
+    "Legacy A2A server (a2a-sdk 0.3) is retired by greenfield rebuild. "
+    "Replaced in M2 by adcp.server.serve(transport='a2a') (a2a-sdk 1.0). "
+    "See core/README.md.",
+    allow_module_level=True,
+)
+
+
 from unittest.mock import patch
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler

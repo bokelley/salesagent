@@ -8,7 +8,7 @@ Beads: salesagent-55b
 """
 
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.format_id import FormatId
+from adcp.types import FormatId
 
 from src.core.tools.creatives import _build_creative_data
 

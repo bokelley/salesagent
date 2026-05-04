@@ -26,17 +26,16 @@ Usage::
 from __future__ import annotations
 
 import factory
-from adcp.types.generated_poc.core.format import (
-    Assets,
-    Assets5,
-    Assets6,
-    Assets7,
-    Assets8,
-    Assets9,
-    Dimensions,
-    Renders,
+from adcp.types import (
+    AudioFormatAsset,
+    HtmlFormatAsset,
+    ImageFormatAsset,
+    MarkdownFormatAsset,
     Responsive,
+    TextFormatAsset,
+    VideoFormatAsset,
 )
+from adcp.types.generated_poc.core.format import Dimensions, Renders  # not yet on public surface
 
 from src.core.schemas import Format, FormatId
 
@@ -45,23 +44,23 @@ AGENT_URL = "https://creative.adcontextprotocol.org"
 # ── Asset class mapping ──────────────────────────────────────────────
 
 _ASSET_CLASS_MAP = {
-    "image": Assets,
-    "video": Assets5,
-    "audio": Assets6,
-    "text": Assets7,
-    "markdown": Assets8,
-    "html": Assets9,
+    "image": ImageFormatAsset,
+    "video": VideoFormatAsset,
+    "audio": AudioFormatAsset,
+    "text": TextFormatAsset,
+    "markdown": MarkdownFormatAsset,
+    "html": HtmlFormatAsset,
 }
 
 
-def make_asset(asset_type: str, asset_id: str | None = None) -> Assets:
+def make_asset(asset_type: str, asset_id: str | None = None) -> ImageFormatAsset:
     """Create a typed asset object from an asset type string.
 
     >>> a = make_asset("video")
     >>> a.asset_type
     'video'
     """
-    cls = _ASSET_CLASS_MAP.get(asset_type, Assets)
+    cls = _ASSET_CLASS_MAP.get(asset_type, ImageFormatAsset)
     return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 

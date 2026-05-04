@@ -40,8 +40,8 @@ from a2a.utils.errors import ServerError
 from adcp import create_a2a_webhook_payload
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import GeneratedTaskStatus
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from adcp.types import ContextObject
+from adcp.types import CreativeAsset
 from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger

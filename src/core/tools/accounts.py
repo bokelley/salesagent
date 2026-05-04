@@ -19,18 +19,20 @@ import uuid
 from datetime import UTC
 from typing import Any
 
-from adcp.types.generated_poc.account.list_accounts_request import (
+from adcp.types import (
+
     Status as AccountStatus,
+
 )
-from adcp.types.generated_poc.account.sync_accounts_request import (
+from adcp.types import (
     Account as SyncAccountInput,
 )
-from adcp.types.generated_poc.account.sync_accounts_response import (
+from adcp.types import (
     Account as SyncResponseAccount,
 )
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-from adcp.types.generated_poc.core.pagination_response import PaginationResponse
+from adcp.types import ContextObject
+from adcp.types import PaginationRequest
+from adcp.types import PaginationResponse
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
@@ -266,7 +268,7 @@ def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
     Both dict and model inputs are normalized through model_dump(mode="json")
     to ensure consistent comparison (e.g., AnyUrl → str).
     """
-    from adcp.types.generated_poc.core.account import GovernanceAgent
+    from adcp.types import GovernanceAgent
 
     if agents is None:
         return None
@@ -348,7 +350,7 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     """
     from datetime import datetime, timedelta
 
-    from adcp.types.generated_poc.account.sync_accounts_response import Setup
+    from adcp.types import Setup
 
     if mode == "credit_review":
         return Setup(
@@ -369,7 +371,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
     Returns a list of Error objects if invalid, None if valid.
     Reserved TLDs (.test, .invalid, .example, .localhost) are rejected.
     """
-    from adcp.types.generated_poc.core.error import Error
+    from adcp.types import Error
 
     reserved_tlds = {".test", ".invalid", ".example", ".localhost"}
     for tld in reserved_tlds:
@@ -395,7 +397,7 @@ def _check_billing_policy(
     Returns a list of Error objects if rejected, None if accepted.
     Per BR-RULE-059: unsupported billing → BILLING_NOT_SUPPORTED.
     """
-    from adcp.types.generated_poc.core.error import Error
+    from adcp.types import Error
 
     # Read billing policy from tenant configuration (not identity).
     # Both dict and TenantContext expose .get() identically, so no branching needed.

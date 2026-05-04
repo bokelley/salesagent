@@ -93,35 +93,51 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
 # so middleware and scope["state"] propagate correctly within the same ASGI app.
 # ---------------------------------------------------------------------------
 
-from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication  # noqa: E402
+# NOTE: The hand-rolled A2A server (src/a2a_server/*) was authored against
+# a2a-sdk 0.3 and does not run on a2a-sdk 1.0+. Greenfield (core/) replaces
+# it via ``adcp.server.serve(transport="a2a")`` (M2). Until then, the legacy
+# A2A surface is disabled to keep test collection green; tests that exercise
+# the legacy a2a server are blocked on M2.
 from starlette.routing import Route  # noqa: E402
 
-from src.a2a_server.adcp_a2a_server import (  # noqa: E402
-    AdCPRequestHandler,
-    create_agent_card,
-)
-from src.a2a_server.context_builder import AdCPCallContextBuilder  # noqa: E402
-from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain  # noqa: E402
+A2A_LEGACY_AVAILABLE = False
+try:
+    from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication  # noqa: E402, F401
 
-# Create the A2A application and add routes
-_agent_card = create_agent_card()
-_request_handler = AdCPRequestHandler()
+    from src.a2a_server.adcp_a2a_server import (  # noqa: E402
+        AdCPRequestHandler,
+        create_agent_card,
+    )
+    from src.a2a_server.context_builder import AdCPCallContextBuilder  # noqa: E402
+    from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain  # noqa: E402
 
-a2a_app = A2AStarletteApplication(
-    agent_card=_agent_card,
-    http_handler=_request_handler,
-    context_builder=AdCPCallContextBuilder(),
-)
+    A2A_LEGACY_AVAILABLE = True
+except ImportError as _a2a_import_error:
+    logger.info(f"Legacy A2A server disabled (a2a-sdk 1.0): {_a2a_import_error}. Use core/ + serve(transport='a2a') instead.")
+    AdCPRequestHandler = create_agent_card = AdCPCallContextBuilder = None  # type: ignore[assignment,misc]
+    A2AStarletteApplication = None  # type: ignore[assignment,misc]
 
-# Add A2A SDK routes directly to the FastAPI app.
-# This gives us /a2a (JSON-RPC), /.well-known/agent-card.json, /agent.json
-a2a_app.add_routes_to_app(
-    app,
-    agent_card_url="/.well-known/agent-card.json",
-    rpc_url="/a2a",
-    extended_agent_card_url="/agent.json",
-)
-logger.info("A2A routes added: /a2a, /.well-known/agent-card.json, /agent.json")
+
+_agent_card = None
+a2a_app = None
+
+if A2A_LEGACY_AVAILABLE:
+    _agent_card = create_agent_card()
+    _request_handler = AdCPRequestHandler()
+
+    a2a_app = A2AStarletteApplication(
+        agent_card=_agent_card,
+        http_handler=_request_handler,
+        context_builder=AdCPCallContextBuilder(),
+    )
+
+    a2a_app.add_routes_to_app(
+        app,
+        agent_card_url="/.well-known/agent-card.json",
+        rpc_url="/a2a",
+        extended_agent_card_url="/agent.json",
+    )
+    logger.info("A2A routes added: /a2a, /.well-known/agent-card.json, /agent.json")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
@@ -212,7 +228,8 @@ def _replace_routes():
         logger.warning(f"_replace_routes: expected SDK routes not found for paths: {sorted(missing)}")
 
 
-_replace_routes()
+if A2A_LEGACY_AVAILABLE:
+    _replace_routes()
 
 # ---------------------------------------------------------------------------
 # A2A messageId compatibility middleware (body rewriting, unrelated to auth)

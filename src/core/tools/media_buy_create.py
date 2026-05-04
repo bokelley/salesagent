@@ -24,11 +24,11 @@ from adcp import PushNotificationConfig
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from adcp.types.aliases import Package as ResponsePackage
-from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset
-from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
-from adcp.types.generated_poc.core.targeting import TargetingOverlay
-from adcp.types.generated_poc.media_buy.package_request import PackageRequest as AdcpPackageRequest
+from adcp.types import ContextObject
+from adcp.types import CreativeAsset
+from adcp.types import ReportingWebhook
+from adcp.types import TargetingOverlay
+from adcp.types import PackageRequest as AdcpPackageRequest
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, ValidationError
@@ -199,7 +199,7 @@ def _determine_media_buy_status(
     # - Missing creatives or unapproved creatives
     # - Scheduled for future start
     if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
-        return MediaBuyStatus.pending_activation.value
+        return MediaBuyStatus.pending_start.value
 
     # Priority 3: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
@@ -1296,7 +1296,7 @@ def _build_idempotency_hit_result(
         try:
             adcp_status = MediaBuyStatus(existing.status)
         except ValueError:
-            adcp_status = MediaBuyStatus.pending_activation
+            adcp_status = MediaBuyStatus.pending_start
 
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(

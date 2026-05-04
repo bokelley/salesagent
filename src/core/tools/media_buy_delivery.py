@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 from adcp.types import Error, MediaBuyStatus
-from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types import ContextObject
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
@@ -752,7 +752,7 @@ def _get_target_media_buys(
 
     def _to_internal(status: MediaBuyStatus) -> str:
         """Convert AdCP MediaBuyStatus enum to internal status string."""
-        if status == MediaBuyStatus.pending_activation:
+        if status == MediaBuyStatus.pending_start:
             return "ready"
         return status.value
 
