@@ -1015,6 +1015,79 @@ class TestStatusSetupTasks:
             assert items["public_agent_url"]["scope"] == "publisher"
 
 
+class TestStatusProductsBlock:
+    """Sprint 1.8 follow-up — products rollup on the /status response.
+
+    Distinct from packages: one Product fans out to multiple priced
+    packages, so packages.active_count doesn't answer "what is the
+    publisher selling?". Storefront's homepage card reads from this
+    block.
+    """
+
+    @pytest.fixture
+    def managed_tenant(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_status_products")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+        return tid
+
+    def test_products_block_present_with_zero_counts_when_no_products(self, client, auth_headers, managed_tenant):
+        """A freshly-provisioned tenant has no Products → all counters zero."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        invalidate_status_cache(managed_tenant)
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "products" in body
+        assert body["products"] == {"active_count": 0, "draft_count": 0, "archived_count": 0}
+
+    def test_active_products_counted(self, client, auth_headers, managed_tenant, bound_factories):
+        """``archived_at IS NULL`` → ``active_count``."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        ProductFactory(tenant=tenant, product_id="prod_active_1", name="Active 1")
+        ProductFactory(tenant=tenant, product_id="prod_active_2", name="Active 2")
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.get_json()["products"]["active_count"] == 2
+
+    def test_archived_products_split_from_active(self, client, auth_headers, managed_tenant, bound_factories):
+        """``archived_at IS NOT NULL`` → ``archived_count``, not ``active_count``."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        ProductFactory(tenant=tenant, product_id="prod_active", name="Active")
+        archived = ProductFactory(tenant=tenant, product_id="prod_archived", name="Archived")
+        archived.archived_at = datetime.now(UTC)
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        body = resp.get_json()["products"]
+        assert body["active_count"] == 1
+        assert body["archived_count"] == 1
+
+    def test_draft_count_always_zero(self, client, auth_headers, managed_tenant, bound_factories):
+        """``draft_count`` reserved for a future draft-state column —
+        always 0 today, but the field is in the response shape so
+        Storefront can render a "Drafts" badge without an API change."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        ProductFactory(tenant=tenant, product_id="prod_d_1", name="P1")
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.get_json()["products"]["draft_count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Sprint 1.6: pre-map advertisers
 # ---------------------------------------------------------------------------

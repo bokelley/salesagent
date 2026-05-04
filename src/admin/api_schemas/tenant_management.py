@@ -451,6 +451,28 @@ class StatusCreativesBlock(BaseModel):
     rejected_last_24h_count: int = 0
 
 
+class StatusProductsBlock(BaseModel):
+    """Product-level counters.
+
+    Distinct from :class:`StatusPackagesBlock` — one product can have
+    multiple priced packages, so package counts don't answer "what is
+    the publisher actually selling?". Storefront surfaces ``active_count``
+    on its homepage as the primary "what's the publisher doing" signal.
+
+    Note: the Product model doesn't carry an explicit ``status`` field
+    today. ``archived_at IS NULL`` rows count as active; non-null rows
+    count as archived. ``draft_count`` is 0 until a draft state lands
+    (forward-compatible field — Storefront can render a "Drafts" badge
+    without an API shape change when it does).
+    """
+
+    model_config = _config()
+
+    active_count: int = 0
+    draft_count: int = 0
+    archived_count: int = 0
+
+
 class StatusWebhooksBlock(BaseModel):
     """Outbound-webhook summary. ``None`` until sprint 6 lands the table."""
 
@@ -517,6 +539,7 @@ class TenantStatusResponse(BaseModel):
     workflows: StatusWorkflowsBlock = Field(default_factory=StatusWorkflowsBlock)
     media_buys: StatusMediaBuysBlock = Field(default_factory=StatusMediaBuysBlock)
     packages: StatusPackagesBlock = Field(default_factory=StatusPackagesBlock)
+    products: StatusProductsBlock = Field(default_factory=StatusProductsBlock)
     creatives: StatusCreativesBlock = Field(default_factory=StatusCreativesBlock)
     webhooks: StatusWebhooksBlock | None = None
     setup_tasks: SetupTasksBlock = Field(default_factory=SetupTasksBlock)

@@ -25,6 +25,7 @@ from src.admin.api_schemas.tenant_management import (
     StatusCreativesBlock,
     StatusMediaBuysBlock,
     StatusPackagesBlock,
+    StatusProductsBlock,
     StatusSyncRunBlock,
     StatusSyncsBlock,
     StatusWebhooksBlock,
@@ -38,6 +39,7 @@ from src.core.database.models import (
     Creative,
     MediaBuy,
     MediaPackage,
+    Product,
     SyncJob,
     Tenant,
     WorkflowStep,
@@ -98,6 +100,7 @@ def _build_status(session: Session, tenant_id: str) -> TenantStatusResponse:
         workflows=_workflows_block(session, tenant_id),
         media_buys=_media_buys_block(session, tenant_id),
         packages=_packages_block(session, tenant_id),
+        products=_products_block(session, tenant_id),
         creatives=_creatives_block(session, tenant_id),
         webhooks=_webhooks_block(),
         setup_tasks=_setup_tasks_block(session, tenant_id),
@@ -230,6 +233,34 @@ def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
         active_count=int(active or 0),
         paused_count=int(paused or 0),
         last_24h_impressions=0,
+    )
+
+
+def _products_block(session: Session, tenant_id: str) -> StatusProductsBlock:
+    """Product counters split by archived state.
+
+    Sprint 1.8 follow-up — Storefront's homepage uses ``active_count``
+    as the primary "what's the publisher selling?" signal. Distinct
+    from packages because one product fans out to N priced packages.
+
+    The Product model doesn't carry an explicit status field today;
+    ``archived_at IS NULL`` rows count active, non-null rows count
+    archived. ``draft_count`` always 0 — the field is reserved for
+    when a draft state lands so Storefront can light up a "Drafts"
+    badge without an API shape change.
+    """
+    active = session.scalar(
+        select(func.count()).select_from(Product).where(Product.tenant_id == tenant_id, Product.archived_at.is_(None))
+    )
+    archived = session.scalar(
+        select(func.count())
+        .select_from(Product)
+        .where(Product.tenant_id == tenant_id, Product.archived_at.is_not(None))
+    )
+    return StatusProductsBlock(
+        active_count=int(active or 0),
+        draft_count=0,
+        archived_count=int(archived or 0),
     )
 
 
