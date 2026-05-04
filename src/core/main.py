@@ -291,7 +291,6 @@ from src.core.tools.media_buy_list import get_media_buys
 from src.core.tools.media_buy_update import update_media_buy
 from src.core.tools.performance import update_performance_index
 from src.core.tools.products import get_products
-from src.core.tools.properties import list_authorized_properties
 from src.core.tools.task_management import complete_task, get_task, list_tasks
 
 # Register tools with MCP (must be done after imports to avoid circular dependency)
@@ -304,7 +303,12 @@ mcp.tool()(with_error_logging(get_products))
 mcp.tool()(with_error_logging(list_creative_formats))
 mcp.tool()(with_error_logging(sync_creatives))
 mcp.tool()(with_error_logging(list_creatives))
-mcp.tool()(with_error_logging(list_authorized_properties))
+# list_authorized_properties was removed in AdCP 3.0+ — properties are now
+# discovered via the AAO model (publisher's brand.json + adagents.json).
+# See docs/design/replace-authorized-properties-with-aao-lookup.md and
+# src/services/aao_lookup_service.py. The legacy impl + REST route stay
+# for the deprecation window so products.py's publisher_properties picker
+# (admin UI domain selection) keeps working.
 mcp.tool()(with_error_logging(create_media_buy))
 mcp.tool()(with_error_logging(update_media_buy))
 mcp.tool()(with_error_logging(get_media_buy_delivery))

@@ -131,7 +131,9 @@ DISCOVERY_SKILLS = frozenset(
         "get_adcp_capabilities",  # Agent capabilities (always public per AdCP spec)
         "list_accounts",  # Account discovery (public, returns empty for unauthed per BR-RULE-055)
         "list_creative_formats",  # Creative specifications (always public)
-        "list_authorized_properties",  # Property catalog (always public)
+        # NOTE: list_authorized_properties removed in AdCP 3.0+ — properties are
+        # now discovered via the AAO model (publisher's brand.json + adagents.json).
+        # See docs/design/replace-authorized-properties-with-aao-lookup.md.
         "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
     }
 )
@@ -1345,7 +1347,9 @@ class AdCPRequestHandler(RequestHandler):
             "list_creative_formats": self._handle_list_creative_formats_skill,
             "list_accounts": self._handle_list_accounts_skill,
             "sync_accounts": self._handle_sync_accounts_skill,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill,
+            # list_authorized_properties was removed in AdCP 3.0+ — see header comment above.
+            # The handler method + impl + REST route stay live for the deprecation
+            # window (admin UI domain picker depends on AuthorizedProperty).
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
             "get_media_buys": self._handle_get_media_buys_skill,
