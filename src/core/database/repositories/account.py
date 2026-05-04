@@ -57,8 +57,19 @@ class AccountRepository:
         brand_domain: str,
         brand_id: str | None = None,
         sandbox: bool | None = None,
+        *,
+        billing: str | None = None,
+        principal_id: str | None = None,
     ) -> Account | None:
-        """Get an account by its natural key (operator + brand + sandbox).
+        """Get an account by its natural key.
+
+        Default key (operator + brand + sandbox) preserves today's
+        ``billing=operator`` upsert semantics for backward compatibility:
+        with ``billing=None`` the lookup ignores billing entirely.
+
+        For ``billing="agent"`` the caller MUST pass ``principal_id`` —
+        the buyer agent in the billing relationship is part of the natural
+        key per ``docs/design/sync-accounts-advertiser-mapping.md``.
 
         The brand field is JSONType containing {"domain": ..., "brand_id": ...}.
         """
@@ -73,6 +84,10 @@ class AccountRepository:
             stmt = stmt.where(Account.sandbox == sandbox)
         else:
             stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
+        if billing is not None:
+            stmt = stmt.where(Account.billing == billing)
+        if principal_id is not None:
+            stmt = stmt.where(Account.principal_id == principal_id)
         return self._session.scalars(stmt).first()
 
     def list_by_natural_key(

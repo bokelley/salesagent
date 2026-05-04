@@ -515,12 +515,22 @@ async def _sync_accounts_impl(
                 )
                 continue
 
-            # Look up existing account by natural key
+            # Look up existing account by natural key.
+            #
+            # For billing=agent the natural key includes the calling
+            # principal — different buyer agents on the same (operator,
+            # brand) pair produce distinct Accounts (different commercial
+            # relationships, different rate cards, separate GAM
+            # advertisers). See docs/design/sync-accounts-advertiser-
+            # mapping.md § Granularity decision.
+            agent_scoped = billing_val == "agent"
             existing = repo.get_by_natural_key(
                 operator=operator,
                 brand_domain=brand_domain,
                 brand_id=brand_id,
                 sandbox=sandbox,
+                billing=billing_val if agent_scoped else None,
+                principal_id=principal_id if agent_scoped else None,
             )
 
             if existing is not None:
@@ -579,7 +589,26 @@ async def _sync_accounts_impl(
                 tenant = identity.tenant if identity else None
                 approval_mode = tenant.get("account_approval_mode") if tenant else None
                 setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
-                initial_status = "pending_approval" if setup else "active"
+                # Status precedence (sprint 1.6 § Lifecycle):
+                #   pending_approval — manual approval gate (BR-RULE-060)
+                #   pending_provision — auto-approved + GAM tenant + not sandbox + no
+                #                       pre-mapped advertiser → wait for provision-on-
+                #                       first-buy or manual mapping via Tenant Mgmt API
+                #   active — sandbox accounts (sandbox advertiser wired at first-buy),
+                #            non-GAM tenants (mock adapter, no provisioning concept),
+                #            and rows the management API pre-creates with platform_mappings
+                tenant_ad_server = (tenant or {}).get("ad_server")
+                needs_provision = (
+                    setup is None
+                    and tenant_ad_server == "google_ad_manager"
+                    and not sandbox
+                )
+                if setup:
+                    initial_status = "pending_approval"
+                elif needs_provision:
+                    initial_status = "pending_provision"
+                else:
+                    initial_status = "active"
 
                 if dry_run:
                     results.append(
