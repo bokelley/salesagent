@@ -98,6 +98,10 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         now = datetime.now(UTC)
 
         # Create tenant with SSO configured (auth_setup_mode=False)
+        # Sprint 1.7 made house_domain + public_agent_url required for the
+        # AAO checklist items to be complete; sprint 1.8 §6 hides them on
+        # managed tenants. A "complete" open-instance fixture must populate
+        # both for the checklist's first two critical items to pass.
         tenant = Tenant(
             tenant_id=test_tenant_id,
             name="Complete Tenant",
@@ -109,6 +113,8 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             enable_axe_signals=True,
             authorized_emails=["test@example.com"],  # Required for access control
             auth_setup_mode=False,  # SSO configured, setup mode disabled
+            house_domain="complete.example.com",
+            public_agent_url="https://agent.example.com/complete",
             created_at=now,
             updated_at=now,
             is_active=True,
@@ -424,6 +430,11 @@ class TestSetupChecklistService:
                 name="Bulk Test Tenant 3",
                 subdomain="bulk3",
                 ad_server="mock",  # Mock adapter is accepted in test environments
+                # Sprint 1.7 + 1.8 §6: AAO model fields are critical-tier
+                # checklist items; populated here so tenant 3 hits its
+                # "near complete" progress assertion.
+                house_domain="bulk3.example.com",
+                public_agent_url="https://agent.example.com/bulk3",
                 created_at=now,
                 updated_at=now,
                 is_active=True,
@@ -771,6 +782,10 @@ class TestTaskDetails:
                 name="Multi-tenant Publisher",
                 subdomain="test_mtp",
                 ad_server="mock",
+                # Sprint 1.7 + 1.8: AAO model fields are critical-tier
+                # checklist items and must be populated for ready_for_orders.
+                house_domain="multitenant.example.com",
+                public_agent_url="https://agent.example.com/mtp",
                 created_at=now,
                 updated_at=now,
                 is_active=True,
@@ -828,3 +843,109 @@ class TestTaskDetails:
             # All critical tasks should be complete
             incomplete_critical = [t for t in status["critical"] if not t["is_complete"]]
             assert len(incomplete_critical) == 0, f"Incomplete critical tasks: {incomplete_critical}"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §6 — house_domain + public_agent_url checklist hide-when-set
+# ---------------------------------------------------------------------------
+
+
+class TestSprint18AaoChecklistHide:
+    """Both AAO items disappear from the critical-tasks list when the
+    tenant is managed_externally AND both fields are populated.
+
+    Open-instance tenants always see them (legacy behavior). Managed
+    tenants with NULL fields still see them — that signals the platform
+    hasn't finished provisioning.
+    """
+
+    def _make_tenant(
+        self, tenant_id: str, *, managed_externally: bool, house_domain: str | None, public_agent_url: str | None
+    ):
+        """Create a tenant directly (architecture guard allowlist applies to this file)."""
+        from datetime import UTC, datetime
+
+        from src.core.database.database_session import get_db_session
+
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            now = datetime.now(UTC)
+            tenant = Tenant(
+                tenant_id=tenant_id,
+                name=f"Test {tenant_id}",
+                subdomain=tenant_id.replace("_", "-"),
+                ad_server="mock",
+                created_at=now,
+                updated_at=now,
+                is_active=True,
+                managed_externally=managed_externally,
+                external_org_id=tenant_id if managed_externally else None,
+                external_source="scope3" if managed_externally else None,
+                house_domain=house_domain,
+                public_agent_url=public_agent_url,
+            )
+            session.add(tenant)
+            session.commit()
+
+    def _cleanup(self, tenant_id: str):
+        from src.core.database.database_session import get_db_session
+
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            existing = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if existing:
+                session.delete(existing)
+                session.commit()
+
+    def test_managed_tenant_with_both_fields_set_hides_aao_items(self, integration_db):
+        tid = "tid_aao_hide_managed"
+        self._make_tenant(
+            tid,
+            managed_externally=True,
+            house_domain="acme.example.com",
+            public_agent_url="https://agent.scope3.com/x",
+        )
+        try:
+            service = SetupChecklistService(tid)
+            status = service.get_setup_status()
+            keys = {t["key"] for t in status["critical"]}
+            assert "house_domain" not in keys
+            assert "public_agent_url" not in keys
+        finally:
+            self._cleanup(tid)
+
+    def test_open_instance_tenant_always_shows_aao_items(self, integration_db):
+        tid = "tid_aao_open_instance"
+        self._make_tenant(
+            tid,
+            managed_externally=False,
+            house_domain="acme.example.com",
+            public_agent_url="https://agent.scope3.com/x",
+        )
+        try:
+            service = SetupChecklistService(tid)
+            status = service.get_setup_status()
+            keys = {t["key"] for t in status["critical"]}
+            assert "house_domain" in keys
+            assert "public_agent_url" in keys
+        finally:
+            self._cleanup(tid)
+
+    def test_managed_tenant_with_null_house_domain_still_shows_items(self, integration_db):
+        """Managed tenant with incomplete provisioning — Storefront's
+        Scope3-side checklist surfaces this as a platform gap to escalate."""
+        tid = "tid_aao_managed_partial"
+        self._make_tenant(
+            tid,
+            managed_externally=True,
+            house_domain=None,
+            public_agent_url="https://agent.scope3.com/x",
+        )
+        try:
+            service = SetupChecklistService(tid)
+            status = service.get_setup_status()
+            keys = {t["key"] for t in status["critical"]}
+            assert "house_domain" in keys
+            assert "public_agent_url" in keys
+        finally:
+            self._cleanup(tid)

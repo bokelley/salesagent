@@ -8,10 +8,11 @@ pattern #7).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -21,6 +22,50 @@ _EXTRA_MODE = get_pydantic_extra_mode()
 def _config() -> ConfigDict:
     """Return a fresh ConfigDict for each schema."""
     return ConfigDict(extra=_EXTRA_MODE)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §6 — shared validators for platform-managed AAO fields
+# ---------------------------------------------------------------------------
+
+# Bare DNS hostname: "acme.example.com" yes; "https://acme.example.com" no;
+# "ACME.EXAMPLE.COM" no (force-lowercase before validate); "acme.example.com/foo" no.
+# Pattern matches IDN-friendly DNS labels separated by dots, total length capped
+# to 253 chars by RFC 1035.
+_HOUSE_DOMAIN_REGEX = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def _validate_house_domain(value: str) -> str:
+    """Force-lowercase + validate as a bare DNS hostname.
+
+    Sprint 1.8 §6: house_domain must be the publisher's bare domain
+    (where brand.json lives). Rejects schemes, paths, uppercase, and
+    label-format violations.
+    """
+    lowered = value.strip().lower()
+    if len(lowered) > 253:
+        raise ValueError(f"house_domain too long ({len(lowered)} chars; max 253 per RFC 1035)")
+    if not _HOUSE_DOMAIN_REGEX.match(lowered):
+        raise ValueError(
+            f"house_domain must be a bare DNS hostname (e.g. 'acme.example.com'); "
+            f"got {value!r}. No scheme, no path, lowercase only."
+        )
+    return lowered
+
+
+def _validate_public_agent_url(value: str) -> str:
+    """HTTPS-only URL validator for public_agent_url.
+
+    Sprint 1.8 §6: public_agent_url is what publishers list in
+    adagents.json to authorize this tenant. Must be HTTPS — adagents.json
+    fetch is HTTPS-only, and a non-HTTPS agent URL would never verify.
+    """
+    stripped = value.strip()
+    if not stripped.startswith("https://"):
+        raise ValueError(
+            f"public_agent_url must start with 'https://'; got {value!r}. adagents.json fetch is HTTPS-only."
+        )
+    return stripped
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +151,18 @@ class ProvisionTenantRequest(BaseModel):
 
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
+
+    # Sprint 1.8 §6: AAO field validators (force-lowercase house_domain,
+    # HTTPS-only public_agent_url).
+    @field_validator("house_domain")
+    @classmethod
+    def _check_house_domain(cls, value: str) -> str:
+        return _validate_house_domain(value)
+
+    @field_validator("public_agent_url")
+    @classmethod
+    def _check_public_agent_url(cls, value: str) -> str:
+        return _validate_public_agent_url(value)
 
 
 class ProvisionedPrincipalResponse(BaseModel):
@@ -225,6 +282,23 @@ class UpdateTenantRequest(BaseModel):
     # to leave unchanged; no path to clear an already-set value, since
     # clearing it would brick the routing chain).
     default_gam_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    # Sprint 1.8 §6: same AAO validators as ProvisionTenantRequest.
+    # ``mode='before'`` lets us short-circuit on None (PATCH with field
+    # absent should pass through unchanged).
+    @field_validator("house_domain")
+    @classmethod
+    def _check_house_domain(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_house_domain(value)
+
+    @field_validator("public_agent_url")
+    @classmethod
+    def _check_public_agent_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_public_agent_url(value)
 
 
 # ---------------------------------------------------------------------------

@@ -338,43 +338,56 @@ class SetupChecklistService:
         # them, so a new tenant's first experience is "where does your
         # brand.json live?" not "fill out 47 properties." Replaces the old
         # AuthorizedProperty count gate.
-        tasks.append(
-            SetupTask(
-                key="house_domain",
-                name="Publisher House Domain",
-                description=(
-                    "The domain where your brand.json lives "
-                    "(https://{house_domain}/.well-known/brand.json). "
-                    "Properties are looked up live from this file."
-                ),
-                is_complete=bool(tenant.house_domain),
-                action_url=f"/tenant/{self.tenant_id}/settings#aao",
-                details=(
-                    f"Configured: {tenant.house_domain}"
-                    if tenant.house_domain
-                    else "Set your publisher house domain to enable property discovery."
-                ),
-            )
+        #
+        # Sprint 1.8 §6: hide both items entirely on managed-externally
+        # tenants where both fields are set. The platform (Scope3) owns
+        # them; surfacing "incomplete AAO" tasks to the publisher would be
+        # confusing — they can't edit the values anyway (model-layer guard).
+        # Open-instance tenants and managed tenants with NULL fields still
+        # see the items (the latter signals the platform hasn't finished
+        # provisioning, which the §7 setup_tasks scope=platform annotation
+        # surfaces to Storefront).
+        aao_managed_and_complete = (
+            bool(tenant.managed_externally) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
         )
-        tasks.append(
-            SetupTask(
-                key="public_agent_url",
-                name="Public Agent URL",
-                description=(
-                    "The agent URL publishers list in their adagents.json to "
-                    "authorize this tenant. Managed-mode tenants share one "
-                    "(e.g., https://interchange.io); self-hosted publishers "
-                    "use their own salesagent's URL."
-                ),
-                is_complete=bool(tenant.public_agent_url),
-                action_url=f"/tenant/{self.tenant_id}/settings#aao",
-                details=(
-                    f"Configured: {tenant.public_agent_url}"
-                    if tenant.public_agent_url
-                    else "Set the agent URL that publishers will list in adagents.json."
-                ),
+        if not aao_managed_and_complete:
+            tasks.append(
+                SetupTask(
+                    key="house_domain",
+                    name="Publisher House Domain",
+                    description=(
+                        "The domain where your brand.json lives "
+                        "(https://{house_domain}/.well-known/brand.json). "
+                        "Properties are looked up live from this file."
+                    ),
+                    is_complete=bool(tenant.house_domain),
+                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                    details=(
+                        f"Configured: {tenant.house_domain}"
+                        if tenant.house_domain
+                        else "Set your publisher house domain to enable property discovery."
+                    ),
+                )
             )
-        )
+            tasks.append(
+                SetupTask(
+                    key="public_agent_url",
+                    name="Public Agent URL",
+                    description=(
+                        "The agent URL publishers list in their adagents.json to "
+                        "authorize this tenant. Managed-mode tenants share one "
+                        "(e.g., https://interchange.io); self-hosted publishers "
+                        "use their own salesagent's URL."
+                    ),
+                    is_complete=bool(tenant.public_agent_url),
+                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                    details=(
+                        f"Configured: {tenant.public_agent_url}"
+                        if tenant.public_agent_url
+                        else "Set the agent URL that publishers will list in adagents.json."
+                    ),
+                )
+            )
 
         # 1. Ad Server FULLY CONFIGURED - CRITICAL BLOCKER
         # This is the most important task - nothing else can be done until ad server works
@@ -490,10 +503,7 @@ class SetupChecklistService:
             # Treat "house_domain set" as the green state — actual brand.json
             # validation runs out-of-band and surfaces via Admin UI banners.
             is_complete = True
-            details = (
-                f"brand.json at {tenant.house_domain}; "
-                f"{verified_publisher_count} verified publisher partners"
-            )
+            details = f"brand.json at {tenant.house_domain}; {verified_publisher_count} verified publisher partners"
         else:
             stmt = (
                 select(func.count())
@@ -515,8 +525,7 @@ class SetupChecklistService:
                 f"{property_count} properties from {verified_publisher_count} verified "
                 f"publishers (legacy mode — set house_domain to migrate to brand.json lookup)"
                 if property_count > 0
-                else "Set house_domain to enable brand.json property discovery, or "
-                "use the legacy Add Publishers flow"
+                else "Set house_domain to enable brand.json property discovery, or use the legacy Add Publishers flow"
             )
 
         tasks.append(
@@ -840,8 +849,58 @@ class SetupChecklistService:
         product_count: int,
         principal_count: int,
     ) -> list[SetupTask]:
-        """Build critical tasks from pre-fetched data (no session queries)."""
+        """Build critical tasks from pre-fetched data (no session queries).
+
+        Mirrors :meth:`_check_critical_tasks` for the bulk path; the two
+        must stay in sync so single-tenant and bulk callers agree on
+        ``progress_percent`` and ``ready_for_orders``.
+        """
         tasks = []
+
+        # 0. AAO model — same hide-when-set logic as _check_critical_tasks.
+        # See sprint 1.8 §6: managed-externally tenants with both fields set
+        # don't see these items (they belong to the platform).
+        aao_managed_and_complete = (
+            bool(tenant.managed_externally) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
+        )
+        if not aao_managed_and_complete:
+            tasks.append(
+                SetupTask(
+                    key="house_domain",
+                    name="Publisher House Domain",
+                    description=(
+                        "The domain where your brand.json lives "
+                        "(https://{house_domain}/.well-known/brand.json). "
+                        "Properties are looked up live from this file."
+                    ),
+                    is_complete=bool(tenant.house_domain),
+                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                    details=(
+                        f"Configured: {tenant.house_domain}"
+                        if tenant.house_domain
+                        else "Set your publisher house domain to enable property discovery."
+                    ),
+                )
+            )
+            tasks.append(
+                SetupTask(
+                    key="public_agent_url",
+                    name="Public Agent URL",
+                    description=(
+                        "The agent URL publishers list in their adagents.json to "
+                        "authorize this tenant. Managed-mode tenants share one "
+                        "(e.g., https://interchange.io); self-hosted publishers "
+                        "use their own salesagent's URL."
+                    ),
+                    is_complete=bool(tenant.public_agent_url),
+                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                    details=(
+                        f"Configured: {tenant.public_agent_url}"
+                        if tenant.public_agent_url
+                        else "Set the agent URL that publishers will list in adagents.json."
+                    ),
+                )
+            )
 
         # 1. Ad Server Configuration
         ad_server_selected = tenant.ad_server is not None and tenant.ad_server != ""
