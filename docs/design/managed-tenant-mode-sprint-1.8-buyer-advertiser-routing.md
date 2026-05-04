@@ -85,6 +85,14 @@ def resolve_advertiser_for_buy(tenant_id, account_ref):
         if account.platform_mappings.gam_advertiser_id:
             return account.platform_mappings.gam_advertiser_id, "account"
 
+    # 0. Sandbox carve-out (Q4 decision): sandbox traffic NEVER touches
+    #    routing rules or the tenant default — always goes to the
+    #    per-tenant sandbox advertiser (lazy-created in sprint 1.6).
+    #    Don't bill, don't pollute reports, don't count against inventory.
+    if account_ref.sandbox:
+        sandbox_id = ensure_sandbox_advertiser(tenant_id)  # sprint 1.6 helper
+        return sandbox_id, "sandbox"
+
     # Inline form (operator + brand) → run the precedence chain.
     operator = account_ref.operator
     brand_house = account_ref.brand.domain
@@ -107,11 +115,13 @@ def resolve_advertiser_for_buy(tenant_id, account_ref):
     if tenant.default_gam_advertiser_id:
         return tenant.default_gam_advertiser_id, "default"
 
-    # 5. No fallback configured → reject.
+    # 5. No fallback configured → reject (Q3 decision: activation is
+    #    implicit; the buyer-protocol error path IS the contract).
     raise AdCPError(
         "TENANT_NOT_ACTIVATED",
         message=f"Tenant {tenant_id!r} has no default_gam_advertiser_id and no "
-                f"matching routing rule for ({operator}, {brand_house}, {brand_id}).",
+                f"matching routing rule for ({operator}, {brand_house}, {brand_id}). "
+                "Publisher must set a default advertiser before this tenant can buy media.",
     )
 ```
 
@@ -182,9 +192,9 @@ GET /tenants/{tid}/recent-buyers?days=30&limit=100
       }
 ```
 
-Source data: `Account` rows for managed-mode tenants — each Account already carries `(operator, brand_house, brand_id)` from sync_accounts upserts AND the resolved `platform_mappings.google_ad_manager.advertiser_id`. We need to add `Account.resolved_via` (one of `"account" | "exact" | "house" | "operator" | "default"`) at first-creation time, and aggregate `request_count` / `last_seen_at` from `MediaBuy` rows joined to Account.
+Source data: `Account` rows for managed-mode tenants — each Account already carries `(operator, brand_house, brand_id)` from sync_accounts upserts AND the resolved `platform_mappings.google_ad_manager.advertiser_id`. We need to add `Account.resolved_via` (one of `"account" | "sandbox" | "exact" | "house" | "operator" | "default"`) at first-creation time, and aggregate `request_count` / `last_seen_at` from `MediaBuy` rows joined to Account.
 
-If buyer agents call `get_products` without a follow-up `create_media_buy`, those don't show up here (no Account row gets created on get_products). That's a deliberate gap — the spec says "degrade gracefully if the upstream subset isn't there"; we surface what we have.
+`get_products` requests carry `account: AccountReference | None` too — when populated, they hit the same routing chain. Recent-buyers therefore covers both flows uniformly when the buyer supplies the field.
 
 ### §5: preview-adapter extension
 
@@ -257,12 +267,13 @@ No migration needed beyond Sprint 1.7's existing nullable columns. Existing mana
 
 ## Migration plan
 
-Three migrations + Sprint 1.6 cleanup:
+Four migrations + Sprint 1.6 cleanup:
 
 1. **`add_default_gam_advertiser_id_to_tenant`** — nullable string column. Tenant Management API requires it on managed-mode activation flows.
 2. **`create_advertiser_routing_rules_table`** — schema above. Indexed on (tenant_id) and (tenant_id, operator_domain).
-3. **`add_resolved_via_to_account`** — nullable enum (`"account" | "exact" | "house" | "operator" | "default"`). Backfill is null for legacy rows; new rows populated by the resolution chain.
-4. **`drop_auto_provision_advertisers_from_tenant`** — Sprint 1.6's flag. Replaced by the routing chain. Deferred until impl is verified end-to-end so we have a rollback option.
+3. **`add_resolved_via_to_account`** — nullable enum (`"account" | "sandbox" | "exact" | "house" | "operator" | "default"`). Backfill is null for legacy rows; new rows populated by the resolution chain.
+4. **`add_gam_sandbox_advertiser_id_to_adapter_config`** — Sprint 1.6's deferred sandbox-advertiser cache (Q4 decision: prerequisite for the sprint 1.8 routing chain's sandbox early-return). Nullable; lazy-populated on first sandbox call by `ensure_sandbox_advertiser(tenant_id)`.
+5. **`drop_auto_provision_advertisers_from_tenant`** — Sprint 1.6's flag. Replaced by the routing chain. Deferred until impl is verified end-to-end so we have a rollback option.
 
 ### Code changes
 
@@ -297,11 +308,12 @@ Three migrations + Sprint 1.6 cleanup:
 
 ### Resolution chain
 - [ ] Buy with `account_ref={account_id: "acct_xxx"}` and existing Account → returns the Account's advertiser, `resolved_via="account"`.
+- [ ] Buy with `sandbox=true` → returns the per-tenant sandbox advertiser (sprint 1.6 helper), `resolved_via="sandbox"`. Routing rules + tenant default are NOT consulted (Q4 decision).
 - [ ] Buy matching exact rule → returns rule's advertiser, `resolved_via="exact"`.
 - [ ] Buy matching house wildcard but not exact → `resolved_via="house"`.
 - [ ] Buy matching operator wildcard but not house → `resolved_via="operator"`.
 - [ ] Buy with no match + tenant has default → `resolved_via="default"`.
-- [ ] Buy with no match + tenant has no default → raises `TENANT_NOT_ACTIVATED`.
+- [ ] Buy with no match + tenant has no default → raises `TENANT_NOT_ACTIVATED` (Q3 decision: implicit activation, no separate endpoint). Buyer-protocol error message includes the unresolved `(operator, brand_house, brand_id)` triple so Storefront can surface "publisher hasn't finished setup."
 - [ ] First buy with a new triple creates an Account row with the resolved advertiser stamped on `platform_mappings`. Second buy with the same triple reuses the Account.
 
 ### Read endpoints
@@ -329,9 +341,9 @@ Three migrations + Sprint 1.6 cleanup:
 
 2. **`operator_domain` validation: AAO-validated on POST with cache.** Routing-rule POST/PATCH validates the operator publishes a valid adagents.json listing this tenant's `public_agent_url`. Reuses Sprint 1.7's `is_agent_authorized_by_publisher` (6h cache). Read endpoints (GET `/buyer-advertiser-mappings`) stay cheap — no validation on read.
 
-3. **Activation gate: deferred — open.** Recommended (b) reject `create_media_buy` with `TENANT_NOT_ACTIVATED` when the chain falls through to no default. No separate `POST /activate` endpoint in this sprint. Brian flagged as TBD.
+3. **Activation gate: implicit, enforced in `create_media_buy`.** No separate `POST /activate` endpoint, no new state column. The buyer-protocol error path IS the contract: when the routing chain falls through with no default, raise `TENANT_NOT_ACTIVATED`. Storefront's homepage checklist drives off `GET /tenants/{tid}` returning a non-null `default_gam_advertiser_id` (light-up-green client-side, no API ceremony). Sprint 1's `Tenant.is_active` stays the operator-controlled lifecycle field; "activated" config-completeness stays implicit so the two concepts don't collide.
 
-4. **Sandbox interaction: deferred — open.** Recommended sandbox routes through per-tenant sandbox advertiser (Sprint 1.6 § Sandbox) and bypasses these rules entirely. Brian flagged as TBD.
+4. **Sandbox interaction: bypass routing rules entirely → per-tenant sandbox advertiser.** Sandbox traffic is ops-test by definition (don't bill, don't pollute reports, don't count against inventory caps); routing it through commercial advertisers defeats the carve-out. Sprint 1.6 already designed `AdapterConfig.gam_sandbox_advertiser_id` (lazy-created on first sandbox call). Sprint 1.8 adds an early-return at the top of `resolve_advertiser_for_buy` when `account_ref.sandbox=true`, with `resolved_via="sandbox"` for the recent-buyers UI. Sprint 1.6's deferred sandbox-advertiser work becomes a prerequisite for Sprint 1.8.
 
 5. **Legacy `Account.resolved_via`: NULL → "unknown".** Migration backfills NULL; recent-buyers surfaces NULL as `"unknown"` in responses. No re-resolve job in this sprint. Optional follow-up tool publishers can run on demand.
 
