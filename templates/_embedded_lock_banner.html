@@ -1,0 +1,17 @@
+{#
+  Embedded-mode lock banner partial.
+
+  Rendered on platform-managed surfaces when tenant.is_embedded is True.
+  Replaces hidden settings sections / hidden routes with a "this is owned
+  by your platform" explanation. See
+  docs/design/embedded-mode-sprint-4-ui-hardening.md.
+
+  Usage:
+    {% include "_embedded_lock_banner.html" %}
+
+  Required context: tenant (Tenant ORM model with .external_source attribute)
+#}
+<div class="alert alert-info embedded-lock-banner" role="status">
+  <strong>Platform settings managed by {{ (tenant.external_source or 'your platform') | title }}.</strong>
+  <p class="mb-0">Contact your account team to change these.</p>
+</div>

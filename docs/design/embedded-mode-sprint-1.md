@@ -1,12 +1,14 @@
-# Sprint 1 Spec: Managed Tenant Mode Foundation
+# Sprint 1 Spec: Embedded Mode Foundation
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
+> **Reference deployment.** Concrete examples in this doc cite Scope3 Storefront as the first reference deployment. The deliverables are generic — any host product embedding PSA uses the same surface.
+
 ## Scope
 
-Sprint 1 delivers the **complete platform-managed surface** Scope3 needs to fully manage tenants via API:
+Sprint 1 delivers the **complete platform-managed surface** a host product needs to fully manage tenants via API:
 
 1. Schema migration for embedded mode (`is_embedded`, `external_org_id`, `external_source` on `Tenant`; `external_*` fields on `AuditLog`).
 2. Identity-propagation middleware (reads `X-Identity-*` headers; sprint 1 ships the reader only — request scoping lands in sprint 4).
@@ -23,15 +25,15 @@ Sprint 1 delivers the **complete platform-managed surface** Scope3 needs to full
    - `GET /tenants/{id}/adapter-config`
    - `PUT /tenants/{id}/adapter-config`
    - `POST /tenants/{id}/adapter-config/test-connection`
-6. Reverse-proxy compatibility verified — salesagent works under a Scope3 path prefix.
+6. Reverse-proxy compatibility verified — salesagent works under a host-product path prefix (e.g., `/storefront/salesagent/...`).
 7. Scoped write guard at the model layer (platform-managed columns/tables only — see "Scoped write guard" section below).
 
-After sprint 1, Scope3 can fully provision, configure, update, deactivate, and delete tenants; it can manage adapter credentials and test connections — all via API with a published OpenAPI spec.
+After sprint 1, the host product can fully provision, configure, update, deactivate, and delete tenants; it can manage adapter credentials and test connections — all via API with a published OpenAPI spec.
 
 Not in sprint 1:
 - Consolidated `GET /status` endpoint + adapter preview — [sprint 1.5](./embedded-mode-sprint-1.5.md).
-- UI hardening, banner / nav hiding, network-policy lockdown for `MANAGED_INSTANCE`, MCP/A2A embedded-mode `resolve_identity()` — [sprint 2](./managed-tenant-mode-sprint-2.md).
-- Workflow approve/reject + drill-down read endpoints (workflows list/detail, media-buys, audit-log, sync-history) — [sprint 3](./managed-tenant-mode-sprint-3.md).
+- UI hardening, banner / nav hiding, network-policy lockdown for `MANAGED_INSTANCE`, MCP/A2A embedded-mode `resolve_identity()` — [sprint 2](./embedded-mode-sprint-2.md).
+- Workflow approve/reject + drill-down read endpoints (workflows list/detail, media-buys, audit-log, sync-history) — [sprint 3](./embedded-mode-sprint-3.md).
 - Publisher-managed CRUD via API (principals, products, sub-resources) — sprints 4–5 (optional).
 - Outbound webhooks — sprint 6 (optional).
 
@@ -75,7 +77,7 @@ def downgrade():
 The boundary is *infrastructure vs. business* (see [parent design § 1a](./embedded-mode.md#1a-platform-managed-vs-publisher-managed-surfaces)). Only platform-managed surfaces are locked; publisher-managed surfaces (products, principals, creatives, workflows, etc.) remain writable from the UI.
 
 ```python
-# src/core/database/managed_tenant_guard.py
+# src/core/database/embedded_tenant_guard.py
 from sqlalchemy import event
 from sqlalchemy.orm.attributes import get_history
 from src.core.database.models import Tenant, AdapterConfig
@@ -94,7 +96,7 @@ PUBLISHER_WRITABLE_FIELDS: dict[type, set[str]] = {
     # which means the guard doesn't fire on them — they're publisher-managed by default.
 }
 
-class ManagedTenantWriteError(Exception):
+class EmbeddedTenantWriteError(Exception):
     pass
 
 def _caller_is_authorized(connection) -> bool:
@@ -128,7 +130,7 @@ def block_platform_managed_writes(mapper, connection, target):
     if changed_fields and changed_fields.issubset(writable):
         return
 
-    raise ManagedTenantWriteError(
+    raise EmbeddedTenantWriteError(
         f"{type(target).__name__} for tenant {tenant_id} is platform-managed; "
         f"changes to {sorted(changed_fields)} must go through the Tenant Management API."
     )
@@ -136,18 +138,18 @@ def block_platform_managed_writes(mapper, connection, target):
 @event.listens_for(Tenant, "before_insert")
 @event.listens_for(AdapterConfig, "before_insert")
 def block_platform_managed_inserts(mapper, connection, target):
-    # Inserts into platform-managed tables for managed tenants must come from the API.
+    # Inserts into platform-managed tables for embedded tenants must come from the API.
     if isinstance(target, Tenant) and not target.is_embedded:
         return
     if not _caller_is_authorized(connection):
-        raise ManagedTenantWriteError(
-            f"Inserting {type(target).__name__} for a managed tenant requires the Tenant Management API."
+        raise EmbeddedTenantWriteError(
+            f"Inserting {type(target).__name__} for a embedded tenant requires the Tenant Management API."
         )
 ```
 
 The Tenant Management API endpoints set `session.info["management_api_caller"] = True` on entry. The super-admin backdoor sets `session.info["super_admin_override"] = True` for emergencies. UI handlers and other code paths don't set either flag — writes to platform-managed surfaces fail loudly.
 
-Critically: writes to publisher-managed tables (Product, Principal, Creative, Workflow, Property, etc.) are **not** intercepted by this guard. Their existing UI handlers continue to work for managed tenants without any code change.
+Critically: writes to publisher-managed tables (Product, Principal, Creative, Workflow, Property, etc.) are **not** intercepted by this guard. Their existing UI handlers continue to work for embedded tenants without any code change.
 
 Sprint 1 ships the guard wired up for `Tenant` and `AdapterConfig` only. Other platform-managed surfaces (domain config, OIDC config) are added to the guard list as their tables are touched in later sprints, but they're not commonly written-to in embedded mode anyway.
 
@@ -229,10 +231,10 @@ class ProvisionTenantResponse(BaseModel):
     is_embedded: Literal[True]
     created_at: datetime
 
-    # Surfaces — URLs Scope3 needs to know
+    # Surfaces — URLs the host product needs to know
     mcp_url: str        # e.g. https://salesagent.internal/mcp/
     a2a_url: str        # e.g. https://salesagent.internal/a2a
-    admin_url_path: str # path Scope3 mounts under storefront, e.g. /tenant/{tenant_id}
+    admin_url_path: str # path the host mounts under its UI, e.g. /tenant/{tenant_id}
 
     # Adapter status
     adapter: AdapterStatusResponse
@@ -368,7 +370,7 @@ Replaces the entire adapter config. Same shape as the `adapter` field in `Provis
 
 ### `POST /tenants/{id}/adapter-config/test-connection`
 
-Tests the *currently saved* adapter config without modifying it. Returns `TestConnectionResponse`. Used by Scope3 for periodic health checks.
+Tests the *currently saved* adapter config without modifying it. Returns `TestConnectionResponse`. Called by the host product for periodic health checks.
 
 ## Middleware: identity propagation reader
 
@@ -439,7 +441,7 @@ Result:
 
 ## Reverse-proxy verification
 
-Sprint 1 doesn't need to *land* the proxy — Scope3 sets that up — but it must verify the salesagent works under a path prefix. Two checks:
+Sprint 1 doesn't need to *land* the proxy — the host product owns that — but it must verify the salesagent works under a path prefix. Two checks:
 
 1. **Manual smoke test**: run the salesagent locally behind an nginx that mounts it at `/storefront/salesagent/`. Confirm: login redirects work, JS fetches use `scriptRoot`, no hardcoded URLs.
 2. **Audit pass**: grep for hardcoded URLs in templates and JS. CLAUDE.md pattern #6 is enforced for new code, but pre-existing violations may exist.
@@ -466,7 +468,7 @@ Anything that turns up gets a `request.script_root` fix.
 - [ ] Provision returns 409 (not 500) on duplicate `external_org_id`.
 
 **Tenant lifecycle CRUD:**
-- [ ] `GET /tenants` lists managed tenants with filter params.
+- [ ] `GET /tenants` lists embedded tenants with filter params.
 - [ ] `GET /tenants/{id}` returns 200 for existing, 404 for missing.
 - [ ] `PATCH /tenants/{id}` updates platform-managed fields; rejects unknown fields (Pydantic `extra="forbid"` in dev/CI).
 - [ ] `PATCH /tenants/{id}` does *not* allow modifying `external_org_id` or `external_source`.
@@ -485,14 +487,14 @@ Anything that turns up gets a `request.script_root` fix.
 - [ ] `GET /docs` renders Swagger UI; every endpoint executable from the UI with an API key.
 
 **Write guard:**
-- [ ] Attempting to update a managed tenant's platform-managed columns (name, billing_plan, external_org_id, etc.) via any non-API path raises `ManagedTenantWriteError`.
-- [ ] Attempting to update a managed tenant's `AdapterConfig` via any non-API path raises `ManagedTenantWriteError`.
-- [ ] Updating a publisher-managed table (Product, Principal, Creative) for a managed tenant via the **existing UI handlers** succeeds — the guard does not fire.
+- [ ] Attempting to update a embedded tenant's platform-managed columns (name, billing_plan, external_org_id, etc.) via any non-API path raises `EmbeddedTenantWriteError`.
+- [ ] Attempting to update a embedded tenant's `AdapterConfig` via any non-API path raises `EmbeddedTenantWriteError`.
+- [ ] Updating a publisher-managed table (Product, Principal, Creative) for a embedded tenant via the **existing UI handlers** succeeds — the guard does not fire.
 - [ ] The super-admin override flag (`session.info["super_admin_override"]`) bypasses the guard cleanly.
 
 **Integration:**
 - [ ] Reverse-proxy smoke test: salesagent admin UI works correctly when mounted at a non-root path prefix.
-- [ ] End-to-end test: provision a managed tenant via API; update its name via API (succeeds); attempt to update its name via UI handler (fails with `ManagedTenantWriteError`); mutate a Product via UI handler (succeeds); deactivate via API; verify subsequent provision attempts with the same `external_org_id` fail or are blocked correctly.
+- [ ] End-to-end test: provision a embedded tenant via API; update its name via API (succeeds); attempt to update its name via UI handler (fails with `EmbeddedTenantWriteError`); mutate a Product via UI handler (succeeds); deactivate via API; verify subsequent provision attempts with the same `external_org_id` fail or are blocked correctly.
 
 **Schema testing:**
 - [ ] Unit test: each Pydantic schema validates the happy path and rejects each failure mode (missing required fields, bad currency code, etc.).
@@ -501,7 +503,7 @@ Anything that turns up gets a `request.script_root` fix.
 
 1. **GAM credentials handling.** Storing the service account key JSON requires encryption at rest (existing `src/core/database/encryption.py` covers this). Confirm the `AdapterConfig` model already encrypts secret fields, or add it as part of sprint 1.
 2. **Adapter test connection** — does the existing GAM adapter expose a `test_connection()` method, or do we need to add one? If the latter, that's a small extra item in sprint 1.
-3. **Initial principal API token format.** Existing principal tokens come from `secrets.token_urlsafe()`. Confirm same scheme for managed-tenant principals; document the format in the response schema.
+3. **Initial principal API token format.** Existing principal tokens come from `secrets.token_urlsafe()`. Confirm same scheme for embedded-tenant principals; document the format in the response schema.
 
 ## What sprint 2 builds on this
 

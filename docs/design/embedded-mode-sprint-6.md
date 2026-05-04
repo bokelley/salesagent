@@ -1,7 +1,7 @@
 # Sprint 6 Spec: Outbound Webhooks (Optional)
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md) – [sprint 5](./managed-tenant-mode-sprint-5.md)
+**Builds on:** [sprint 1](./embedded-mode-sprint-1.md) – [sprint 5](./embedded-mode-sprint-5.md)
 **Status:** Draft, optional
 **Last updated:** 2026-05-04
 
@@ -151,7 +151,7 @@ Reuses sprint 1's `ApiError`. New error codes:
 - [ ] Receiver test (using a mock receiver in integration tests) confirms idempotency keyed on `event_id`.
 
 **Integration:**
-- [ ] End-to-end: register webhook on managed tenant, create a workflow via buyer protocol, confirm webhook fires within 30s with valid signature and correct payload.
+- [ ] End-to-end: register webhook on embedded tenant, create a workflow via buyer protocol, confirm webhook fires within 30s with valid signature and correct payload.
 - [ ] End-to-end: configure a 502-returning mock receiver, confirm retry → eventual DLQ landing.
 
 ## Open questions

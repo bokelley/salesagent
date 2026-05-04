@@ -1,4 +1,4 @@
-# Managed Mode — Identity Propagation Contract
+# Embedded Mode — Identity Propagation Contract
 
 **Version:** v1
 **Status:** Stable
@@ -86,7 +86,7 @@ The error response body follows the standard `ApiError` shape:
 
 Because the contract relies on network trust in the default `network` mode, the salesagent's deployment must:
 
-- Bind the salesagent listener to a private interface only — never `0.0.0.0` on a managed instance.
+- Bind the salesagent listener to a private interface only — never `0.0.0.0` on a embedded instance.
 - Allow-list the upstream proxy's source IP/range at the salesagent's listener (`BUYER_PROTOCOL_ALLOWED_CIDRS`, `MANAGEMENT_API_ALLOWED_CIDRS`, `ADMIN_UI_ALLOWED_CIDRS` — see deployment docs).
 - Reject any request missing the required `X-Identity-*` headers — fail closed.
 - Audit-log the headers on every request for post-hoc detection.
@@ -95,7 +95,7 @@ These are non-optional. The salesagent will fail to start if `MANAGED_INSTANCE=t
 
 ## Audit log capture
 
-The salesagent records identity headers in audit log entries for managed-tenant mutations:
+The salesagent records identity headers in audit log entries for embedded-tenant mutations:
 
 - `audit_logs.external_user_email` ← `X-Identity-Email`
 - `audit_logs.external_user_id` ← `X-Identity-User-Id`
@@ -123,7 +123,7 @@ A reverse proxy in front of the salesagent should:
 3. Forward the request to the salesagent with the headers above set.
 4. Pass the original `Host` and protocol via `X-Forwarded-*` headers (`X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Prefix`) so the salesagent renders correct absolute URLs under the path-prefix mount.
 
-Example nginx snippet (managed instance, `network` trust mode):
+Example nginx snippet (embedded instance, `network` trust mode):
 
 ```nginx
 location /storefront/salesagent/ {

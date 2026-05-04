@@ -1,7 +1,7 @@
 # Sprint 1.5 Spec: Storefront Integration Essentials
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md)
+**Builds on:** [sprint 1](./embedded-mode-sprint-1.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 

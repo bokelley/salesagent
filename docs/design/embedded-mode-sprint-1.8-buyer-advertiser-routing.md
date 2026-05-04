@@ -221,11 +221,11 @@ Pydantic field validators on `ProvisionTenantRequest` and `UpdateTenantRequest`:
 
 ### Lock-down via the model-layer write guard
 
-`src/core/database/managed_tenant_guard.py` (sprint 1) blocks UI-driven writes to platform-managed columns when `tenant.is_embedded=true` AND the session isn't flagged with `info["management_api_caller"]`. Today's protected set on `Tenant` is empty (the comment notes "no publisher-writable platform-managed columns").
+`src/core/database/embedded_tenant_guard.py` (sprint 1) blocks UI-driven writes to platform-managed columns when `tenant.is_embedded=true` AND the session isn't flagged with `info["management_api_caller"]`. Today's protected set on `Tenant` is empty (the comment notes "no publisher-writable platform-managed columns").
 
 Add `house_domain` and `public_agent_url` to the protected set. Result:
 - `PATCH /tenants/{tid}` (Tenant Management API, sets `info["management_api_caller"]=True`) → writes succeed.
-- Publisher-facing Settings UI POST → write attempt raises `ManagedTenantWriteError`, surfaced as 403 with the existing `managed_tenant_write_blocked` error code.
+- Publisher-facing Settings UI POST → write attempt raises `EmbeddedTenantWriteError`, surfaced as 403 with the existing `embedded_tenant_write_blocked` error code.
 
 ### Settings page UX
 
@@ -250,7 +250,7 @@ The `readonly` attribute is cosmetic (DOM-side only) — the model-layer guard i
 
 ### Setup-checklist hide-when-set
 
-Sprint 1.7 added "Publisher House Domain" + "Public Agent URL" as the first two critical-tasks items. Sprint 1.8 hides them when both are populated AND tenant is managed-externally:
+Sprint 1.7 added "Publisher House Domain" + "Public Agent URL" as the first two critical-tasks items. Sprint 1.8 hides them when both are populated AND tenant is embedded:
 
 ```python
 # src/services/setup_checklist_service.py:_check_critical_tasks
@@ -302,7 +302,7 @@ The existing `_check_critical_tasks` / `_check_recommended_tasks` / `_check_opti
 
 Per the sprint-1 platform-vs-publisher split:
 
-| Task | scope (managed-externally) | scope (open-instance) |
+| Task | scope (embedded) | scope (open-instance) |
 |---|---|---|
 | `house_domain` | `platform` (Scope3 sets at provision) | `publisher` |
 | `public_agent_url` | `platform` | `publisher` |
@@ -312,7 +312,7 @@ Per the sprint-1 platform-vs-publisher split:
 | `sso_configuration` | hidden (SSO managed by upstream platform) | `publisher` |
 | `authorized_properties` (legacy) | hidden (deprecated; brand.json drives in §1.7) | `publisher` |
 
-`scope=platform` items in a managed-externally tenant signal "Scope3 didn't finish provisioning" — Storefront should escalate that internally, not expose to the publisher. `scope=publisher` items deep-link via `configure_path` into the iframe at the right Settings tab.
+`scope=platform` items in a embedded tenant signal "Scope3 didn't finish provisioning" — Storefront should escalate that internally, not expose to the publisher. `scope=publisher` items deep-link via `configure_path` into the iframe at the right Settings tab.
 
 ### `configure_path` shape
 
@@ -332,7 +332,7 @@ Sprint 1.5's status cache (5s TTL, per-tenant) covers the new block automaticall
 Sprint 1.5's status endpoint exposes per-sync state (`syncs.inventory`, `syncs.custom_targeting`, `syncs.advertisers`); Sprint 1.5 + crontab already auto-run them every 6h via `sync_all_tenants.py`. What's missing for embedded-mode UX:
 
 1. **Configurable per-tenant cadence** so publishers with high-volume catalogs can pull more frequently (or low-volume publishers can save cron load).
-2. **First-sync-on-provision** so a managed tenant has data the moment Scope3 finishes provisioning (no "wait 6 hours").
+2. **First-sync-on-provision** so a embedded tenant has data the moment Scope3 finishes provisioning (no "wait 6 hours").
 3. **Single `POST /tenants/{tid}/refresh` endpoint** that fires all enabled syncs together — Storefront's UI collapses N "Sync inventory" / "Sync targeting" / "Sync advertisers" buttons into one.
 
 ### Schema
@@ -389,12 +389,12 @@ Five migrations + Sprint 1.6 cleanup:
 
 - **`src/admin/api_schemas/tenant_management.py`** — `BuyerAdvertiserMapping` (request + response variants), `GamAdvertiser`, `RecentBuyer`, `ListBuyerAdvertiserMappingsResponse`, `ListGamAdvertisersResponse`, `ListRecentBuyersResponse`. Plus `default_gam_advertiser_id` on `ProvisionTenantRequest`, `UpdateTenantRequest`, `TenantDetail`. Plus field validators on `house_domain` (domain regex, force-lowercase) and `public_agent_url` (HTTPS-only).
 - **`src/admin/tenant_management_api.py`** — five new endpoints (mapping CRUD: GET/POST/PATCH/DELETE; mapping-list GET, advertisers GET, recent-buyers GET).
-- **`src/core/database/managed_tenant_guard.py`** — add `house_domain` + `public_agent_url` to the `Tenant` protected-columns set. UI writes from managed-externally tenants raise `ManagedTenantWriteError`.
+- **`src/core/database/embedded_tenant_guard.py`** — add `house_domain` + `public_agent_url` to the `Tenant` protected-columns set. UI writes from embedded tenants raise `EmbeddedTenantWriteError`.
 - **`src/services/buyer_advertiser_routing.py`** — new module: `resolve_advertiser_for_buy(tenant_id, account_ref)` runs the precedence chain.
 - **`src/core/tools/media_buy_create.py`** — replace Sprint 1.6's `resolve_account_advertiser` call with the new routing service. Account row creation moves into the resolver.
 - **`src/services/gam_advertiser_search.py`** — search/paginate the local `gam_advertisers` cache for `/gam/advertisers`.
 - **`src/services/recent_buyers_rollup.py`** — joins Account + MediaBuy for `/recent-buyers`.
-- **`src/services/setup_checklist_service.py`** — hide `house_domain` + `public_agent_url` tasks when tenant is managed-externally and both fields are populated. Add `scope` ("platform" | "publisher") + `severity` ("blocker" | "warning" | "info") fields to `SetupTask` for §7. Extend `get_setup_status` to emit the §7-shaped output.
+- **`src/services/setup_checklist_service.py`** — hide `house_domain` + `public_agent_url` tasks when tenant is embedded and both fields are populated. Add `scope` ("platform" | "publisher") + `severity` ("blocker" | "warning" | "info") fields to `SetupTask` for §7. Extend `get_setup_status` to emit the §7-shaped output.
 - **`src/admin/services/tenant_status_service.py`** — fold setup_checklist output into `_build_status` as the new `setup_tasks` block (sprint 1.5 cache covers it for free).
 - **`templates/tenant_settings.html`** — `readonly` on house_domain + public_agent_url inputs when `tenant.is_embedded`; "Platform-managed by Scope3" banner. `{% if not is_embedded %}` guard around per-sync trigger buttons (§8); `Refresh tenant` button always visible.
 - **`src/admin/tenant_management_api.py`** — `POST /tenants/{tid}/refresh` endpoint (§8). Returns 202 with `sync_run_ids`. 60s idempotency window via the existing `SyncJob.started_at` index.
@@ -442,16 +442,16 @@ Five migrations + Sprint 1.6 cleanup:
 ### §6 Platform-managed lock-down
 - [ ] `POST /tenants/provision` rejects `house_domain` with scheme/path/uppercase (422 with field validator error). Force-lowercase before persist.
 - [ ] `POST /tenants/provision` rejects `public_agent_url=http://...` (422); accepts `https://...`.
-- [ ] `PATCH /tenants/{tid}` (Tenant Management API) updates both fields successfully on a managed-externally tenant.
-- [ ] Direct DB write to `Tenant.house_domain` outside the management API on a `is_embedded=true` tenant raises `ManagedTenantWriteError` (model-layer guard).
-- [ ] Setup checklist for managed-externally tenant with both fields set OMITS the "Publisher House Domain" + "Public Agent URL" critical-tasks items.
+- [ ] `PATCH /tenants/{tid}` (Tenant Management API) updates both fields successfully on a embedded tenant.
+- [ ] Direct DB write to `Tenant.house_domain` outside the management API on a `is_embedded=true` tenant raises `EmbeddedTenantWriteError` (model-layer guard).
+- [ ] Setup checklist for embedded tenant with both fields set OMITS the "Publisher House Domain" + "Public Agent URL" critical-tasks items.
 - [ ] Settings page renders `readonly` on both fields + "Platform-managed by Scope3" banner when `tenant.is_embedded=true`.
 - [ ] Open-instance (is_embedded=false) tenants always see editable fields + setup tasks (no behavior change).
 
 ### §7 setup_tasks block on /status
 - [ ] `GET /tenants/{tid}/status` response includes `setup_tasks` block with `blocker_count`, `warning_count`, `items[]`.
 - [ ] Each item carries `id`, `name`, `severity ∈ blocker|warning|info`, `scope ∈ platform|publisher`, `description`, `configure_path`.
-- [ ] `house_domain` / `public_agent_url` items render `scope="platform"` for managed-externally tenants, `scope="publisher"` for open-instance.
+- [ ] `house_domain` / `public_agent_url` items render `scope="platform"` for embedded tenants, `scope="publisher"` for open-instance.
 - [ ] `default_gam_advertiser_id` (from §1) item renders `severity="blocker"` when null, `scope="publisher"`.
 - [ ] Items where the underlying task IS complete render `severity="info"` (Storefront UI choice on whether to display).
 - [ ] Status cache invalidation hooks (sprint 1.5: adapter test, PATCH, lifecycle) cover the new block — flipping a tenant's `default_gam_advertiser_id` reflects within 5s.

@@ -1,7 +1,7 @@
 # Sprint 3 Spec: Workflow Mutations + Detail Read Endpoints
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md)
+**Builds on:** [sprint 1](./embedded-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./embedded-mode-sprint-2.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
@@ -213,7 +213,7 @@ Reuses sprint 1's `ApiError`. New error codes:
 
 **Audit log:**
 - [ ] `action_prefix` filter matches dotted prefixes correctly.
-- [ ] `external_*` filter params work for managed-tenant searches.
+- [ ] `external_*` filter params work for embedded-tenant searches.
 - [ ] Cursor pagination doesn't skip or duplicate entries when new audit rows are inserted between calls.
 
 **Sync history:**
@@ -222,7 +222,7 @@ Reuses sprint 1's `ApiError`. New error codes:
 - [ ] Historical entries match the most-recent values surfaced in `GET /status` (sprint 1.5).
 
 **Integration with prior sprints:**
-- [ ] Provision a managed tenant; trigger a sync via existing `sync_api`; `GET /sync-history` includes the run; `GET /status` reflects current state.
+- [ ] Provision a embedded tenant; trigger a sync via existing `sync_api`; `GET /sync-history` includes the run; `GET /status` reflects current state.
 - [ ] Create a workflow (via internal mechanism — workflows are created by buyer protocol, not API); approve via API; status flips; audit log records the decision; `GET /status.workflows.open_count` decreases on next fetch.
 
 **OpenAPI:**

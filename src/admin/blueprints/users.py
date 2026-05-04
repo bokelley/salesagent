@@ -21,12 +21,23 @@ users_bp = Blueprint("users", __name__, url_prefix="/tenant/<tenant_id>/users")
 @users_bp.route("")
 @require_tenant_access()
 def list_users(tenant_id):
-    """List users for a tenant."""
+    """List users for a tenant.
+
+    On embedded tenants the page is replaced with the platform-managed
+    lock banner — identity flows through ``X-Identity-*`` headers per the
+    embedded-mode identity contract, so there are no salesagent-side User
+    records to manage. Returns 200 (not 404) so deep-links from the
+    setup-task panel land on a "managed by your platform" explanation
+    rather than a dead end.
+    """
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
             flash("Tenant not found", "error")
             return redirect(url_for("core.index"))
+
+        if tenant.is_embedded:
+            return render_template("_embedded_locked_page.html", tenant=tenant), 200
 
         stmt = select(User).filter_by(tenant_id=tenant_id).order_by(User.email)
         users = db_session.scalars(stmt).all()

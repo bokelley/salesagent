@@ -1,20 +1,22 @@
-# Sprint 2 Spec: Managed-Mode Hardening — UI, Network, Buyer-Protocol Auth
+# Sprint 2 Spec: Embedded-Mode Hardening — UI, Network, Buyer-Protocol Auth
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md)
+**Builds on:** [sprint 1](./embedded-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
+> **Reference deployment.** Concrete examples in this doc cite Scope3 Storefront as the first reference deployment. The deliverables are generic — any host product embedding PSA uses the same surface.
+
 ## Scope
 
-Sprints 1 + 1.5 built the platform-managed API surface and the storefront-integration essentials (preview, status, identity contract). Sprint 2 makes the runtime actually behave correctly in embedded mode:
+Sprints 1 + 1.5 built the platform-managed API surface and the host-integration essentials (preview, status, identity contract). Sprint 2 makes the runtime actually behave correctly in embedded mode:
 
 1. **UI middleware** — scopes nav, hides platform-managed config pages, renders read-only banners. Publisher-managed pages remain fully writable.
-2. **Identity-propagation request scoping** — the `X-Identity-*` header reader (built in sprint 1) gets wired into the request lifecycle so every UI request on a managed instance is identity-scoped. Audit log captures it.
+2. **Identity-propagation request scoping** — the `X-Identity-*` header reader (built in sprint 1) gets wired into the request lifecycle so every UI request on an embedded instance is identity-scoped. Audit log captures it.
 3. **Network policy enforcement** — when `MANAGED_INSTANCE=true`, every surface (MCP/A2A, Tenant Management API, admin UI direct URL) rejects traffic outside the configured private CIDR.
 4. **`resolve_identity()` for MCP/A2A in embedded mode** — header-based principal/tenant scoping, no bearer tokens. Open-instance behavior unchanged.
 
-After sprint 2, a embedded-mode salesagent is fully operational end-to-end. No public exposure, no per-principal tokens, all writes either go through the Tenant Management API (platform-managed) or through the proxied UI scoped by upstream identity (publisher-managed).
+After sprint 2, an embedded-mode salesagent is fully operational end-to-end. No public exposure, no per-principal tokens, all writes either go through the Tenant Management API (platform-managed) or through the proxied UI scoped by upstream identity (publisher-managed).
 
 Out of scope for sprint 2 (deferred to sprints 3+):
 - Workflow approve/reject + remaining read-only operational endpoints (workflow detail, media-buys, audit-log, sync-history) — sprint 3
@@ -24,19 +26,19 @@ Out of scope for sprint 2 (deferred to sprints 3+):
 
 ## Components
 
-### 1. UI middleware: `managed_tenant_middleware`
+### 1. UI middleware: `embedded_tenant_middleware`
 
-Lives in `src/admin/middleware/managed_tenant.py`. Registered as a Flask `before_request` hook on the admin app.
+Lives in `src/admin/middleware/embedded_tenant.py`. Registered as a Flask `before_request` hook on the admin app.
 
 **Responsibilities:**
 
 ```python
-def managed_tenant_middleware():
+def embedded_tenant_middleware():
     """
     Runs before every admin route. Determines whether the current request
-    is on a managed tenant, and if so, applies the platform-managed scoping rules.
+    is on a embedded tenant, and if so, applies the platform-managed scoping rules.
 
-    Sets g.managed_context with:
+    Sets g.embedded_context with:
       - is_managed: bool
       - external_identity: PropagatedIdentity | None  (from X-Identity-* headers)
       - is_super_admin_override: bool                  (set by super-admin backdoor)
@@ -82,10 +84,10 @@ The middleware reads `view_func._platform_managed` at request time; routes witho
 **Banner**: a Jinja macro in `templates/components/managed_banner.html`:
 
 ```jinja
-{% if g.managed_context and g.managed_context.is_managed and not g.managed_context.is_super_admin_override %}
+{% if g.embedded_context and g.embedded_context.is_managed and not g.embedded_context.is_super_admin_override %}
   <div class="banner banner--managed">
-    Platform settings are managed by {{ g.managed_context.external_identity.source | source_display_name }}.
-    To change these, edit them in {{ g.managed_context.external_identity.source | source_display_name }}.
+    Platform settings are managed by {{ g.embedded_context.external_identity.source | source_display_name }}.
+    To change these, edit them in {{ g.embedded_context.external_identity.source | source_display_name }}.
   </div>
 {% endif %}
 ```
@@ -95,10 +97,10 @@ Rendered at the top of every platform-managed page. `source_display_name` filter
 **Nav scoping**: existing nav templates call a helper:
 
 ```python
-def visible_nav_items(role, managed_context) -> list[NavItem]:
+def visible_nav_items(role, embedded_context) -> list[NavItem]:
     """Filter the nav based on managed status and role."""
     items = ALL_NAV_ITEMS
-    if managed_context.is_managed and not managed_context.is_super_admin_override:
+    if embedded_context.is_managed and not embedded_context.is_super_admin_override:
         items = [i for i in items if not i.platform_managed]
     items = [i for i in items if role >= i.required_role]
     return items
@@ -110,8 +112,8 @@ Items get `platform_managed=True` in the registry — same classification as rou
 
 Sprint 1 shipped the `read_identity_from_request()` reader as a function. Sprint 2 wires it into the request lifecycle:
 
-- `managed_tenant_middleware` calls it, sets `g.managed_context.external_identity`.
-- Audit log decorator (`src/admin/utils/audit_decorator.py`) reads `g.managed_context.external_identity` and populates the new `external_*` columns on `AuditLog` rows.
+- `embedded_tenant_middleware` calls it, sets `g.embedded_context.external_identity`.
+- Audit log decorator (`src/admin/utils/audit_decorator.py`) reads `g.embedded_context.external_identity` and populates the new `external_*` columns on `AuditLog` rows.
 - Existing user-resolution code (`src/admin/auth_helpers.py`) returns the propagated identity when `is_managed && !is_super_admin_override`, so existing handlers don't need to know whether they're running in embedded mode — they just see "current user" with role.
 
 ### 4. `resolve_identity()` for MCP/A2A in embedded mode
@@ -198,7 +200,7 @@ def network_policy_middleware(allowed_cidrs: list[str], surface_name: str):
 | Tenant Management API | `MANAGEMENT_API_ALLOWED_CIDRS` |
 | Admin UI direct (super-admin backdoor) | `ADMIN_UI_ALLOWED_CIDRS` (typically VPN range) |
 
-If a surface's env var is unset on a managed instance, the salesagent **fails to start** with a configuration error. Forces deployers to make a deliberate choice — never silent "allow all" defaults.
+If a surface's env var is unset on a embedded instance, the salesagent **fails to start** with a configuration error. Forces deployers to make a deliberate choice — never silent "allow all" defaults.
 
 **Trusted-proxy handling**: `TRUSTED_PROXY_CIDRS` lists the upstream proxy ranges (Scope3's nginx). Requests from those IPs have their `X-Forwarded-For` honored; everything else uses `remote_addr`. Standard pattern — `werkzeug.middleware.proxy_fix.ProxyFix` configured at app init also relies on this.
 
@@ -206,9 +208,9 @@ If a surface's env var is unset on a managed instance, the salesagent **fails to
 
 ### 6. Super-admin backdoor
 
-Salesagent staff log in via Google OAuth (existing flow), email allowlisted via `SUPER_ADMIN_EMAILS`. On managed instances:
+Salesagent staff log in via Google OAuth (existing flow), email allowlisted via `SUPER_ADMIN_EMAILS`. On embedded instances:
 - Reachable via private network only (`ADMIN_UI_ALLOWED_CIDRS` includes the VPN/bastion range).
-- Sets `g.managed_context.is_super_admin_override = true` in the middleware.
+- Sets `g.embedded_context.is_super_admin_override = true` in the middleware.
 - Bypasses platform-managed-route restrictions, but each mutation is **audit-logged with the super-admin email and "override" reason**.
 - Bypasses the model-layer write guard via `session.info["super_admin_override"] = True` (set by an `@super_admin_override` decorator applied to relevant emergency routes).
 
@@ -249,22 +251,22 @@ Returned as 403 responses.
 ## Acceptance criteria
 
 **UI middleware:**
-- [ ] Routes annotated `@platform_managed` return 403 on POST/PUT/PATCH/DELETE for non-super-admin users on managed tenants.
+- [ ] Routes annotated `@platform_managed` return 403 on POST/PUT/PATCH/DELETE for non-super-admin users on embedded tenants.
 - [ ] Same routes return 200 with read-only template + banner on GET.
 - [ ] Routes without the annotation work normally (publisher-managed paths unaffected).
-- [ ] Nav helper hides platform-managed items for managed tenants; "Settings" parent dropped if all children hidden.
-- [ ] Banner renders only on managed-tenant pages, never on unmanaged or super-admin-override sessions.
+- [ ] Nav helper hides platform-managed items for embedded tenants; "Settings" parent dropped if all children hidden.
+- [ ] Banner renders only on embedded-tenant pages, never on non-embedded or super-admin-override sessions.
 
 **Identity propagation:**
-- [ ] Request to a managed-tenant URL without `X-Identity-*` headers returns 403 `identity_required`.
+- [ ] Request to a embedded-tenant URL without `X-Identity-*` headers returns 403 `identity_required`.
 - [ ] Request with `X-Identity-Org-Id` not matching the URL's tenant returns 403 `identity_org_mismatch`.
-- [ ] Audit log entries on managed-tenant mutations carry the external_* fields populated from headers.
+- [ ] Audit log entries on embedded-tenant mutations carry the external_* fields populated from headers.
 - [ ] Audit log entries via Tenant Management API carry `external_source="management_api"`.
 
 **MCP/A2A embedded-mode resolve_identity:**
 - [ ] Call to MCP with `X-Tenant-Id` + `X-Principal-Id` resolves correctly; no bearer token required or accepted.
 - [ ] Call to MCP without those headers returns the protocol's auth-error response (e.g., MCP error -32001).
-- [ ] Call to MCP with bearer token `x-adcp-auth` on a managed instance is **ignored** (not a fallback) — embedded mode rejects the call same as no headers.
+- [ ] Call to MCP with bearer token `x-adcp-auth` on a embedded instance is **ignored** (not a fallback) — embedded mode rejects the call same as no headers.
 - [ ] On `MANAGED_INSTANCE=false`, existing bearer-token flow works unchanged (regression test).
 
 **Network policy:**
@@ -275,12 +277,12 @@ Returned as 403 responses.
 - [ ] `X-Forwarded-For` is honored only when source IP is in `TRUSTED_PROXY_CIDRS`.
 
 **Super-admin override:**
-- [ ] Logged-in super admin accessing platform-managed route on managed tenant: succeeds.
+- [ ] Logged-in super admin accessing platform-managed route on embedded tenant: succeeds.
 - [ ] Each super-admin override mutation creates an audit log entry with `external_source="super_admin_override"`.
 - [ ] Non-super-admin Google session attempting same: 403.
 
 **Integration:**
-- [ ] End-to-end: provision a managed tenant via API; visit the proxied UI as a Scope3 user; products page is editable; tenant settings page is read-only with banner; attempt POST to settings update → 403; super-admin login bypass works.
+- [ ] End-to-end: provision a embedded tenant via API; visit the proxied UI as a Scope3 user; products page is editable; tenant settings page is read-only with banner; attempt POST to settings update → 403; super-admin login bypass works.
 - [ ] End-to-end: Scope3 buyer agent calls `/mcp/get_products` with `X-Tenant-Id`/`X-Principal-Id` → succeeds. Same call from public IP → 403. Same call without headers → auth error.
 
 **Regressions:**

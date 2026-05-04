@@ -1,0 +1,16 @@
+{#
+  Locked-page wrapper for hidden routes on embedded tenants.
+
+  Renders only the embedded lock banner, wrapped in the standard base
+  layout, so deep-links from setup-task panels land here cleanly. See
+  docs/design/embedded-mode-sprint-4-ui-hardening.md.
+#}
+{% extends "base.html" %}
+
+{% block title %}Managed by Platform - {{ tenant.name }}{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 720px; margin: 2rem auto;">
+  {% include "_embedded_lock_banner.html" %}
+</div>
+{% endblock %}

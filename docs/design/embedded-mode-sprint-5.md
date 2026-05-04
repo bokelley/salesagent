@@ -1,7 +1,7 @@
 # Sprint 5 Spec: Remaining Publisher-Managed Sub-Resources via API (Optional)
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md), [sprint 3](./managed-tenant-mode-sprint-3.md), [sprint 4](./managed-tenant-mode-sprint-4.md)
+**Builds on:** [sprint 1](./embedded-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./embedded-mode-sprint-2.md), [sprint 3](./embedded-mode-sprint-3.md), [sprint 4](./embedded-mode-sprint-4.md)
 **Status:** Draft, optional
 **Last updated:** 2026-05-04
 
@@ -277,4 +277,4 @@ Reuses sprint 1's `ApiError`. New error codes introduced in sprint 5:
 
 ## What sprint 6 builds on this
 
-Sprint 5 closes out the optional publisher-managed API surface. The only remaining sprint is [sprint 6](./managed-tenant-mode-sprint-6.md) (also optional) — outbound webhooks for state changes, replacing polling load on `GET /status` and `GET /workflows`.
+Sprint 5 closes out the optional publisher-managed API surface. The only remaining sprint is [sprint 6](./embedded-mode-sprint-6.md) (also optional) — outbound webhooks for state changes, replacing polling load on `GET /status` and `GET /workflows`.

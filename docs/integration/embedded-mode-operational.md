@@ -1,4 +1,4 @@
-# Managed Mode — Operational Reference
+# Embedded Mode — Operational Reference
 
 **Status:** Working draft (answers Scope3 operational asks D.1–D.4)
 **Last updated:** 2026-05-04
@@ -94,7 +94,7 @@ After `docker compose -p core -f docker-compose.core.yml up -d`:
 3. Run the end-to-end smoke to verify the stack is wired:
 
    ```bash
-   ./scripts/managed_mode_smoke.sh
+   ./scripts/embedded_mode_smoke.sh
    ```
 
    Hits `health` → `preview-adapter` → `provision` → `status` and prints the

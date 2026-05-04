@@ -444,29 +444,35 @@
 <div class="settings-layout">
     <!-- Settings Navigation -->
     <nav class="settings-nav">
+        {% if not tenant.is_embedded %}
         <a class="settings-nav-item active" data-section="account">
             <span class="settings-nav-icon">🏢</span>
             <span>Account</span>
         </a>
+        {% endif %}
 
         <a class="settings-nav-item" href="{{ url_for('tenants.setup_checklist', tenant_id=tenant.tenant_id) }}">
             <span class="settings-nav-icon">✅</span>
             <span>Setup Checklist</span>
         </a>
 
+        {% if not tenant.is_embedded %}
         <a class="settings-nav-item" href="{{ url_for('users.list_users', tenant_id=tenant.tenant_id) }}">
             <span class="settings-nav-icon">👥</span>
             <span>Users & Access</span>
         </a>
+        {% endif %}
 
         <div class="settings-nav-separator"></div>
 
+        {% if not tenant.is_embedded %}
         <a class="settings-nav-item" data-section="adserver">
             <span class="settings-nav-icon">🖥️</span>
             <span>Ad Server</span>
         </a>
+        {% endif %}
 
-        <a class="settings-nav-item" data-section="business-rules">
+        <a class="settings-nav-item{% if tenant.is_embedded %} active{% endif %}" data-section="business-rules">
             <span class="settings-nav-icon">📋</span>
             <span>Policies & Workflows</span>
         </a>
@@ -512,6 +518,17 @@
 
     <!-- Settings Content -->
     <div class="settings-content">
+        {% if tenant.is_embedded %}
+        {# Embedded tenants: account/adserver/branding/access-control are platform-managed.
+           Render the lock banner so deep-links to these anchors land somewhere
+           explanatory rather than on a blank page. #}
+        <div id="account" class="settings-section">
+            {% include "_embedded_lock_banner.html" %}
+        </div>
+        <div id="adserver" class="settings-section">
+            {% include "_embedded_lock_banner.html" %}
+        </div>
+        {% else %}
         <!-- Account Settings (renamed from General) -->
         <div id="account" class="settings-section active">
             <div class="settings-header">
@@ -1166,6 +1183,7 @@
                 {% endif %}{# End legacy adapter config #}
             </div>
         </div>
+        {% endif %}{# End: not tenant.is_embedded — account + adserver sections #}
 
         <!-- Policies & Workflows Section -->
         <div id="business-rules" class="settings-section">
@@ -1197,6 +1215,29 @@
                     </div>
                     {% endif %}
 
+                    {% if tenant.is_embedded %}
+                    {# Embedded tenants: currency is set at provision and owned by the
+                       upstream platform. Render read-only — no add/remove/edit UI. #}
+                    <div id="currency-limits-container" style="margin-bottom: 1.5rem;">
+                        {% if currency_limits %}
+                            {% for limit in currency_limits %}
+                            <div class="currency-limit-item" data-currency="{{ limit.currency_code }}" style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; padding: 0.75rem 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
+                                <strong style="color: #1f2937;">Currency:</strong>
+                                <span style="font-weight: 600;">{{ limit.currency_code }}</span>
+                                <small style="color: #6b7280; margin-left: auto;">
+                                    Set by your platform at provisioning.
+                                </small>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div style="padding: 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
+                                <small style="color: #6b7280;">
+                                    No currencies configured by your platform yet.
+                                </small>
+                            </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
                     <!-- Currency Limits Management -->
                     <div id="currency-limits-container" style="margin-bottom: 1.5rem;">
                         {% if currency_limits %}
@@ -1280,6 +1321,7 @@
                             Supports international advertisers. Common currencies: USD, EUR, GBP, CAD, AUD, JPY
                         </small>
                     </div>
+                    {% endif %}{# End currency lock for embedded tenants #}
                 </div>
 
                 <!-- Brand Manifest Policy -->
@@ -3235,6 +3277,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // AXE Segment Targeting configuration moved to Inventory page (inventory_unified.html)
 </script>
 
+{% if not tenant.is_embedded %}
 <!-- Add Currency Modal -->
 <div class="modal fade" id="addCurrencyModal" tabindex="-1" aria-labelledby="addCurrencyModalLabel" aria-hidden="true">
     <div class="modal-dialog">
@@ -3283,6 +3326,7 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
     </div>
 </div>
+{% endif %}{# End: addCurrencyModal hidden for embedded tenants #}
 
 <!-- Edit Principal Mappings Modal -->
 <div class="modal fade" id="editPrincipalModal" tabindex="-1" aria-labelledby="editPrincipalModalLabel" aria-hidden="true">

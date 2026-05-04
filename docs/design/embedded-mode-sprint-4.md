@@ -1,7 +1,7 @@
 # Sprint 4 Spec: Publisher-Managed CRUD via API (Optional)
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md), [sprint 3](./managed-tenant-mode-sprint-3.md)
+**Builds on:** [sprint 1](./embedded-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./embedded-mode-sprint-2.md), [sprint 3](./embedded-mode-sprint-3.md)
 **Status:** Draft, optional
 **Last updated:** 2026-05-04
 
@@ -36,27 +36,27 @@ POST    /tenants/{tid}/products/autogenerate-from-gam
 
 ## Auth boundary
 
-Token management is intentionally not part of the Tenant Management API. On a managed instance, the salesagent doesn't authenticate callers at all — network ACL is the trust boundary. Any service that can reach the salesagent's port is, by definition, authorized.
+Token management is intentionally not part of the Tenant Management API. On a embedded instance, the salesagent doesn't authenticate callers at all — network ACL is the trust boundary. Any service that can reach the salesagent's port is, by definition, authorized.
 
 This applies uniformly:
 - **UI proxy**: identity comes from `X-Identity-*` headers, trusted because the network is private.
 - **Tenant Management API**: API key (the one credential that crosses the trust boundary on purpose, identifying the control plane).
-- **MCP/A2A buyer protocol**: no protocol-level auth on managed instances. Caller specifies which principal/tenant the call is on behalf of via headers (likely `X-Principal-Id`, plus `X-Tenant-Id` if not derivable). Same network-trust model as the UI proxy.
+- **MCP/A2A buyer protocol**: no protocol-level auth on embedded instances. Caller specifies which principal/tenant the call is on behalf of via headers (likely `X-Principal-Id`, plus `X-Tenant-Id` if not derivable). Same network-trust model as the UI proxy.
 
 This means:
 - `POST /principals` does not return an API token. Principals are pure advertiser-identity records.
 - There is no token rotation, regeneration, or revocation endpoint.
 - `PrincipalSummary` and `PrincipalDetail` carry no token-related fields.
-- The existing `Principal.token` column stays in the schema for open-instance compatibility but is unused for managed-tenant principals.
+- The existing `Principal.token` column stays in the schema for open-instance compatibility but is unused for embedded-tenant principals.
 
 **For open instances** (today's behavior): MCP/A2A still uses `x-adcp-auth` bearer tokens per principal. This is unchanged. The principal's token is still generated, stored, and used. Embedded mode is the variant that opts out of per-principal credentials in favor of network trust.
 
-**Implementation note**: the salesagent's MCP/A2A endpoints need to know how to scope calls without a bearer token in embedded mode. That `resolve_identity()` change is shipped in [sprint 2](./managed-tenant-mode-sprint-2.md) (embedded-mode hardening). Sprint 4 just consumes the existing infrastructure.
+**Implementation note**: the salesagent's MCP/A2A endpoints need to know how to scope calls without a bearer token in embedded mode. That `resolve_identity()` change is shipped in [sprint 2](./embedded-mode-sprint-2.md) (embedded-mode hardening). Sprint 4 just consumes the existing infrastructure.
 
 Out of scope for sprint 4 (in other sprints):
 - Creative review/approval API (publishers do this in the UI; not commonly automated)
-- Workflow approval API (already in [sprint 3](./managed-tenant-mode-sprint-3.md))
-- Authorized properties / inventory profiles / business rules / agents / policy ([sprint 5](./managed-tenant-mode-sprint-5.md), also optional)
+- Workflow approval API (already in [sprint 3](./embedded-mode-sprint-3.md))
+- Authorized properties / inventory profiles / business rules / agents / policy ([sprint 5](./embedded-mode-sprint-5.md), also optional)
 - Bulk endpoints for principals (`POST /principals/bulk`). Single-create + reasonable rate limits is fine for v1; bulk added if Scope3 needs it.
 
 The model-layer write guard from sprint 1 is **not** modified. Principals, Products, and their child tables are publisher-managed — the existing UI handlers continue to write to them without the guard firing.
@@ -352,8 +352,8 @@ The existing UI blueprints (`src/admin/blueprints/principals.py`, `src/admin/blu
 - [ ] Returns 400 `adapter_not_gam` for non-GAM tenants.
 
 **Integration with prior sprints:**
-- [ ] After sprints 1–4: provision a managed tenant, autogenerate products from GAM, create a principal — entire flow works via API only without touching the UI.
-- [ ] After sprints 1–4: existing UI handlers for principals/products on a managed tenant still work — the model write guard does not fire on these tables.
+- [ ] After sprints 1–4: provision a embedded tenant, autogenerate products from GAM, create a principal — entire flow works via API only without touching the UI.
+- [ ] After sprints 1–4: existing UI handlers for principals/products on a embedded tenant still work — the model write guard does not fire on these tables.
 
 **OpenAPI:**
 - [ ] All 11 endpoints listed in the OpenAPI spec.
@@ -361,11 +361,11 @@ The existing UI blueprints (`src/admin/blueprints/principals.py`, `src/admin/blu
 
 ## Open questions
 
-1. **`resolve_identity()` change for MCP/A2A in embedded mode.** Concrete header names (`X-Principal-Id`, `X-Tenant-Id` vs. reusing existing identity headers), and how the salesagent toggles between bearer-token mode (open instance) and header-scope mode (managed instance). Confirm the existing `resolve_identity()` callsites can branch cleanly on `MANAGED_INSTANCE`. Implementation detail, not a separate design doc.
+1. **`resolve_identity()` change for MCP/A2A in embedded mode.** Concrete header names (`X-Principal-Id`, `X-Tenant-Id` vs. reusing existing identity headers), and how the salesagent toggles between bearer-token mode (open instance) and header-scope mode (embedded instance). Confirm the existing `resolve_identity()` callsites can branch cleanly on `MANAGED_INSTANCE`. Implementation detail, not a separate design doc.
 3. **GAM ad-unit-to-product mapping table.** `skip_existing` requires knowing which products were autogenerated from which ad units. Add `Product.source_ad_unit_id` (nullable string) populated by autogenerate; query by it for the skip check. Does this exist today?
 4. **Product field mapping from GAM ad units.** The autogenerate endpoint needs deterministic rules for mapping ad-unit attributes (sizes → formats, targeting → product targeting, etc.). Specify these mappings in a separate `gam-product-autogenerate-mapping.md` doc since they're substantive.
 5. **Bulk principal creation.** Sprint 4 ships single-create. If Scope3 needs to onboard hundreds at a time, add `POST /principals/bulk` accepting a list. Defer until Scope3 confirms.
 
 ## What sprint 5+ builds on this
 
-If sprint 4 ships, [sprint 5](./managed-tenant-mode-sprint-5.md) (also optional) fills out the remaining publisher-managed sub-resources via API (properties, profiles, slack, business rules, agents, policy) — same plumbing, different tables. [Sprint 6](./managed-tenant-mode-sprint-6.md) (optional) adds outbound webhooks.
+If sprint 4 ships, [sprint 5](./embedded-mode-sprint-5.md) (also optional) fills out the remaining publisher-managed sub-resources via API (properties, profiles, slack, business rules, agents, policy) — same plumbing, different tables. [Sprint 6](./embedded-mode-sprint-6.md) (optional) adds outbound webhooks.

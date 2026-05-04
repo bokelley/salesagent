@@ -3,7 +3,7 @@
 **Status:** Draft
 **Owner:** Sales Agent
 **Last updated:** 2026-05-04
-**Related:** [managed-tenant-mode-sprint-1.md](./managed-tenant-mode-sprint-1.md), [managed-tenant-mode-sprint-4.md](./managed-tenant-mode-sprint-4.md)
+**Related:** [embedded-mode-sprint-1.md](./embedded-mode-sprint-1.md), [embedded-mode-sprint-4.md](./embedded-mode-sprint-4.md)
 
 ## Problem
 
@@ -73,7 +73,7 @@ if account.status == "pending_provision":
         )
 ```
 
-The `ACCOUNT_NOT_PROVISIONED` path is the conservative default — publishers with strong GAM-side ops governance keep `auto_provision_advertisers=false` and the salesagent files an approval workflow visible in the Admin UI. The `auto_provision_advertisers=true` path is for tenants who've delegated advertiser-create authority to the salesagent (Scope3-managed tenants will turn this on at provision time).
+The `ACCOUNT_NOT_PROVISIONED` path is the conservative default — publishers with strong GAM-side ops governance keep `auto_provision_advertisers=false` and the salesagent files an approval workflow visible in the Admin UI. The `auto_provision_advertisers=true` path is for tenants who've delegated advertiser-create authority to the salesagent (Scope3-embedded tenants will turn this on at provision time).
 
 ### `Tenant.auto_provision_advertisers`
 
@@ -204,7 +204,7 @@ Code changes:
 
 ## Sprint placement
 
-This work fits in **Sprint 1.6 or Sprint 4** of the managed-tenant-mode plan. Lighter than Sprint 4's full publisher-CRUD scope; depends on Sprint 1's Tenant Management API existing (which it does). Recommend landing as a discrete sprint right after 1.5 since Scope3's first real `create_media_buy` will hit `ACCOUNT_NOT_PROVISIONED` without it.
+This work fits in **Sprint 1.6 or Sprint 4** of the embedded-mode plan. Lighter than Sprint 4's full publisher-CRUD scope; depends on Sprint 1's Tenant Management API existing (which it does). Recommend landing as a discrete sprint right after 1.5 since Scope3's first real `create_media_buy` will hit `ACCOUNT_NOT_PROVISIONED` without it.
 
 Estimated scope: ~3 days.
 - 0.5d migrations + Tenant flag.
