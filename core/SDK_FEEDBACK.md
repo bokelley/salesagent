@@ -454,21 +454,25 @@ test seam. Asked in round 1; haven't seen it land yet.
 
 ---
 
-## TL;DR for the team — 5 of 15 round-1 asks already shipped 🚀
-
-Tracking via `core/SDK_FEEDBACK.md` git history:
+## TL;DR for the team — running totals 🚀
 
 | Round | Item | Status |
 |-------|------|--------|
-| 1 | #1 Dimensions/Renders public | ✅ DONE in 68699763 |
+| 1 | #1 Dimensions/Renders public | ✅ DONE in main |
 | 1 | #2 MediaBuyFeatures/AiTool public | ✅ DONE |
+| 1 | #5 a2a-sdk 1.0 migration guidance | ✅ DONE in #524 |
 | 1 | #10 make_request_context | ✅ DONE |
-| 1 | #11 build_asgi_app | open (carried as #24) |
+| 1 | #11 build_asgi_app | ✅ DONE in `adcp.testing.decisioning` |
+| 1 | #13 host:* sibling synthesis on allowed_hosts | ✅ DONE in #537 |
 | 1 | #6 codemod auto-apply for safe 78% | open |
-| 2 | #16 PgBackend for IdempotencyStore | new (real blocker for multi-worker) |
-| 2 | #18 TokenAuthMiddleware | new (will write it ourselves; happy to PR) |
-| 2 | #20 DbBackedSubdomainTenantRouter | new (we have a working example to port) |
+| 2 | #17 capability-vs-store-wired silent mismatch | 🚧 in flight (`validate_idempotency.py` on dublin-v18) |
+| 2 | #20 DbBackedSubdomainTenantRouter | ✅ PR'd as **adcp-client-python#544** (`CallableSubdomainTenantRouter`) |
+| 2 | #18 TokenAuthMiddleware | ✅ PR'd as **adcp-client-python#545** (`header_name` + `bearer_prefix_required` on existing `BearerTokenAuthMiddleware`) |
+| 2 | #19 DefaultWebhookSender | **DEFERRED** — surface is more nuanced than initially scoped. The existing `WebhookSender` requires signing keys (no universal default); `auto_emit_completion_webhooks=False` in `hello_seller.py` is structurally correct (no key in a hello-world). Recommend a follow-up issue: boot-time fail-fast when `auto_emit_completion_webhooks=True` AND no `webhook_sender`/`webhook_supervisor` is wired, plus a brighter doc treatment in `hello_seller.py` of why webhooks are off there. |
+| 2 | #16 PgBackend for IdempotencyStore | open (real blocker for multi-worker) |
+| 2 | #21 LazyPlatformRouter | open |
+| 2 | #22 adcp.upstream.gam helper | open (stretch) |
+| 2 | #23 Placement → Product projection helper | open (stretch) |
 
-Items we'd happily PR upstream if it'd land: **#18 TokenAuthMiddleware**
-(salesagent already has the working middleware), **#20 DbBackedSubdomainTenantRouter**
-(again, working impl in `core/main.py`). Just say the word.
+11 of 18 items closed or in flight. Round-3 asks will follow as we keep
+porting against `core/`.
