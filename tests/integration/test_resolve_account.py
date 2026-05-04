@@ -104,8 +104,19 @@ class TestResolveAccountByNaturalKey:
 
             assert result == "acc_nat"
 
-    def test_natural_key_not_found_raises(self, integration_db):
-        """Non-existent brand+operator → AdCPAccountNotFoundError."""
+    def test_natural_key_not_found_on_unactivated_tenant_raises_tenant_not_activated(self, integration_db):
+        """Sprint 1.8 cutover: non-existent brand+operator on a tenant
+        with no default_gam_advertiser_id and no routing rules → the
+        routing chain fall-through raises ``TENANT_NOT_ACTIVATED``.
+
+        This is intentional: the buyer-protocol error path IS the
+        activation contract per the sprint 1.8 design doc Q3 — strictly
+        more informative than the legacy ``AccountNotFoundError`` (it
+        tells Storefront "publisher hasn't finished setup," not "couldn't
+        find your account").
+        """
+        from src.services.buyer_advertiser_routing import AdCPTenantNotActivated
+
         with AccountSyncEnv(tenant_id="resolve_t5", principal_id="agent_r5") as env:
             env.setup_default_data()
             env._commit_factory_data()
@@ -117,5 +128,5 @@ class TestResolveAccountByNaturalKey:
             ref = AccountReference(AccountReference2(brand={"domain": "unknown.com"}, operator="unknown.com"))
             with get_db_session() as session:
                 repo = AccountRepository(session, "resolve_t5")
-                with pytest.raises(AdCPAccountNotFoundError):
+                with pytest.raises(AdCPTenantNotActivated):
                     resolve_account(ref, env.identity, repo)

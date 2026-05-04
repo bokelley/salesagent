@@ -32,6 +32,8 @@ from src.core.database.models import (
     Account,
     AdapterConfig,
     AdvertiserRoutingRule,
+    AgentAccountAccess,
+    Principal,
     Tenant,
 )
 from src.core.exceptions import AdCPError
@@ -323,6 +325,39 @@ def create_account_from_routing(
         source=f"auto:routing-chain:{resolved_via}",
     )
     session.add(account)
+
+    # Grant the buyer agent access to the new Account so subsequent
+    # AccountRepository.has_access() checks succeed without a manual
+    # provisioning step. Operator-billed accounts (no principal_id)
+    # skip this — access is governed by tenant-wide auth instead.
+    #
+    # Defense-in-depth: only grant if the Principal row exists. The
+    # managed-mode auth bypass creates Principals on first identity-
+    # header request, so in production this should always be true.
+    # Skipping the FK insert avoids killing the buy flow if the auth
+    # path drifts; the access check downstream will surface as a
+    # cleaner authorization error than an FK violation.
+    if principal_id:
+        principal_exists = session.scalars(
+            select(Principal.principal_id).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+        ).first()
+        if principal_exists:
+            session.add(
+                AgentAccountAccess(
+                    tenant_id=tenant_id,
+                    principal_id=principal_id,
+                    account_id=account.account_id,
+                )
+            )
+        else:
+            logger.warning(
+                "[ROUTING] skipping AgentAccountAccess grant for tenant=%s "
+                "principal=%s (Principal row not found — auth bypass "
+                "should have created it)",
+                tenant_id,
+                principal_id,
+            )
+
     logger.info(
         "[ROUTING] auto-created Account %s for tenant %s via %s -> advertiser %s",
         account.account_id,

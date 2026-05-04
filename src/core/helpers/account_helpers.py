@@ -114,7 +114,20 @@ def _resolve_by_natural_key(
     identity: ResolvedIdentity,
     repo: AccountRepository,
 ) -> str:
-    """Resolve by natural key (brand + operator + sandbox) — lookup + ambiguity check + access check + status check."""
+    """Resolve by natural key (brand + operator + sandbox).
+
+    Lookup + ambiguity check + access check + status check. When no
+    Account matches the natural key, falls through to the sprint 1.8
+    buyer-advertiser routing chain to auto-create one — see
+    ``docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md``.
+
+    The chain raises ``AdCPTenantNotActivated`` (TENANT_NOT_ACTIVATED)
+    when the tenant has neither routing rules nor a default advertiser.
+    That error propagates unchanged — it's strictly more informative
+    than ``AccountNotFoundError`` ("publisher hasn't finished setup"
+    vs "account not found"), and the buyer-protocol error path IS the
+    activation contract.
+    """
     brand_domain = ref.brand.domain
     brand_id = None
     if ref.brand.brand_id is not None:
@@ -136,10 +149,28 @@ def _resolve_by_natural_key(
 
     account = matches[0] if matches else None
     if account is None:
-        raise AdCPAccountNotFoundError(
-            f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
-            details={"suggestion": "Use list_accounts to find valid accounts."},
+        # Sprint 1.8 cutover: walk the routing chain to auto-create the
+        # Account with the resolved advertiser stamped on platform_mappings.
+        # Subsequent buys with the same triple hit the natural-key fast
+        # path above. Imported lazily to keep account_helpers free of
+        # transitive routing-service deps for callers that don't need it.
+        from src.services.buyer_advertiser_routing import create_account_from_routing
+
+        if identity.tenant_id is None:
+            raise AdCPAccountNotFoundError(
+                f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
+                details={"suggestion": "Use list_accounts to find valid accounts."},
+            )
+
+        # AdCPTenantNotActivated propagates unchanged — see docstring above.
+        new_account = create_account_from_routing(
+            repo._session,
+            identity.tenant_id,
+            ref,
+            principal_id=identity.principal_id,
         )
+        repo._session.flush()
+        return new_account.account_id
 
     # Access check — parity with _resolve_by_id (lines 100-102)
     principal_id = identity.principal_id
