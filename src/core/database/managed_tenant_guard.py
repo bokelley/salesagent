@@ -47,7 +47,10 @@ class ManagedTenantWriteError(Exception):
 # billing_plan, is_active, external_* are all platform concerns. Listed empty for clarity.
 PUBLISHER_WRITABLE_FIELDS: dict[type, set[str]] = {
     Tenant: set(),
-    AdapterConfig: set(),
+    # Sprint 1.8: gam_sandbox_advertiser_id is a runtime cache populated lazily
+    # by the routing chain on first sandbox call (not a user-editable surface).
+    # Routing-chain writes are internal infrastructure, not publisher UI traffic.
+    AdapterConfig: {"gam_sandbox_advertiser_id"},
 }
 
 
