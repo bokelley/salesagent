@@ -158,6 +158,18 @@ class Tenant(Base, JSONValidatorMixin):
     # authorize this tenant's agent. Managed-mode tenants share one
     # (https://interchange.io); self-hosted publishers use their own salesagent.
     public_agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Sprint 1.8 buyer-advertiser routing — see
+    # docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md.
+    # Required-before-activation fallback advertiser. Buys whose
+    # (operator_domain, brand_house, brand_id) triple doesn't match a
+    # routing rule fall through to this advertiser; if NULL, the routing
+    # chain raises TENANT_NOT_ACTIVATED (Q3: implicit activation —
+    # buyer-protocol error IS the contract).
+    default_gam_advertiser_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Per-tenant sync cadence override (minutes). NULL = use the cron's
+    # default 6h. sync_all_tenants.py branches on this when picking
+    # tenants per run.
+    sync_cadence_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
@@ -868,6 +880,11 @@ class Account(Base):
     # Internal fields (not in AdCP spec)
     principal_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     platform_mappings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Sprint 1.8: which path the routing chain took to attach the
+    # gam_advertiser_id on this Account. Used by /recent-buyers to
+    # color-code matches vs fall-throughs without re-running resolution.
+    # Legacy rows are NULL; surfaces as "unknown" in API responses.
+    resolved_via: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -895,6 +912,11 @@ class Account(Base):
         CheckConstraint(
             "account_scope IS NULL OR account_scope IN ('operator', 'brand', 'operator_brand', 'agent')",
             name="ck_accounts_account_scope",
+        ),
+        CheckConstraint(
+            "resolved_via IS NULL OR resolved_via IN "
+            "('account', 'sandbox', 'exact', 'house', 'operator', 'default')",
+            name="ck_accounts_resolved_via",
         ),
         Index("idx_accounts_tenant", "tenant_id"),
         Index("idx_accounts_status", "status"),
@@ -1200,6 +1222,12 @@ class AdapterConfig(Base):
     custom_targeting_keys: Mapped[dict] = mapped_column(JSONType, nullable=False, server_default=text("'{}'::jsonb"))
 
     # NOTE: gam_company_id (advertiser_id) is per-principal, stored in Principal.platform_mappings
+
+    # Sprint 1.8 + 1.6: per-tenant sandbox advertiser. Lazy-populated by
+    # ensure_sandbox_advertiser() on first sandbox call; the routing chain
+    # short-circuits sandbox=true buys to this advertiser (don't bill,
+    # don't pollute reports, don't count against inventory).
+    gam_sandbox_advertiser_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Kevel
     kevel_network_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -1925,6 +1953,58 @@ class AuthorizedProperty(Base, JSONValidatorMixin):
         Index("idx_authorized_properties_domain", "publisher_domain"),
         Index("idx_authorized_properties_type", "property_type"),
         Index("idx_authorized_properties_verification", "verification_status"),
+    )
+
+
+class AdvertiserRoutingRule(Base):
+    """Sprint 1.8 — buyer-advertiser routing rules.
+
+    Ordered overrides keyed by ``(operator_domain, brand_house, brand_id)``
+    with NULL-as-wildcard. The resolution chain in
+    :mod:`src.services.buyer_advertiser_routing` reads these rows
+    when a buy comes in carrying inline ``account: AccountReference``
+    (operator + brand + sandbox triple). Precedence: exact → house
+    wildcard → operator wildcard → tenant default → reject.
+
+    See ``docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md``.
+    """
+
+    __tablename__ = "advertiser_routing_rules"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # "rule_<random>"
+    tenant_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
+    )
+    # Buyer agent's domain (e.g. interchange.io, buyer.scope3.com).
+    # Validated AAO-side on POST — must publish a valid adagents.json
+    # listing this tenant's public_agent_url. Always populated.
+    operator_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Parent brand domain (e.g. coca-cola.com). NULL = "any house under
+    # this operator" (operator wildcard).
+    brand_house: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Specific brand within the house (e.g. sprite). NULL = "any brand
+    # under this house" (house wildcard).
+    brand_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Target advertiser. Validated against the synced gam advertisers
+    # cache on POST/PATCH (must reference a real advertiser in the
+    # tenant's GAM network).
+    gam_advertiser_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    tenant = relationship("Tenant", backref="advertiser_routing_rules")
+
+    __table_args__ = (
+        # Uniqueness on the natural key with NULLs participating via
+        # COALESCE coercion (Postgres treats NULL as distinct in UNIQUE
+        # by default). Index defined in the migration since alembic's
+        # autogenerate doesn't handle expression indexes cleanly.
+        Index("idx_routing_rules_tenant", "tenant_id"),
+        Index("idx_routing_rules_operator", "tenant_id", "operator_domain"),
     )
 
 
