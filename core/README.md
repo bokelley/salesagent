@@ -82,8 +82,27 @@ The codemod report at `/tmp/codemod-report.json` lists every v3→v4 issue in
 
 ## Live in dev
 
-`docker compose up -d` brings the full stack up. To run `core/main.py`
-alongside the legacy server:
+`docker compose up -d` brings the full stack up. To make `core/main.py`
+reachable from the host (so `npx @adcp/sdk@latest` etc. can connect),
+create a local `docker-compose.override.yml` (gitignored):
+
+```yaml
+services:
+  adcp-server:
+    ports:
+      - "3001:3001"
+```
+
+Then `docker compose up -d adcp-server` (recreates the container with
+the port mapped). Connect from the host using a tenant subdomain:
+
+```bash
+npx @adcp/sdk@latest http://wonderstruck.localhost:3001/mcp \
+  get_products '{"account":{"account_id":"wonderstruck:demo"},
+                 "buying_mode":"brief","brief":"display ads"}'
+```
+
+To run `core/main.py` alongside the legacy server:
 
 ```bash
 docker compose exec -d adcp-server bash -c \
