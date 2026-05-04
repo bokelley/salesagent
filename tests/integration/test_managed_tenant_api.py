@@ -1702,3 +1702,122 @@ class TestRecentBuyers:
     def test_missing_api_key_returns_401(self, client, tid):
         resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers")
         assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §8 — collapsed refresh endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestRefresh:
+    """``POST /tenants/{tid}/refresh`` — fan-out across sync types with
+    60s idempotency window."""
+
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_refresh")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        t = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(t)
+        return t
+
+    def test_unknown_tenant_returns_404(self, client, auth_headers):
+        resp = client.post("/api/v1/tenant-management/tenants/tenant_missing/refresh", headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_first_call_returns_202_with_three_sync_run_ids(self, client, auth_headers, tid):
+        resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+        assert resp.status_code == 202
+        body = resp.get_json()
+        assert "started_at" in body
+        sync_ids = body["sync_run_ids"]
+        # All three sync types fanned out.
+        assert set(sync_ids.keys()) == {"inventory", "custom_targeting", "advertisers"}
+        # Each gets a unique id (no collisions).
+        assert len(set(sync_ids.values())) == 3
+
+    def test_immediate_repost_returns_same_ids_idempotent(self, client, auth_headers, tid):
+        """Re-POST within the 60s idempotency window returns the SAME ids
+        — avoids hammering GAM when a publisher mashes the button."""
+        first = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers).get_json()
+        second = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers).get_json()
+        assert first["sync_run_ids"] == second["sync_run_ids"]
+
+    def test_creates_pending_sync_jobs_in_db(self, client, auth_headers, tid):
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+
+        client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+
+        with get_db_session() as session:
+            jobs = session.scalars(select(SyncJob).filter_by(tenant_id=tid)).all()
+        # One per sync type + status=pending + triggered_by_id stamps the source.
+        assert len(jobs) == 3
+        assert {j.sync_type for j in jobs} == {"inventory", "custom_targeting", "advertisers"}
+        for job in jobs:
+            assert job.status == "pending"
+            assert job.triggered_by == "api"
+            assert job.triggered_by_id == "tenant_management_api:refresh"
+
+    def test_running_sync_is_reused_in_response(self, client, auth_headers, tid, bound_factories):
+        """A pre-existing running SyncJob is reused even outside the 60s
+        idempotency window — running > stale-but-recent."""
+        from datetime import timedelta as _td
+
+        from src.core.database.models import SyncJob
+
+        old_running_id = "sync_existing_running"
+        bound_factories.add(
+            SyncJob(
+                sync_id=old_running_id,
+                tenant_id=tid,
+                adapter_type="google_ad_manager",
+                sync_type="inventory",
+                status="running",
+                started_at=datetime.now(UTC) - _td(minutes=10),  # outside 60s window
+                triggered_by="cron",
+            )
+        )
+        bound_factories.commit()
+
+        resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+        assert resp.status_code == 202
+        assert resp.get_json()["sync_run_ids"]["inventory"] == old_running_id
+
+    def test_completed_sync_outside_window_is_not_reused(self, client, auth_headers, tid, bound_factories):
+        """A completed SyncJob older than 60s is NOT reused — we want
+        fresh data for the publisher's 'Refresh tenant' click."""
+        from datetime import timedelta as _td
+
+        from src.core.database.models import SyncJob
+
+        bound_factories.add(
+            SyncJob(
+                sync_id="sync_old_completed",
+                tenant_id=tid,
+                adapter_type="google_ad_manager",
+                sync_type="inventory",
+                status="completed",
+                started_at=datetime.now(UTC) - _td(minutes=10),
+                completed_at=datetime.now(UTC) - _td(minutes=8),
+                triggered_by="cron",
+            )
+        )
+        bound_factories.commit()
+
+        resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+        new_id = resp.get_json()["sync_run_ids"]["inventory"]
+        assert new_id != "sync_old_completed"
+
+    def test_invalidates_status_cache(self, client, auth_headers, tid):
+        """A refresh should invalidate the status cache so the next
+        GET /status reflects the new pending sync runs."""
+        first = client.get(f"/api/v1/tenant-management/tenants/{tid}/status", headers=auth_headers).get_json()
+        client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+        second = client.get(f"/api/v1/tenant-management/tenants/{tid}/status", headers=auth_headers).get_json()
+        assert first["fetched_at"] != second["fetched_at"]
+
+    def test_missing_api_key_returns_401(self, client, tid):
+        resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh")
+        assert resp.status_code in (401, 403)

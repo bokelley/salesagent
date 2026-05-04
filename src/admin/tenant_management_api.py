@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from src.admin.api_schemas.tenant_management import (
@@ -40,6 +40,7 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantRequest,
     ProvisionTenantResponse,
     RecentBuyer,
+    RefreshResponse,
     TenantDetail,
     TenantStatusResponse,
     TenantSummary,
@@ -63,6 +64,7 @@ from src.core.database.models import (
     MediaBuy,
     Principal,
     PropertyTag,
+    SyncJob,
     Tenant,
 )
 
@@ -1646,6 +1648,93 @@ def list_recent_buyers(tenant_id: str):
             )
 
     return jsonify(ListRecentBuyersResponse(buyers=buyers).model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §8 — collapsed refresh endpoint
+# ---------------------------------------------------------------------------
+
+
+# Sync types that ``POST /refresh`` fans out to. The status endpoint
+# (sprint 1.5) reports state per type; Storefront's UI hides per-sync
+# trigger buttons in managed mode and surfaces a single "Refresh tenant"
+# action that calls this endpoint.
+_REFRESH_SYNC_TYPES: tuple[str, ...] = ("inventory", "custom_targeting", "advertisers")
+
+# Idempotency window: re-POST within this window returns the existing
+# SyncJob ids instead of creating duplicates. Caps GAM API hammering when
+# a publisher mashes the button or Storefront retries on a slow response.
+_REFRESH_IDEMPOTENCY_SECONDS = 60
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/refresh", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_202=RefreshResponse, HTTP_404=ApiError))
+def refresh_tenant(tenant_id: str):
+    """Fan out a refresh across all sync types — collapses N per-sync
+    triggers into one call.
+
+    For each enabled sync type, either reuse the existing SyncJob if one
+    started in the last 60 seconds (or is currently running), or create
+    a new pending SyncJob. The actual sync work is picked up by the
+    existing background sync infrastructure.
+
+    Returns 202 Accepted with ``sync_run_ids`` mapping sync_type → sync_id.
+    Storefront polls ``GET /status.syncs`` for per-type progress.
+    """
+    now = datetime.now(UTC)
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        sync_run_ids: dict[str, str] = {}
+        idempotency_cutoff = now - timedelta(seconds=_REFRESH_IDEMPOTENCY_SECONDS)
+        adapter_type = tenant.ad_server or "mock"
+
+        for sync_type in _REFRESH_SYNC_TYPES:
+            # Reuse an existing SyncJob if one is running OR started within
+            # the idempotency window. ``started_at desc`` so the most
+            # recent eligible row wins.
+            existing = session.scalars(
+                select(SyncJob)
+                .where(
+                    SyncJob.tenant_id == tenant_id,
+                    SyncJob.sync_type == sync_type,
+                    or_(
+                        SyncJob.status == "running",
+                        SyncJob.started_at >= idempotency_cutoff,
+                    ),
+                )
+                .order_by(SyncJob.started_at.desc())
+                .limit(1)
+            ).first()
+
+            if existing is not None:
+                sync_run_ids[sync_type] = existing.sync_id
+                continue
+
+            sync_id = f"sync_{tenant_id}_{sync_type}_{int(now.timestamp())}"
+            session.add(
+                SyncJob(
+                    sync_id=sync_id,
+                    tenant_id=tenant_id,
+                    adapter_type=adapter_type,
+                    sync_type=sync_type,
+                    status="pending",
+                    started_at=now,
+                    triggered_by="api",
+                    triggered_by_id="tenant_management_api:refresh",
+                )
+            )
+            sync_run_ids[sync_type] = sync_id
+
+        session.commit()
+
+    response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=now)
+    invalidate_status_cache(tenant_id)
+    return jsonify(response.model_dump(mode="json")), 202
 
 
 # Register all spectree-validated routes with the OpenAPI generator.

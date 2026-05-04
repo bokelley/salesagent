@@ -698,6 +698,25 @@ class ListRecentBuyersResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 1.8 §8 — collapsed refresh endpoint
+# ---------------------------------------------------------------------------
+
+
+class RefreshResponse(BaseModel):
+    """``POST /tenants/{tid}/refresh`` response — fan-out of sync run ids.
+
+    Storefront polls ``GET /status.syncs`` for progress per sync type.
+    Re-POST within 60 seconds returns the SAME ids (idempotent — avoids
+    hammering GAM when a publisher mashes the button).
+    """
+
+    model_config = _config()
+
+    sync_run_ids: dict[str, str] = Field(default_factory=dict)
+    started_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 
