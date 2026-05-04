@@ -621,7 +621,7 @@ escape hatch.
 | 2 | #20 DbBackedSubdomainTenantRouter | ✅ PR'd as **adcp-client-python#544** (`CallableSubdomainTenantRouter`) |
 | 2 | #18 TokenAuthMiddleware | ✅ PR'd as **adcp-client-python#545** (`header_name` + `bearer_prefix_required` on existing `BearerTokenAuthMiddleware`) |
 | 2 | #19 DefaultWebhookSender | **DEFERRED** — surface is more nuanced than initially scoped. The existing `WebhookSender` requires signing keys (no universal default); `auto_emit_completion_webhooks=False` in `hello_seller.py` is structurally correct (no key in a hello-world). Recommend a follow-up issue: boot-time fail-fast when `auto_emit_completion_webhooks=True` AND no `webhook_sender`/`webhook_supervisor` is wired, plus a brighter doc treatment in `hello_seller.py` of why webhooks are off there. |
-| 2 | #16 PgBackend for IdempotencyStore | open (real blocker for multi-worker) |
+| 2 | #16 PgBackend for IdempotencyStore | ✅ FIXED in [adcp-client-python#555](https://github.com/adcontextprotocol/adcp-client-python/pull/555) — wired into core/platforms via `core.idempotency.get_idempotency_store()`. Atomicity caveat (cache write commits separately from handler txn) tracked for follow-up on `_create_media_buy_impl`. |
 | 2 | #21 LazyPlatformRouter | open |
 | 2 | #22 adcp.upstream.gam helper | open (stretch) |
 | 2 | #23 Placement → Product projection helper | open (stretch) |

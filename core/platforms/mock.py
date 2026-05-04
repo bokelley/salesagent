@@ -50,16 +50,14 @@ from adcp.decisioning.capabilities import (
     MediaBuy,
     SupportedProtocol,
 )
-from adcp.server.idempotency import IdempotencyStore, MemoryBackend
-
+from core.idempotency import get_idempotency_store
 from core.platforms._delegate import _delegate_get_products
 from core.stores.accounts import SalesagentAccountStore
 
-# Single-process idempotency dedup. Multi-worker deployments need
-# ``PgBackend`` for cross-worker dedup — tracked in salesagent task #24.
-# ``MemoryBackend`` satisfies the framework's boot-time
-# ``validate_idempotency_wiring`` check today.
-_IDEMPOTENCY = IdempotencyStore(backend=MemoryBackend(), ttl_seconds=86400)
+# Process-singleton idempotency store wired through ``core.idempotency``.
+# Defaults to :class:`PgBackend` for cross-worker durable replay; tests
+# set ``CORE_IDEMPOTENCY_BACKEND=memory`` for single-process isolation.
+_IDEMPOTENCY = get_idempotency_store()
 
 
 # In-process media-buy store. Keyed by media_buy_id, scoped to one

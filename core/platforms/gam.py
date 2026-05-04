@@ -43,8 +43,7 @@ from adcp.decisioning.capabilities import (
     MediaBuy,
     SupportedProtocol,
 )
-from adcp.server.idempotency import IdempotencyStore, MemoryBackend
-
+from core.idempotency import get_idempotency_store
 from core.platforms._delegate import (
     _delegate_create_media_buy,
     _delegate_get_media_buy_delivery,
@@ -59,15 +58,15 @@ from core.stores.accounts import SalesagentAccountStore
 
 logger = logging.getLogger(__name__)
 
-# Single-process idempotency dedup. Adopt PgBackend (#24) for
-# multi-worker durability. Required by the framework's boot-time
-# ``validate_idempotency_wiring`` because the platform advertises
-# ``IdempotencySupported(supported=True)`` in its capabilities. The
-# wrap is on ``create_media_buy`` only — ``update_media_buy`` is
-# arg-projected and incompatible with @wrap (#559); ``sync_creatives``
-# and others are idempotent at the impl layer via per-creative
-# upserts and per-buy state checks.
-_IDEMPOTENCY = IdempotencyStore(backend=MemoryBackend(), ttl_seconds=86400)
+# Process-singleton idempotency store wired through ``core.idempotency``
+# (PgBackend by default; CORE_IDEMPOTENCY_BACKEND=memory in tests). The
+# framework's boot-time ``validate_idempotency_wiring`` is satisfied
+# because the platform advertises ``IdempotencySupported(supported=True)``
+# and we wrap ``create_media_buy`` below. ``update_media_buy`` is
+# arg-projected and incompatible with @wrap (SDK #559 fix landed in
+# #567); ``sync_creatives`` and others are idempotent at the impl layer
+# via per-creative upserts and per-buy state checks.
+_IDEMPOTENCY = get_idempotency_store()
 
 
 class GamPlatform(DecisioningPlatform):
