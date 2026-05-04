@@ -333,6 +333,11 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     # layer (ResolvedIdentity), not from the request payload, so account is optional here.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
 
+    # adcp v4.4.0 made idempotency_key required. Salesagent allows it
+    # optional — buyers that don't send one fall through to per-creative
+    # natural-key dedup at the impl layer.
+    idempotency_key: str | None = None  # type: ignore[assignment]
+
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]

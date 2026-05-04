@@ -845,7 +845,6 @@ class TestAdCPContract:
                 },
                 "click_url": {"url": "https://example.com/landing", "url_type": "clickthrough"},
             },
-            tags=["display", "banner"],
             # Internal fields (optional, added by sales agent)
             principal_id="test_principal",
             created_date=datetime.now(tz=UTC),
@@ -897,6 +896,14 @@ class TestAdCPContract:
         )
 
         signal = Signal(
+            # adcp v4.4.0 typed signal_id as a discriminated union with two
+            # variants: catalog (data_provider_domain + id) and agent
+            # (agent_url + id). Use catalog form for the marketplace test.
+            signal_id={
+                "source": "catalog",
+                "data_provider_domain": "acme-data.com",
+                "id": "signal_auto_intenders_q1_2025",
+            },
             signal_agent_segment_id="signal_auto_intenders_q1_2025",
             name="Auto Intenders Q1 2025",
             description="Consumers showing purchase intent for automotive products in Q1 2025",
@@ -1372,7 +1379,6 @@ class TestAdCPContract:
                 },
                 "click_url": {"url": "https://example.com/click", "url_type": "clickthrough"},
             },
-            tags=["sports", "premium"],
             # Internal fields (added by sales agent during processing)
             principal_id="principal_456",
             created_date=datetime.now(),
@@ -1564,14 +1570,18 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp 3.10 library schema)
+        # Verify all spec fields are present (per adcp v4.4.0 library schema —
+        # adds account, adcp_major_version, include_pricing on top of v3.10).
         spec_fields = {
+            "account",
+            "adcp_major_version",
             "context",
             "ext",
             "fields",
             "filters",
             "include_assignments",
             "include_items",
+            "include_pricing",
             "include_snapshot",
             "include_variables",
             "pagination",
@@ -1594,7 +1604,6 @@ class TestAdCPContract:
                     "asset_type": "image",
                 }
             },
-            tags=["sports"],
             # Internal fields
             principal_id="principal_1",
             status="approved",
@@ -1615,7 +1624,6 @@ class TestAdCPContract:
                     "asset_type": "video",
                 }
             },
-            tags=["premium"],
             # Internal fields
             principal_id="principal_1",
             status="pending_review",
@@ -2700,6 +2708,11 @@ class TestAdCPContract:
 
         # Test with all fields
         signal_data = {
+            "signal_id": {
+                "source": "catalog",
+                "data_provider_domain": "acme-data.com",
+                "id": "seg_123",
+            },
             "signal_agent_segment_id": "seg_123",
             "name": "Premium Audiences",
             "description": "High-value customer segment",
@@ -2949,9 +2962,16 @@ class TestProductV36FieldContract:
     # --- reporting_capabilities (optional, default=None) ---
 
     def test_reporting_capabilities_absent_when_null(self):
-        """reporting_capabilities not in model_dump when not set."""
-        product = self._make_base_product()
-        dump = product.model_dump()
+        """reporting_capabilities is None and excluded with exclude_none.
+
+        adcp v4.4.0 made the field required upstream; salesagent overrides
+        with ``Any | None = None`` (see src/core/schemas/product.py) so
+        legacy products without the field still serialize. With
+        ``exclude_none=True`` (the buyer-protocol default) the None value
+        is omitted from the wire.
+        """
+        product = self._make_base_product(reporting_capabilities=None)
+        dump = product.model_dump(exclude_none=True)
         assert "reporting_capabilities" not in dump
 
     def test_reporting_capabilities_present_when_set(self):
