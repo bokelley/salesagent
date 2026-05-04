@@ -214,17 +214,25 @@ class TestTenantManagementAPIIntegration:
         assert response.status_code == 200
         data = response.json
 
-        # Verify all expected fields
+        # The response shape is now ``TenantDetail`` (sprint-1 of managed-tenant-mode).
+        # ``settings`` and ``adapter_config`` blocks moved out of this endpoint —
+        # adapter config now has its own resource at /tenants/{id}/adapter-config.
         assert data["tenant_id"] == tenant_id
         assert data["name"] == "Test Detail Publisher"
         assert data["subdomain"] == "test-detail"
         assert data["ad_server"] == "google_ad_manager"
-        assert "settings" in data
-        assert "adapter_config" in data
+        assert data["adapter_configured"] is True
+        assert data["managed_externally"] is False
 
-        # Verify adapter config
-        assert data["adapter_config"]["adapter_type"] == "google_ad_manager"
-        assert data["adapter_config"]["has_refresh_token"] is True
+        # Adapter config now lives at its own endpoint.
+        adapter_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/adapter-config",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+        assert adapter_resp.status_code == 200
+        adapter_data = adapter_resp.json
+        assert adapter_data["type"] == "google_ad_manager"
+        assert adapter_data["refresh_token"] == "<redacted>"
 
     def test_update_tenant(self, client, mock_api_key_auth, test_tenant):
         """Test updating a tenant."""
@@ -266,9 +274,13 @@ class TestTenantManagementAPIIntegration:
 
         updated_data = get_response.json
         assert updated_data["billing_plan"] == "enterprise"
-        # max_daily_budget moved to currency_limits table, not in tenant settings anymore
-        assert updated_data["adapter_config"]["gam_network_code"] == "987654321"
-        assert updated_data["adapter_config"]["gam_trafficker_id"] == "trafficker_999"
+        # Adapter config moved to its own resource. Verify the legacy PUT update wrote through.
+        adapter_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/adapter-config",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+        adapter_data = adapter_resp.json
+        assert adapter_data["network_code"] == "987654321"
 
     def test_soft_delete_tenant(self, client, mock_api_key_auth, test_tenant):
         """Test soft deleting a tenant."""
@@ -291,8 +303,10 @@ class TestTenantManagementAPIIntegration:
             f"/api/v1/tenant-management/tenants/{tenant_id}", headers={"X-Tenant-Management-API-Key": mock_api_key_auth}
         )
 
+        # Sprint-1 contract: DELETE returns the soft-deleted TenantDetail body.
         assert response.status_code == 200
-        assert "deactivated" in response.json["message"]
+        assert response.json["is_active"] is False
+        assert response.json["tenant_id"] == tenant_id
 
         # Verify tenant still exists but is inactive
         get_response = client.get(
@@ -402,9 +416,11 @@ class TestSyncApiAuth:
             )
             # Auth passed — we get past the decorator. Route may fail on DB
             # but must NOT return 401 (missing/invalid key) or 503 (unconfigured).
-            assert resp.status_code not in (401, 403, 503), (
-                f"Auth should have succeeded but got {resp.status_code}: {resp.json}"
-            )
+            assert resp.status_code not in (
+                401,
+                403,
+                503,
+            ), f"Auth should have succeeded but got {resp.status_code}: {resp.json}"
 
     def test_missing_header_returns_401(self, sync_app, monkeypatch):
         """Request without X-API-Key header returns 401."""

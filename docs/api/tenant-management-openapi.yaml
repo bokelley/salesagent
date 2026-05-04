@@ -1,0 +1,989 @@
+components:
+  schemas:
+    AdapterConfigEnvelope.61b280c:
+      discriminator:
+        mapping:
+          google_ad_manager: '#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig'
+          mock: '#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig'
+        propertyName: type
+      oneOf:
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig'
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig'
+      title: AdapterConfigEnvelope
+    AdapterConfigEnvelope.61b280c.GAMAdapterConfig:
+      additionalProperties: false
+      description: Google Ad Manager adapter configuration.
+      properties:
+        network_code:
+          maxLength: 32
+          minLength: 1
+          title: Network Code
+          type: string
+        refresh_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          maxLength: 255
+          minLength: 3
+          title: Service Account Email
+          type: string
+        service_account_key_json:
+          format: password
+          title: Service Account Key Json
+          type: string
+          writeOnly: true
+        type:
+          const: google_ad_manager
+          default: google_ad_manager
+          title: Type
+          type: string
+      required:
+      - network_code
+      - service_account_email
+      - service_account_key_json
+      title: GAMAdapterConfig
+      type: object
+    AdapterConfigEnvelope.61b280c.MockAdapterConfig:
+      additionalProperties: false
+      description: Mock adapter configuration (no real backend).
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        type:
+          const: mock
+          default: mock
+          title: Type
+          type: string
+      title: MockAdapterConfig
+      type: object
+    AdapterConfigResponse.f44f287:
+      additionalProperties: false
+      description: Adapter config view returned with secrets redacted.
+      properties:
+        configured:
+          title: Configured
+          type: boolean
+        network_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network Code
+        refresh_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Service Account Email
+        service_account_key_json:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Service Account Key Json
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - configured
+      title: AdapterConfigResponse
+      type: object
+    ApiError.f44f287:
+      additionalProperties: false
+      description: Standard problem-detail shape used by every Tenant Management endpoint.
+      properties:
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Details
+        error:
+          title: Error
+          type: string
+        message:
+          title: Message
+          type: string
+      required:
+      - error
+      - message
+      title: ApiError
+      type: object
+    ListTenantsResponse.f44f287:
+      additionalProperties: false
+      properties:
+        count:
+          title: Count
+          type: integer
+        tenants:
+          items:
+            $ref: '#/components/schemas/ListTenantsResponse.f44f287.TenantSummary'
+          title: Tenants
+          type: array
+      required:
+      - tenants
+      - count
+      title: ListTenantsResponse
+      type: object
+    ListTenantsResponse.f44f287.TenantSummary:
+      additionalProperties: false
+      description: Compact tenant entry for ``GET /tenants`` listings.
+      properties:
+        ad_server:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Ad Server
+        adapter_configured:
+          title: Adapter Configured
+          type: boolean
+        billing_plan:
+          title: Billing Plan
+          type: string
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        external_org_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Org Id
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Source
+        is_active:
+          title: Is Active
+          type: boolean
+        managed_externally:
+          title: Managed Externally
+          type: boolean
+        name:
+          title: Name
+          type: string
+        subdomain:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Subdomain
+        tenant_id:
+          title: Tenant Id
+          type: string
+      required:
+      - tenant_id
+      - name
+      - managed_externally
+      - is_active
+      - billing_plan
+      - adapter_configured
+      - created_at
+      title: TenantSummary
+      type: object
+    ProvisionTenantRequest.f44f287:
+      additionalProperties: false
+      description: Request body for ``POST /tenants/provision``.
+      properties:
+        adapter:
+          discriminator:
+            mapping:
+              google_ad_manager: '#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig'
+              mock: '#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig'
+            propertyName: type
+          oneOf:
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig'
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig'
+          title: Adapter
+        billing_plan:
+          default: standard
+          maxLength: 64
+          title: Billing Plan
+          type: string
+        contact_email:
+          format: email
+          title: Contact Email
+          type: string
+        default_currency:
+          default: USD
+          maxLength: 3
+          minLength: 3
+          title: Default Currency
+          type: string
+        external_org_id:
+          maxLength: 255
+          minLength: 1
+          title: External Org Id
+          type: string
+        external_source:
+          maxLength: 64
+          minLength: 1
+          title: External Source
+          type: string
+        initial_principal:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.InitialPrincipalRequest'
+          - type: 'null'
+          default: null
+        name:
+          maxLength: 255
+          minLength: 1
+          title: Name
+          type: string
+      required:
+      - name
+      - external_org_id
+      - external_source
+      - contact_email
+      - adapter
+      title: ProvisionTenantRequest
+      type: object
+    ProvisionTenantRequest.f44f287.GAMAdapterConfig:
+      additionalProperties: false
+      description: Google Ad Manager adapter configuration.
+      properties:
+        network_code:
+          maxLength: 32
+          minLength: 1
+          title: Network Code
+          type: string
+        refresh_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          maxLength: 255
+          minLength: 3
+          title: Service Account Email
+          type: string
+        service_account_key_json:
+          format: password
+          title: Service Account Key Json
+          type: string
+          writeOnly: true
+        type:
+          const: google_ad_manager
+          default: google_ad_manager
+          title: Type
+          type: string
+      required:
+      - network_code
+      - service_account_email
+      - service_account_key_json
+      title: GAMAdapterConfig
+      type: object
+    ProvisionTenantRequest.f44f287.InitialPrincipalRequest:
+      additionalProperties: false
+      description: Optional initial advertiser created at provision time.
+      properties:
+        external_advertiser_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: External Advertiser Id
+        name:
+          maxLength: 255
+          minLength: 1
+          title: Name
+          type: string
+      required:
+      - name
+      title: InitialPrincipalRequest
+      type: object
+    ProvisionTenantRequest.f44f287.MockAdapterConfig:
+      additionalProperties: false
+      description: Mock adapter configuration (no real backend).
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        type:
+          const: mock
+          default: mock
+          title: Type
+          type: string
+      title: MockAdapterConfig
+      type: object
+    ProvisionTenantResponse.f44f287:
+      additionalProperties: false
+      description: Response body for ``POST /tenants/provision``.
+      properties:
+        a2a_url:
+          title: A2A Url
+          type: string
+        adapter:
+          $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.AdapterStatusResponse'
+        admin_url_path:
+          title: Admin Url Path
+          type: string
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        external_org_id:
+          title: External Org Id
+          type: string
+        external_source:
+          title: External Source
+          type: string
+        initial_principal:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse'
+          - type: 'null'
+          default: null
+        managed_externally:
+          const: true
+          default: true
+          title: Managed Externally
+          type: boolean
+        mcp_url:
+          title: Mcp Url
+          type: string
+        name:
+          title: Name
+          type: string
+        tenant_id:
+          title: Tenant Id
+          type: string
+      required:
+      - tenant_id
+      - name
+      - external_org_id
+      - external_source
+      - created_at
+      - mcp_url
+      - a2a_url
+      - admin_url_path
+      - adapter
+      title: ProvisionTenantResponse
+      type: object
+    ProvisionTenantResponse.f44f287.AdapterStatusResponse:
+      additionalProperties: false
+      description: Compact adapter status block returned in provision responses.
+      properties:
+        configured:
+          title: Configured
+          type: boolean
+        connection_test_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Connection Test Error
+        connection_test_passed:
+          title: Connection Test Passed
+          type: boolean
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - configured
+      - connection_test_passed
+      title: AdapterStatusResponse
+      type: object
+    ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse:
+      additionalProperties: false
+      description: "Initial principal returned from provision.\n\nNote: managed-mode\
+        \ buyer-protocol auth flows through the identity-propagation\ncontract, not\
+        \ per-principal tokens (see sprint 2 \xA7 Auth boundary). No\n``api_token``\
+        \ field is emitted here."
+      properties:
+        name:
+          title: Name
+          type: string
+        principal_id:
+          title: Principal Id
+          type: string
+      required:
+      - principal_id
+      - name
+      title: ProvisionedPrincipalResponse
+      type: object
+    TenantDetail.f44f287:
+      additionalProperties: false
+      description: Full tenant detail returned from ``GET /tenants/{id}`` and lifecycle
+        responses.
+      properties:
+        ad_server:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Ad Server
+        adapter_configured:
+          title: Adapter Configured
+          type: boolean
+        billing_plan:
+          title: Billing Plan
+          type: string
+        contact_email:
+          anyOf:
+          - format: email
+            type: string
+          - type: 'null'
+          default: null
+          title: Contact Email
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        default_currency:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Default Currency
+        external_org_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Org Id
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Source
+        is_active:
+          title: Is Active
+          type: boolean
+        managed_externally:
+          title: Managed Externally
+          type: boolean
+        name:
+          title: Name
+          type: string
+        subdomain:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Subdomain
+        tenant_id:
+          title: Tenant Id
+          type: string
+      required:
+      - tenant_id
+      - name
+      - managed_externally
+      - is_active
+      - billing_plan
+      - adapter_configured
+      - created_at
+      title: TenantDetail
+      type: object
+    TestConnectionResponse.f44f287:
+      additionalProperties: false
+      description: Result of an adapter connection probe.
+      properties:
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        success:
+          title: Success
+          type: boolean
+        tested_at:
+          format: date-time
+          title: Tested At
+          type: string
+      required:
+      - success
+      - tested_at
+      title: TestConnectionResponse
+      type: object
+    UpdateTenantRequest.f44f287:
+      additionalProperties: false
+      description: "PATCH body \u2014 only platform-managed fields are exposed.\n\n\
+        ``external_org_id`` and ``external_source`` are NOT modifiable post-creation;\n\
+        they identify the tenant's relationship with the upstream platform.\n``is_active``\
+        \ is changed via the deactivate/reactivate endpoints, not PATCH."
+      properties:
+        billing_plan:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Billing Plan
+        contact_email:
+          anyOf:
+          - format: email
+            type: string
+          - type: 'null'
+          default: null
+          title: Contact Email
+        name:
+          anyOf:
+          - maxLength: 255
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+      title: UpdateTenantRequest
+      type: object
+    ValidationError.6a07bef:
+      description: Model of a validation error response.
+      items:
+        $ref: '#/components/schemas/ValidationError.6a07bef.ValidationErrorElement'
+      title: ValidationError
+      type: array
+    ValidationError.6a07bef.ValidationErrorElement:
+      description: Model of a validation error response element.
+      properties:
+        ctx:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Error context
+        loc:
+          items:
+            type: string
+          title: Missing field name
+          type: array
+        msg:
+          title: Error message
+          type: string
+        type:
+          title: Error type
+          type: string
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationErrorElement
+      type: object
+info:
+  title: "Sales Agent \u2014 Tenant Management API"
+  version: v1
+openapi: 3.1.0
+paths:
+  /api/v1/tenant-management/health:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_health
+      parameters: []
+      responses: {}
+      summary: Health check endpoint for the tenant management API.
+      tags: []
+  /api/v1/tenant-management/tenants:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTenantsResponse.f44f287'
+          description: OK
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: 'List tenants. Optional query params: ``managed_externally``, ``is_active``,
+        ``external_source``.'
+      tags: []
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants
+      parameters: []
+      responses: {}
+      summary: Create a new tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/provision:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_provision
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProvisionTenantRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisionTenantResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: Provision a managed tenant (one-shot create + adapter + currency +
+        property tag + optional principal).
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}:
+    delete:
+      description: Returns 409 ``tenant_has_active_resources`` if the tenant has any
+        active media buys.
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: 'Soft-delete a tenant by default. Hard-delete requires ``?hard=true``
+        and ``X-Confirm-Delete: yes``.'
+      tags: []
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return :class:`TenantDetail` for a tenant. 404 if the tenant doesn't
+        exist.
+      tags: []
+    patch:
+      description: ''
+      operationId: patch__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: "Update platform-managed fields on a tenant (PATCH semantics \u2014\
+        \ only listed fields are touched)."
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses: {}
+      summary: Update a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/adapter-config:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_adapter-config
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterConfigResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return the tenant's adapter config with secrets redacted.
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}_adapter-config
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterConfigResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Replace the tenant's adapter config. Tests the connection before commit.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/adapter-config/test-connection:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_adapter-config_test-connection
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestConnectionResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Probe the saved adapter config without modifying state.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/deactivate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_deactivate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Idempotently deactivate a tenant. Calling on an already-inactive tenant
+        is a no-op.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/reactivate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_reactivate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Idempotently reactivate a tenant.
+      tags: []
+security: []
+tags: []

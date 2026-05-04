@@ -1,9 +1,17 @@
 .PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
-.PHONY: test-stack-up test-stack-down test-all test-cov test-entity
+.PHONY: test-stack-up test-stack-down test-all test-cov test-entity openapi
 .PHONY: test-int test-bdd test-e2e
 
 setup:
 	uv run python scripts/setup-dev.py
+
+# Regenerate the static Tenant Management API OpenAPI spec at
+# docs/api/tenant-management-openapi.{json,yaml}. Run this whenever
+# you add/change an endpoint, request schema, or response schema in
+# src/admin/tenant_management_api.py — the in-sync drift test
+# (tests/unit/test_openapi_export_in_sync.py) fails CI otherwise.
+openapi:
+	uv run python scripts/export_openapi.py
 
 quality:
 	uv run ruff format --check .
