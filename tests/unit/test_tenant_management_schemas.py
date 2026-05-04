@@ -15,8 +15,11 @@ from src.admin.api_schemas.tenant_management import (
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
+    BuyerAdvertiserMapping,
+    CreateBuyerAdvertiserMappingRequest,
     GAMAdapterConfig,
     InitialPrincipalRequest,
+    ListBuyerAdvertiserMappingsResponse,
     ListTenantsResponse,
     MockAdapterConfig,
     ProvisionedPrincipalResponse,
@@ -24,6 +27,7 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantResponse,
     TenantDetail,
     TenantSummary,
+    UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
 )
 from src.admin.api_schemas.tenant_management import (
@@ -84,6 +88,8 @@ def _provision_payload(**overrides):
         "external_org_id": "org_123",
         "external_source": "scope3",
         "contact_email": "ops@acme.example.com",
+        "house_domain": "acme.example.com",
+        "public_agent_url": "https://agent.scope3.com/tenant_acme",
         "adapter": _gam_payload(),
     }
     base.update(overrides)
@@ -269,3 +275,134 @@ def test_connection_test_response_failure_includes_error():
 def test_api_error_minimum():
     err = ApiError(error="x", message="y")
     assert err.details is None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 — buyer-advertiser routing rule schemas
+# ---------------------------------------------------------------------------
+
+
+def test_provision_request_accepts_default_gam_advertiser_id():
+    """Sprint 1.8 — managed-mode provision can pass the fall-through advertiser inline."""
+    req = ProvisionTenantRequest.model_validate(_provision_payload(default_gam_advertiser_id="12345"))
+    assert req.default_gam_advertiser_id == "12345"
+
+
+def test_provision_request_default_gam_advertiser_id_optional_at_provision():
+    """Required-before-activation, not required-at-provision — covers the
+    'create then attach default' flow."""
+    req = ProvisionTenantRequest.model_validate(_provision_payload())
+    assert req.default_gam_advertiser_id is None
+
+
+def test_update_tenant_request_can_patch_default_gam_advertiser_id():
+    req = UpdateTenantRequest.model_validate({"default_gam_advertiser_id": "67890"})
+    assert req.default_gam_advertiser_id == "67890"
+
+
+def test_update_tenant_request_rejects_blank_default_gam_advertiser_id():
+    """``min_length=1`` blocks empty-string PATCH (no path to clear once set)."""
+    with pytest.raises(ValidationError):
+        UpdateTenantRequest.model_validate({"default_gam_advertiser_id": ""})
+
+
+def test_tenant_detail_carries_default_gam_advertiser_id():
+    detail = TenantDetail(
+        tenant_id="t1",
+        name="Test",
+        managed_externally=True,
+        is_active=True,
+        billing_plan="standard",
+        adapter_configured=True,
+        created_at=datetime.now(),
+        default_gam_advertiser_id="12345",
+    )
+    assert detail.default_gam_advertiser_id == "12345"
+
+
+def test_buyer_advertiser_mapping_response_round_trip():
+    payload = {
+        "id": "rule_abc123",
+        "operator_domain": "interchange.io",
+        "brand_house": "coca-cola.com",
+        "brand_id": "sprite",
+        "gam_advertiser_id": "12345",
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+    }
+    mapping = BuyerAdvertiserMapping.model_validate(payload)
+    assert mapping.brand_id == "sprite"
+
+
+def test_buyer_advertiser_mapping_allows_null_brand_house_and_brand_id():
+    """Operator-wildcard rule shape — both brand fields null."""
+    mapping = BuyerAdvertiserMapping(
+        id="rule_x",
+        operator_domain="buyer.scope3.com",
+        gam_advertiser_id="99",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    assert mapping.brand_house is None and mapping.brand_id is None
+
+
+def test_create_mapping_request_minimum_fields():
+    """Operator-wildcard create — operator_domain and gam_advertiser_id only."""
+    req = CreateBuyerAdvertiserMappingRequest(operator_domain="buyer.scope3.com", gam_advertiser_id="99")
+    assert req.brand_house is None and req.brand_id is None
+
+
+def test_create_mapping_request_rejects_blank_operator_domain():
+    with pytest.raises(ValidationError):
+        CreateBuyerAdvertiserMappingRequest(operator_domain="", gam_advertiser_id="99")
+
+
+def test_create_mapping_request_rejects_blank_gam_advertiser_id():
+    with pytest.raises(ValidationError):
+        CreateBuyerAdvertiserMappingRequest(operator_domain="x.example.com", gam_advertiser_id="")
+
+
+def test_create_mapping_request_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        CreateBuyerAdvertiserMappingRequest.model_validate(
+            {"operator_domain": "x.example.com", "gam_advertiser_id": "99", "rogue": "oops"}
+        )
+
+
+def test_update_mapping_request_does_not_expose_operator_domain():
+    """Natural-key field is intentionally not patchable — DELETE+POST only."""
+    fields = set(UpdateBuyerAdvertiserMappingRequest.model_fields.keys())
+    assert "operator_domain" not in fields
+    assert fields == {"brand_house", "brand_id", "gam_advertiser_id"}
+
+
+def test_update_mapping_request_all_optional():
+    req = UpdateBuyerAdvertiserMappingRequest()
+    assert req.brand_house is None
+    assert req.brand_id is None
+    assert req.gam_advertiser_id is None
+
+
+def test_update_mapping_request_rejects_blank_gam_advertiser_id():
+    with pytest.raises(ValidationError):
+        UpdateBuyerAdvertiserMappingRequest.model_validate({"gam_advertiser_id": ""})
+
+
+def test_list_mappings_response_round_trip():
+    payload = {
+        "mappings": [
+            {
+                "id": "rule_abc",
+                "operator_domain": "interchange.io",
+                "brand_house": None,
+                "brand_id": None,
+                "gam_advertiser_id": "12345",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+        ],
+        "count": 1,
+    }
+    resp = ListBuyerAdvertiserMappingsResponse.model_validate(payload)
+    assert resp.count == 1
+    assert resp.mappings[0].operator_domain == "interchange.io"

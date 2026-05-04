@@ -99,6 +99,11 @@ class ProvisionTenantRequest(BaseModel):
     default_currency: str = Field(default="USD", min_length=3, max_length=3)
     billing_plan: str = Field(default="standard", max_length=64)
 
+    # Sprint 1.8 — fall-through advertiser. Optional at provision time;
+    # required before activation (enforced by the routing chain at
+    # create_media_buy time, not by an explicit /activate endpoint).
+    default_gam_advertiser_id: str | None = Field(default=None, max_length=64)
+
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
 
@@ -186,6 +191,8 @@ class TenantDetail(TenantSummary):
     # path don't have these populated yet.
     house_domain: str | None = None
     public_agent_url: str | None = None
+    # Sprint 1.8 — fall-through advertiser. Nullable until activation.
+    default_gam_advertiser_id: str | None = None
 
 
 class ListTenantsResponse(BaseModel):
@@ -213,6 +220,11 @@ class UpdateTenantRequest(BaseModel):
     # through here.
     house_domain: str | None = Field(default=None, min_length=1, max_length=255)
     public_agent_url: str | None = Field(default=None, min_length=1, max_length=500)
+    # Sprint 1.8 — fall-through advertiser. Patchable any time. PATCH with
+    # an explicit empty string is rejected by the handler (use null/omit
+    # to leave unchanged; no path to clear an already-set value, since
+    # clearing it would brick the routing chain).
+    default_gam_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +475,67 @@ class ListAccountsManagedResponse(BaseModel):
     model_config = _config()
 
     accounts: list[AccountSummary]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 — buyer-advertiser routing rules
+# ---------------------------------------------------------------------------
+
+
+class BuyerAdvertiserMapping(BaseModel):
+    """Routing rule on the wire — the public face of an
+    ``AdvertiserRoutingRule`` ORM row.
+
+    Vocabulary alignment with Scope3 Storefront UI: external surface uses
+    "buyer-advertiser-mapping"; internal storage table is named
+    ``advertiser_routing_rules`` because the impl IS a precedence-ordered
+    routing chain. One-line mapping at the API boundary.
+    """
+
+    model_config = _config()
+
+    id: str
+    operator_domain: str
+    brand_house: str | None = None
+    brand_id: str | None = None
+    gam_advertiser_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateBuyerAdvertiserMappingRequest(BaseModel):
+    """``POST /tenants/{tid}/buyer-advertiser-mappings`` body."""
+
+    model_config = _config()
+
+    operator_domain: str = Field(..., min_length=1, max_length=255)
+    brand_house: str | None = Field(default=None, max_length=255)
+    brand_id: str | None = Field(default=None, max_length=255)
+    gam_advertiser_id: str = Field(..., min_length=1, max_length=64)
+
+
+class UpdateBuyerAdvertiserMappingRequest(BaseModel):
+    """``PATCH /tenants/{tid}/buyer-advertiser-mappings/{mid}`` body.
+
+    ``operator_domain`` is intentionally absent — changing it requires
+    DELETE + POST so the natural-key uniqueness constraint can't be
+    silently violated by a partial-update flow.
+    """
+
+    model_config = _config()
+
+    brand_house: str | None = Field(default=None, max_length=255)
+    brand_id: str | None = Field(default=None, max_length=255)
+    gam_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class ListBuyerAdvertiserMappingsResponse(BaseModel):
+    """``GET /tenants/{tid}/buyer-advertiser-mappings`` response."""
+
+    model_config = _config()
+
+    mappings: list[BuyerAdvertiserMapping]
     count: int
 
 

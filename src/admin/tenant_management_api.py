@@ -17,19 +17,20 @@ from datetime import UTC, datetime
 from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
-from src.admin.api_schemas.tenant_management import (
-    AdapterConfig as AdapterConfigSchema,
-)
 from src.admin.api_schemas.tenant_management import (
     AccountDetail,
     AccountSummary,
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
+    BuyerAdvertiserMapping,
     CreateAccountRequest,
+    CreateBuyerAdvertiserMappingRequest,
     GAMAdapterConfig,
     ListAccountsManagedResponse,
+    ListBuyerAdvertiserMappingsResponse,
     ListTenantsResponse,
     MockAdapterConfig,
     PreviewAdapterRequest,
@@ -41,7 +42,11 @@ from src.admin.api_schemas.tenant_management import (
     TenantStatusResponse,
     TenantSummary,
     TestConnectionResponse,
+    UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
+)
+from src.admin.api_schemas.tenant_management import (
+    AdapterConfig as AdapterConfigSchema,
 )
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
@@ -51,6 +56,7 @@ from src.core.database.managed_tenant_guard import ManagedTenantWriteError
 from src.core.database.models import (
     Account,
     AdapterConfig,
+    AdvertiserRoutingRule,
     CurrencyLimit,
     MediaBuy,
     Principal,
@@ -128,6 +134,7 @@ def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
         default_currency=default_currency,
         house_domain=tenant.house_domain,
         public_agent_url=tenant.public_agent_url,
+        default_gam_advertiser_id=tenant.default_gam_advertiser_id,
     ).model_dump(mode="json")
 
 
@@ -704,6 +711,7 @@ def provision_tenant():
             external_source=req.external_source,
             house_domain=req.house_domain,
             public_agent_url=req.public_agent_url,
+            default_gam_advertiser_id=req.default_gam_advertiser_id,
             authorized_emails=[req.contact_email],
             authorized_domains=[],
             human_review_required=True,
@@ -857,6 +865,8 @@ def patch_tenant(tenant_id: str):
             tenant.house_domain = req.house_domain
         if req.public_agent_url is not None:
             tenant.public_agent_url = req.public_agent_url
+        if req.default_gam_advertiser_id is not None:
+            tenant.default_gam_advertiser_id = req.default_gam_advertiser_id
         tenant.updated_at = datetime.now(UTC)
 
         try:
@@ -1117,9 +1127,7 @@ def _generate_pre_mapped_account_name(req: CreateAccountRequest) -> str:
     return base
 
 
-def _find_account_by_natural_key(
-    session, tenant_id: str, req: CreateAccountRequest
-) -> Account | None:
+def _find_account_by_natural_key(session, tenant_id: str, req: CreateAccountRequest) -> Account | None:
     """Match the existing _sync_accounts_impl natural-key behavior, with the
     agent extension for billing=agent."""
     stmt = select(Account).where(
@@ -1268,9 +1276,7 @@ def list_managed_accounts(tenant_id: str):
     summaries = [_account_to_summary(a) for a in accounts]
     if advertiser_mapped_bool is not None:
         summaries = [s for s in summaries if s.advertiser_mapped == advertiser_mapped_bool]
-    return jsonify(
-        ListAccountsManagedResponse(accounts=summaries, count=len(summaries)).model_dump(mode="json")
-    )
+    return jsonify(ListAccountsManagedResponse(accounts=summaries, count=len(summaries)).model_dump(mode="json"))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/status", methods=["GET"])
@@ -1287,6 +1293,249 @@ def tenant_status(tenant_id: str):
     if snapshot is None:
         return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
     return jsonify(snapshot.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 — buyer-advertiser routing rules CRUD
+# ---------------------------------------------------------------------------
+
+
+def _routing_rule_to_mapping(rule: AdvertiserRoutingRule) -> BuyerAdvertiserMapping:
+    """Project an AdvertiserRoutingRule ORM row onto the wire schema."""
+    return BuyerAdvertiserMapping(
+        id=rule.id,
+        operator_domain=rule.operator_domain,
+        brand_house=rule.brand_house,
+        brand_id=rule.brand_id,
+        gam_advertiser_id=rule.gam_advertiser_id,
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    )
+
+
+def _is_routing_rule_unique_violation(exc: IntegrityError) -> bool:
+    """Detect the COALESCE-unique-index violation on advertiser_routing_rules.
+
+    Postgres reports the index name in the diagnostic; we check both that and
+    the table to be resilient to local SQLite (test) variations even though
+    production is Postgres-only.
+    """
+    s = str(exc.orig).lower() if exc.orig else str(exc).lower()
+    return "uq_routing_rule_natural_key" in s or "advertiser_routing_rules" in s
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/buyer-advertiser-mappings", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListBuyerAdvertiserMappingsResponse, HTTP_404=ApiError))
+def list_buyer_advertiser_mappings(tenant_id: str):
+    """List routing rules for a tenant. Ordered by ``created_at`` ASC so the
+    UI renders them in the same order they were authored.
+
+    Filters: ``operator_domain`` (exact match) — the per-operator detail
+    pane uses this to scope the rules grid without re-pulling the full set.
+    """
+    operator_filter = request.args.get("operator_domain")
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        stmt = (
+            select(AdvertiserRoutingRule)
+            .where(AdvertiserRoutingRule.tenant_id == tenant_id)
+            .order_by(AdvertiserRoutingRule.created_at.asc())
+        )
+        if operator_filter:
+            stmt = stmt.where(AdvertiserRoutingRule.operator_domain == operator_filter)
+        rules = list(session.scalars(stmt).all())
+
+    mappings = [_routing_rule_to_mapping(r) for r in rules]
+    return jsonify(ListBuyerAdvertiserMappingsResponse(mappings=mappings, count=len(mappings)).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/buyer-advertiser-mappings", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=CreateBuyerAdvertiserMappingRequest,
+    resp=Response(
+        HTTP_201=BuyerAdvertiserMapping,
+        HTTP_400=ApiError,
+        HTTP_404=ApiError,
+        HTTP_409=ApiError,
+    ),
+)
+def create_buyer_advertiser_mapping(tenant_id: str):
+    """Create a routing rule.
+
+    Validation:
+    - ``brand_id`` cannot be set without ``brand_house`` (sprint 1.8 doc §2:
+      a brand-level rule must be scoped to a parent house).
+    - 409 on duplicate ``(operator_domain, brand_house, brand_id)`` tuple
+      (NULLs participate in uniqueness via COALESCE in the unique index).
+
+    NOTE: ``gam_advertiser_id`` cache validation against the synced GAM
+    advertiser list is deferred to sprint 1.8 piece D (the GET
+    /gam/advertisers endpoint introduces the cache table the validator
+    needs). Until then we accept any well-formed id and let the routing
+    chain surface a runtime error if the advertiser doesn't exist.
+    """
+    req: CreateBuyerAdvertiserMappingRequest = request.context.json  # type: ignore[attr-defined]
+
+    if req.brand_id is not None and req.brand_house is None:
+        return _api_error(
+            "brand_house_required",
+            "brand_id requires brand_house — a brand-level rule must be scoped to a parent house.",
+            400,
+        )
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        rule = AdvertiserRoutingRule(
+            id=f"rule_{uuid.uuid4().hex[:12]}",
+            tenant_id=tenant_id,
+            operator_domain=req.operator_domain,
+            brand_house=req.brand_house,
+            brand_id=req.brand_id,
+            gam_advertiser_id=req.gam_advertiser_id,
+        )
+        session.add(rule)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            if _is_routing_rule_unique_violation(exc):
+                return _api_error(
+                    "routing_rule_duplicate",
+                    "A routing rule with this (operator_domain, brand_house, brand_id) tuple already exists.",
+                    409,
+                    details={
+                        "operator_domain": req.operator_domain,
+                        "brand_house": req.brand_house,
+                        "brand_id": req.brand_id,
+                    },
+                )
+            raise
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        session.refresh(rule)
+
+    return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json")), 201
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/buyer-advertiser-mappings/<mapping_id>", methods=["PATCH"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=UpdateBuyerAdvertiserMappingRequest,
+    resp=Response(
+        HTTP_200=BuyerAdvertiserMapping,
+        HTTP_400=ApiError,
+        HTTP_404=ApiError,
+        HTTP_409=ApiError,
+    ),
+)
+def patch_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
+    """PATCH a routing rule.
+
+    ``operator_domain`` is intentionally not patchable (see schema docstring
+    — natural-key changes go DELETE+POST so collisions surface explicitly).
+    Patching ``brand_house`` / ``brand_id`` can collide with another rule;
+    409 on natural-key conflict, same shape as POST.
+    """
+    req: UpdateBuyerAdvertiserMappingRequest = request.context.json  # type: ignore[attr-defined]
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        rule = session.scalars(select(AdvertiserRoutingRule).filter_by(id=mapping_id, tenant_id=tenant_id)).first()
+        if not rule:
+            return _api_error(
+                "routing_rule_not_found",
+                f"Routing rule {mapping_id!r} not found for tenant {tenant_id!r}",
+                404,
+            )
+
+        if req.brand_house is not None:
+            rule.brand_house = req.brand_house
+        if req.brand_id is not None:
+            rule.brand_id = req.brand_id
+        if req.gam_advertiser_id is not None:
+            rule.gam_advertiser_id = req.gam_advertiser_id
+
+        # Re-validate the brand_id-without-brand_house invariant against
+        # the post-merge state, not the request alone — patching only
+        # brand_id while a previously-set brand_house is unchanged is
+        # still valid; clearing brand_house while brand_id remains set
+        # is not (and isn't reachable today since PATCH can't NULL out
+        # brand_house, but the guard is cheap and future-proofs the rule).
+        if rule.brand_id is not None and rule.brand_house is None:
+            session.rollback()
+            return _api_error(
+                "brand_house_required",
+                "brand_id requires brand_house — a brand-level rule must be scoped to a parent house.",
+                400,
+            )
+
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            if _is_routing_rule_unique_violation(exc):
+                return _api_error(
+                    "routing_rule_duplicate",
+                    "A routing rule with this (operator_domain, brand_house, brand_id) tuple already exists.",
+                    409,
+                    details={
+                        "operator_domain": rule.operator_domain,
+                        "brand_house": rule.brand_house,
+                        "brand_id": rule.brand_id,
+                    },
+                )
+            raise
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        session.refresh(rule)
+
+    return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/buyer-advertiser-mappings/<mapping_id>", methods=["DELETE"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_204=None, HTTP_404=ApiError))
+def delete_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
+    """Delete a routing rule. 204 on success, 404 if not found.
+
+    Idempotency: DELETE on an already-deleted id returns 404 (not 204) —
+    the caller asked us to delete a specific row by id, and a 404 is the
+    truthful answer that the row isn't there. Callers driving a UI delete
+    button should treat 404 as a benign race (someone else deleted it).
+    """
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        rule = session.scalars(select(AdvertiserRoutingRule).filter_by(id=mapping_id, tenant_id=tenant_id)).first()
+        if not rule:
+            return _api_error(
+                "routing_rule_not_found",
+                f"Routing rule {mapping_id!r} not found for tenant {tenant_id!r}",
+                404,
+            )
+
+        session.delete(rule)
+        try:
+            session.commit()
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+
+    return "", 204
 
 
 # Register all spectree-validated routes with the OpenAPI generator.

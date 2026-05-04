@@ -227,16 +227,12 @@ class TestProvision:
             house_domain="acme.example",
             public_agent_url="https://interchange.io",
         )
-        response = client.post(
-            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
-        )
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         assert response.status_code == 201, response.get_data(as_text=True)
         body = response.get_json()
         cleanup_tenants.append(body["tenant_id"])
 
-        detail = client.get(
-            f"/api/v1/tenant-management/tenants/{body['tenant_id']}", headers=auth_headers
-        )
+        detail = client.get(f"/api/v1/tenant-management/tenants/{body['tenant_id']}", headers=auth_headers)
         d = detail.get_json()
         assert d["house_domain"] == "acme.example"
         assert d["public_agent_url"] == "https://interchange.io"
@@ -245,16 +241,12 @@ class TestProvision:
         """Sprint 1.7: managed-mode provision REQUIRES both AAO fields."""
         payload = _provision_payload(external_org_id="org_no_aao")
         del payload["house_domain"]
-        response = client.post(
-            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
-        )
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         assert response.status_code == 422
 
     def test_patch_updates_aao_fields(self, client, auth_headers, cleanup_tenants):
         payload = _provision_payload(external_org_id="org_aao_patch")
-        provision_resp = client.post(
-            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
-        )
+        provision_resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         tid = provision_resp.get_json()["tenant_id"]
         cleanup_tenants.append(tid)
 
@@ -662,8 +654,8 @@ class TestOpenAPI:
 @pytest.fixture
 def real_adapter_test_disabled(monkeypatch):
     """Stub ``preview_adapter`` to passthrough — used by tests that don't care about adapter type."""
-    from src.admin.services.adapter_connection_tester import AdapterPreview
     import src.admin.tenant_management_api as api_module
+    from src.admin.services.adapter_connection_tester import AdapterPreview
 
     def _stub(adapter_type, cfg):
         if adapter_type == "mock":
@@ -705,8 +697,8 @@ class TestPreviewAdapter:
 
     def test_gam_happy_path_returns_network_metadata(self, client, auth_headers, monkeypatch):
         """Stub ``preview_adapter`` to simulate a successful GAM probe."""
-        from src.admin.services.adapter_connection_tester import AdapterPreview
         import src.admin.tenant_management_api as api_module
+        from src.admin.services.adapter_connection_tester import AdapterPreview
 
         monkeypatch.setattr(
             api_module,
@@ -742,8 +734,8 @@ class TestPreviewAdapter:
 
     def test_bad_creds_return_200_with_ok_false(self, client, auth_headers, monkeypatch):
         """Bad creds are a normal flow — surface as 200 + ok=false, not 4xx."""
-        from src.admin.services.adapter_connection_tester import AdapterPreview
         import src.admin.tenant_management_api as api_module
+        from src.admin.services.adapter_connection_tester import AdapterPreview
 
         monkeypatch.setattr(
             api_module,
@@ -884,8 +876,12 @@ class TestTenantStatus:
 
     def test_status_is_cached_within_ttl(self, client, auth_headers, managed_tenant):
         """Two calls within the TTL window return the same ``fetched_at`` (cache hit)."""
-        first = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
-        second = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        first = client.get(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers
+        ).get_json()
+        second = client.get(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers
+        ).get_json()
         assert first["fetched_at"] == second["fetched_at"]
 
     def test_adapter_test_invalidates_status_cache(self, client, auth_headers, managed_tenant):
@@ -893,13 +889,17 @@ class TestTenantStatus:
 
         Verifies the invalidation hook wired in ``adapter_test_connection``.
         """
-        first = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        first = client.get(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers
+        ).get_json()
         # Touch the test-connection endpoint — should invalidate.
         client.post(
             f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config/test-connection",
             headers=auth_headers,
         )
-        second = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        second = client.get(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers
+        ).get_json()
         assert first["fetched_at"] != second["fetched_at"]
 
     def test_missing_api_key_returns_401(self, client, managed_tenant):
@@ -1093,3 +1093,284 @@ class TestPreMapAdvertiser:
             json={"operator": "x", "brand": {"domain": "y.com"}, "billing": "operator", "gam_advertiser_id": "1"},
         )
         assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8: buyer-advertiser routing rules CRUD + default advertiser
+# ---------------------------------------------------------------------------
+
+
+class TestBuyerAdvertiserMappings:
+    """``/tenants/{tid}/buyer-advertiser-mappings`` CRUD.
+
+    External API surface uses ``buyer-advertiser-mapping`` vocabulary
+    (matches Storefront UI); the underlying table is
+    ``advertiser_routing_rules`` because the impl IS a precedence-ordered
+    routing chain. The handler maps between the two at the boundary.
+    """
+
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_routing")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        t = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(t)
+        return t
+
+    def _post_mapping(self, client, auth_headers, tid, **overrides):
+        body = {
+            "operator_domain": "interchange.io",
+            "brand_house": "coca-cola.com",
+            "brand_id": "sprite",
+            "gam_advertiser_id": "12345",
+        }
+        body.update(overrides)
+        return client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings",
+            headers=auth_headers,
+            json=body,
+        )
+
+    def test_create_returns_201_with_full_mapping(self, client, auth_headers, tid):
+        resp = self._post_mapping(client, auth_headers, tid)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["operator_domain"] == "interchange.io"
+        assert body["brand_house"] == "coca-cola.com"
+        assert body["brand_id"] == "sprite"
+        assert body["gam_advertiser_id"] == "12345"
+        assert body["id"].startswith("rule_")
+        assert "created_at" in body and "updated_at" in body
+
+    def test_create_operator_wildcard_omits_brand_fields(self, client, auth_headers, tid):
+        resp = self._post_mapping(client, auth_headers, tid, brand_house=None, brand_id=None, gam_advertiser_id="99")
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body["brand_house"] is None and body["brand_id"] is None
+
+    def test_create_house_wildcard_omits_brand_id(self, client, auth_headers, tid):
+        resp = self._post_mapping(client, auth_headers, tid, brand_id=None)
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body["brand_house"] == "coca-cola.com" and body["brand_id"] is None
+
+    def test_create_rejects_brand_id_without_brand_house(self, client, auth_headers, tid):
+        resp = self._post_mapping(client, auth_headers, tid, brand_house=None, brand_id="sprite")
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "brand_house_required"
+
+    def test_create_returns_409_on_duplicate_natural_key(self, client, auth_headers, tid):
+        first = self._post_mapping(client, auth_headers, tid)
+        assert first.status_code == 201
+        # Same (operator, brand_house, brand_id) tuple, different advertiser
+        dup = self._post_mapping(client, auth_headers, tid, gam_advertiser_id="99999")
+        assert dup.status_code == 409
+        body = dup.get_json()
+        assert body["error"] == "routing_rule_duplicate"
+        assert body["details"]["operator_domain"] == "interchange.io"
+        assert body["details"]["brand_house"] == "coca-cola.com"
+        assert body["details"]["brand_id"] == "sprite"
+
+    def test_create_409_on_duplicate_with_null_brand_fields(self, client, auth_headers, tid):
+        """COALESCE-unique-index treats NULL+NULL as a collision — two
+        operator-wildcard rules under the same operator are forbidden."""
+        first = self._post_mapping(client, auth_headers, tid, brand_house=None, brand_id=None, gam_advertiser_id="1")
+        assert first.status_code == 201
+        dup = self._post_mapping(client, auth_headers, tid, brand_house=None, brand_id=None, gam_advertiser_id="2")
+        assert dup.status_code == 409
+
+    def test_create_allows_multiple_rules_under_same_operator_when_brand_differs(self, client, auth_headers, tid):
+        """Three coexisting rules under the same operator: exact, house, operator-wildcard."""
+        r1 = self._post_mapping(client, auth_headers, tid, brand_house="cocacola.com", brand_id="sprite")
+        r2 = self._post_mapping(
+            client, auth_headers, tid, brand_house="cocacola.com", brand_id=None, gam_advertiser_id="2"
+        )
+        r3 = self._post_mapping(client, auth_headers, tid, brand_house=None, brand_id=None, gam_advertiser_id="3")
+        assert (r1.status_code, r2.status_code, r3.status_code) == (201, 201, 201)
+        assert len({r1.get_json()["id"], r2.get_json()["id"], r3.get_json()["id"]}) == 3
+
+    def test_create_unknown_tenant_returns_404(self, client, auth_headers):
+        resp = client.post(
+            "/api/v1/tenant-management/tenants/tenant_missing/buyer-advertiser-mappings",
+            headers=auth_headers,
+            json={"operator_domain": "x.com", "gam_advertiser_id": "1"},
+        )
+        assert resp.status_code == 404
+
+    def test_list_returns_rules_in_creation_order(self, client, auth_headers, tid):
+        self._post_mapping(client, auth_headers, tid, brand_house="a.com", brand_id=None, gam_advertiser_id="1")
+        self._post_mapping(client, auth_headers, tid, brand_house="b.com", brand_id=None, gam_advertiser_id="2")
+        self._post_mapping(client, auth_headers, tid, brand_house="c.com", brand_id=None, gam_advertiser_id="3")
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["count"] == 3
+        # ASC by created_at — first-authored rule appears first
+        assert [m["brand_house"] for m in body["mappings"]] == ["a.com", "b.com", "c.com"]
+
+    def test_list_filters_by_operator_domain(self, client, auth_headers, tid):
+        self._post_mapping(
+            client, auth_headers, tid, operator_domain="interchange.io", brand_house="a.com", brand_id=None
+        )
+        self._post_mapping(
+            client,
+            auth_headers,
+            tid,
+            operator_domain="buyer.scope3.com",
+            brand_house="b.com",
+            brand_id=None,
+            gam_advertiser_id="2",
+        )
+        resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings?operator_domain=interchange.io",
+            headers=auth_headers,
+        )
+        body = resp.get_json()
+        assert body["count"] == 1
+        assert body["mappings"][0]["operator_domain"] == "interchange.io"
+
+    def test_list_unknown_tenant_returns_404(self, client, auth_headers):
+        resp = client.get(
+            "/api/v1/tenant-management/tenants/tenant_missing/buyer-advertiser-mappings",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+
+    def test_patch_updates_advertiser_id(self, client, auth_headers, tid):
+        created = self._post_mapping(client, auth_headers, tid).get_json()
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/{created['id']}",
+            headers=auth_headers,
+            json={"gam_advertiser_id": "99999"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["gam_advertiser_id"] == "99999"
+        assert body["operator_domain"] == "interchange.io"  # Unchanged
+
+    def test_patch_409_on_natural_key_collision(self, client, auth_headers, tid):
+        """Patching brand_id into another rule's tuple collides on the unique index."""
+        a = self._post_mapping(client, auth_headers, tid, brand_house="coke.com", brand_id="sprite")
+        b = self._post_mapping(
+            client, auth_headers, tid, brand_house="coke.com", brand_id="dasani", gam_advertiser_id="2"
+        )
+        assert (a.status_code, b.status_code) == (201, 201)
+
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/{b.get_json()['id']}",
+            headers=auth_headers,
+            json={"brand_id": "sprite"},  # collides with rule a
+        )
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "routing_rule_duplicate"
+
+    def test_patch_unknown_id_returns_404(self, client, auth_headers, tid):
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/rule_does_not_exist",
+            headers=auth_headers,
+            json={"gam_advertiser_id": "1"},
+        )
+        assert resp.status_code == 404
+
+    def test_patch_does_not_accept_operator_domain(self, client, auth_headers, tid):
+        """``operator_domain`` is intentionally not patchable — schema strips it."""
+        created = self._post_mapping(client, auth_headers, tid).get_json()
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/{created['id']}",
+            headers=auth_headers,
+            json={"operator_domain": "different.io"},
+        )
+        # spectree validates against UpdateBuyerAdvertiserMappingRequest (extra=forbid in dev/CI).
+        assert resp.status_code in (400, 422)
+
+    def test_delete_returns_204_then_404_on_repeat(self, client, auth_headers, tid):
+        created = self._post_mapping(client, auth_headers, tid).get_json()
+        first = client.delete(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/{created['id']}",
+            headers=auth_headers,
+        )
+        assert first.status_code == 204
+
+        # Repeat returns 404 — the row truly is gone, and the caller's
+        # request to delete that specific id can't be satisfied.
+        again = client.delete(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/{created['id']}",
+            headers=auth_headers,
+        )
+        assert again.status_code == 404
+
+    def test_delete_unknown_id_returns_404(self, client, auth_headers, tid):
+        resp = client.delete(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings/rule_missing",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+
+    def test_missing_api_key_returns_401(self, client, tid):
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings",
+            json={"operator_domain": "x.com", "gam_advertiser_id": "1"},
+        )
+        assert resp.status_code in (401, 403)
+
+
+class TestDefaultGamAdvertiserId:
+    """``Tenant.default_gam_advertiser_id`` — read/write through the
+    provision and patch endpoints. See sprint 1.8 design doc §1."""
+
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_default_advertiser")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        t = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(t)
+        return t
+
+    def test_provision_persists_default_gam_advertiser_id(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_default_at_provision", default_gam_advertiser_id="11111")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        cleanup_tenants.append(resp.get_json()["tenant_id"])
+
+        tid = resp.get_json()["tenant_id"]
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.status_code == 200
+        assert get_resp.get_json()["default_gam_advertiser_id"] == "11111"
+
+    def test_provision_without_default_returns_null_in_detail(self, client, auth_headers, tid):
+        """Required-before-activation, optional at provision."""
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.status_code == 200
+        assert get_resp.get_json()["default_gam_advertiser_id"] is None
+
+    def test_patch_sets_default_gam_advertiser_id(self, client, auth_headers, tid):
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"default_gam_advertiser_id": "55555"},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["default_gam_advertiser_id"] == "55555"
+
+        # Roundtrip via GET to confirm persistence
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.get_json()["default_gam_advertiser_id"] == "55555"
+
+    def test_patch_omitting_default_advertiser_does_not_clear_existing(self, client, auth_headers, tid):
+        """PATCH with default_gam_advertiser_id absent leaves stored value intact."""
+        client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"default_gam_advertiser_id": "55555"},
+        )
+        # Patch a different field — default_gam_advertiser_id must stay set.
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"name": "Renamed Publisher"},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["default_gam_advertiser_id"] == "55555"

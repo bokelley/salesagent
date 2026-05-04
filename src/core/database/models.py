@@ -5,8 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from adcp.types import CreditLimit, GovernanceAgent, Setup
-from adcp.types import BrandReference
+from adcp.types import BrandReference, CreditLimit, GovernanceAgent, Setup
 from sqlalchemy import (
     DECIMAL,
     BigInteger,
@@ -914,8 +913,7 @@ class Account(Base):
             name="ck_accounts_account_scope",
         ),
         CheckConstraint(
-            "resolved_via IS NULL OR resolved_via IN "
-            "('account', 'sandbox', 'exact', 'house', 'operator', 'default')",
+            "resolved_via IS NULL OR resolved_via IN ('account', 'sandbox', 'exact', 'house', 'operator', 'default')",
             name="ck_accounts_resolved_via",
         ),
         Index("idx_accounts_tenant", "tenant_id"),
@@ -1989,9 +1987,7 @@ class AdvertiserRoutingRule(Base):
     # cache on POST/PATCH (must reference a real advertiser in the
     # tenant's GAM network).
     gam_advertiser_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -2001,8 +1997,17 @@ class AdvertiserRoutingRule(Base):
     __table_args__ = (
         # Uniqueness on the natural key with NULLs participating via
         # COALESCE coercion (Postgres treats NULL as distinct in UNIQUE
-        # by default). Index defined in the migration since alembic's
-        # autogenerate doesn't handle expression indexes cleanly.
+        # by default). Mirrors the index alembic creates in
+        # 0042_e7a4c2b9d5f1; declared here so Base.metadata.create_all()
+        # (used by integration tests) builds the same constraint.
+        Index(
+            "uq_routing_rule_natural_key",
+            "tenant_id",
+            "operator_domain",
+            text("COALESCE(brand_house, '')"),
+            text("COALESCE(brand_id, '')"),
+            unique=True,
+        ),
         Index("idx_routing_rules_tenant", "tenant_id"),
         Index("idx_routing_rules_operator", "tenant_id", "operator_domain"),
     )
