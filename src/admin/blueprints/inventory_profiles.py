@@ -165,11 +165,10 @@ def list_inventory_profiles(tenant_id: str):
             )
 
     return render_template(
-        "inventory_unified.html",
+        "inventory_profiles_list.html",
         tenant_id=tenant_id,
         tenant=tenant,
         profiles=profiles_data,
-        active_tab="inventory_profiles",
     )
 
 

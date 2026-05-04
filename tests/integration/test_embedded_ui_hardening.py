@@ -403,3 +403,198 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         # otherwise the header "Add Advertiser" renders. Either is fine —
         # the /principals/create route link is the single canonical signal.
         assert "/principals/create" in body
+
+
+# ---------------------------------------------------------------------------
+# /tenant/{id}/inventory  (Sync Inventory)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncInventoryHiddenOnEmbedded:
+    """The Sync Inventory page is fully hidden on embedded tenants.
+
+    Sync is driven by the upstream platform via
+    ``POST /api/v1/tenant-management/tenants/{id}/refresh``. The route
+    keeps its URL (``/tenant/{id}/inventory``) so bookmarks don't break,
+    but on embedded tenants it 200s with the lock banner.
+    """
+
+    def test_embedded_tenant_returns_200_with_banner(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert "Platform settings managed by" in body
+        assert "Scope3" in body
+
+    def test_embedded_omits_sync_controls(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory")
+        body = resp.get_data(as_text=True)
+        # The Sync Inventory page's three sync buttons must NOT render.
+        assert "Incremental Sync" not in body
+        assert "Full Reset" not in body
+        # The targeting-sync button label is unique to the page heading.
+        assert 'id="syncTargetingBtn"' not in body
+        # No POST endpoints to the sync API exposed via the page.
+        assert "/api/tenant/" not in body or "/inventory/sync" not in body
+
+    def test_open_tenant_renders_sync_controls(self, client, open_tenant_id):
+        """Open-instance tenants see the narrowed Sync Inventory page —
+        sync controls only, no Publishers / Profiles / Browse tabs."""
+        resp = client.get(f"/tenant/{open_tenant_id}/inventory")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # Narrowed page header.
+        assert "Sync Inventory" in body
+        # The three sync controls are present (mock-adapter tenants see a
+        # warning banner instead of buttons, so seed an open GAM tenant
+        # in a separate fixture would be required to assert button text;
+        # the warning marker is the canonical "page rendered" signal).
+        assert "Inventory sync is only available for Google Ad Manager" in body or "Incremental Sync" in body
+        # Tabs from the old unified page must not appear.
+        assert "Publishers & Properties" not in body
+        assert "Inventory Profiles" not in body
+        assert "Browse Inventory" not in body or "Browse Inventory</a>" in body
+
+    def test_embedded_dashboard_drops_sync_inventory_link(self, client, embedded_tenant_id):
+        """Embedded dashboard nav must NOT link to /tenant/<id>/inventory."""
+        resp = client.get(f"/tenant/{embedded_tenant_id}")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # The Sync Inventory action-button label is unique.
+        assert "Sync Inventory" not in body
+        # Verify the /inventory route is not linked from the dashboard
+        # (other inventory paths like /inventory/browse are allowed).
+        assert f"/tenant/{embedded_tenant_id}/inventory\"" not in body
+
+    def test_open_dashboard_keeps_sync_inventory_link(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert "Sync Inventory" in body
+        assert f"/tenant/{open_tenant_id}/inventory\"" in body
+
+
+# ---------------------------------------------------------------------------
+# Top-level inventory nav (Browse / Targeting / Profiles)
+# ---------------------------------------------------------------------------
+
+
+class TestPromotedInventoryNav:
+    """Browse Inventory / Targeting Criteria / Inventory Profiles are
+    promoted to top-level nav siblings on the tenant dashboard.
+
+    These three are visible on BOTH embedded and open-instance tenants —
+    publishers need to browse inventory and target criteria when authoring
+    products regardless of who drives sync.
+    """
+
+    def test_open_tenant_dashboard_shows_three_promoted_links(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert "Browse Inventory" in body
+        assert "Targeting Criteria" in body
+        assert "Inventory Profiles" in body
+        assert f"/tenant/{open_tenant_id}/inventory/browse" in body
+        assert f"/tenant/{open_tenant_id}/targeting" in body
+        assert f"/tenant/{open_tenant_id}/inventory-profiles/" in body
+
+    def test_embedded_tenant_dashboard_shows_three_promoted_links(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert "Browse Inventory" in body
+        assert "Targeting Criteria" in body
+        assert "Inventory Profiles" in body
+        assert f"/tenant/{embedded_tenant_id}/inventory/browse" in body
+        assert f"/tenant/{embedded_tenant_id}/targeting" in body
+        assert f"/tenant/{embedded_tenant_id}/inventory-profiles/" in body
+
+    def test_browse_inventory_resolves_on_open_tenant(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/inventory/browse")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_browse_inventory_resolves_on_embedded_tenant(self, client, embedded_tenant_id):
+        """Embedded tenants browse inventory the platform synced for them —
+        the page renders normally; only the sync trigger is suppressed
+        elsewhere."""
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory/browse")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_targeting_resolves_on_open_tenant(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/targeting")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_targeting_resolves_on_embedded_tenant(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/targeting")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_inventory_profiles_resolves_on_open_tenant(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/inventory-profiles/")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_inventory_profiles_resolves_on_embedded_tenant(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory-profiles/")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# Browse Inventory must not contain Publishers & Properties tab
+# ---------------------------------------------------------------------------
+
+
+class TestPublishersTabRemovedFromBrowseInventory:
+    """The "Publishers & Properties" tab was nested under Inventory because
+    sync was the entry point. Now Publisher Partnerships lives in Settings
+    (and is hidden on embedded tenants — see TestPublisherPartnershipsHiddenOnEmbedded).
+    Browse Inventory is just inventory hierarchy + search; no Publisher tab.
+    """
+
+    def test_open_browse_inventory_omits_publishers_tab(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/inventory/browse")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # The unified page used "Publishers & Properties" as a tab label
+        # and a section heading; neither belongs on the standalone Browse
+        # Inventory page.
+        assert "Publishers & Properties" not in body
+        assert 'id="publishers-tab"' not in body
+        assert 'id="publishers-pane"' not in body
+        # The Publisher Partners CTA list is also gone.
+        assert "Publisher Partners" not in body or "Manage your publisher partnerships" not in body
+
+    def test_embedded_browse_inventory_omits_publishers_tab(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory/browse")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert "Publishers & Properties" not in body
+        assert 'id="publishers-tab"' not in body
+
+
+# ---------------------------------------------------------------------------
+# Targeting Criteria — Sync Targeting Data button hidden on embedded
+# ---------------------------------------------------------------------------
+
+
+class TestSyncTargetingDataButtonHiddenOnEmbedded:
+    """The Targeting Criteria page stays visible on embedded tenants —
+    publishers browse targeting keys when authoring products. Only the
+    "Sync Targeting Data" button is suppressed, since sync is driven by
+    the upstream platform.
+    """
+
+    def test_embedded_omits_sync_targeting_button(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/targeting")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # The header sync button must be gone.
+        assert 'id="sync-targeting-btn"' not in body
+        # The page itself must still render — Targeting Criteria heading.
+        assert "Targeting Criteria Browser" in body
+
+    def test_open_renders_sync_targeting_button(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/targeting")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert 'id="sync-targeting-btn"' in body
+        assert "Sync Targeting Data" in body

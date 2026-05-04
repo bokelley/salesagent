@@ -1,9 +1,11 @@
 # Sync Accounts → GAM Advertiser Mapping
 
-**Status:** Draft
+**Status:** Shipped (sprint 1.6 — pieces A, B, C). Resolution semantics partially superseded by [sprint 1.8 routing chain](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md). See [Addendum on `auto_provision_advertisers`](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md#addendum-auto_provision_advertisers-retained-flag-not-dropped).
 **Owner:** Sales Agent
 **Last updated:** 2026-05-04
-**Related:** [embedded-mode-sprint-1.md](./embedded-mode-sprint-1.md), [embedded-mode-sprint-4.md](./embedded-mode-sprint-4.md)
+**Related:** [embedded-mode-sprint-1.md](./embedded-mode-sprint-1.md), [embedded-mode-sprint-1.8-buyer-advertiser-routing.md](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md), [embedded-mode-sprint-4.md](./embedded-mode-sprint-4.md)
+
+> **Product policy update (post-sprint-1.8).** This doc originally framed `auto_provision_advertisers=true` as the default for embedded-mode tenants. **That is no longer the position.** The default — for every tenant, embedded or open — is `false`: the salesagent does not create advertisers in the publisher's GAM network without explicit per-tenant opt-in. See the [sprint 1.8 addendum](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md#addendum-auto_provision_advertisers-retained-flag-not-dropped) for the full rationale.
 
 ## Problem
 
@@ -73,11 +75,13 @@ if account.status == "pending_provision":
         )
 ```
 
-The `ACCOUNT_NOT_PROVISIONED` path is the conservative default — publishers with strong GAM-side ops governance keep `auto_provision_advertisers=false` and the salesagent files an approval workflow visible in the Admin UI. The `auto_provision_advertisers=true` path is for tenants who've delegated advertiser-create authority to the salesagent (host-product-embedded tenants typically turn this on at provision time).
+The `ACCOUNT_NOT_PROVISIONED` path is the **default for every tenant** — the salesagent files an approval workflow visible in the Admin UI; the publisher (or the host product driving the API) maps the advertiser explicitly. The `auto_provision_advertisers=true` path is for tenants who have explicitly delegated advertiser-create authority to the salesagent. There is no implicit default-to-true for embedded mode (or any other mode); the policy is "explicit opt-in only" because auto-create writes new state into the publisher's GAM network.
 
 ### `Tenant.auto_provision_advertisers`
 
-New boolean column on `Tenant`. Default `false` for backward compatibility with today's open-instance tenants. The Tenant Management API's `POST /tenants/provision` accepts it as a request field (default `true` for embedded-mode tenants — host products generally want automation by default). Open-instance Admin UI exposes it as a config toggle on the GAM adapter page.
+New boolean column on `Tenant`. Default `false` for **every** tenant — embedded or open. Auto-creating advertisers writes state into the publisher's GAM network, and we don't presume to do that without per-tenant explicit consent.
+
+The Tenant Management API's `POST /tenants/provision` and `PATCH /tenants/{id}` should accept this as an optional field (not currently wired — see [sprint 1.8 addendum](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md#addendum-auto_provision_advertisers-retained-flag-not-dropped)). When wired, the API default remains `false`; a host product opts in per tenant by passing `auto_provision_advertisers: true` in the request. Open-instance Admin UI exposes it as a config toggle on the GAM adapter page.
 
 Migration: `add_auto_provision_advertisers_to_tenant` adds the column with `server_default='false'`.
 
@@ -192,7 +196,7 @@ Code changes:
 - [ ] `create_media_buy` for `pending_provision` Account on tenant with `auto_provision_advertisers=false` → raises `ACCOUNT_NOT_PROVISIONED`. Admin UI shows the account with a "Map advertiser" prompt.
 - [ ] Two media buys against the same `pending_provision` Account in quick succession (race) → only one GAM CompanyService.createCompanies call (idempotency on the provision step keyed by `account_id`).
 - [ ] Advertiser-name collision in GAM → existing advertiser id is attached, no error. Audit log records the attach.
-- [ ] Tenant Management API `POST /tenants/provision` accepts `auto_provision_advertisers` in the request; default `true` for embedded-mode tenants (`is_embedded=true`), `false` otherwise.
+- [ ] Tenant Management API `POST /tenants/provision` and `PATCH /tenants/{id}` accept `auto_provision_advertisers` as an optional field; default `false` for **every** tenant (embedded or open). Per the [sprint 1.8 addendum](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md#addendum-auto_provision_advertisers-retained-flag-not-dropped), there is no implicit default-to-true for embedded mode — auto-creating advertisers writes state into the publisher's GAM network and requires explicit consent.
 - [ ] Existing open-instance tenants unaffected after migration — `auto_provision_advertisers=false` by default keeps today's manual-mapping flow intact.
 
 ## Open questions

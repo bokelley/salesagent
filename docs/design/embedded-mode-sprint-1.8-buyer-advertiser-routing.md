@@ -1,9 +1,11 @@
-# Sprint 1.8 Spec: Buyer-Advertiser Routing for Managed Storefronts
+# Sprint 1.8 Spec: Buyer-Advertiser Routing for Embedded Storefronts
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1.6](./sync-accounts-advertiser-mapping.md), [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md)
-**Status:** Draft
+**Status:** Shipped (see [Addendum](#addendum-auto_provision_advertisers-retained-flag-not-dropped) re: `auto_provision_advertisers` flag retention)
 **Last updated:** 2026-05-04
+
+> **Note on item 6 below.** Sprint 1.8 originally planned to drop `auto_provision_advertisers` as redundant (item 6 in the Migrations section). That decision has been **reversed** — see [Addendum](#addendum-auto_provision_advertisers-retained-flag-not-dropped). The flag stays.
 
 ## Scope
 
@@ -497,4 +499,32 @@ Estimated scope: **~5 days**.
 
 - [Sprint 1.6](./sync-accounts-advertiser-mapping.md) — Account + advertiser pre-mapping. The resolved Account row IS the persistent record; this sprint adds the rules that decide *what advertiser to attach* on first creation.
 - [Sprint 1.7](./replace-authorized-properties-with-aao-lookup.md) — `Tenant.public_agent_url` (the agent URL publishers list in their adagents.json). Conceptually the "operator side" of routing — the operator_domain in this sprint is the *buyer*'s agent_url.
-- [Identity contract](../integration/embedded-mode-identity-contract.md) — these endpoints stay on `X-Tenant-Management-API-Key` auth (publishers manipulate routing config via the upstream platform's UI, not via X-Identity-* iframe sessions).
+- [Identity contract](../integration/embedded-mode-identity-contract.md) — these endpoints stay on `X-Tenant-Management-API-Key` auth (publishers manipulate routing config via the host product's UI, not via X-Identity-* iframe sessions).
+
+## Addendum: `auto_provision_advertisers` retained (flag NOT dropped)
+
+**Decision:** the planned `drop_auto_provision_advertisers_from_tenant` migration (item 6 in the Migrations section above, and the "Sprint 1.6 cleanup" line in the estimate) is **cancelled**. The flag stays.
+
+**Why the original retire-the-flag plan was wrong.** Sprint 1.8 conflated two distinct operations:
+
+| Operation | What it does | Replaced by sprint 1.8? |
+|---|---|---|
+| **Auto-attach** (use a pre-existing advertiser when the buyer has no specific mapping) | Reads existing GAM data | ✅ Yes — `Tenant.default_gam_advertiser_id` + `BuyerAdvertiserMapping` rules cover this case |
+| **Auto-create** (`CompanyService.createCompanies` on first buy when no Account exists) | **Writes new state to the publisher's GAM network** | ❌ No — this is a distinct operation that nothing in sprint 1.8 replaces |
+
+Sprint 1.8 replaces the auto-attach role of the flag, but not the auto-create role. Dropping the flag would silently remove a capability with no equivalent on the new path.
+
+**Product policy: explicit opt-in for any GAM-side write.** We don't know what behavior individual host products / publishers will want around advertiser creation. The conservative default — and the right default for an operation that *creates state in someone else's ad server* — is **never auto-create unless explicitly opted in per tenant.** Today's runtime already enforces this: `Tenant.auto_provision_advertisers` defaults `false` (server default in [migration `c8a5e1d3f4b9`](../../alembic/versions/c8a5e1d3f4b9_add_pending_provision_and_auto_provision.py)), and `account_provisioning.py:197` raises `ACCOUNT_NOT_PROVISIONED` whenever the flag is false.
+
+**Outstanding work to make the opt-in usable:**
+- The Tenant Management API's `POST /tenants/provision` and `PATCH /tenants/{id}` do not currently accept `auto_provision_advertisers`. A host that *does* want auto-create has no way to set it. Adding it is a small follow-up: one schema field, one PATCH path, one OpenAPI export refresh. Not blocking — the safe default is what it should be.
+- The Admin UI doesn't expose the toggle either. Same fix shape; same low priority while we observe what hosts ask for.
+
+**Behavior with the routing chain.** No change to `resolve_advertiser_for_buy`. The chain operates on advertisers that already exist (`default_gam_advertiser_id` and `BuyerAdvertiserMapping` both reference existing GAM advertiser IDs). When neither matches and the buy lands on an unmapped Account in `pending_provision`:
+
+- `auto_provision_advertisers=false` (today's default for every tenant) → raise `ACCOUNT_NOT_PROVISIONED`. Publisher maps manually via the Admin UI / API.
+- `auto_provision_advertisers=true` (explicit opt-in per tenant) → call `CompanyService.createCompanies`, persist the new advertiser id, attach the buy.
+
+These paths are complementary, not competing.
+
+**Status of [sync-accounts-advertiser-mapping.md](./sync-accounts-advertiser-mapping.md):** that doc described the original `pending_provision` + `auto_provision_advertisers` flow and predates sprint 1.8's routing chain. The Account + status-precedence machinery it describes is shipped (sprint 1.6 piece A/B/C). The "default true for embedded-mode tenants" framing in that doc is **not** the current product position — see this addendum.

@@ -46,6 +46,14 @@ Today's `src/admin/tenant_management_api.py` is a partial step: 6 endpoints unde
 - Multiple host products on the same embedded instance in v1. An embedded instance has one control plane authenticated with one global API key. Multi-host on one instance is a future extension; the `X-Identity-Source` header is the seam for it.
 - A host-native UI. v1 reverse-proxies the existing salesagent admin UI. A host may build a native UI later on the Tenant Management API; that's a separate project per host.
 
+## Product policy: explicit opt-in for ad-server writes
+
+Embedded mode is permissive about *reads* (the salesagent fetches GAM inventory, advertiser lists, network metadata as part of normal operation) and conservative about *writes that create new state in the publisher's ad server*. Specifically: the salesagent does **not** auto-create GAM advertisers on first buy unless the publisher (or the host product on the publisher's behalf) has explicitly opted in per tenant. This is the default for every tenant — embedded or open.
+
+The mechanism is `Tenant.auto_provision_advertisers` (default `false`). When `false`, an unmapped buy returns `ACCOUNT_NOT_PROVISIONED` and the publisher maps the advertiser explicitly via the Admin UI or API. When `true`, the salesagent calls `CompanyService.createCompanies` on the publisher's GAM network on first buy.
+
+We don't presume a default here because we don't yet know what host products / publishers will want, and the cost of guessing wrong (creating unwanted entities in someone else's ad server) is higher than the cost of a one-time per-tenant configuration step. See [sprint 1.8 addendum](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md#addendum-auto_provision_advertisers-retained-flag-not-dropped) for the full rationale.
+
 ## Architecture overview
 
 ```

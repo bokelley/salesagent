@@ -690,6 +690,40 @@
                     </div>
                 </a>
 
+                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory/browse" class="action-button">
+                    <div class="action-icon inventory">📦</div>
+                    <div>
+                        <div style="font-weight: 600;">Browse Inventory</div>
+                        <div style="font-size: 0.75rem; color: #6b7280;">Ad units, placements, hierarchy</div>
+                    </div>
+                </a>
+
+                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/targeting" class="action-button">
+                    <div class="action-icon inventory">🎯</div>
+                    <div>
+                        <div style="font-weight: 600;">Targeting Criteria</div>
+                        <div style="font-size: 0.75rem; color: #6b7280;">Custom keys, audiences, labels</div>
+                    </div>
+                </a>
+
+                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory-profiles/" class="action-button">
+                    <div class="action-icon inventory">🗂️</div>
+                    <div>
+                        <div style="font-weight: 600;">Inventory Profiles</div>
+                        <div style="font-size: 0.75rem; color: #6b7280;">Reusable inventory bundles for products</div>
+                    </div>
+                </a>
+
+                {% if not tenant.is_embedded %}
+                <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/inventory" class="action-button">
+                    <div class="action-icon inventory">🔄</div>
+                    <div>
+                        <div style="font-weight: 600;">Sync Inventory</div>
+                        <div style="font-size: 0.75rem; color: #6b7280;">Pull ad-server data into the local mirror</div>
+                    </div>
+                </a>
+                {% endif %}
+
                 <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/reporting" class="action-button">
                     <div class="action-icon reports">📈</div>
                     <div>

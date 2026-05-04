@@ -20,7 +20,14 @@ inventory_bp = Blueprint("inventory", __name__)
 @inventory_bp.route("/tenant/<tenant_id>/targeting")
 @require_tenant_access()
 def targeting_browser(tenant_id):
-    """Display targeting browser page."""
+    """Display targeting browser page.
+
+    The "Sync Targeting Data" button is hidden on embedded tenants —
+    sync is driven by the upstream platform via the Tenant Management
+    API (see ``POST /api/v1/tenant-management/tenants/{id}/refresh``).
+    The page itself remains visible so publishers can browse targeting
+    keys when authoring products.
+    """
 
     with get_db_session() as db_session:
         tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -36,18 +43,21 @@ def targeting_browser(tenant_id):
                 "axe_macro_key": tenant_obj.adapter_config.axe_macro_key or "",
             }
 
-    # Pass tenant data including ad_server (needed for AXE key save)
-    tenant = {
-        "tenant_id": tenant_obj.tenant_id,
-        "name": tenant_obj.name,
-        "ad_server": tenant_obj.ad_server or "",
-    }
+        # Pass tenant data including ad_server (needed for AXE key save)
+        # and is_embedded so the template can hide the Sync button.
+        tenant = {
+            "tenant_id": tenant_obj.tenant_id,
+            "name": tenant_obj.name,
+            "ad_server": tenant_obj.ad_server or "",
+            "is_embedded": bool(tenant_obj.is_embedded),
+            "external_source": tenant_obj.external_source,
+        }
 
     return render_template(
         "targeting_browser.html",
         tenant=tenant,
         tenant_id=tenant_id,
-        tenant_name=tenant_obj.name,
+        tenant_name=tenant["name"],
         adapter_config=adapter_config_dict,
     )
 
@@ -306,35 +316,102 @@ def get_targeting_values(tenant_id, key_id):
 @inventory_bp.route("/tenant/<tenant_id>/inventory")
 @require_tenant_access()
 def inventory_browser(tenant_id):
-    """Display unified inventory browser and profiles page."""
+    """Display the Sync Inventory page (sync controls + sync state only).
+
+    On embedded tenants the page is replaced with the platform-managed
+    lock banner — sync is driven by the upstream platform via
+    ``POST /api/v1/tenant-management/tenants/{id}/refresh``. Returns 200
+    (not 404) so deep-links land on a "managed by your platform"
+    explanation rather than a dead end.
+
+    Browse Inventory, Targeting Criteria, and Inventory Profiles are
+    now top-level nav siblings — see ``inventory_browse``,
+    ``targeting_browser``, and the inventory_profiles blueprint.
+    """
 
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        row = (tenant.tenant_id, tenant.name) if tenant else None
-        if not row:
+        if not tenant:
             return "Tenant not found", 404
 
-        # Check adapter type - GAM inventory features (ad units, placements) only for GAM
-        # But Publishers & Properties tab is available for all adapters
+        if tenant.is_embedded:
+            return render_template("_embedded_locked_page.html", tenant=tenant), 200
+
         adapter_type = tenant.ad_server or "mock"
         is_gam = adapter_type == "google_ad_manager"
+        tenant_dict = {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "virtual_host": tenant.virtual_host,
+            "is_embedded": False,
+        }
 
-        # Note: We allow non-GAM tenants to access this page for the Publishers & Properties tab
+    return render_template(
+        "sync_inventory.html",
+        tenant=tenant_dict,
+        tenant_id=tenant_id,
+        tenant_name=tenant_dict["name"],
+        is_gam=is_gam,
+        adapter_type=adapter_type,
+    )
 
-    tenant_dict = {"tenant_id": row[0], "name": row[1], "virtual_host": tenant.virtual_host if tenant else None}
 
-    # Get inventory type from query param
+@inventory_bp.route("/tenant/<tenant_id>/inventory/browse")
+@require_tenant_access()
+def inventory_browse(tenant_id):
+    """Display the Browse Inventory page (ad-unit hierarchy + search).
+
+    Top-level nav sibling — visible on both embedded and open-instance
+    tenants. Embedded tenants browse the inventory the upstream platform
+    has synced for them; sync controls live on the Sync Inventory page
+    (hidden on embedded).
+    """
+
+    # Reuse the same tenant fetch as ``inventory_browser`` — both hit the
+    # same Tenant row, just present different UIs. The select() is
+    # allowlisted on ``inventory_browser``; sharing keeps the violation
+    # surface flat.
+    tenant_dict, is_gam, adapter_type, not_found = _load_tenant_for_inventory(tenant_id)
+    if not_found:
+        return not_found
+
     inventory_type = request.args.get("type", "all")
 
     return render_template(
-        "inventory_unified.html",
+        "inventory_browser.html",
         tenant=tenant_dict,
         tenant_id=tenant_id,
-        tenant_name=row[1],
+        tenant_name=tenant_dict["name"],
         inventory_type=inventory_type,
         is_gam=is_gam,
         adapter_type=adapter_type,
     )
+
+
+def _load_tenant_for_inventory(tenant_id):
+    """Load the Tenant row for inventory pages.
+
+    Shared helper for ``inventory_browser`` (Sync Inventory) and
+    ``inventory_browse`` (Browse Inventory) — same tenant fetch, two
+    different page surfaces. Returns a tuple of:
+    ``(tenant_dict, is_gam, adapter_type, not_found_response_or_None)``.
+    The tenant_dict carries ``is_embedded`` so callers can decide whether
+    to show or suppress sync triggers.
+    """
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return None, False, "mock", ("Tenant not found", 404)
+
+        adapter_type = tenant.ad_server or "mock"
+        is_gam = adapter_type == "google_ad_manager"
+        tenant_dict = {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "virtual_host": tenant.virtual_host,
+            "is_embedded": bool(tenant.is_embedded),
+        }
+    return tenant_dict, is_gam, adapter_type, None
 
 
 @inventory_bp.route("/tenant/<tenant_id>/orders")

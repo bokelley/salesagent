@@ -65,11 +65,13 @@
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1>Targeting Criteria Browser</h1>
         <div>
+            {% if not tenant.is_embedded %}
             <button id="sync-targeting-btn" class="btn btn-primary" onclick="syncTargetingData()">
                 <i class="fas fa-sync"></i> <span id="sync-btn-text">Sync Targeting Data</span>
             </button>
-            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
-                ← Back to Inventory
+            {% endif %}
+            <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
+                ← Back to Browse Inventory
             </a>
         </div>
     </div>
@@ -78,7 +80,9 @@
     <div class="alert alert-info">
         <i class="fas fa-info-circle"></i>
         <strong>Note:</strong> This page displays targeting criteria (custom targeting keys, audience segments, and labels) synced from your ad server.
-        To sync ad units and placements, visit the <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}" class="alert-link">Inventory Browser</a>.
+        {% if not tenant.is_embedded %}
+        To sync ad units and placements, visit <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant.tenant_id) }}" class="alert-link">Sync Inventory</a>.
+        {% endif %}
     </div>
 
     <!-- Last Sync Info -->
@@ -385,6 +389,7 @@
 <script>
 const tenantId = '{{ tenant.tenant_id }}';
 const scriptRoot = '{{ request.script_root }}';  // Base path for URLs (e.g., '/admin' or '')
+const isEmbedded = {{ 'true' if tenant.is_embedded else 'false' }};
 let currentKeyId = null;
 let targetingData = {
     customKeys: [],
@@ -393,11 +398,18 @@ let targetingData = {
     labels: []
 };
 
-// Sync targeting data from ad server
+// Sync targeting data from ad server. Hidden on embedded tenants —
+// the upstream platform drives sync via the Tenant Management API.
 async function syncTargetingData() {
     const btn = document.getElementById('sync-targeting-btn');
     const btnText = document.getElementById('sync-btn-text');
     const syncMessage = document.getElementById('sync-message');
+
+    if (!btn) {
+        // Embedded tenant — sync trigger is suppressed.
+        if (syncMessage) syncMessage.textContent = 'Sync is managed by your platform.';
+        return;
+    }
 
     // Disable button and show loading state
     btn.disabled = true;
@@ -405,7 +417,7 @@ async function syncTargetingData() {
     syncMessage.textContent = 'Starting sync...';
 
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -447,7 +459,7 @@ async function syncTargetingData() {
 // Load all targeting data
 async function loadTargetingData() {
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/all`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/all`, {
             credentials: 'same-origin'
         });
 
@@ -557,13 +569,14 @@ function renderCustomKeys() {
     console.log('filteredKeys count:', filteredKeys.length);
 
     if (filteredKeys.length === 0) {
+        const syncCta = isEmbedded
+            ? '<p class="text-muted small">Sync is managed by your platform.</p>'
+            : '<button class="btn btn-primary btn-sm" onclick="syncTargetingData()"><i class="fas fa-sync"></i> Sync from GAM</button>';
         keysList.innerHTML = `
             <div class="text-center p-4">
                 <i class="bi bi-search text-muted" style="font-size: 3rem;"></i>
                 <p class="text-muted mt-2">No custom targeting keys found</p>
-                <button class="btn btn-primary btn-sm" onclick="syncTargetingData()">
-                    <i class="fas fa-sync"></i> Sync from GAM
-                </button>
+                ${syncCta}
             </div>
         `;
         return;
@@ -729,7 +742,7 @@ async function selectKey(key) {
 // Load custom targeting values from API
 async function loadCustomValues(keyId) {
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/values/${keyId}`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/values/${keyId}`, {
             credentials: 'same-origin'
         });
 

@@ -16,7 +16,7 @@
                        class="btn btn-success">
                         <i class="fas fa-plus"></i> Create Profile
                     </a>
-                    <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}"
+                    <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant_id) }}"
                        class="btn btn-outline-secondary">
                         <i class="fas fa-th"></i> Browse Inventory
                     </a>
@@ -155,7 +155,8 @@ function deleteProfile(profileId, profileName) {
         return;
     }
 
-    fetch(`/admin/tenant/{{ tenant_id }}/inventory-profiles/${profileId}/delete`, {
+    const scriptRoot = '{{ request.script_root }}';
+    fetch(`${scriptRoot}/tenant/{{ tenant_id }}/inventory-profiles/${profileId}/delete`, {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',

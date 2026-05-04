@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block title %}Sync Inventory - {{ tenant.name }} Sales Agent{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('core.index') }}">Dashboard</a></li>
+            <li class="breadcrumb-item"><a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id) }}">{{ tenant.name }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Sync Inventory</li>
+        </ol>
+    </nav>
+
+    <div class="row">
+        <div class="col-12">
+            <h2>Sync Inventory</h2>
+            <p class="text-muted">
+                Pull ad units, placements, labels, custom targeting keys, and audience segments from your ad server.
+                Browse the synced inventory under <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant.tenant_id) }}">Browse Inventory</a>
+                or <a href="{{ url_for('inventory.targeting_browser', tenant_id=tenant.tenant_id) }}">Targeting Criteria</a>.
+            </p>
+        </div>
+    </div>
+
+    {% if not is_gam %}
+    <div class="alert alert-warning mt-3">
+        <i class="fas fa-info-circle"></i>
+        Inventory sync is only available for Google Ad Manager tenants. Your tenant is configured to use the
+        <code>{{ adapter_type }}</code> adapter.
+    </div>
+    {% else %}
+
+    <!-- Sync Status Card -->
+    <div class="row mt-3">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="card-title mb-1">Inventory Status</h5>
+                            <p class="mb-0" id="syncStatus">Loading...</p>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="syncInventory('incremental')" id="incrementalSyncBtn">
+                                <i class="fas fa-sync"></i> Incremental Sync
+                            </button>
+                            <button class="btn btn-outline-danger" onclick="syncInventory('full')" id="fullResetBtn">
+                                <i class="fas fa-trash-restore"></i> Full Reset
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Quick Stats</h5>
+                    <div id="inventoryStats">
+                        <div class="text-muted">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Targeting Sync Card -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="card-title mb-1">Targeting Data</h5>
+                            <p class="mb-0 text-muted">
+                                Sync custom targeting keys, audience segments, and labels from GAM.
+                            </p>
+                        </div>
+                        <button class="btn btn-secondary" onclick="syncTargetingData()" id="syncTargetingBtn">
+                            <i class="fas fa-sync"></i> Sync Targeting Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="alert alert-info">
+                <h6 class="alert-heading">When to use which sync</h6>
+                <ul class="mb-0">
+                    <li><strong>Incremental Sync</strong> — pulls only items changed since the last successful sync. Fast; safe to run often.</li>
+                    <li><strong>Full Reset</strong> — clears the local mirror and re-pulls everything from GAM. Use after large reorganizations or when status drift is suspected.</li>
+                    <li><strong>Sync Targeting Data</strong> — refreshes custom targeting keys, audiences, and labels (no ad-unit changes).</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+const tenantId = '{{ tenant_id }}';
+const scriptRoot = '{{ request.script_root }}';
+const isGam = {{ 'true' if is_gam else 'false' }};
+
+function syncInventory(mode) {
+    if (!isGam) return;
+    const btnId = mode === 'full' ? 'fullResetBtn' : 'incrementalSyncBtn';
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    if (mode === 'full' && !confirm('Full Reset will clear the local inventory mirror and re-pull everything from GAM. Continue?')) {
+        return;
+    }
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
+
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+    })
+        .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
+        .then(({ ok, status, data }) => {
+            if (!ok) {
+                alert(`Sync failed (${status}): ${data.error || 'unknown error'}`);
+                btn.disabled = false;
+                btn.innerHTML = original;
+                return;
+            }
+            const syncLabel = mode === 'full' ? 'Full reset' : 'Incremental sync';
+            alert(`${syncLabel} started. Sync ID: ${data.sync_id}\nThe page will reload when sync completes.`);
+            pollSyncStatus(data.sync_id, btn, original);
+        })
+        .catch(err => {
+            console.error('Sync error:', err);
+            alert('Sync failed: ' + err.message);
+            btn.disabled = false;
+            btn.innerHTML = original;
+        });
+}
+
+function syncTargetingData() {
+    if (!isGam) return;
+    const btn = document.getElementById('syncTargetingBtn');
+    if (!btn) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            mode: 'incremental',
+            types: ['labels', 'custom_targeting', 'audience_segments']
+        })
+    })
+        .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
+        .then(({ ok, status, data }) => {
+            if (!ok) {
+                alert(`Targeting sync failed (${status}): ${data.error || 'unknown error'}`);
+                btn.disabled = false;
+                btn.innerHTML = original;
+                return;
+            }
+            alert(`Targeting sync started. Sync ID: ${data.sync_id}`);
+            pollSyncStatus(data.sync_id, btn, original);
+        })
+        .catch(err => {
+            console.error('Targeting sync error:', err);
+            alert('Targeting sync failed: ' + err.message);
+            btn.disabled = false;
+            btn.innerHTML = original;
+        });
+}
+
+function pollSyncStatus(syncId, btn, originalLabel) {
+    let attempts = 0;
+    const maxAttempts = 240;  // 20 minutes at 5s intervals
+    const interval = setInterval(() => {
+        attempts++;
+        if (attempts > maxAttempts) {
+            clearInterval(interval);
+            btn.disabled = false;
+            btn.innerHTML = originalLabel;
+            return;
+        }
+        fetch(`${scriptRoot}/tenant/${tenantId}/gam/sync-status/${syncId}`, { credentials: 'same-origin' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'completed' || data.status === 'failed') {
+                    clearInterval(interval);
+                    location.reload();
+                }
+            })
+            .catch(() => {});
+    }, 5000);
+}
+
+function loadInventoryStatus() {
+    if (!isGam) return;
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/sync-status`, { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(data => {
+            const sync = data.sync_status || {};
+            const status = document.getElementById('syncStatus');
+            const stats = document.getElementById('inventoryStats');
+            const lastSyncs = Object.values(sync).map(s => s.last_synced).filter(Boolean).sort();
+            const lastSync = lastSyncs.length ? lastSyncs[lastSyncs.length - 1] : null;
+            if (lastSync) {
+                status.textContent = `Last synced: ${new Date(lastSync).toLocaleString()}`;
+            } else {
+                status.textContent = 'No sync yet — run an Incremental Sync to populate inventory.';
+            }
+            const lines = [];
+            for (const [type, info] of Object.entries(sync)) {
+                lines.push(`<div><strong>${type}</strong>: ${info.total_count}</div>`);
+            }
+            stats.innerHTML = lines.join('') || '<div class="text-muted">No inventory.</div>';
+        })
+        .catch(err => {
+            console.error('Status load error:', err);
+            const status = document.getElementById('syncStatus');
+            if (status) status.textContent = 'Failed to load sync status.';
+        });
+}
+
+document.addEventListener('DOMContentLoaded', loadInventoryStatus);
+</script>
+{% endblock %}

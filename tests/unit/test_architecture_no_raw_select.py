@@ -153,6 +153,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "get_sync_status"),
     ("src/admin/blueprints/inventory.py", "get_targeting_data"),
     ("src/admin/blueprints/inventory.py", "get_targeting_values"),
+    ("src/admin/blueprints/inventory.py", "_load_tenant_for_inventory"),
     ("src/admin/blueprints/inventory.py", "inventory_browser"),
     ("src/admin/blueprints/inventory.py", "orders_browser"),
     ("src/admin/blueprints/inventory.py", "sync_inventory"),
@@ -270,6 +271,37 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "get_adapter_config"),
     ("src/admin/tenant_management_api.py", "put_adapter_config"),
     ("src/admin/tenant_management_api.py", "adapter_test_connection"),
+    # FIXME(embedded-mode-sprint-1.6/1.8): Account + buyer-advertiser-mappings + recent-buyers
+    # + refresh endpoints landed before AccountRoutingRule / SyncJob / Tenant repositories
+    # existed. Fold into repositories alongside the auto_provision_advertisers retirement
+    # follow-up once Sprint 1.8 is end-to-end verified in production.
+    ("src/admin/tenant_management_api.py", "_find_account_by_natural_key"),
+    ("src/admin/tenant_management_api.py", "upsert_account"),
+    ("src/admin/tenant_management_api.py", "list_managed_accounts"),
+    ("src/admin/tenant_management_api.py", "list_buyer_advertiser_mappings"),
+    ("src/admin/tenant_management_api.py", "create_buyer_advertiser_mapping"),
+    ("src/admin/tenant_management_api.py", "patch_buyer_advertiser_mapping"),
+    ("src/admin/tenant_management_api.py", "delete_buyer_advertiser_mapping"),
+    ("src/admin/tenant_management_api.py", "list_recent_buyers"),
+    ("src/admin/tenant_management_api.py", "refresh_tenant"),
+    # FIXME(embedded-mode-sprint-1.5): tenant_status_service aggregates 5 ORM models
+    # for the /status snapshot. Fold into a StatusRepository or per-block repos.
+    ("src/admin/services/tenant_status_service.py", "get_tenant_status"),
+    ("src/admin/services/tenant_status_service.py", "_adapter_block"),
+    ("src/admin/services/tenant_status_service.py", "_syncs_block"),
+    ("src/admin/services/tenant_status_service.py", "_workflows_block"),
+    ("src/admin/services/tenant_status_service.py", "_setup_tasks_block"),
+    # FIXME(embedded-mode-sprint-2): managed/embedded mode auth bypass loads tenant
+    # by tenant_id from header. TenantRepository will fold this in.
+    ("src/admin/utils/embedded_mode_auth.py", "_load_tenant"),
+    # FIXME(embedded-mode-sprint-1.8): buyer-advertiser routing chain reads Tenant +
+    # AdapterConfig + AdvertiserRoutingRule. AdvertiserRoutingRuleRepository TBD.
+    ("src/services/buyer_advertiser_routing.py", "ensure_sandbox_advertiser"),
+    ("src/services/buyer_advertiser_routing.py", "_find_rule"),
+    ("src/services/buyer_advertiser_routing.py", "resolve_advertiser_for_buy"),
+    # FIXME(sync-accounts-advertiser-mapping): sprint 1.6 piece C reads Account at
+    # buy-time. Folds into AccountRepository (which exists) — open follow-up.
+    ("src/core/helpers/account_provisioning.py", "resolve_account_advertiser"),
     ("src/admin/utils/helpers.py", "decorated_function"),
     ("src/admin/utils/helpers.py", "decorator"),
     ("src/admin/utils/helpers.py", "get_custom_targeting_mappings"),
