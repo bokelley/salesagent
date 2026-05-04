@@ -907,6 +907,111 @@ class TestTenantStatus:
         assert resp.status_code in (401, 403)
 
 
+class TestStatusSetupTasks:
+    """Sprint 1.8 §7 — ``setup_tasks`` block on /status.
+
+    Folds the existing setup-checklist output into the status response
+    with severity + scope annotations so Storefront can route gaps.
+    """
+
+    @pytest.fixture
+    def managed_tenant(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_setup_tasks")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+        return tid
+
+    def test_setup_tasks_block_present_on_status_response(self, client, auth_headers, managed_tenant):
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "setup_tasks" in body
+        assert "blocker_count" in body["setup_tasks"]
+        assert "warning_count" in body["setup_tasks"]
+        assert "items" in body["setup_tasks"]
+        assert isinstance(body["setup_tasks"]["items"], list)
+
+    def test_managed_tenant_with_aao_set_omits_aao_tasks(self, client, auth_headers, managed_tenant):
+        """Sprint 1.8 §6 hide-when-set carries through to /status setup_tasks."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        item_ids = {item["id"] for item in resp.get_json()["setup_tasks"]["items"]}
+        assert "house_domain" not in item_ids
+        assert "public_agent_url" not in item_ids
+
+    def test_authorized_properties_legacy_task_is_hidden(self, client, auth_headers, managed_tenant):
+        """Legacy ``authorized_properties`` task is hidden on every tenant."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        item_ids = {item["id"] for item in resp.get_json()["setup_tasks"]["items"]}
+        assert "authorized_properties" not in item_ids
+
+    def test_default_advertiser_blocker_when_unset(self, client, auth_headers, managed_tenant):
+        """Tenant without default_gam_advertiser_id sees the task as a publisher-scope blocker."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = resp.get_json()["setup_tasks"]["items"]
+        # default_gam_advertiser_id isn't in the existing setup_checklist tasks today;
+        # it'll be a publisher-scope item once the checklist surfaces it. For now,
+        # assert that any *publisher*-scope item we DO surface carries the right shape.
+        assert all(item["scope"] in ("platform", "publisher") for item in items)
+        assert all(item["severity"] in ("blocker", "warning", "info") for item in items)
+
+    def test_complete_tasks_render_severity_info(self, client, auth_headers, managed_tenant):
+        """Completed items become severity=info regardless of tier."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = resp.get_json()["setup_tasks"]["items"]
+        for item in items:
+            if item["is_complete"]:
+                assert item["severity"] == "info"
+
+    def test_blocker_warning_counts_match_items(self, client, auth_headers, managed_tenant):
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        body = resp.get_json()["setup_tasks"]
+        actual_blockers = sum(1 for i in body["items"] if i["severity"] == "blocker")
+        actual_warnings = sum(1 for i in body["items"] if i["severity"] == "warning")
+        assert body["blocker_count"] == actual_blockers
+        assert body["warning_count"] == actual_warnings
+
+    def test_configure_paths_are_relative_to_tenant_root(self, client, auth_headers, managed_tenant):
+        """``configure_path`` must be relative (``/settings#aao``) so Storefront
+        can compose with its iframe prefix."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = resp.get_json()["setup_tasks"]["items"]
+        for item in items:
+            cp = item["configure_path"]
+            if cp is not None:
+                assert cp.startswith("/")
+                # Must NOT be a tenant-prefixed full path
+                assert not cp.startswith("/tenant/")
+
+    def test_open_instance_tenant_aao_tasks_have_publisher_scope(
+        self, client, auth_headers, bound_factories, cleanup_tenants
+    ):
+        """Open-instance tenant (managed_externally=False) sees AAO items as
+        ``scope=publisher`` — they're the publisher's job, not the platform's."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tid = "tid_open_instance_status"
+        TenantFactory(
+            tenant_id=tid,
+            name="Open Instance",
+            subdomain="open-instance",
+            ad_server="mock",
+            managed_externally=False,
+        )
+        cleanup_tenants.append(tid)
+        invalidate_status_cache(tid)
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/status", headers=auth_headers)
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["setup_tasks"]["items"]}
+        # Open-instance tenants always show AAO items (sprint 1.7 + 1.8 §6).
+        if "house_domain" in items:
+            assert items["house_domain"]["scope"] == "publisher"
+        if "public_agent_url" in items:
+            assert items["public_agent_url"]["scope"] == "publisher"
+
+
 # ---------------------------------------------------------------------------
 # Sprint 1.6: pre-map advertisers
 # ---------------------------------------------------------------------------

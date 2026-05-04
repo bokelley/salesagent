@@ -19,6 +19,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.admin.api_schemas.tenant_management import (
+    SetupTaskItem,
+    SetupTasksBlock,
     StatusAdapterBlock,
     StatusCreativesBlock,
     StatusMediaBuysBlock,
@@ -40,7 +42,6 @@ from src.core.database.models import (
     Tenant,
     WorkflowStep,
 )
-
 
 # ---------------------------------------------------------------------------
 # In-memory cache (5-second TTL — see sprint 1.5 design § Caching)
@@ -99,6 +100,7 @@ def _build_status(session: Session, tenant_id: str) -> TenantStatusResponse:
         packages=_packages_block(session, tenant_id),
         creatives=_creatives_block(session, tenant_id),
         webhooks=_webhooks_block(),
+        setup_tasks=_setup_tasks_block(session, tenant_id),
         fetched_at=datetime.now(UTC),
     )
 
@@ -126,9 +128,7 @@ def _adapter_block(session: Session, tenant_id: str) -> StatusAdapterBlock:
 
 def _syncs_block(session: Session, tenant_id: str) -> StatusSyncsBlock:
     """Sync runs grouped by ``sync_type``."""
-    runs = session.scalars(
-        select(SyncJob).filter_by(tenant_id=tenant_id).order_by(SyncJob.started_at.desc())
-    ).all()
+    runs = session.scalars(select(SyncJob).filter_by(tenant_id=tenant_id).order_by(SyncJob.started_at.desc())).all()
 
     by_type: dict[str, SyncJob] = {}
     for run in runs:
@@ -265,3 +265,104 @@ def _creatives_block(session: Session, tenant_id: str) -> StatusCreativesBlock:
 def _webhooks_block() -> StatusWebhooksBlock | None:
     """Returns ``None`` — outbound-webhook delivery aggregation lands in sprint 6."""
     return None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §7 — setup_tasks block (folds setup_checklist into /status)
+# ---------------------------------------------------------------------------
+
+
+# Per the design table:
+#   house_domain / public_agent_url → platform on managed, publisher on open-instance
+#   sso_configuration → hidden on managed (multi-tenant runtime already gates it
+#     out), publisher on open-instance
+#   authorized_properties (legacy) → hidden everywhere (deprecated)
+#   everything else → publisher
+_PLATFORM_KEYS_WHEN_MANAGED = frozenset(("house_domain", "public_agent_url"))
+_HIDDEN_KEYS = frozenset(("authorized_properties",))
+
+
+# Configure paths are relative to the tenant root so Storefront can compose
+# them against whatever iframe prefix it chooses.
+_CONFIGURE_PATHS: dict[str, str] = {
+    "house_domain": "/settings#aao",
+    "public_agent_url": "/settings#aao",
+    "default_gam_advertiser_id": "/settings#advertiser-routing",
+    "ad_server_connected": "/settings#adserver",
+    "currency_limits": "/settings#business-rules",
+    "sso_configuration": "/users",
+    "products_created": "/products",
+    "principals_created": "/settings#advertisers",
+    "inventory_synced": "/inventory",
+}
+
+
+def _scope_for_task(key: str, *, is_managed: bool) -> str | None:
+    """Return ``platform``/``publisher`` for a task key, or None to hide."""
+    if key in _HIDDEN_KEYS:
+        return None
+    if key in _PLATFORM_KEYS_WHEN_MANAGED:
+        return "platform" if is_managed else "publisher"
+    return "publisher"
+
+
+def _severity_for_task(*, tier: str, is_complete: bool) -> str:
+    """Map (tier, complete) → severity per sprint 1.8 §7."""
+    if is_complete:
+        return "info"
+    if tier == "critical":
+        return "blocker"
+    if tier == "recommended":
+        return "warning"
+    return "info"
+
+
+def _setup_tasks_block(session: Session, tenant_id: str) -> SetupTasksBlock:
+    """Project the setup checklist onto the /status response shape.
+
+    Reads the existing :class:`SetupChecklistService` output, annotates
+    each task with severity + scope, drops hidden tasks, and returns
+    the rolled-up :class:`SetupTasksBlock`.
+    """
+    # Local import keeps this service independent of the checklist
+    # module's transitive imports (which include its own session bootstrap).
+    from src.services.setup_checklist_service import SetupChecklistService
+
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+    is_managed = bool(tenant and tenant.managed_externally)
+
+    checklist = SetupChecklistService(tenant_id).get_setup_status()
+
+    items: list[SetupTaskItem] = []
+    blocker_count = 0
+    warning_count = 0
+
+    for tier in ("critical", "recommended", "optional"):
+        for task in checklist.get(tier, []):
+            key = task["key"]
+            scope = _scope_for_task(key, is_managed=is_managed)
+            if scope is None:
+                continue
+            severity = _severity_for_task(tier=tier, is_complete=task["is_complete"])
+            if severity == "blocker":
+                blocker_count += 1
+            elif severity == "warning":
+                warning_count += 1
+
+            items.append(
+                SetupTaskItem(
+                    id=key,
+                    name=task["name"],
+                    severity=severity,
+                    scope=scope,
+                    description=task["description"],
+                    is_complete=task["is_complete"],
+                    configure_path=_CONFIGURE_PATHS.get(key),
+                )
+            )
+
+    return SetupTasksBlock(
+        blocker_count=blocker_count,
+        warning_count=warning_count,
+        items=items,
+    )

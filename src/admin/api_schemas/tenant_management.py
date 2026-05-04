@@ -454,6 +454,53 @@ class StatusWebhooksBlock(BaseModel):
     last_failure_at: datetime | None = None
 
 
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §7 — setup_tasks block on /status
+# ---------------------------------------------------------------------------
+
+
+SetupTaskSeverity = Literal["blocker", "warning", "info"]
+SetupTaskScope = Literal["platform", "publisher"]
+
+
+class SetupTaskItem(BaseModel):
+    """One configuration-completeness item in the status setup_tasks block.
+
+    Severity drives Storefront UI urgency; scope drives routing — Scope3
+    escalates ``platform`` items internally (it's the host's job to
+    finish provisioning), while ``publisher`` items deep-link into the
+    iframe at the matching Settings tab.
+    """
+
+    model_config = _config()
+
+    id: str
+    name: str
+    severity: SetupTaskSeverity
+    scope: SetupTaskScope
+    description: str
+    is_complete: bool
+    # Path relative to the tenant root (``/settings#aao``, not
+    # ``/tenant/{id}/settings#aao``) so Storefront can compose with
+    # whatever iframe prefix it chooses. Null when the task has no
+    # configuration UI (rare — most are routed via Settings anchors).
+    configure_path: str | None = None
+
+
+class SetupTasksBlock(BaseModel):
+    """Configuration-completeness rollup for ``GET /tenants/{tid}/status``.
+
+    Replaces the separate ``setup_checklist`` round-trip — Storefront
+    renders the homepage checklist directly off this block.
+    """
+
+    model_config = _config()
+
+    blocker_count: int = 0
+    warning_count: int = 0
+    items: list[SetupTaskItem] = Field(default_factory=list)
+
+
 class TenantStatusResponse(BaseModel):
     """``GET /tenants/{tid}/status`` — one round-trip operational snapshot."""
 
@@ -466,6 +513,7 @@ class TenantStatusResponse(BaseModel):
     packages: StatusPackagesBlock = Field(default_factory=StatusPackagesBlock)
     creatives: StatusCreativesBlock = Field(default_factory=StatusCreativesBlock)
     webhooks: StatusWebhooksBlock | None = None
+    setup_tasks: SetupTasksBlock = Field(default_factory=SetupTasksBlock)
     fetched_at: datetime
 
 
