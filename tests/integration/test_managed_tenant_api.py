@@ -1479,3 +1479,226 @@ class TestDefaultGamAdvertiserId:
         )
         assert resp.status_code == 200
         assert resp.get_json()["default_gam_advertiser_id"] == "55555"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §4 — recent-buyers rollup
+# ---------------------------------------------------------------------------
+
+
+class TestRecentBuyers:
+    """``GET /tenants/{tid}/recent-buyers`` — distinct buyer triples
+    aggregated from Account + MediaBuy. Powers the Storefront 'buyer
+    routing' widget."""
+
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_recent_buyers")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        t = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(t)
+        return t
+
+    def test_unknown_tenant_returns_404(self, client, auth_headers):
+        resp = client.get("/api/v1/tenant-management/tenants/tenant_missing/recent-buyers", headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_no_accounts_returns_empty_list(self, client, auth_headers, tid):
+        """Tenants with no Accounts return ``buyers: []``, not 404."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json() == {"buyers": []}
+
+    def test_account_with_resolved_via_surfaces(self, client, auth_headers, tid, bound_factories):
+        """Sprint 1.8 ``resolved_via`` flows through to /recent-buyers."""
+        from src.core.database.models import Account
+
+        bound_factories.add(
+            Account(
+                tenant_id=tid,
+                account_id="acct_house_match",
+                name="Coke (Interchange)",
+                status="active",
+                operator="interchange.io",
+                brand={"domain": "coca-cola.com", "brand_id": "sprite"},
+                billing="agent",
+                sandbox=False,
+                principal_id=None,
+                platform_mappings={"google_ad_manager": {"advertiser_id": "12345"}},
+                resolved_via="house",
+            )
+        )
+        bound_factories.commit()
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers", headers=auth_headers)
+        body = resp.get_json()
+        assert len(body["buyers"]) == 1
+        buyer = body["buyers"][0]
+        assert buyer["operator_domain"] == "interchange.io"
+        assert buyer["brand_house"] == "coca-cola.com"
+        assert buyer["brand_id"] == "sprite"
+        assert buyer["resolved_gam_advertiser_id"] == "12345"
+        assert buyer["resolved_via"] == "house"
+        # No MediaBuys → request_count is 0.
+        assert buyer["request_count"] == 0
+
+    def test_legacy_account_with_null_resolved_via_surfaces_unknown(self, client, auth_headers, tid, bound_factories):
+        """Account rows that predate sprint 1.8 have NULL resolved_via;
+        the API surfaces them as ``resolved_via='unknown'``."""
+        from src.core.database.models import Account
+
+        bound_factories.add(
+            Account(
+                tenant_id=tid,
+                account_id="acct_legacy",
+                name="Legacy Account",
+                status="active",
+                operator="legacy.example",
+                brand={"domain": "legacy.example"},
+                billing="operator",
+                sandbox=False,
+                platform_mappings={"google_ad_manager": {"advertiser_id": "999"}},
+                resolved_via=None,
+            )
+        )
+        bound_factories.commit()
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers", headers=auth_headers)
+        buyers = resp.get_json()["buyers"]
+        legacy = next((b for b in buyers if b["operator_domain"] == "legacy.example"), None)
+        assert legacy is not None
+        assert legacy["resolved_via"] == "unknown"
+
+    def test_request_count_aggregates_media_buys(self, client, auth_headers, tid, bound_factories):
+        """``request_count`` reflects MediaBuy rows in the window."""
+        from src.core.database.models import Account
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=tid)).first()
+        principal = PrincipalFactory(
+            tenant=tenant,
+            principal_id="p_recent",
+            access_token="t_recent",
+            platform_mappings={"google_ad_manager": {"advertiser_id": "1"}},
+        )
+        bound_factories.add(
+            Account(
+                tenant_id=tid,
+                account_id="acct_active",
+                name="Active",
+                status="active",
+                operator="buyer.example",
+                brand={"domain": "brand.example"},
+                billing="agent",
+                principal_id=principal.principal_id,
+                sandbox=False,
+                platform_mappings={"google_ad_manager": {"advertiser_id": "1"}},
+                resolved_via="default",
+            )
+        )
+        bound_factories.flush()
+
+        for i in range(3):
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id=f"mb_recent_{i}",
+                order_name=f"Recent {i}",
+                advertiser_name="x",
+                status="active",
+                budget=100,
+                start_date=datetime.now(UTC).date(),
+                end_date=datetime.now(UTC).date(),
+                raw_request={},
+                account_id="acct_active",
+            )
+        bound_factories.commit()
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers", headers=auth_headers)
+        buyers = resp.get_json()["buyers"]
+        active = next((b for b in buyers if b["operator_domain"] == "buyer.example"), None)
+        assert active is not None
+        assert active["request_count"] == 3
+
+    def test_days_filter_excludes_old_media_buys(self, client, auth_headers, tid, bound_factories):
+        """``?days=1`` excludes MediaBuys older than 1 day."""
+        from datetime import timedelta as _td
+
+        from src.core.database.models import Account
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=tid)).first()
+        principal = PrincipalFactory(
+            tenant=tenant,
+            principal_id="p_old",
+            access_token="t_old",
+            platform_mappings={"google_ad_manager": {"advertiser_id": "1"}},
+        )
+        bound_factories.add(
+            Account(
+                tenant_id=tid,
+                account_id="acct_old",
+                name="Old",
+                status="active",
+                operator="old.example",
+                brand={"domain": "old.example"},
+                billing="agent",
+                principal_id=principal.principal_id,
+                sandbox=False,
+                platform_mappings={"google_ad_manager": {"advertiser_id": "1"}},
+                resolved_via="default",
+            )
+        )
+        bound_factories.flush()
+
+        # MediaBuy created 60 days ago — outside the 1-day window.
+        old = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_old",
+            order_name="Old buy",
+            advertiser_name="x",
+            status="completed",
+            budget=100,
+            start_date=datetime.now(UTC).date(),
+            end_date=datetime.now(UTC).date(),
+            raw_request={},
+            account_id="acct_old",
+        )
+        old.created_at = datetime.now(UTC) - _td(days=60)
+        bound_factories.commit()
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers?days=1", headers=auth_headers)
+        buyers = resp.get_json()["buyers"]
+        old_buyer = next((b for b in buyers if b["operator_domain"] == "old.example"), None)
+        # Account is still in the list (we don't hide unprovisioned ones)
+        # but request_count is 0 because the only MediaBuy is outside the window.
+        assert old_buyer is not None
+        assert old_buyer["request_count"] == 0
+
+    def test_limit_caps_response_size(self, client, auth_headers, tid, bound_factories):
+        """``?limit=2`` returns at most 2 buyers."""
+        from src.core.database.models import Account
+
+        for i in range(5):
+            bound_factories.add(
+                Account(
+                    tenant_id=tid,
+                    account_id=f"acct_lim_{i}",
+                    name=f"Buyer {i}",
+                    status="active",
+                    operator=f"buyer{i}.example",
+                    brand={"domain": f"brand{i}.example"},
+                    billing="operator",
+                    sandbox=False,
+                    platform_mappings={"google_ad_manager": {"advertiser_id": str(i)}},
+                    resolved_via="default",
+                )
+            )
+        bound_factories.commit()
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers?limit=2", headers=auth_headers)
+        assert len(resp.get_json()["buyers"]) == 2
+
+    def test_missing_api_key_returns_401(self, client, tid):
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/recent-buyers")
+        assert resp.status_code in (401, 403)

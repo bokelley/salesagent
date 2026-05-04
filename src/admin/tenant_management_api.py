@@ -12,7 +12,7 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
@@ -31,6 +31,7 @@ from src.admin.api_schemas.tenant_management import (
     GAMAdapterConfig,
     ListAccountsManagedResponse,
     ListBuyerAdvertiserMappingsResponse,
+    ListRecentBuyersResponse,
     ListTenantsResponse,
     MockAdapterConfig,
     PreviewAdapterRequest,
@@ -38,6 +39,7 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionedPrincipalResponse,
     ProvisionTenantRequest,
     ProvisionTenantResponse,
+    RecentBuyer,
     TenantDetail,
     TenantStatusResponse,
     TenantSummary,
@@ -1536,6 +1538,114 @@ def delete_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
 
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8 §4 — recent-buyers rollup
+# ---------------------------------------------------------------------------
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/recent-buyers", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListRecentBuyersResponse, HTTP_404=ApiError))
+def list_recent_buyers(tenant_id: str):
+    """Distinct (operator, brand_house, brand_id) triples seen recently.
+
+    Source data: ``Account`` rows joined to ``MediaBuy`` for activity
+    counts. Each Account already carries its (operator, brand) natural
+    key + the resolved ``platform_mappings.google_ad_manager.advertiser_id``
+    + ``resolved_via`` (sprint 1.8 stamp).
+
+    Query params:
+    - ``days`` (int, default 30, max 365) — window for last_seen_at filter
+    - ``limit`` (int, default 100, max 1000) — paginate by ordered last_seen_at desc
+
+    Returns ``{"buyers": [...]}``. Empty buyers list is the "no recent
+    activity" case — never 404 unless the tenant itself doesn't exist.
+    """
+    try:
+        days = max(1, min(365, int(request.args.get("days", "30"))))
+    except ValueError:
+        days = 30
+    try:
+        limit = max(1, min(1000, int(request.args.get("limit", "100"))))
+    except ValueError:
+        limit = 100
+
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        # Aggregate MediaBuy counts + last_seen per Account, scoped to the
+        # last N days. Accounts with no recent buys are still returned —
+        # the publisher might want to see a buyer agent that's been
+        # provisioned but hasn't transacted yet.
+        request_count_subq = (
+            select(
+                MediaBuy.account_id.label("account_id"),
+                func.count().label("request_count"),
+                func.max(MediaBuy.created_at).label("last_seen_at"),
+            )
+            .where(
+                MediaBuy.tenant_id == tenant_id,
+                MediaBuy.created_at >= cutoff,
+                MediaBuy.account_id.is_not(None),
+            )
+            .group_by(MediaBuy.account_id)
+            .subquery()
+        )
+
+        rows = session.execute(
+            select(
+                Account,
+                request_count_subq.c.request_count,
+                request_count_subq.c.last_seen_at,
+            )
+            .outerjoin(
+                request_count_subq,
+                Account.account_id == request_count_subq.c.account_id,
+            )
+            .where(Account.tenant_id == tenant_id)
+            .order_by(
+                # Active buyers first (with recent activity), then provisioned
+                # accounts that haven't transacted, ordered by Account.created_at desc.
+                request_count_subq.c.last_seen_at.desc().nullslast(),
+                Account.created_at.desc(),
+            )
+            .limit(limit)
+        ).all()
+
+        buyers: list[RecentBuyer] = []
+        for account, request_count, last_seen in rows:
+            brand_dict: dict | None
+            if account.brand is None:
+                brand_dict = None
+            elif isinstance(account.brand, dict):
+                brand_dict = account.brand
+            elif hasattr(account.brand, "model_dump"):
+                brand_dict = account.brand.model_dump(exclude_none=True)
+            else:
+                brand_dict = dict(account.brand)
+            brand_house = (brand_dict or {}).get("domain")
+            brand_id = (brand_dict or {}).get("brand_id")
+
+            advertiser_id = _account_advertiser_id(account)
+            buyers.append(
+                RecentBuyer(
+                    operator_domain=account.operator or "",
+                    brand_house=brand_house,
+                    brand_id=brand_id,
+                    last_seen_at=last_seen or account.created_at,
+                    request_count=int(request_count or 0),
+                    resolved_gam_advertiser_id=advertiser_id,
+                    resolved_via=account.resolved_via or "unknown",
+                )
+            )
+
+    return jsonify(ListRecentBuyersResponse(buyers=buyers).model_dump(mode="json"))
 
 
 # Register all spectree-validated routes with the OpenAPI generator.

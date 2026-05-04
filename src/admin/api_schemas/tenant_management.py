@@ -662,6 +662,42 @@ class ListBuyerAdvertiserMappingsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 1.8 §4 — recent-buyers rollup
+# ---------------------------------------------------------------------------
+
+
+class RecentBuyer(BaseModel):
+    """One distinct ``(operator, brand_house, brand_id)`` triple seen in
+    recent traffic, with the GAM advertiser it resolved to and how.
+
+    Powers Storefront's "buyer routing" widget — publishers can see at a
+    glance which buyers are landing on the default advertiser
+    (``resolved_via=default``) and might want their own bucket, vs.
+    which already match a specific routing rule.
+    """
+
+    model_config = _config()
+
+    operator_domain: str
+    brand_house: str | None = None
+    brand_id: str | None = None
+    last_seen_at: datetime
+    request_count: int
+    resolved_gam_advertiser_id: str | None = None
+    # ``"account" | "sandbox" | "exact" | "house" | "operator" | "default" | "unknown"``
+    # — "unknown" surfaces NULL for legacy Account rows that predate sprint 1.8.
+    resolved_via: str
+
+
+class ListRecentBuyersResponse(BaseModel):
+    """``GET /tenants/{tid}/recent-buyers`` response."""
+
+    model_config = _config()
+
+    buyers: list[RecentBuyer]
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 
