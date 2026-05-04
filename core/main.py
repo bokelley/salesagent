@@ -42,6 +42,7 @@ from adcp.server import (
 )
 from sqlalchemy import select
 
+from core.platforms.gam import WonderstruckGamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
@@ -75,15 +76,26 @@ def _load_tenant_subdomain_map() -> dict[str, Tenant]:
     return mapping
 
 
-def _load_platforms() -> dict[str, MockSellerPlatform]:
-    """One MockSellerPlatform per active tenant.
+def _load_platforms() -> dict[str, MockSellerPlatform | WonderstruckGamPlatform]:
+    """One per-tenant DecisioningPlatform, dispatched by ``tenants.ad_server``.
 
-    M1 wires every tenant to the same mock platform; M3 swaps in
-    real adapters (GAM/Kevel) keyed off ``tenants.adapter_type``.
+    - ``ad_server == 'google_ad_manager'`` → :class:`WonderstruckGamPlatform`
+      (reads real Placements from the tenant's GAM network)
+    - anything else (default ``mock``) → :class:`MockSellerPlatform`
+      (reads from the salesagent ``products`` table)
     """
     with get_db_session() as session:
         rows = session.scalars(select(TenantRow).filter_by(is_active=True)).all()
-    return {row.tenant_id: MockSellerPlatform() for row in rows}
+
+    out: dict[str, MockSellerPlatform | WonderstruckGamPlatform] = {}
+    for row in rows:
+        if row.ad_server == "google_ad_manager":
+            out[row.tenant_id] = WonderstruckGamPlatform()
+            logger.info(f"  loaded WonderstruckGamPlatform for tenant {row.tenant_id!r}")
+        else:
+            out[row.tenant_id] = MockSellerPlatform()
+            logger.info(f"  loaded MockSellerPlatform for tenant {row.tenant_id!r}")
+    return out
 
 
 def build_router() -> PlatformRouter:
