@@ -454,6 +454,158 @@ test seam. Asked in round 1; haven't seen it land yet.
 
 ---
 
+## 📦 Round 3 — surfaced by the kill-nginx + storyboard work
+
+Five new items from running `core/` end-to-end against the
+`@adcp/sdk` `media_buy_seller` storyboard in Docker, plus the
+admin-into-Starlette mount work that ate nginx. The first three are
+real bugs that produced runtime failures; the last two are framework
+gaps we worked around with local middleware.
+
+### 25. `validate_idempotency_wiring` × `LazyPlatformRouter` composition
+
+The boot validator (`adcp.decisioning.validate_idempotency`) walks
+the platform handed to `serve()` looking for `@IdempotencyStore.wrap`
+decorators. With `LazyPlatformRouter` the router shell has none —
+dedup is wired one indirection deeper, on the per-tenant platforms
+the factory produces. Boot fails with `INVALID_REQUEST` even though
+every produced platform is correctly wrapped.
+
+**Workaround:** set `router._adcp_idempotency_external = True` on
+the `LazyPlatformRouter` instance. Defensible because dedup IS wired,
+just downstream of the validator's reach.
+
+**Better SDK shape:** validator should detect `LazyPlatformRouter`
+and either (a) skip with an info log noting the indirection, (b)
+probe the factory once at boot for a representative tenant, or (c)
+extend the public API so the router can declare "wrap is wired
+downstream" without poking a private attribute.
+
+(salesagent task #27)
+
+### 26. MCP DNS-rebinding allowlist needs subdomain wildcards
+
+`mcp.server.transport_security._validate_host`
+([transport_security.py:45-65](https://github.com/modelcontextprotocol/python-sdk/blob/main/src/mcp/server/transport_security.py))
+only matches exact hosts and `host:*` port wildcards. NOT subdomain
+wildcards like `*.localhost` or `*.localtest.me`. For multi-tenant
+deployments where every tenant is a subdomain, this means either
+enumerating every active tenant in the allowlist on every boot OR
+disabling DNS-rebinding protection entirely.
+
+**Workaround:** enumerate dev tenant subdomains explicitly in
+`core/main.py:_allowed_hosts()`. Production needs a callable
+`validate_host(host) -> bool` upstream so adopters can plug in their
+existing tenant resolver instead of recomputing the allowlist.
+
+**Better SDK shape:** the allowlist should accept either glob-style
+subdomain wildcards OR a callable `validate_host(host: str) -> bool`
+that gets wired through `serve()`'s `allowed_hosts=` parameter. The
+ADCP framework can pass through; the actual MCP-side fix probably
+lives in `modelcontextprotocol/python-sdk`.
+
+(salesagent task #32)
+
+### 27. `BearerTokenAuthMiddleware` × `serve(transport="both")` scope mismatch
+
+**Filed upstream as
+[adcp-client-python#558](https://github.com/adcontextprotocol/adcp-client-python/issues/558)**.
+
+`BearerTokenAuthMiddleware` is documented MCP-only
+(`src/adcp/server/auth.py:62-65`). Handing it to
+`serve(transport="both")` via `asgi_middleware=[...]` wraps the
+*whole* binary including A2A's public
+`/.well-known/agent-card.json` discovery endpoint, returning 401
+to unauthenticated discovery requests — breaking A2A buyer
+auto-discovery.
+
+**Workaround we shipped (with a real security cost):** wrote a
+30-line `ScopedAuthMiddleware` (`core/middleware/scoped_auth.py`)
+that runs `BearerTokenAuthMiddleware` only on `/mcp/*`. **A2A is
+currently unauthenticated in salesagent's core build.** That's a
+regression we accepted because the framework didn't give us a clean
+path. Issue #558 traces three options; we're voting (b) — add an
+`A2ABearerAuthMiddleware` sibling and a `serve(auth=...)` shortcut
+that wires both legs from one config.
+
+(salesagent task #33)
+
+### 28. `@IdempotencyStore.wrap` incompatible with arg-projected methods
+
+**Filed upstream as
+[adcp-client-python#559](https://github.com/adcontextprotocol/adcp-client-python/issues/559)**.
+
+The wrap decorator
+(`src/adcp/server/idempotency/store.py:146-152`) wraps as
+`async def _wrapped(handler_self, params, context=None, *args,
+**kwargs)`. But the framework's arg-projector
+(`src/adcp/decisioning/dispatch.py:~1080`) splits `update_media_buy`
+into `(media_buy_id, patch, ctx)` separate kwargs:
+
+```python
+result = await method(**arg_projector, ctx=ctx)
+# arg_projector = {"media_buy_id": "...", "patch": {...}}
+```
+
+Decorating an arg-projected method with `@wrap` produces:
+
+```
+TypeError: ...update_media_buy() missing 1 required positional argument: 'params'
+```
+
+The wrap body never runs — Python raises on the calling-convention
+mismatch before the wrapper executes. The reference seller
+(`examples/v3_reference_seller/src/platform.py:735`) intentionally
+omits the wrap on `update_media_buy`, presumably for the same
+reason; the docs don't spell this out as a known incompatibility.
+
+**Workaround we shipped:** dropped `@_IDEMPOTENCY.wrap` from
+`update_media_buy` on both `mock.py` and `gam.py`. **Lost
+idempotency on update_media_buy** — buyer retries re-execute side
+effects.
+
+**Better SDK shape:** make wrap signature-flexible — detect the
+arg-projector calling pattern (kwargs that aren't `ctx`/`context`)
+and synthesize a params dict before hashing. Sketch in #559.
+
+(salesagent task #35)
+
+### 29. `AdcpError` raise path bypasses context echo
+
+`adcp/server/mcp_tools.py:2030` calls `inject_context(raw_params,
+result)` only on the success-return path. When a handler raises
+`AdcpError`, the framework wraps it into the wire error envelope but
+never calls `inject_context` — so error responses don't echo the
+buyer's `context.correlation_id`.
+
+This breaks every storyboard validation that asserts "context echoed
+unchanged" on error responses (specifically:
+`media_buy_seller/invalid_transitions/update_unknown_media_buy`,
+`update_unknown_package`, `double_cancel`). Three of the 21
+scenarios in the `media_buy_seller` storyboard fail purely because
+of this gap; nothing else.
+
+**Workaround attempted:** return `{"adcp_error": {...}}` as a dict
+instead of raising. The framework's adcp-aware validator skips
+validation when it sees the `adcp_error` key (line 2038), AND
+`inject_context` does fire, so context echoes correctly. **But**
+FastMCP's per-tool output validator (separate from the adcp
+validator) rejects the dict shape because the tool's declared output
+schema is success-only. We reverted to raising AdcpError, accepted
+the context-echo loss, and filed this gap.
+
+**Better SDK shape:** `inject_context` should also fire on the
+AdcpError serialization path — either in `dispatch.py`'s error-wrap
+helper or by adding a `context` slot to `AdcpError` plus the wire
+serializer. Bonus: the per-tool output schema should include the
+adcp-error envelope as an alternative branch so dict-return paths
+don't trip the FastMCP validator either, restoring the dict-return
+escape hatch.
+
+(salesagent task #36)
+
+---
+
 ## TL;DR for the team — running totals 🚀
 
 | Round | Item | Status |
@@ -474,5 +626,17 @@ test seam. Asked in round 1; haven't seen it land yet.
 | 2 | #22 adcp.upstream.gam helper | open (stretch) |
 | 2 | #23 Placement → Product projection helper | open (stretch) |
 
-11 of 18 items closed or in flight. Round-3 asks will follow as we keep
-porting against `core/`.
+11 of 18 items closed or in flight. Round-3 below adds 5 more from the
+kill-nginx + storyboard work.
+
+| Round | Item | Status |
+|-------|------|--------|
+| 3 | #25 validate_idempotency × LazyPlatformRouter | open (workaround: `_adcp_idempotency_external = True`) |
+| 3 | #26 MCP allowlist needs subdomain wildcards | open (workaround: enumerate tenants) |
+| 3 | #27 BearerTokenAuth × transport=both | ✅ FIXED in [adcp-client-python#566](https://github.com/adcontextprotocol/adcp-client-python/pull/566) — `serve(auth=BearerTokenAuth(...))` wires both legs; A2A POST now returns 401 without token (was wide open) |
+| 3 | #28 `@wrap` × arg-projected methods | ✅ FIXED in [adcp-client-python#567](https://github.com/adcontextprotocol/adcp-client-python/pull/567) — wrap detects 3 calling conventions; idempotency restored on `update_media_buy` |
+| 3 | #29 AdcpError raise bypasses context echo | ✅ FIXED in [adcp-client-python#560](https://github.com/adcontextprotocol/adcp-client-python/pull/560) — context echoed on AdcpError envelopes; storyboard 21/21 |
+| 3 | #30 'submitted' wire status fails FastMCP output validator | open (salesagent #41) — FastMCP doesn't resolve oneOf branches on CreateMediaBuyResponse; rejects `status='submitted'` even though it's a valid third-branch literal |
+| 3 | #31 ctx.caller_identity is composite scope-key, not bare principal_id | open (salesagent #42) — docs misleading; bare principal_id lives on `current_principal` ContextVar from BearerTokenAuthMiddleware |
+
+16 of 23 items closed, in flight, or filed upstream.

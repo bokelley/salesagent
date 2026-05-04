@@ -1,9 +1,17 @@
-"""Entrypoint: build PlatformRouter, attach SubdomainTenantMiddleware, serve.
+"""Entrypoint: build LazyPlatformRouter + admin mount + serve MCP/A2A.
 
-Replaces ``src/core/main.py`` (MCP) and ``src/a2a_server/adcp_a2a_server.py``
-(A2A) with a single ``serve()`` call from the framework. One process,
-either transport. No nginx routing — Starlette middleware handles
-multi-tenancy via the ``Host`` header.
+One Starlette binary serves every surface — no nginx. Layout:
+
+* ``/`` and ``/.well-known/agent-card.json`` → A2A (host root IS the
+  A2A surface per AdCP convention)
+* ``/mcp`` → MCP transport
+* ``/admin/*``, ``/static/*``, ``/auth/*``, ``/tenant/*``, ``/api/*``,
+  ``/login``, ``/logout``, ``/health``, ``/metrics``, ``/debug/*``,
+  ``/test/*``, ``/create_tenant``, ``/signup`` → Flask admin via
+  :class:`a2wsgi.WSGIMiddleware`
+
+Multi-tenancy via the ``Host`` header — Starlette middleware resolves
+the tenant before token auth runs.
 
 For development without DNS::
 
@@ -14,6 +22,10 @@ For development without DNS::
 
     # Then connect any AdCP MCP buyer to:
     http://default.localhost:3001/mcp
+    # Or any A2A buyer to:
+    http://default.localhost:3001/
+    # Or browse the admin UI at:
+    http://default.localhost:3001/admin/
 """
 
 from __future__ import annotations
@@ -21,9 +33,11 @@ from __future__ import annotations
 import logging
 import os
 
+from a2wsgi import WSGIMiddleware
 from adcp.decisioning import (
     DecisioningCapabilities,
-    PlatformRouter,
+    DecisioningPlatform,
+    LazyPlatformRouter,
     serve,
 )
 from adcp.decisioning.capabilities import (
@@ -36,7 +50,7 @@ from adcp.decisioning.capabilities import (
     SupportedProtocol,
 )
 from adcp.server import (
-    BearerTokenAuthMiddleware,
+    BearerTokenAuth,
     CallableSubdomainTenantRouter,
     Principal,
     SubdomainTenantMiddleware,
@@ -45,8 +59,10 @@ from adcp.server import (
 )
 from sqlalchemy import select
 
-from core.platforms.gam import WonderstruckGamPlatform
+from core.middleware.admin_mount import AdminWSGIMount
+from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
+from core.proposal.manager import SalesAgentProposalManager
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
@@ -66,8 +82,11 @@ async def _resolve_tenant(host: str) -> Tenant | None:
     Production deployments add their actual base domain to this matcher.
     """
     # Strip known dev/prod suffixes; whatever's left is the subdomain.
+    # localtest.me / lvh.me are public-DNS aliases for 127.0.0.1 we use
+    # in dev because Google OAuth rejects *.localhost ("not a public
+    # top-level domain"). example.com is the prod placeholder.
     subdomain = host
-    for suffix in (".localhost", ".example.com"):
+    for suffix in (".localhost", ".localtest.me", ".lvh.me", ".example.com"):
         if subdomain.endswith(suffix):
             subdomain = subdomain[: -len(suffix)]
             break
@@ -129,32 +148,54 @@ def _validate_token(token: str) -> Principal | None:
     )
 
 
-# ---- Per-tenant DecisioningPlatform loading -------------------------------
+# ---- Per-tenant DecisioningPlatform factory -------------------------------
 
 
-def _load_platforms() -> dict[str, MockSellerPlatform | WonderstruckGamPlatform]:
-    """One per-tenant DecisioningPlatform, dispatched by ``tenants.ad_server``.
+async def build_platform_for_tenant(tenant_id: str) -> DecisioningPlatform:
+    """Per-tenant ``DecisioningPlatform`` factory for :class:`LazyPlatformRouter`.
 
-    - ``ad_server == 'google_ad_manager'`` → :class:`WonderstruckGamPlatform`
-      (reads real Placements from the tenant's GAM network)
+    First-request build with bounded LRU+TTL caching upstream — boot path
+    is O(1) instead of O(N tenants × auth-handshake), and inactive
+    tenants get evicted under tenant churn.
+
+    - ``ad_server == 'google_ad_manager'`` → :class:`GamPlatform`
+      (reads real Placements from the tenant's GAM network on first call)
     - anything else (default ``mock``) → :class:`MockSellerPlatform`
       (reads from the salesagent ``products`` table)
     """
     with get_db_session() as session:
+        row = session.scalars(
+            select(TenantRow).filter_by(tenant_id=tenant_id, is_active=True)
+        ).first()
+
+    if row is None:
+        # LazyPlatformRouter callers already passed the SubdomainTenantMiddleware
+        # filter, so a missing/inactive tenant here is genuinely unexpected.
+        raise LookupError(f"tenant {tenant_id!r} not found or inactive")
+
+    if row.ad_server == "google_ad_manager":
+        logger.info(f"  built GamPlatform for tenant {tenant_id!r}")
+        return GamPlatform()
+    logger.info(f"  built MockSellerPlatform for tenant {tenant_id!r}")
+    return MockSellerPlatform()
+
+
+def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
+    """Bind a :class:`SalesAgentProposalManager` to every active
+    tenant. Same instance shared across tenants — v1 of the manager
+    has no per-tenant configuration. Tenants registered AFTER boot
+    don't pick up the manager until restart; that's acceptable while
+    the surface is stateless. Persistent DRAFT proposals (v2) move
+    this mapping to a runtime-resolvable structure or a default
+    factory.
+    """
+    shared = SalesAgentProposalManager()
+    with get_db_session() as session:
         rows = session.scalars(select(TenantRow).filter_by(is_active=True)).all()
-
-    out: dict[str, MockSellerPlatform | WonderstruckGamPlatform] = {}
-    for row in rows:
-        if row.ad_server == "google_ad_manager":
-            out[row.tenant_id] = WonderstruckGamPlatform()
-            logger.info(f"  loaded WonderstruckGamPlatform for tenant {row.tenant_id!r}")
-        else:
-            out[row.tenant_id] = MockSellerPlatform()
-            logger.info(f"  loaded MockSellerPlatform for tenant {row.tenant_id!r}")
-    return out
+    return {row.tenant_id: shared for row in rows}
 
 
-def build_router() -> PlatformRouter:
+def build_router() -> LazyPlatformRouter:
     capabilities = DecisioningCapabilities(
         specialisms=["sales-non-guaranteed"],
         adcp=Adcp(
@@ -165,33 +206,62 @@ def build_router() -> PlatformRouter:
         media_buy=MediaBuy(supported_pricing_models=["cpm"]),
         supported_protocols=[SupportedProtocol.media_buy],
     )
-    return PlatformRouter(
+    # ProposalManager is wired per-tenant. Today every active tenant
+    # gets the same SalesAgentProposalManager — get_products subsumed
+    # via the framework's primitive (#38). The router auto-routes
+    # buying_mode='refine' to manager.refine_products when the
+    # manager's capabilities declare it; v1 of the manager doesn't,
+    # so refine falls through to get_products (the buyer-side wire
+    # contract is unchanged).
+    proposal_managers = _build_proposal_managers()
+    router = LazyPlatformRouter(
         accounts=SalesagentAccountStore(),
-        platforms=_load_platforms(),
+        factory=build_platform_for_tenant,
         capabilities=capabilities,
+        proposal_managers=proposal_managers,
     )
+    # validate_idempotency_wiring inspects the platform handed to serve()
+    # for @IdempotencyStore.wrap decorators. The router shell has none —
+    # dedup is wired one indirection deeper, on the per-tenant platforms
+    # the factory produces (mock + gam both wrap their mutating methods).
+    # Setting the escape hatch tells the boot validator dedup IS wired,
+    # just not on this object. Tracked upstream (LazyPlatformRouter +
+    # validate_idempotency_wiring composition).
+    router._adcp_idempotency_external = True
+    return router
 
 
 def _allowed_hosts() -> list[str]:
-    """FastMCP DNS-rebinding allowlist for the dev/prod base domains.
+    """FastMCP DNS-rebinding allowlist for dev/prod base domains.
 
-    The framework auto-synthesizes ``host:*`` siblings (PR #537) so we
-    only register the bare hosts. Per-tenant subdomain validation
-    happens AFTER the allowlist filter, inside our resolver — adding
-    the wildcards here would defeat the per-tenant scoping.
+    FastMCP's DNS-rebinding ``_validate_host`` only supports exact
+    matches and ``host:*`` port wildcards — NOT subdomain wildcards
+    like ``*.localhost``. Per-tenant subdomains have to be enumerated
+    explicitly OR we drop DNS-rebinding protection (relying on
+    Starlette's TrustedHostMiddleware further out).
 
-    Production adds its actual base domain (e.g.
-    ``*.sales-agent.example.com``) by extending this list.
+    For local dev we enumerate the well-known tenant subdomains
+    (``default.localhost``, ``acme.localhost``, etc.). Production
+    deployments either enumerate a known closed set OR set
+    ``enable_dns_rebinding_protection=False`` and rely on the cloud
+    LB / WAF for Host validation.
+
+    Tracked upstream: MCP framework needs subdomain wildcards or a
+    callable Host validator for multi-tenant deployments.
     """
-    return [
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",
-        # Tenant subdomains — wildcard pattern matches any subdomain
-        # under these bases.
-        "*.localhost",
-        "*.example.com",
-    ]
+    base = ["localhost", "127.0.0.1", "0.0.0.0"]
+    # Local dev tenant subdomains. Add new tenants here when they're
+    # registered (admin UI is on the kill-nginx-spike followups).
+    # Both .localhost and .localtest.me — localtest.me is the alias we
+    # actually use (Google OAuth accepts it as a real public TLD; .localhost
+    # is rejected as not-a-public-TLD).
+    dev_tenants = ["default", "acme", "beta", "wonderstruck", "test"]
+    for tenant in dev_tenants:
+        base.append(f"{tenant}.localhost")
+        base.append(f"{tenant}.localtest.me")
+    # Bare localtest.me itself, in case the operator hits the apex.
+    base.append("localtest.me")
+    return base
 
 
 if __name__ == "__main__":
@@ -202,25 +272,44 @@ if __name__ == "__main__":
     router = build_router()
     subdomain_router = build_subdomain_router()
 
+    # Mount Flask admin alongside MCP + A2A so one binary owns every
+    # surface. The Flask app is unchanged from the legacy stack —
+    # WSGIMiddleware bridges it to ASGI, AdminWSGIMount dispatches a
+    # known set of path prefixes (/admin, /static, /auth, /tenant, etc.)
+    # to it before the inner serve() dispatcher routes the rest to A2A.
+    from src.admin.app import create_app as _create_admin_app
+
+    admin_wsgi = WSGIMiddleware(_create_admin_app())
+
     serve(
         router,
         name="salesagent-core",
         port=port,
+        # MCP at /mcp, A2A at / on one Starlette binary. context_factory
+        # and asgi_middleware are shared.
+        transport="both",
         auto_emit_completion_webhooks=False,
-        # Auth + tenant resolution chain. Order matters: subdomain runs
-        # outermost so unknown hosts 404 before token validation, then
-        # token auth populates the principal contextvar that
-        # auth_context_factory reads to build ToolContext.
+        # ``auth=BearerTokenAuth(...)`` (PR #566 / salesagent task #33)
+        # wires the bearer-token middleware on BOTH the MCP and A2A
+        # legs from one config. Replaces the prior ScopedAuthMiddleware
+        # workaround that ran the MCP-only BearerTokenAuthMiddleware
+        # against /mcp/* and left A2A unauthenticated. A2A's public
+        # agent-card discovery at /.well-known/agent-card.json stays
+        # reachable; A2A messaging endpoints now require the same
+        # x-adcp-auth token MCP does.
+        auth=BearerTokenAuth(
+            validate_token=_validate_token,
+            header_name="x-adcp-auth",
+            bearer_prefix_required=False,
+        ),
+        # AdminWSGIMount stays as ASGI middleware — it short-circuits
+        # /admin/*, /static/*, /auth/*, /tenant/*, etc. to the Flask
+        # WSGI app BEFORE the auth chain fires (Flask owns its own
+        # session-cookie auth). Subdomain tenant resolution still runs
+        # on every non-admin request.
         asgi_middleware=[
+            (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
             (SubdomainTenantMiddleware, {"router": subdomain_router}),
-            (
-                BearerTokenAuthMiddleware,
-                {
-                    "validate_token": _validate_token,
-                    "header_name": "x-adcp-auth",
-                    "bearer_prefix_required": False,
-                },
-            ),
         ],
         context_factory=auth_context_factory,
         allowed_hosts=_allowed_hosts(),

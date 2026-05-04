@@ -1,0 +1,176 @@
+# Managed Mode — Operational Reference
+
+**Status:** Working draft (answers Scope3 operational asks D.1–D.4)
+**Last updated:** 2026-05-04
+
+This document covers the deployment-side concerns that complement the API design: where to pull images, how to run locally, what GAM permissions to instruct publishers to grant, and when sync runs.
+
+## D.1 — Image distribution
+
+**Built by:** `.github/workflows/release-please.yml` on tagged releases (release-please workflow auto-creates tags from conventional commits).
+
+**Registries (multi-arch, linux/amd64 + linux/arm64):**
+- **GitHub Container Registry** — `ghcr.io/prebid/salesagent`
+- **Docker Hub** — `<dockerhub-user>/salesagent` (set via repo secrets)
+
+**Tag scheme** (semver-driven):
+- `1.2.3` — exact patch
+- `1.2` — latest patch in minor line
+- `1` — latest minor in major line
+- `latest` — newest release
+
+**For Scope3's deployment:**
+- Pin to a **specific patch tag** (e.g., `ghcr.io/prebid/salesagent:1.2.3`) for production. Don't use `latest` or major-only tags — both can pull breaking changes silently.
+- Subscribe to release-please-generated GitHub releases for changelog visibility.
+- For staging, `1.2` is reasonable — picks up patch fixes automatically without minor-version surprises.
+
+**OCI labels** carried by every image (visible via `docker inspect`):
+- `org.opencontainers.image.title=AdCP Sales Agent`
+- `org.opencontainers.image.source=https://github.com/prebid/salesagent`
+- `org.opencontainers.image.documentation=https://github.com/prebid/salesagent/blob/main/docs/quickstart.md`
+- `org.opencontainers.image.licenses=MIT`
+
+**Image size note:** the Dockerfile is multi-stage; runtime image excludes build deps (gcc, libpq-dev, git). Includes nginx and supercronic for legacy single-binary topologies — managed-mode deployments may not need either if running the core greenfield (`docker-compose.core.yml`) or just the API server.
+
+## D.2 — Local dev
+
+The repo has multiple compose files:
+
+| File | Purpose | Default port |
+|---|---|---|
+| `docker-compose.yml` | Standard dev stack — Postgres + adcp-server + nginx proxy. Hot-reload via bind mount. | 8000 |
+| `docker-compose.core.yml` | Newer "no-nginx" topology — single Starlette binary serves admin + MCP + A2A. Cleaner for managed-mode integration testing. | 3091 |
+| `docker-compose.multi-tenant.yml` | Multi-tenant subdomain routing variant | n/a |
+| `docker-compose.e2e.yml` | E2E test stack | n/a |
+| `docker-compose.override.yml` | Auto-loaded local overrides; in-flight work | — |
+
+### Recommended for Scope3 dev
+
+For Storefront integration testing, use `docker-compose.core.yml` — closer to managed-mode topology (no nginx in the way; single port). Standard invocation:
+
+```bash
+# In the salesagent repo:
+docker compose -p core -f docker-compose.core.yml up
+
+# Salesagent is now reachable at http://localhost:3091
+#   /admin/                — admin UI (will be proxied behind Storefront in managed mode)
+#   /mcp                    — MCP buyer protocol
+#   /                       — A2A buyer protocol + .well-known/agent-card.json
+#   /api/v1/tenant-management/  — Tenant Management API
+```
+
+### Storefront → salesagent dev configuration
+
+For Scope3 engineers wiring a local Storefront to a local salesagent:
+
+```yaml
+# Storefront-side env for dev
+SALESAGENT_BASE_URL: http://localhost:3091
+SALESAGENT_TENANT_MANAGEMENT_API_KEY: <set in salesagent's .env as TENANT_MANAGEMENT_API_KEY>
+
+# Storefront proxy config (nginx example) — see managed-mode-identity-contract.md
+location /storefront/salesagent/ {
+    proxy_pass http://localhost:3091/;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /storefront/salesagent;
+    proxy_set_header X-Identity-Email $auth_user_email;
+    proxy_set_header X-Identity-Org-Id $auth_org_id;
+    proxy_set_header X-Identity-Role $auth_role;
+    proxy_set_header X-Identity-Source "scope3";
+}
+```
+
+### Bootstrapping
+
+After `docker compose up`:
+1. Migrations run automatically (`db-init` service runs `scripts/ops/migrate.py`).
+2. Set `TENANT_MANAGEMENT_API_KEY` in `.env` (or generate one — sprint 1 spec covers initialization).
+3. Hit `POST /api/v1/tenant-management/tenants/provision` with a Mock adapter to create your first managed tenant — no GAM creds needed for early integration.
+4. Set `ADCP_AUTH_TEST_MODE=true` (already set in compose files) to skip Google OAuth in dev.
+
+### Known dev caveats
+
+- **Subdomain routing**: the legacy stack uses `default.localhost` and similar. For managed-mode dev, this is irrelevant — tenant comes from URL path + `external_org_id` claim. The core compose already disables this complexity.
+- **OAuth callback URL**: `localtest.me` is used for dev OAuth (Google rejects `*.localhost`). For Storefront-proxied managed mode this doesn't matter — Storefront handles OAuth.
+- **PostgreSQL bind**: postgres has no host port mapping; access via `docker compose exec postgres psql -U adcp_user -d adcp` or expose port if you want external access.
+
+## D.3 — GAM service account permissions
+
+**Recommended role: Trafficker.** Full doc at `docs/adapters/gam/service-account-setup.md`.
+
+### Publisher-facing instructions (what Scope3 should tell publishers)
+
+> To grant the Sales Agent access to your Google Ad Manager network:
+>
+> 1. Log into Google Ad Manager.
+> 2. Navigate to **Admin → Global Settings → API access** and ensure **API access** is toggled on.
+> 3. Click **Add a service account user**. *(Important: do **not** use the regular Users page — that sends an email invitation, which a service account cannot accept.)*
+> 4. Paste the service account email provided by Scope3.
+> 5. Assign role: **Trafficker**.
+> 6. Optionally restrict to specific advertisers under **Teams** for additional security.
+> 7. Save.
+> 8. Verify: under **Admin → Access & authorization → Users**, the service account email should appear as an active user.
+
+### What Trafficker grants
+
+| Capability | Granted? |
+|---|---|
+| Create/manage orders (campaigns) | ✅ |
+| Create/manage line items | ✅ |
+| Upload and associate creatives | ✅ |
+| Read inventory (ad units, placements) | ✅ |
+| Read/write custom targeting | ✅ |
+| Generate reports | ✅ |
+| Modify network settings | ❌ |
+| Create new advertisers | ❌ |
+
+The "cannot create advertisers" limitation is intentional — publishers create advertiser entities themselves; Scope3's salesagent attaches campaigns to existing advertisers via the `external_advertiser_id` field on Principal.
+
+### Custom-role minimum (for security-strict publishers)
+
+If a publisher won't grant Trafficker, the minimum custom permissions are documented in `docs/adapters/gam/service-account-setup.md`. Quick list: Orders {Create, Read, Update}, Line Items {Create, Read, Update}, Creatives {Create, Read, Update, Associate}, Ad Units {Read}, Placements {Read}, Custom Targeting {Read, Write}, Reports {Run}, Network {Read}.
+
+### Service account provisioning model
+
+Scope3 (or any operator) creates service accounts in **its own GCP project** and provides only the email to publishers. Publishers grant access via that email — they never see or store the private key. This is the recommended security posture (private key + GAM grant are two-factor; publisher controls the GAM grant, Scope3 controls the key, neither alone is sufficient).
+
+The salesagent has automation for this: `POST /create-service-account` (existing GAM blueprint endpoint) creates an SA in the configured GCP project, returns the email. Requires `GCP_PROJECT_ID` env var + `roles/iam.serviceAccountAdmin` on the salesagent's runtime credentials.
+
+## D.4 — Sync cadence
+
+**From `crontab` (run via supercronic in the container):**
+
+```
+0 */6 * * * python /app/scripts/sync_all_tenants.py
+0 7 * * *   python /app/scripts/sync_all_tenants.py
+```
+
+| Trigger | Frequency | Notes |
+|---|---|---|
+| Scheduled (every 6h) | 4×/day | Catches recent inventory/targeting changes |
+| Scheduled (daily 7 UTC ≈ 2am EST) | 1×/day | Belt-and-suspenders, matches a quiet window for most US publishers |
+| On-demand | Anytime | `POST /api/sync/trigger/<tenant_id>` (existing `sync_api`); also via Admin UI button |
+
+**Implication for Scope3 status caching:** the homepage status card can be ~6h stale at most under normal scheduling. Scope3's UI should:
+- Show "Last synced: <time>" prominently on the tenant overview.
+- Offer a "Sync now" button that calls `POST /api/sync/trigger/<tenant_id>` for users who want fresher data.
+- Not assume real-time freshness without an explicit on-demand sync.
+
+**Sync types** (exposed separately in `GET /status.syncs` per sprint 1.5):
+- `inventory` — ad units + placements
+- `custom_targeting` — keys + values
+- `advertisers` — advertiser entities
+
+Each runs as part of `sync_all_tenants.py`; they're separate progress trackers but share a schedule.
+
+**Known caveat:** the current `sync_all_tenants.py` filters to tenants with `gam_refresh_token` set (OAuth-flow tenants). For service-account-flow tenants (the recommended managed-mode posture), the same script needs to also pick up tenants with `gam_service_account_json` set. **This is an existing gap to verify before sprint 1 ships** — managed-mode tenants will all be SA-flow, so the cron must include them. Likely a one-line filter change in `sync_all_tenants.py`.
+
+## Open items for follow-up
+
+1. **`docker-compose.core.yml` is untracked** in the current branch — promote it to committed before Scope3 starts using it as the canonical dev stack.
+2. **Sync filter for SA-flow tenants** — verify and fix `sync_all_tenants.py` if the current filter excludes service-account auth.
+3. **Tenant Management API key bootstrap** — sprint 1 spec mentions `initialize_tenant_management_api_key()`; confirm the bootstrap UX (env var? auto-generated on first run? CLI command?). Document for Scope3.
+4. **Health check endpoints** — `docker-compose.core.yml` healthchecks `/admin/health`. Scope3's deployment monitoring should probably also poll `/api/v1/tenant-management/health` (existing) and `/mcp/health` if available.
+
+These don't block sprint 1 implementation, but should be resolved before Scope3 deploys to its own staging.

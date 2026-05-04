@@ -1,80 +1,136 @@
-"""Unit test: MockSellerPlatform.get_products reads tenant-scoped product rows.
+"""Unit test: MockSellerPlatform.get_products delegates to _get_products_impl.
 
-This is the M1 entry-point test. Validates:
+After the platform-delegation refactor (#37) MockSellerPlatform.get_products
+is a thin AdCP wire-shape adapter that calls
+``src/core/tools/products.py:_get_products_impl`` for the real brief
++ policy + filtering work. These tests verify the delegation contract:
+
 - AccountStore resolves explicit ``"<tenant>:<account>"`` refs.
-- get_products filters by tenant_id from ``ctx.account.metadata``.
-- Wire projection conforms to AdCP get_products response shape.
+- get_products builds a ResolvedIdentity from ``ctx`` and forwards to
+  the impl.
+- The Pydantic ``GetProductsResponse`` is projected to a wire dict.
+- Missing tenant metadata raises ACCOUNT_NOT_FOUND before the impl
+  runs.
 
-DB access is mocked at the session level so this stays a unit test.
-The end-to-end storyboard run lands in
-``core/tests/storyboards/test_media_buy_seller.py`` (M1 second half).
+Brief-matching, policy enforcement, and dynamic-product semantics are
+tested upstream against ``_get_products_impl`` directly — not here.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from adcp.testing import make_request_context
 
 from core.platforms.mock import MockSellerPlatform
 
 
-def _fake_product(**overrides):
-    p = MagicMock()
-    p.tenant_id = overrides.get("tenant_id", "test-tenant")
-    p.product_id = overrides.get("product_id", "prod1")
-    p.name = overrides.get("name", "Test Product")
-    p.description = overrides.get("description", "A product for testing")
-    p.delivery_type = overrides.get("delivery_type", "non_guaranteed")
-    p.format_ids = overrides.get(
-        "format_ids",
-        [{"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_300x250"}],
+def _make_get_products_response(product_id: str = "prod1"):
+    """Build a real GetProductsResponse Pydantic so we exercise
+    .model_dump() projection like the production path."""
+    from adcp.types import GetProductsResponse, Product
+
+    return GetProductsResponse(
+        products=[
+            Product.model_validate(
+                {
+                    "product_id": product_id,
+                    "name": "Test Product",
+                    "description": "A product for testing",
+                    "delivery_type": "non_guaranteed",
+                    "publisher_properties": [
+                        {"publisher_domain": "example.com", "selection_type": "all"}
+                    ],
+                    "format_ids": [
+                        {
+                            "agent_url": "https://creative.adcontextprotocol.org/",
+                            "id": "display_300x250",
+                        }
+                    ],
+                    "pricing_options": [
+                        {
+                            "pricing_option_id": "po-cpm-default",
+                            "pricing_model": "cpm",
+                            "floor_price": 1.0,
+                            "currency": "USD",
+                        }
+                    ],
+                    "reporting_capabilities": {
+                        "available_metrics": ["impressions", "spend"],
+                        "available_reporting_frequencies": ["daily"],
+                        "date_range_support": "date_range",
+                        "supports_webhooks": False,
+                        "expected_delay_minutes": 60,
+                        "timezone": "UTC",
+                    },
+                    "delivery_measurement": {"provider": "publisher"},
+                }
+            )
+        ],
+        errors=None,
+        context=None,
     )
-    p.delivery_measurement = overrides.get("delivery_measurement", {"provider": "publisher"})
-    p.properties = overrides.get("properties")
-    p.property_ids = overrides.get("property_ids")
-    p.property_tags = overrides.get("property_tags")
-    return p
 
 
 @pytest.fixture
-def mock_session_with_product():
-    """Patch get_db_session in BOTH stores.accounts and platforms.mock."""
+def active_tenant_session():
+    """AccountStore needs a live DB session for the active-tenant
+    existence check during ``platform.accounts.resolve``."""
     session = MagicMock()
     session.__enter__.return_value = session
     session.__exit__.return_value = False
-    # AccountStore tenant-existence check returns active tenant
-    active_tenant = MagicMock(is_active=True)
-    # get_products query returns one product
-    session.scalars.return_value.all.return_value = [_fake_product()]
-    session.scalars.return_value.first.return_value = active_tenant
+    session.scalars.return_value.first.return_value = MagicMock(is_active=True)
+    return session
 
-    with patch("core.platforms.mock.get_db_session", return_value=session), patch(
-        "core.stores.accounts.get_db_session", return_value=session
+
+def test_get_products_delegates_to_impl_and_projects_to_wire(active_tenant_session):
+    """MockSellerPlatform.get_products forwards to _get_products_impl
+    and projects the response onto the AdCP wire dict shape."""
+    response = _make_get_products_response("prod1")
+
+    with patch(
+        "core.stores.accounts.get_db_session", return_value=active_tenant_session
+    ), patch(
+        "core.platforms._delegate._get_products_impl",
+        new=AsyncMock(return_value=response),
+    ) as mock_impl, patch(
+        "core.platforms._delegate.get_tenant_by_id",
+        return_value={"tenant_id": "test-tenant", "name": "Test Tenant"},
     ):
-        yield session
+        platform = MockSellerPlatform()
+        account = platform.accounts.resolve(ref={"account_id": "test-tenant:demo"})
+        ctx = make_request_context(account=account, request_id="req-1")
 
+        result = asyncio.run(
+            platform.get_products(
+                req={"brief": "test", "buying_mode": "brief"}, ctx=ctx
+            )
+        )
 
-def test_get_products_returns_tenant_scoped_products(mock_session_with_product):
-    platform = MockSellerPlatform()
-    account = platform.accounts.resolve(ref={"account_id": "test-tenant:demo"})
-    ctx = make_request_context(account=account, request_id="req-1")
-
-    result = platform.get_products(req={}, ctx=ctx)
-
+    # Wire shape — products[] of dicts, not Pydantic models.
     assert "products" in result
     assert len(result["products"]) == 1
     product = result["products"][0]
+    assert isinstance(product, dict)
     assert product["product_id"] == "prod1"
     assert product["delivery_type"] == "non_guaranteed"
     assert product["pricing_options"][0]["pricing_model"] == "cpm"
-    assert product["format_ids"][0]["id"] == "display_300x250"
+
+    # Delegation — impl was called with the buyer's request and a
+    # ResolvedIdentity carrying tenant_id from ctx.account.metadata.
+    assert mock_impl.await_count == 1
+    call_kwargs = mock_impl.await_args
+    forwarded_req, forwarded_identity = call_kwargs.args
+    assert forwarded_identity.tenant_id == "test-tenant"
+    assert forwarded_req.brief == "test"
 
 
-def test_get_products_rejects_missing_tenant_metadata(mock_session_with_product):
-    """If ctx.account has no tenant_id metadata, raise ACCOUNT_NOT_FOUND."""
+def test_get_products_rejects_missing_tenant_metadata():
+    """If ctx.account has no tenant_id metadata, the delegate raises
+    ACCOUNT_NOT_FOUND before reaching the impl. This is a wiring-bug
+    guard — auth chain didn't populate the metadata."""
     from adcp.decisioning import AdcpError
     from adcp.decisioning.types import Account
 
@@ -83,7 +139,11 @@ def test_get_products_rejects_missing_tenant_metadata(mock_session_with_product)
     ctx = make_request_context(account=bad_account, request_id="req-2")
 
     with pytest.raises(AdcpError) as exc_info:
-        platform.get_products(req={}, ctx=ctx)
+        asyncio.run(
+            platform.get_products(
+                req={"brief": "x", "buying_mode": "brief"}, ctx=ctx
+            )
+        )
 
     assert exc_info.value.code == "ACCOUNT_NOT_FOUND"
 
@@ -103,29 +163,3 @@ def test_account_store_rejects_unknown_tenant():
             platform.accounts.resolve(ref={"account_id": "nonexistent-tenant:demo"})
 
     assert exc_info.value.code == "ACCOUNT_NOT_FOUND"
-
-
-def test_publisher_properties_uses_tags_when_present(mock_session_with_product, monkeypatch):
-    """Verify the property_tags branch of _publisher_properties_from_row."""
-    session = MagicMock()
-    session.__enter__.return_value = session
-    session.__exit__.return_value = False
-    session.scalars.return_value.all.return_value = [
-        _fake_product(property_tags=["sports", "premium"])
-    ]
-    session.scalars.return_value.first.return_value = MagicMock(is_active=True)
-
-    monkeypatch.setattr("core.platforms.mock.get_db_session", lambda: session)
-    monkeypatch.setattr("core.stores.accounts.get_db_session", lambda: session)
-
-    platform = MockSellerPlatform()
-    account = platform.accounts.resolve(ref={"account_id": "test-tenant:demo"})
-    ctx = make_request_context(account=account, request_id="req-3")
-
-    result = platform.get_products(req={}, ctx=ctx)
-    pubs = result["products"][0]["publisher_properties"]
-    # by_tag selector ships one entry with all tags in property_tags array
-    assert len(pubs) == 1
-    assert pubs[0]["selection_type"] == "by_tag"
-    assert set(pubs[0]["property_tags"]) == {"sports", "premium"}
-    assert "publisher_domain" in pubs[0]

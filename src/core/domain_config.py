@@ -12,12 +12,25 @@ import os
 
 
 def _is_localhost(domain: str | None) -> bool:
-    """Check if domain is localhost or 127.0.0.1."""
+    """Check if domain is localhost, 127.0.0.1, or a known local-DNS
+    convenience domain (``localtest.me``, ``lvh.me``, and any subdomain
+    of either). These all resolve to 127.0.0.1 via real public DNS, so
+    they're treated as localhost for protocol auto-detection — the
+    seller serves over http in dev regardless of which alias the user
+    types into the browser.
+    """
     if not domain:
         return False
     # Strip port if present
-    host = domain.split(":")[0]
-    return host in ("localhost", "127.0.0.1")
+    host = domain.split(":")[0].lower()
+    if host in ("localhost", "127.0.0.1"):
+        return True
+    # localtest.me + lvh.me are public-DNS aliases for 127.0.0.1.
+    # Match the bare alias and any subdomain of it.
+    for local_alias in ("localtest.me", "lvh.me"):
+        if host == local_alias or host.endswith("." + local_alias):
+            return True
+    return False
 
 
 def _get_protocol_for_domain(domain: str | None) -> str:

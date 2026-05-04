@@ -1,0 +1,146 @@
+# Core greenfield stack — no nginx.
+#
+# One Starlette binary serves admin (Flask via WSGIMiddleware), MCP, and A2A
+# directly on the host port. Nginx is gone. Use this stack to verify the
+# kill-nginx spike end-to-end before merging back into the main compose file.
+#
+# Usage (separate project namespace from the legacy stack):
+#   docker compose -p core -f docker-compose.core.yml up
+#
+# Default port 3091 (overridable via CORE_PORT env). The legacy stack
+# runs on 3001/8000; the core stack uses 3091 to avoid clashes.
+#
+# Endpoints (default port 3001):
+#   http://localhost:3091/                - A2A messaging endpoint
+#   http://localhost:3091/.well-known/agent-card.json - A2A discovery
+#   http://localhost:3091/mcp             - MCP server
+#   http://localhost:3091/admin/          - Admin UI (Flask)
+#   http://localhost:3091/static/<file>   - Admin static assets (Flask)
+#   http://localhost:3091/auth/...        - OAuth callbacks (Flask)
+#   http://localhost:3091/tenant/<id>/... - Per-tenant admin pages (Flask)
+#
+# Layout note: this differs from the legacy nginx layout where root
+# served a Flask landing page and A2A was at /a2a. In the core/ greenfield
+# the host root is the A2A surface (per AdCP spec convention — the
+# .well-known agent card lives at a host root, not under a prefix).
+# The admin UI is reached via /admin/ explicitly.
+#
+# /etc/hosts entry needed for tenant subdomain resolution:
+#   127.0.0.1 default.localhost
+#
+# Then hit: http://default.localhost:3091/admin/
+#
+# OAuth note: callback URL is unchanged from the nginx-fronted stack.
+# Google Cloud Console redirect URI is /auth/google/callback (Flask owns
+# /auth/* in both topologies). The only thing that changes is host:port.
+# For dev: http://default.localhost:3091/auth/google/callback
+# In dev with test mode on (ADCP_AUTH_TEST_MODE=true) you can skip OAuth
+# entirely and log in via /test/login.
+
+# Project name: bring this up with `-p core` so it runs in parallel with
+# the legacy `tallahassee-v8` stack without container-name collisions:
+#   docker compose -p core -f docker-compose.core.yml up
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: adcp
+      POSTGRES_USER: adcp_user
+      POSTGRES_PASSWORD: secure_password_change_me
+    volumes:
+      - core_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp_user -d adcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: []
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      PYTHONPATH: "/app"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # NO bind-mount of the host repo — migrations run against the
+    # image's baked /app contents (including /app/.venv with the right
+    # Linux-arch packages). The legacy stack bind-mounts the host
+    # source for dev hot-reload, which then needs an anonymous
+    # /app/.venv mount to keep the image's venv intact — and that
+    # anonymous volume silently shadows SDK upgrades across rebuilds.
+    # Greenfield avoids the shadow entirely; bumping `adcp` is a
+    # plain `docker compose build` away.
+    command: ["python", "scripts/ops/migrate.py"]
+
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: []
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      ADCP_PORT: "3001"
+      # SALES_AGENT_DOMAIN drives the per-tenant URLs that get baked into
+      # SSO redirect URIs shown to admins (auth_config_service.py).
+      # localtest.me is real public DNS — every *.localtest.me resolves
+      # to 127.0.0.1 — but it has a real .me TLD, so Google OAuth (which
+      # rejects *.localhost as "not a public top-level domain") accepts
+      # it. _is_localhost in src/core/domain_config.py recognizes
+      # localtest.me as local so the protocol stays http.
+      SALES_AGENT_DOMAIN: "localtest.me:3091"
+      # Per-tenant Setup Mode + test login enabled in dev
+      ADCP_AUTH_TEST_MODE: "true"
+      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
+      PYTHONUNBUFFERED: "1"
+      FLASK_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${CORE_PORT:-3091}:3001"
+    # Source bind-mounts are SCOPED to the dirs we actually edit
+    # (src/, core/, tests/, scripts/, templates/, static/). The
+    # whole-repo `.:/app` + anonymous `/app/.venv` pattern is gone
+    # — that combo silently shadowed SDK upgrades across rebuilds
+    # because the anonymous venv volume persisted and overrode the
+    # newly-built image's venv. With scoped mounts the image's
+    # /app/.venv is never touched, so a `docker compose build`
+    # reliably picks up `adcp` bumps. Source hot-reload still works
+    # for the dirs we mount.
+    volumes:
+      - ./src:/app/src
+      - ./core:/app/core
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+      - ./templates:/app/templates
+      - ./static:/app/static
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
+      - ./audit_logs:/app/audit_logs
+      - adcp_global_pip_cache:/root/.cache/pip
+      - adcp_global_uv_cache:/cache/uv
+    command: ["python", "-m", "core.main"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3091/admin/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  core_postgres_data:
+  adcp_global_pip_cache:
+  adcp_global_uv_cache:

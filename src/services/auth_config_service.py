@@ -225,12 +225,17 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
     Returns:
         Full redirect URI
     """
+    from src.core.domain_config import _get_protocol_for_domain
+
     if tenant.virtual_host:
         # Custom domain takes highest priority
-        base = f"https://{tenant.virtual_host}"
-    elif tenant.subdomain and get_sales_agent_domain():
-        # Subdomain on main domain (multi-tenant mode with SALES_AGENT_DOMAIN set)
-        base = f"https://{tenant.subdomain}.{get_sales_agent_domain()}"
+        base = f"{_get_protocol_for_domain(tenant.virtual_host)}://{tenant.virtual_host}"
+    elif tenant.subdomain and (sales_domain := get_sales_agent_domain()):
+        # Subdomain on main domain (multi-tenant mode with SALES_AGENT_DOMAIN set).
+        # Auto-detect protocol — http for localhost (incl. localhost:port for
+        # local dev with subdomain.localhost), https everywhere else.
+        protocol = _get_protocol_for_domain(sales_domain)
+        base = f"{protocol}://{tenant.subdomain}.{sales_domain}"
     elif main_url := get_sales_agent_url():
         # Explicit SALES_AGENT_DOMAIN URL
         base = main_url

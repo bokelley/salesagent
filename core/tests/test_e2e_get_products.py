@@ -1,73 +1,105 @@
 """End-to-end M1 test: get_products dispatched via the framework's PlatformHandler.
 
-This is the M1 milestone test. It validates the full path:
+After the platform-delegation refactor (#37) the dispatch path is:
 
   GetProductsRequest (typed Pydantic, wire shape)
       ↓
   PlatformHandler.get_products()             — framework's dispatch shim
       ↓
-  MockSellerPlatform.get_products()          — adopter business logic
+  MockSellerPlatform.get_products()          — thin AdCP adapter
       ↓
-  ProductRow ORM rows (mocked)               — salesagent ORM bridge
+  _delegate_get_products()                   — builds ResolvedIdentity
       ↓
-  AdCP get_products response (dict)          — wire-compatible result
+  src/core/tools/products.py:_get_products_impl  — REAL business logic (mocked here)
+      ↓
+  GetProductsResponse → dict                 — wire-compatible result
 
-This is the lowest layer that exercises the framework's real dispatch
-machinery. The MCP/A2A transport layer above it is the framework's
-responsibility — once this works, ``serve()`` works.
-
-DB is mocked at the session level. M2 lands a docker-compose-backed
-storyboard run that drives this through real HTTP.
+This test exercises the framework's real dispatch machinery + the new
+delegation glue. ``_get_products_impl`` itself is mocked — its
+brief-matching, policy enforcement, and dynamic-product semantics
+are tested upstream against the impl directly.
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from adcp.decisioning.serve import create_adcp_server_from_platform
 from adcp.server.base import ToolContext
-from adcp.testing import make_request_context  # noqa: F401 — shows the SDK now ships this helper
-from adcp.types import GetProductsRequest
+from adcp.types import GetProductsRequest, GetProductsResponse, Product
 
 from core.platforms.mock import MockSellerPlatform
 
 
-def _fake_product_row(**overrides):
-    p = MagicMock()
-    p.tenant_id = overrides.get("tenant_id", "demo-tenant")
-    p.product_id = overrides.get("product_id", "demo-product")
-    p.name = overrides.get("name", "Demo Product")
-    p.description = overrides.get("description", "A demo product")
-    p.delivery_type = overrides.get("delivery_type", "non_guaranteed")
-    p.format_ids = overrides.get(
-        "format_ids",
-        [{"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_300x250"}],
+def _impl_response_with_one_product(product_id: str = "demo-product") -> GetProductsResponse:
+    return GetProductsResponse(
+        products=[
+            Product.model_validate(
+                {
+                    "product_id": product_id,
+                    "name": "Demo Product",
+                    "description": "A demo product",
+                    "delivery_type": "non_guaranteed",
+                    "publisher_properties": [
+                        {"publisher_domain": "example.com", "selection_type": "all"}
+                    ],
+                    "format_ids": [
+                        {
+                            "agent_url": "https://creative.adcontextprotocol.org/",
+                            "id": "display_300x250",
+                        }
+                    ],
+                    "pricing_options": [
+                        {
+                            "pricing_option_id": "po-cpm-default",
+                            "pricing_model": "cpm",
+                            "floor_price": 1.0,
+                            "currency": "USD",
+                        }
+                    ],
+                    "reporting_capabilities": {
+                        "available_metrics": ["impressions", "spend"],
+                        "available_reporting_frequencies": ["daily"],
+                        "date_range_support": "date_range",
+                        "supports_webhooks": False,
+                        "expected_delay_minutes": 60,
+                        "timezone": "UTC",
+                    },
+                    "delivery_measurement": {"provider": "publisher"},
+                }
+            )
+        ],
+        errors=None,
+        context=None,
     )
-    p.delivery_measurement = overrides.get("delivery_measurement", {"provider": "publisher"})
-    p.properties = overrides.get("properties")
-    p.property_ids = overrides.get("property_ids")
-    p.property_tags = overrides.get("property_tags")
-    return p
 
 
 @pytest.fixture
-def mocked_db():
+def mocked_pipeline():
+    """Mock the AccountStore session AND the upstream _get_products_impl."""
     session = MagicMock()
     session.__enter__.return_value = session
     session.__exit__.return_value = False
-    session.scalars.return_value.all.return_value = [_fake_product_row()]
     session.scalars.return_value.first.return_value = MagicMock(is_active=True)
-    with patch("core.platforms.mock.get_db_session", return_value=session), patch(
+
+    impl_mock = AsyncMock(return_value=_impl_response_with_one_product())
+
+    with patch(
         "core.stores.accounts.get_db_session", return_value=session
+    ), patch(
+        "core.platforms._delegate._get_products_impl", new=impl_mock
+    ), patch(
+        "core.platforms._delegate.get_tenant_by_id",
+        return_value={"tenant_id": "demo-tenant", "name": "Demo Tenant"},
     ):
-        yield session
+        yield impl_mock
 
 
-def test_get_products_dispatches_through_framework_handler(mocked_db):
-    """A real PlatformHandler dispatch returns a wire-compatible response."""
+def test_get_products_dispatches_through_framework_handler(mocked_pipeline):
+    """A real PlatformHandler dispatch reaches the delegate, which
+    forwards to the impl and projects the response onto a wire dict."""
     platform = MockSellerPlatform()
     handler, _executor, _registry = create_adcp_server_from_platform(
         platform, auto_emit_completion_webhooks=False
@@ -95,3 +127,9 @@ def test_get_products_dispatches_through_framework_handler(mocked_db):
     assert "reporting_capabilities" in product
     # Wire shape: format_ids must be FormatId-shaped dicts
     assert product["format_ids"][0]["agent_url"].startswith("https://")
+
+    # Delegation reached the impl with the buyer's brief intact.
+    assert mocked_pipeline.await_count == 1
+    forwarded_req, forwarded_identity = mocked_pipeline.await_args.args
+    assert forwarded_req.brief == "display ads for sneakers"
+    assert forwarded_identity.tenant_id == "demo-tenant"
