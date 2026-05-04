@@ -34,12 +34,14 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantRequest,
     ProvisionTenantResponse,
     TenantDetail,
+    TenantStatusResponse,
     TenantSummary,
     TestConnectionResponse,
     UpdateTenantRequest,
 )
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
+from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.managed_tenant_guard import ManagedTenantWriteError
 from src.core.database.models import (
@@ -851,6 +853,7 @@ def patch_tenant(tenant_id: str):
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
 
         adapter_present = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
+        invalidate_status_cache(tenant_id)
         return jsonify(_tenant_to_detail(tenant, adapter_present))
 
 
@@ -874,6 +877,7 @@ def deactivate_tenant(tenant_id: str):
             except ManagedTenantWriteError as exc:
                 session.rollback()
                 return _api_error("managed_tenant_write_blocked", str(exc), 403)
+            invalidate_status_cache(tenant_id)
 
         adapter_present = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
         return jsonify(_tenant_to_detail(tenant, adapter_present))
@@ -899,6 +903,7 @@ def reactivate_tenant(tenant_id: str):
             except ManagedTenantWriteError as exc:
                 session.rollback()
                 return _api_error("managed_tenant_write_blocked", str(exc), 403)
+            invalidate_status_cache(tenant_id)
 
         adapter_present = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
         return jsonify(_tenant_to_detail(tenant, adapter_present))
@@ -967,6 +972,7 @@ def put_adapter_config(tenant_id: str):
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(new_adapter)
+        invalidate_status_cache(tenant_id)
         return jsonify(_build_adapter_config_response(new_adapter).model_dump(mode="json"))
 
 
@@ -999,9 +1005,26 @@ def adapter_test_connection(tenant_id: str):
             config = {"dry_run": bool(adapter.mock_dry_run)}
 
         success, error = test_adapter_connection(adapter.adapter_type, config)
+        invalidate_status_cache(tenant_id)
         return jsonify(
             TestConnectionResponse(success=success, error=error, tested_at=datetime.now(UTC)).model_dump(mode="json")
         )
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/status", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=TenantStatusResponse, HTTP_404=ApiError))
+def tenant_status(tenant_id: str):
+    """Consolidated operational snapshot for a tenant.
+
+    One round-trip, one cache lifetime — covers adapter health, sync runs,
+    open workflows, media-buy/package counters, and creative state. The
+    response is computed (not stored) and cached in-memory for ~5s.
+    """
+    snapshot = get_tenant_status(tenant_id)
+    if snapshot is None:
+        return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+    return jsonify(snapshot.model_dump(mode="json"))
 
 
 # Register all spectree-validated routes with the OpenAPI generator.

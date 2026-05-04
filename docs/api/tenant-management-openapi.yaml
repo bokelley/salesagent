@@ -619,6 +619,202 @@ components:
       - created_at
       title: TenantDetail
       type: object
+    TenantStatusResponse.f44f287:
+      additionalProperties: false
+      description: "``GET /tenants/{tid}/status`` \u2014 one round-trip operational\
+        \ snapshot."
+      properties:
+        adapter:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusAdapterBlock'
+        creatives:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusCreativesBlock'
+        fetched_at:
+          format: date-time
+          title: Fetched At
+          type: string
+        media_buys:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusMediaBuysBlock'
+        packages:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusPackagesBlock'
+        syncs:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncsBlock'
+        webhooks:
+          anyOf:
+          - $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusWebhooksBlock'
+          - type: 'null'
+          default: null
+        workflows:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusWorkflowsBlock'
+      required:
+      - adapter
+      - fetched_at
+      title: TenantStatusResponse
+      type: object
+    TenantStatusResponse.f44f287.StatusAdapterBlock:
+      additionalProperties: false
+      description: Adapter block of the tenant status snapshot.
+      properties:
+        connected:
+          title: Connected
+          type: boolean
+        last_test_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Last Test Error
+        last_tested_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Tested At
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - connected
+      title: StatusAdapterBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusCreativesBlock:
+      additionalProperties: false
+      description: Creative-level counters.
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        pending_review_count:
+          default: 0
+          title: Pending Review Count
+          type: integer
+        rejected_last_24h_count:
+          default: 0
+          title: Rejected Last 24H Count
+          type: integer
+      title: StatusCreativesBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusMediaBuysBlock:
+      additionalProperties: false
+      description: Top-level media-buy counters (a buy contains 1+ packages).
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        pending_approval_count:
+          default: 0
+          title: Pending Approval Count
+          type: integer
+      title: StatusMediaBuysBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusPackagesBlock:
+      additionalProperties: false
+      description: "Package-level counters (line items inside media buys).\n\n``last_24h_impressions``\
+        \ is set to 0 until delivery aggregation is wired\nup \u2014 see :mod:`docs/design/managed-tenant-mode-sprint-1.5.md`\
+        \ Open Q #3."
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        last_24h_impressions:
+          default: 0
+          title: Last 24H Impressions
+          type: integer
+        paused_count:
+          default: 0
+          title: Paused Count
+          type: integer
+      title: StatusPackagesBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusSyncRunBlock:
+      additionalProperties: false
+      description: One sync-run summary inside :class:`StatusSyncsBlock`.
+      properties:
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        item_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Item Count
+        last_run_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Run At
+        status:
+          default: never_run
+          enum:
+          - success
+          - failed
+          - running
+          - never_run
+          title: Status
+          type: string
+      title: StatusSyncRunBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusSyncsBlock:
+      additionalProperties: false
+      description: Recent state of each sync category for a tenant.
+      properties:
+        advertisers:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock'
+        custom_targeting:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock'
+        inventory:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock'
+      title: StatusSyncsBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusWebhooksBlock:
+      additionalProperties: false
+      description: Outbound-webhook summary. ``None`` until sprint 6 lands the table.
+      properties:
+        last_24h:
+          additionalProperties: true
+          title: Last 24H
+          type: object
+        last_failure_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Failure At
+      title: StatusWebhooksBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusWorkflowsBlock:
+      additionalProperties: false
+      description: Open-workflow summary.
+      properties:
+        by_kind:
+          additionalProperties:
+            type: integer
+          title: By Kind
+          type: object
+        oldest_opened_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Oldest Opened At
+        open_count:
+          default: 0
+          title: Open Count
+          type: integer
+      title: StatusWorkflowsBlock
+      type: object
     TestConnectionResponse.f44f287:
       additionalProperties: false
       description: Result of an adapter connection probe.
@@ -1138,6 +1334,40 @@ paths:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
       summary: Idempotently reactivate a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/status:
+    get:
+      description: "One round-trip, one cache lifetime \u2014 covers adapter health,\
+        \ sync runs, open workflows, media-buy/package counters, and creative state.\
+        \ The response is computed (not stored) and cached in-memory for ~5s."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_status
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantStatusResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Consolidated operational snapshot for a tenant.
       tags: []
 security: []
 tags: []

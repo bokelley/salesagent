@@ -743,3 +743,113 @@ class TestPreviewAdapter:
     def test_missing_api_key_returns_401(self, client):
         resp = client.post(self.URL, json={"adapter": {"type": "mock"}})
         assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.5: GET /tenants/{tid}/status
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_status_cache():
+    """Bust the in-memory status cache between tests so state doesn't leak."""
+    from src.admin.services.tenant_status_service import invalidate_status_cache
+
+    invalidate_status_cache()
+    yield
+    invalidate_status_cache()
+
+
+class TestTenantStatus:
+    """``GET /tenants/{tid}/status`` — consolidated operational snapshot."""
+
+    @pytest.fixture
+    def managed_tenant(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_status")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+        return tid
+
+    def test_returns_404_for_unknown_tenant(self, client, auth_headers):
+        resp = client.get("/api/v1/tenant-management/tenants/tenant_no_such_id/status", headers=auth_headers)
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "tenant_not_found"
+
+    def test_freshly_provisioned_tenant_returns_zero_state(self, client, auth_headers, managed_tenant):
+        """A new tenant has no syncs / workflows / buys / creatives — should return zero counts, not error."""
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+
+        # Adapter block populated from provision
+        assert body["adapter"]["type"] == "google_ad_manager"
+        assert body["adapter"]["connected"] is True
+
+        # Empty defaults
+        assert body["syncs"]["inventory"]["status"] == "never_run"
+        assert body["syncs"]["custom_targeting"]["status"] == "never_run"
+        assert body["syncs"]["advertisers"]["status"] == "never_run"
+        assert body["workflows"]["open_count"] == 0
+        assert body["workflows"]["by_kind"] == {}
+        assert body["media_buys"]["active_count"] == 0
+        assert body["media_buys"]["pending_approval_count"] == 0
+        assert body["packages"]["active_count"] == 0
+        assert body["packages"]["last_24h_impressions"] == 0
+        assert body["creatives"]["active_count"] == 0
+        assert body["creatives"]["pending_review_count"] == 0
+        assert body["webhooks"] is None
+        assert "fetched_at" in body
+
+    def test_status_reflects_active_media_buy(self, client, auth_headers, managed_tenant, bound_factories):
+        """An active media buy bumps ``media_buys.active_count``."""
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        principal = PrincipalFactory(
+            tenant=tenant,
+            principal_id="p_status",
+            name="Status Test",
+            platform_mappings={"google_ad_manager": {"advertiser_id": "x"}},
+            access_token="t_status",
+        )
+        MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_status_active",
+            order_name="Status Active",
+            advertiser_name="x",
+            status="active",
+            budget=100,
+            start_date=datetime.now(UTC).date(),
+            end_date=datetime.now(UTC).date(),
+            raw_request={},
+        )
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["media_buys"]["active_count"] == 1
+
+    def test_status_is_cached_within_ttl(self, client, auth_headers, managed_tenant):
+        """Two calls within the TTL window return the same ``fetched_at`` (cache hit)."""
+        first = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        second = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        assert first["fetched_at"] == second["fetched_at"]
+
+    def test_adapter_test_invalidates_status_cache(self, client, auth_headers, managed_tenant):
+        """Calling the adapter test-connection endpoint busts the status cache.
+
+        Verifies the invalidation hook wired in ``adapter_test_connection``.
+        """
+        first = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        # Touch the test-connection endpoint — should invalidate.
+        client.post(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config/test-connection",
+            headers=auth_headers,
+        )
+        second = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers).get_json()
+        assert first["fetched_at"] != second["fetched_at"]
+
+    def test_missing_api_key_returns_401(self, client, managed_tenant):
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status")
+        assert resp.status_code in (401, 403)

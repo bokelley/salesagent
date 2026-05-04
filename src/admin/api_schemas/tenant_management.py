@@ -260,6 +260,113 @@ class PreviewAdapterResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 1.5 — consolidated tenant status (GET /tenants/{tid}/status)
+# ---------------------------------------------------------------------------
+
+
+class StatusAdapterBlock(BaseModel):
+    """Adapter block of the tenant status snapshot."""
+
+    model_config = _config()
+
+    type: str
+    connected: bool
+    last_tested_at: datetime | None = None
+    last_test_error: str | None = None
+
+
+SyncStatus = Literal["success", "failed", "running", "never_run"]
+
+
+class StatusSyncRunBlock(BaseModel):
+    """One sync-run summary inside :class:`StatusSyncsBlock`."""
+
+    model_config = _config()
+
+    last_run_at: datetime | None = None
+    status: SyncStatus = "never_run"
+    item_count: int | None = None
+    error: str | None = None
+
+
+class StatusSyncsBlock(BaseModel):
+    """Recent state of each sync category for a tenant."""
+
+    model_config = _config()
+
+    inventory: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
+    custom_targeting: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
+    advertisers: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
+
+
+class StatusWorkflowsBlock(BaseModel):
+    """Open-workflow summary."""
+
+    model_config = _config()
+
+    open_count: int = 0
+    oldest_opened_at: datetime | None = None
+    by_kind: dict[str, int] = Field(default_factory=dict)
+
+
+class StatusMediaBuysBlock(BaseModel):
+    """Top-level media-buy counters (a buy contains 1+ packages)."""
+
+    model_config = _config()
+
+    active_count: int = 0
+    pending_approval_count: int = 0
+
+
+class StatusPackagesBlock(BaseModel):
+    """Package-level counters (line items inside media buys).
+
+    ``last_24h_impressions`` is set to 0 until delivery aggregation is wired
+    up — see :mod:`docs/design/managed-tenant-mode-sprint-1.5.md` Open Q #3.
+    """
+
+    model_config = _config()
+
+    active_count: int = 0
+    paused_count: int = 0
+    last_24h_impressions: int = 0
+
+
+class StatusCreativesBlock(BaseModel):
+    """Creative-level counters."""
+
+    model_config = _config()
+
+    active_count: int = 0
+    pending_review_count: int = 0
+    rejected_last_24h_count: int = 0
+
+
+class StatusWebhooksBlock(BaseModel):
+    """Outbound-webhook summary. ``None`` until sprint 6 lands the table."""
+
+    model_config = _config()
+
+    last_24h: dict[str, Any] = Field(default_factory=dict)
+    last_failure_at: datetime | None = None
+
+
+class TenantStatusResponse(BaseModel):
+    """``GET /tenants/{tid}/status`` — one round-trip operational snapshot."""
+
+    model_config = _config()
+
+    adapter: StatusAdapterBlock
+    syncs: StatusSyncsBlock = Field(default_factory=StatusSyncsBlock)
+    workflows: StatusWorkflowsBlock = Field(default_factory=StatusWorkflowsBlock)
+    media_buys: StatusMediaBuysBlock = Field(default_factory=StatusMediaBuysBlock)
+    packages: StatusPackagesBlock = Field(default_factory=StatusPackagesBlock)
+    creatives: StatusCreativesBlock = Field(default_factory=StatusCreativesBlock)
+    webhooks: StatusWebhooksBlock | None = None
+    fetched_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 
