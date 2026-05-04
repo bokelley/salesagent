@@ -1,0 +1,600 @@
+"""Integration tests for the sprint-1 Tenant Management API endpoints.
+
+Covers the full sprint-1 acceptance criteria:
+- provision happy path + adapter-test failure rollback + duplicate org id
+- list / get / patch / deactivate / reactivate / delete (soft + hard)
+- adapter-config GET / PUT (with rollback on connection failure) / test-connection
+- write-guard behavior (managed vs unmanaged, super-admin override)
+- end-to-end: provision → patch → ui-handler-blocks → deactivate → re-provision-blocked
+- swagger UI loads, OpenAPI spec validates as OpenAPI 3
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+
+import pytest
+from flask import Flask
+from sqlalchemy import select
+
+from src.admin.tenant_management_api import tenant_management_api
+from src.core.database.database_session import get_db_session
+from src.core.database.managed_tenant_guard import ManagedTenantWriteError
+from src.core.database.models import (
+    AdapterConfig,
+    Creative,
+    CurrencyLimit,
+    MediaBuy,
+    Principal,
+    Product,
+    PropertyTag,
+    Tenant,
+)
+from tests.factories import MediaBuyFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.helpers.managed_tenant_api import bind_factories_to_session, install_management_api_key
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+API_KEY = "sk-managed-tenant-test-key"
+
+
+@pytest.fixture
+def install_api_key(integration_db):
+    """Provision the management API key in the test DB."""
+    return install_management_api_key(API_KEY)
+
+
+@pytest.fixture
+def app(integration_db, install_api_key):
+    application = Flask(__name__)
+    application.config["TESTING"] = True
+    application.register_blueprint(tenant_management_api)
+    return application
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture
+def auth_headers(install_api_key):
+    return {"X-Tenant-Management-API-Key": install_api_key}
+
+
+@pytest.fixture(autouse=True)
+def _stub_adapter_test(monkeypatch, request):
+    """Default adapter probe to success — individual tests opt into failures via this fixture."""
+    if "real_adapter_test" in request.keywords:
+        return
+
+    def _stub(adapter_type, config):
+        return True, None
+
+    import src.admin.tenant_management_api as api_module
+
+    monkeypatch.setattr(api_module, "test_adapter_connection", _stub)
+
+
+@pytest.fixture
+def bound_factories(integration_db):
+    """Bind every factory to a session so tests can call ``XFactory(...)`` and have it persist.
+
+    Delegates to ``bind_factories_to_session()`` — keeps the architecture guard happy
+    (no inline session.add() in test bodies) without duplicating the binding logic.
+    """
+    with bind_factories_to_session() as session:
+        yield session
+
+
+@pytest.fixture
+def cleanup_tenants():
+    """Clean up tenants created during the test."""
+    created: list[str] = []
+    yield created
+    if not created:
+        return
+    with get_db_session() as session:
+        for tid in created:
+            for model in (
+                AdapterConfig,
+                CurrencyLimit,
+                PropertyTag,
+                Principal,
+                Product,
+                Creative,
+                MediaBuy,
+            ):
+                session.execute(model.__table__.delete().where(model.tenant_id == tid))
+            session.execute(Tenant.__table__.delete().where(Tenant.tenant_id == tid))
+        session.commit()
+
+
+def _provision_payload(**overrides):
+    payload = {
+        "name": "Acme News",
+        "external_org_id": "org_acme",
+        "external_source": "scope3",
+        "contact_email": "ops@example.com",
+        "adapter": {
+            "type": "google_ad_manager",
+            "network_code": "12345",
+            "service_account_email": "sa@example.com",
+            "service_account_key_json": '{"type":"service_account"}',
+        },
+        "default_currency": "USD",
+        "billing_plan": "standard",
+    }
+    payload.update(overrides)
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Provision
+# ---------------------------------------------------------------------------
+
+
+class TestProvision:
+    def test_provision_happy_path_creates_tenant_and_dependencies(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_provision_happy")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 201, response.get_data(as_text=True)
+        body = response.get_json()
+        assert body["managed_externally"] is True
+        assert body["external_org_id"] == "org_provision_happy"
+        assert body["adapter"]["type"] == "google_ad_manager"
+        assert body["adapter"]["connection_test_passed"] is True
+
+        cleanup_tenants.append(body["tenant_id"])
+
+        # Verify CurrencyLimit + PropertyTag + AdapterConfig were created in the same transaction.
+        with get_db_session() as session:
+            assert (
+                session.scalars(
+                    select(CurrencyLimit).filter_by(tenant_id=body["tenant_id"], currency_code="USD")
+                ).first()
+                is not None
+            )
+            assert (
+                session.scalars(
+                    select(PropertyTag).filter_by(tenant_id=body["tenant_id"], tag_id="all_inventory")
+                ).first()
+                is not None
+            )
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=body["tenant_id"])).first()
+            assert adapter is not None
+            # The encrypted column must round-trip via the property accessor.
+            assert adapter.gam_service_account_json == '{"type":"service_account"}'
+
+    def test_provision_with_initial_principal(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(
+            external_org_id="org_with_principal",
+            initial_principal={"name": "Default Advertiser"},
+        )
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 201
+        body = response.get_json()
+        cleanup_tenants.append(body["tenant_id"])
+        assert body["initial_principal"]["name"] == "Default Advertiser"
+        # Sprint 1 contract: no api_token in response.
+        assert "api_token" not in body["initial_principal"]
+
+    def test_provision_rolls_back_on_adapter_failure(self, client, auth_headers, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        def _fail(adapter_type, config):
+            return False, "auth boom"
+
+        monkeypatch.setattr(api_module, "test_adapter_connection", _fail)
+
+        payload = _provision_payload(external_org_id="org_provision_fail")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 400
+        body = response.get_json()
+        assert body["error"] == "adapter_connection_failed"
+        # Verify NOTHING was written.
+        with get_db_session() as session:
+            assert session.scalars(select(Tenant).filter_by(external_org_id="org_provision_fail")).first() is None
+
+    def test_provision_returns_409_on_duplicate_external_org_id(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_dup")
+        first = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert first.status_code == 201
+        cleanup_tenants.append(first.get_json()["tenant_id"])
+
+        second = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert second.status_code == 409
+        body = second.get_json()
+        assert body["error"] == "external_org_id_conflict"
+        assert "tenant_id" in body["details"]
+
+    def test_provision_unknown_field_rejected(self, client, auth_headers):
+        payload = _provision_payload(external_org_id="org_extra", surprise="oops")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        # spectree returns 422 for Pydantic validation failures.
+        assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: list / get / patch / deactivate / reactivate / delete
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycle:
+    @pytest.fixture
+    def managed_tenant(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_lifecycle")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        tenant_id = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+        return tenant_id
+
+    def test_list_tenants_filters(self, client, auth_headers, managed_tenant):
+        resp = client.get(
+            "/api/v1/tenant-management/tenants?managed_externally=true&external_source=scope3",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        ids = {t["tenant_id"] for t in body["tenants"]}
+        assert managed_tenant in ids
+        for t in body["tenants"]:
+            assert t["managed_externally"] is True
+            assert t["external_source"] == "scope3"
+
+    def test_get_tenant_returns_detail_or_404(self, client, auth_headers, managed_tenant):
+        ok = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}", headers=auth_headers)
+        assert ok.status_code == 200
+        body = ok.get_json()
+        assert body["managed_externally"] is True
+
+        missing = client.get("/api/v1/tenant-management/tenants/tenant_nope_404", headers=auth_headers)
+        assert missing.status_code == 404
+        assert missing.get_json()["error"] == "tenant_not_found"
+
+    def test_patch_updates_platform_managed_fields(self, client, auth_headers, managed_tenant):
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}",
+            headers=auth_headers,
+            json={"name": "Renamed Acme", "billing_plan": "enterprise"},
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["name"] == "Renamed Acme"
+        assert body["billing_plan"] == "enterprise"
+
+    def test_patch_rejects_external_org_id(self, client, auth_headers, managed_tenant):
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}",
+            headers=auth_headers,
+            json={"external_org_id": "different"},
+        )
+        assert resp.status_code == 422  # extra="forbid"
+
+    def test_deactivate_then_reactivate_idempotent(self, client, auth_headers, managed_tenant):
+        first = client.post(f"/api/v1/tenant-management/tenants/{managed_tenant}/deactivate", headers=auth_headers)
+        assert first.status_code == 200
+        assert first.get_json()["is_active"] is False
+
+        second = client.post(f"/api/v1/tenant-management/tenants/{managed_tenant}/deactivate", headers=auth_headers)
+        assert second.status_code == 200
+        assert second.get_json()["is_active"] is False
+
+        re = client.post(f"/api/v1/tenant-management/tenants/{managed_tenant}/reactivate", headers=auth_headers)
+        assert re.status_code == 200
+        assert re.get_json()["is_active"] is True
+
+    def test_soft_delete_returns_inactive_detail(self, client, auth_headers, managed_tenant):
+        resp = client.delete(f"/api/v1/tenant-management/tenants/{managed_tenant}", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()["is_active"] is False
+
+    def test_hard_delete_requires_confirmation_header(self, client, auth_headers, managed_tenant):
+        no_header = client.delete(f"/api/v1/tenant-management/tenants/{managed_tenant}?hard=true", headers=auth_headers)
+        assert no_header.status_code == 400
+        assert no_header.get_json()["error"] == "confirmation_required"
+
+        with_header = client.delete(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}?hard=true",
+            headers={**auth_headers, "X-Confirm-Delete": "yes"},
+        )
+        assert with_header.status_code == 200
+
+        # Tenant should be gone.
+        with get_db_session() as session:
+            assert session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first() is None
+
+    def test_delete_returns_409_when_active_media_buys_present(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        # Add a Principal + active MediaBuy to the managed tenant. This goes through the publisher-managed
+        # path so the write guard does not fire.
+        # Tenant already exists (provisioned by managed_tenant fixture) — load it and pass to factories.
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        principal = PrincipalFactory(
+            tenant=tenant,
+            principal_id="p_active_mb",
+            name="Has Active",
+            platform_mappings={"google_ad_manager": {"advertiser_id": "x"}},
+            access_token="t_active_mb",
+        )
+        MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_active_test",
+            order_name="Active Test",
+            advertiser_name="x",
+            status="active",
+            budget=100,
+            start_date=datetime.now(UTC).date(),
+            end_date=datetime.now(UTC).date(),
+            raw_request={},
+        )
+
+        resp = client.delete(f"/api/v1/tenant-management/tenants/{managed_tenant}", headers=auth_headers)
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "tenant_has_active_resources"
+
+
+# ---------------------------------------------------------------------------
+# Adapter config
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterConfig:
+    @pytest.fixture
+    def managed_tenant(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_adapter_cfg")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+        return tid
+
+    def test_get_adapter_config_redacts_secrets(self, client, auth_headers, managed_tenant):
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["type"] == "google_ad_manager"
+        # The actual secret JSON must NEVER appear in the response — only the redaction marker.
+        assert body["service_account_key_json"] == "<encrypted>"
+        assert "service_account" not in (body.get("service_account_key_json") or "<encrypted>").replace(
+            "<encrypted>", ""
+        )
+
+    def test_put_adapter_config_tests_connection_before_commit(self, client, auth_headers, managed_tenant, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        def _fail(adapter_type, config):
+            return False, "credentials rejected"
+
+        monkeypatch.setattr(api_module, "test_adapter_connection", _fail)
+
+        payload = {
+            "type": "google_ad_manager",
+            "network_code": "67890",
+            "service_account_email": "new@example.com",
+            "service_account_key_json": '{"type":"new_sa"}',
+        }
+        resp = client.put(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config",
+            headers=auth_headers,
+            json=payload,
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "adapter_connection_failed"
+
+        # Existing adapter config unchanged.
+        with get_db_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter is not None
+            assert adapter.gam_network_code == "12345"
+
+    def test_put_adapter_config_replaces_existing(self, client, auth_headers, managed_tenant):
+        payload = {
+            "type": "mock",
+        }
+        resp = client.put(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config",
+            headers=auth_headers,
+            json=payload,
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["type"] == "mock"
+
+    def test_test_connection_endpoint_does_not_modify_state(self, client, auth_headers, managed_tenant):
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config/test-connection",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["success"] is True
+        assert body["error"] is None
+
+
+# ---------------------------------------------------------------------------
+# Write guard
+# ---------------------------------------------------------------------------
+
+
+class TestWriteGuard:
+    @pytest.fixture
+    def managed_tenant(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_guard")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+        return tid
+
+    @pytest.fixture
+    def unmanaged_tenant(self, integration_db, bound_factories):
+        TenantFactory(
+            tenant_id="t_unmanaged_guard",
+            name="Unmanaged",
+            subdomain="unmanaged-guard",
+            ad_server="mock",
+            billing_plan="standard",
+            is_active=True,
+            managed_externally=False,
+        )
+        yield "t_unmanaged_guard"
+        with get_db_session() as session:
+            session.execute(Tenant.__table__.delete().where(Tenant.tenant_id == "t_unmanaged_guard"))
+            session.commit()
+
+    def test_managed_tenant_blocks_non_api_tenant_update(self, managed_tenant):
+        # Simulate a UI handler: open a session, mutate a platform-managed field WITHOUT
+        # setting the management_api_caller flag — the model guard must fire on commit.
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+            assert tenant is not None
+            tenant.name = "Should Not Persist"
+            with pytest.raises(ManagedTenantWriteError):
+                session.commit()
+            session.rollback()
+
+    def test_unmanaged_tenant_allows_write(self, unmanaged_tenant):
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=unmanaged_tenant)).first()
+            tenant.name = "Renamed"
+            session.commit()
+        with get_db_session() as session:
+            assert session.scalars(select(Tenant).filter_by(tenant_id=unmanaged_tenant)).first().name == "Renamed"
+
+    def test_super_admin_override_bypasses_guard(self, managed_tenant):
+        with get_db_session() as session:
+            session.info["super_admin_override"] = True
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+            tenant.name = "Super Admin Rename"
+            session.commit()
+        with get_db_session() as session:
+            assert (
+                session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first().name == "Super Admin Rename"
+            )
+
+    def test_publisher_managed_table_write_succeeds_on_managed_tenant(self, managed_tenant, bound_factories):
+        # Add a Principal directly to the managed tenant, simulating a UI handler.
+        # The guard must NOT fire — Principal is publisher-managed.
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        PrincipalFactory(
+            tenant=tenant,
+            principal_id="p_publisher_write",
+            name="Publisher Side",
+            platform_mappings={"mock": {"advertiser_id": "x"}},
+            access_token="t_pub_write",
+        )
+        with get_db_session() as session:
+            p = session.scalars(
+                select(Principal).filter_by(tenant_id=managed_tenant, principal_id="p_publisher_write")
+            ).first()
+            assert p is not None
+            session.delete(p)
+            session.commit()
+
+    def test_managed_tenant_blocks_adapter_config_update_outside_api(self, managed_tenant):
+        with get_db_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter is not None
+            adapter.gam_network_code = "blocked-rewrite"
+            with pytest.raises(ManagedTenantWriteError):
+                session.commit()
+            session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end + reverse-proxy + OpenAPI smoke
+# ---------------------------------------------------------------------------
+
+
+class TestEndToEnd:
+    def test_end_to_end_managed_tenant_lifecycle(self, client, auth_headers, cleanup_tenants, bound_factories):
+        # 1) Provision.
+        provision_resp = client.post(
+            "/api/v1/tenant-management/tenants/provision",
+            headers=auth_headers,
+            json=_provision_payload(external_org_id="org_e2e"),
+        )
+        assert provision_resp.status_code == 201
+        tenant_id = provision_resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+
+        # 2) Patch via API succeeds.
+        patch_resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers=auth_headers,
+            json={"name": "End-to-End Renamed"},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.get_json()["name"] == "End-to-End Renamed"
+
+        # 3) Same write via a UI-style handler (no management_api_caller) → guard fires.
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            tenant.name = "UI Should Not Persist"
+            with pytest.raises(ManagedTenantWriteError):
+                session.commit()
+            session.rollback()
+
+        # 4) Adding a Product (publisher-managed) via a UI-style handler succeeds.
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        ProductFactory(
+            tenant=tenant,
+            product_id="prod_e2e",
+            name="E2E Product",
+            description="Created without management_api_caller",
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            targeting_template={},
+            delivery_type="non_guaranteed",
+            property_tags=["all_inventory"],
+        )
+        with get_db_session() as session:
+            assert (
+                session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id="prod_e2e")).first()
+                is not None
+            )
+
+        # 5) Deactivate via API.
+        deactivate_resp = client.post(f"/api/v1/tenant-management/tenants/{tenant_id}/deactivate", headers=auth_headers)
+        assert deactivate_resp.status_code == 200
+        assert deactivate_resp.get_json()["is_active"] is False
+
+        # 6) Re-provision with the same external_org_id → 409.
+        repeat = client.post(
+            "/api/v1/tenant-management/tenants/provision",
+            headers=auth_headers,
+            json=_provision_payload(external_org_id="org_e2e"),
+        )
+        assert repeat.status_code == 409
+        assert repeat.get_json()["error"] == "external_org_id_conflict"
+
+
+class TestOpenAPI:
+    def test_swagger_ui_loads(self, client):
+        resp = client.get("/api/v1/tenant-management/docs/swagger/")
+        assert resp.status_code == 200
+        # Swagger UI HTML uses the swagger-ui CSS + JS bundle.
+        body = resp.get_data(as_text=True)
+        assert "swagger" in body.lower()
+
+    def test_openapi_spec_validates_as_openapi3(self, client):
+        resp = client.get("/api/v1/tenant-management/docs/openapi.json")
+        assert resp.status_code == 200
+        spec_doc = resp.get_json()
+
+        # Minimal OpenAPI 3 sanity
+        assert spec_doc.get("openapi", "").startswith("3.")
+        assert "info" in spec_doc and "paths" in spec_doc
+
+        # Sprint-1 endpoints must appear in the spec.
+        paths = spec_doc["paths"]
+        joined = json.dumps(paths)
+        assert "/tenants/provision" in joined
+        assert "/adapter-config" in joined
+        assert "/deactivate" in joined
+        assert "/reactivate" in joined

@@ -258,6 +258,18 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "delete_tenant"),
     ("src/admin/tenant_management_api.py", "get_tenant"),
     ("src/admin/tenant_management_api.py", "update_tenant"),
+    # FIXME(salesagent-managed-tenant-mode): sprint-1 endpoints land before TenantRepository exists.
+    # These will fold into a repository when the publisher-managed-surface API arrives in sprint 2/3.
+    ("src/admin/tenant_management_api.py", "_resolve_default_currency"),
+    ("src/admin/tenant_management_api.py", "_persist_adapter_config"),
+    ("src/admin/tenant_management_api.py", "list_tenants"),
+    ("src/admin/tenant_management_api.py", "provision_tenant"),
+    ("src/admin/tenant_management_api.py", "patch_tenant"),
+    ("src/admin/tenant_management_api.py", "deactivate_tenant"),
+    ("src/admin/tenant_management_api.py", "reactivate_tenant"),
+    ("src/admin/tenant_management_api.py", "get_adapter_config"),
+    ("src/admin/tenant_management_api.py", "put_adapter_config"),
+    ("src/admin/tenant_management_api.py", "adapter_test_connection"),
     ("src/admin/utils/helpers.py", "decorated_function"),
     ("src/admin/utils/helpers.py", "decorator"),
     ("src/admin/utils/helpers.py", "get_custom_targeting_mappings"),

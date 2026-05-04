@@ -124,6 +124,21 @@ class Tenant(Base, JSONValidatorMixin):
     # Can be an absolute URL or a path to an uploaded file (e.g., /static/favicons/tenant_id/favicon.ico)
     favicon_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # Managed-tenant mode: platform-managed surfaces are locked to the Tenant Management API.
+    # When True, the model-layer write guard (managed_tenant_guard) blocks non-API mutations
+    # to platform-managed columns/tables (Tenant core fields, AdapterConfig). Publisher-managed
+    # tables (Product, Principal, Creative, etc.) remain writable from the UI regardless.
+    managed_externally: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    # Identifier for the tenant in the upstream platform (e.g. Scope3 org id).
+    # Indexed but not unique — a single org may own multiple tenants in the future.
+    external_org_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Name of the upstream platform that owns this managed tenant ("scope3", etc.).
+    external_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
     principals = relationship("Principal", back_populates="tenant", cascade="all, delete-orphan")
@@ -160,6 +175,7 @@ class Tenant(Base, JSONValidatorMixin):
     __table_args__ = (
         Index("idx_subdomain", "subdomain"),
         Index("ix_tenants_virtual_host", "virtual_host", unique=True),
+        Index("ix_tenants_external_org_id", "external_org_id"),
     )
 
     # JSON validators are inherited from JSONValidatorMixin
@@ -1050,6 +1066,14 @@ class AuditLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     details: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Managed-tenant external identity propagation (sprint 1 of managed tenant mode).
+    # Populated when a mutation originates from an upstream-platform user (e.g. Scope3
+    # Storefront). All four are optional — open-instance audit rows leave them NULL.
+    external_user_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_org_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="audit_logs")

@@ -1,4 +1,11 @@
-"""Tenant Management API for managing tenants - Using direct SQL queries."""
+"""Tenant Management API for managing tenants.
+
+Sprint 1 of [managed-tenant-mode](../../docs/design/managed-tenant-mode.md)
+extends this blueprint with spectree-validated endpoints for the platform-managed
+surface (provision / list / get / patch / deactivate / reactivate / delete /
+adapter-config / adapter-config test). Legacy non-spectree endpoints below
+remain for direct-customer (open-instance) callers.
+"""
 
 import json
 import logging
@@ -8,18 +15,38 @@ import uuid
 from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, request
+from spectree import Response, SpecTree
 from sqlalchemy import delete, func, select
 
+from src.admin.api_schemas.tenant_management import (
+    AdapterConfig as AdapterConfigSchema,
+)
+from src.admin.api_schemas.tenant_management import (
+    AdapterConfigResponse,
+    AdapterStatusResponse,
+    ApiError,
+    GAMAdapterConfig,
+    ListTenantsResponse,
+    MockAdapterConfig,
+    ProvisionedPrincipalResponse,
+    ProvisionTenantRequest,
+    ProvisionTenantResponse,
+    TenantDetail,
+    TenantSummary,
+    TestConnectionResponse,
+    UpdateTenantRequest,
+)
 from src.admin.auth_helpers import require_api_key_auth
+from src.admin.services.adapter_connection_tester import test_adapter_connection
 from src.core.database.database_session import get_db_session
+from src.core.database.managed_tenant_guard import ManagedTenantWriteError
 from src.core.database.models import (
     AdapterConfig,
-    AuditLog,
+    CurrencyLimit,
     MediaBuy,
     Principal,
-    Product,
+    PropertyTag,
     Tenant,
-    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,12 +54,149 @@ logger = logging.getLogger(__name__)
 # Create Blueprint
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
 
+# OpenAPI spec — Swagger UI at /api/v1/tenant-management/docs, spec at /api/v1/tenant-management/openapi.json
+spec = SpecTree(
+    "flask",
+    title="Sales Agent — Tenant Management API",
+    version="v1",
+    path="docs",
+    openapi_url_prefix="",
+)
+
 
 require_tenant_management_api_key = require_api_key_auth(
     env_var="TENANT_MANAGEMENT_API_KEY",
     config_key="tenant_management_api_key",
     header="X-Tenant-Management-API-Key",
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by the new spectree endpoints
+# ---------------------------------------------------------------------------
+
+
+def _api_error(code: str, message: str, status: int, details: dict | None = None):
+    """Build a (jsonified, status) tuple matching the :class:`ApiError` schema."""
+    body = ApiError(error=code, message=message, details=details).model_dump(exclude_none=True)
+    return jsonify(body), status
+
+
+def _tenant_to_summary(tenant: Tenant, adapter_configured: bool) -> dict:
+    """Serialize a :class:`Tenant` as a :class:`TenantSummary`-compatible dict."""
+    return TenantSummary(
+        tenant_id=tenant.tenant_id,
+        name=tenant.name,
+        subdomain=tenant.subdomain,
+        external_org_id=tenant.external_org_id,
+        external_source=tenant.external_source,
+        managed_externally=bool(tenant.managed_externally),
+        is_active=bool(tenant.is_active),
+        billing_plan=tenant.billing_plan or "standard",
+        ad_server=tenant.ad_server,
+        adapter_configured=adapter_configured,
+        created_at=tenant.created_at,
+    ).model_dump(mode="json")
+
+
+def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
+    """Serialize a :class:`Tenant` as a :class:`TenantDetail`-compatible dict."""
+    contact_email = tenant.billing_contact if tenant.billing_contact and "@" in (tenant.billing_contact or "") else None
+    default_currency = _resolve_default_currency(tenant.tenant_id)
+    return TenantDetail(
+        tenant_id=tenant.tenant_id,
+        name=tenant.name,
+        subdomain=tenant.subdomain,
+        external_org_id=tenant.external_org_id,
+        external_source=tenant.external_source,
+        managed_externally=bool(tenant.managed_externally),
+        is_active=bool(tenant.is_active),
+        billing_plan=tenant.billing_plan or "standard",
+        ad_server=tenant.ad_server,
+        adapter_configured=adapter_configured,
+        created_at=tenant.created_at,
+        contact_email=contact_email,
+        default_currency=default_currency,
+    ).model_dump(mode="json")
+
+
+def _resolve_default_currency(tenant_id: str) -> str | None:
+    """Return the default currency for a tenant, or None if no currency limits exist."""
+    with get_db_session() as session:
+        stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id)
+        first = session.scalars(stmt).first()
+        return first.currency_code if first else None
+
+
+def _adapter_config_to_dict(adapter: AdapterConfigSchema) -> dict:
+    """Flatten the discriminated AdapterConfig into a dict for adapter test/persistence."""
+    if isinstance(adapter, GAMAdapterConfig):
+        return {
+            "type": "google_ad_manager",
+            "network_code": adapter.network_code,
+            "service_account_email": adapter.service_account_email,
+            "service_account_json": adapter.service_account_key_json.get_secret_value(),
+            "refresh_token": adapter.refresh_token.get_secret_value() if adapter.refresh_token else None,
+        }
+    if isinstance(adapter, MockAdapterConfig):
+        return {"type": "mock", "dry_run": adapter.dry_run}
+    raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
+
+
+def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchema) -> AdapterConfig:
+    """Create or replace the AdapterConfig row for a tenant from a validated schema."""
+    stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+    existing = session.scalars(stmt).first()
+    if existing is not None:
+        session.delete(existing)
+        session.flush()
+
+    if isinstance(adapter, GAMAdapterConfig):
+        ac = AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="google_ad_manager",
+            gam_network_code=adapter.network_code,
+            gam_service_account_email=adapter.service_account_email,
+            gam_refresh_token=adapter.refresh_token.get_secret_value() if adapter.refresh_token else None,
+        )
+        # Encryption is wired via the property setter (see models.py:AdapterConfig).
+        ac.gam_service_account_json = adapter.service_account_key_json.get_secret_value()
+    else:  # MockAdapterConfig
+        ac = AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="mock",
+            mock_dry_run=adapter.dry_run,
+        )
+    session.add(ac)
+    return ac
+
+
+def _build_adapter_config_response(adapter: AdapterConfig | None) -> AdapterConfigResponse:
+    """Build the redacted :class:`AdapterConfigResponse` from a stored row."""
+    if adapter is None:
+        return AdapterConfigResponse(type="none", configured=False)
+    if adapter.adapter_type == "google_ad_manager":
+        return AdapterConfigResponse(
+            type="google_ad_manager",
+            configured=True,
+            network_code=adapter.gam_network_code,
+            service_account_email=adapter.gam_service_account_email,
+            service_account_key_json="<encrypted>" if adapter._gam_service_account_json else None,
+            refresh_token="<redacted>" if adapter.gam_refresh_token else None,
+        )
+    return AdapterConfigResponse(type=adapter.adapter_type, configured=True)
+
+
+def _surface_urls(tenant_id: str) -> tuple[str, str, str]:
+    """Return ``(mcp_url, a2a_url, admin_url_path)`` for a tenant.
+
+    Only the path component is stable in v1 — the host comes from the deployment env.
+    """
+    base = os.environ.get("ADCP_BASE_URL", "").rstrip("/")
+    mcp = f"{base}/mcp/" if base else "/mcp/"
+    a2a = f"{base}/a2a" if base else "/a2a"
+    admin_path = f"/tenant/{tenant_id}"
+    return mcp, a2a, admin_path
 
 
 @tenant_management_api.route("/health", methods=["GET"])
@@ -44,50 +208,35 @@ def health_check():
 
 @tenant_management_api.route("/tenants", methods=["GET"])
 @require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListTenantsResponse, HTTP_500=ApiError))
 def list_tenants():
-    """List all tenants."""
-    from src.core.database.models import AdapterConfig
+    """List tenants. Optional query params: ``managed_externally``, ``is_active``, ``external_source``."""
+    managed_filter = request.args.get("managed_externally")
+    active_filter = request.args.get("is_active")
+    source_filter = request.args.get("external_source")
+
+    def _to_bool(value: str | None) -> bool | None:
+        if value is None:
+            return None
+        return value.lower() in ("true", "1", "yes")
 
     with get_db_session() as db_session:
-        try:
-            # Query with left join and group by
-            stmt = (
-                select(
-                    Tenant.tenant_id,
-                    Tenant.name,
-                    Tenant.subdomain,
-                    Tenant.is_active,
-                    Tenant.billing_plan,
-                    Tenant.ad_server,
-                    Tenant.created_at,
-                    func.count(AdapterConfig.tenant_id).label("has_adapter"),
-                )
-                .outerjoin(AdapterConfig, Tenant.tenant_id == AdapterConfig.tenant_id)
-                .group_by(Tenant.tenant_id)
-                .order_by(Tenant.created_at.desc())
-            )
-            tenants_query = db_session.execute(stmt)
+        stmt = select(Tenant).order_by(Tenant.created_at.desc())
+        managed_bool = _to_bool(managed_filter)
+        if managed_bool is not None:
+            stmt = stmt.filter(Tenant.managed_externally.is_(managed_bool))
+        active_bool = _to_bool(active_filter)
+        if active_bool is not None:
+            stmt = stmt.filter(Tenant.is_active.is_(active_bool))
+        if source_filter:
+            stmt = stmt.filter(Tenant.external_source == source_filter)
+        tenants = db_session.scalars(stmt).all()
 
-            results = []
-            for row in tenants_query:
-                results.append(
-                    {
-                        "tenant_id": row.tenant_id,
-                        "name": row.name,
-                        "subdomain": row.subdomain,
-                        "is_active": bool(row.is_active),
-                        "billing_plan": row.billing_plan,
-                        "ad_server": row.ad_server,
-                        "created_at": row.created_at.isoformat() if row.created_at else None,
-                        "adapter_configured": bool(row.has_adapter),
-                    }
-                )
+        # Adapter-configured probe via a separate cheap query keeps the main filter simple.
+        configured_ids = set(db_session.scalars(select(AdapterConfig.tenant_id)).all())
 
-            return jsonify({"tenants": results, "count": len(results)})
-
-        except Exception as e:
-            logger.error(f"Error listing tenants: {str(e)}")
-            return jsonify({"error": "Failed to list tenants"}), 500
+        summaries = [_tenant_to_summary(t, t.tenant_id in configured_ids) for t in tenants]
+        return jsonify({"tenants": summaries, "count": len(summaries)})
 
 
 @tenant_management_api.route("/tenants", methods=["POST"])
@@ -283,87 +432,18 @@ def create_tenant():
 
 @tenant_management_api.route("/tenants/<tenant_id>", methods=["GET"])
 @require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=TenantDetail, HTTP_404=ApiError))
 def get_tenant(tenant_id):
-    """Get details for a specific tenant."""
+    """Return :class:`TenantDetail` for a tenant. 404 if the tenant doesn't exist."""
     with get_db_session() as db_session:
-        try:
-            # Get tenant details
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = db_session.scalars(stmt).first()
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
-
-            result = {
-                "tenant_id": tenant.tenant_id,
-                "name": tenant.name,
-                "subdomain": tenant.subdomain,
-                "is_active": bool(tenant.is_active),
-                "billing_plan": tenant.billing_plan,
-                "billing_contact": tenant.billing_contact,
-                "ad_server": tenant.ad_server,
-                "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
-                "updated_at": tenant.updated_at.isoformat() if tenant.updated_at else None,
-                "settings": {
-                    # Note: max_daily_budget moved to currency_limits table (per models.py line 55)
-                    "enable_axe_signals": bool(tenant.enable_axe_signals),
-                    "authorized_emails": tenant.authorized_emails if tenant.authorized_emails else [],
-                    "authorized_domains": tenant.authorized_domains if tenant.authorized_domains else [],
-                    "slack_webhook_url": tenant.slack_webhook_url,
-                    "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
-                    "hitl_webhook_url": tenant.hitl_webhook_url,
-                    "auto_approve_formats": (tenant.auto_approve_format_ids if tenant.auto_approve_format_ids else []),
-                    "human_review_required": bool(tenant.human_review_required),
-                    "policy_settings": tenant.policy_settings if tenant.policy_settings else {},
-                },
-            }
-
-            # Get adapter config
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter = db_session.scalars(stmt).first()
-            if adapter:
-                adapter_data = {
-                    "adapter_type": adapter.adapter_type,
-                    "created_at": adapter.created_at.isoformat() if adapter.created_at else None,
-                }
-
-                if adapter.adapter_type == "google_ad_manager":
-                    adapter_data.update(
-                        {
-                            "gam_network_code": adapter.gam_network_code,
-                            "has_refresh_token": bool(adapter.gam_refresh_token),
-                            "gam_trafficker_id": adapter.gam_trafficker_id,
-                            "gam_manual_approval_required": bool(adapter.gam_manual_approval_required),
-                        }
-                    )
-                    # NOTE: gam_company_id removed - advertiser_id is per-principal in platform_mappings
-                elif adapter.adapter_type == "kevel":
-                    adapter_data.update(
-                        {
-                            "kevel_network_id": adapter.kevel_network_id,
-                            "has_api_key": bool(adapter.kevel_api_key),
-                            "kevel_manual_approval_required": bool(adapter.kevel_manual_approval_required),
-                        }
-                    )
-                elif adapter.adapter_type == "triton":
-                    adapter_data.update(
-                        {"triton_station_id": adapter.triton_station_id, "has_api_key": bool(adapter.triton_api_key)}
-                    )
-                elif adapter.adapter_type == "mock":
-                    adapter_data.update({"mock_dry_run": bool(adapter.mock_dry_run)})
-
-                result["adapter_config"] = adapter_data
-
-            # Get principals count
-            stmt = select(func.count()).select_from(Principal).filter_by(tenant_id=tenant_id)
-            principals_count = db_session.scalar(stmt)
-            result["principals_count"] = principals_count
-
-            return jsonify(result)
-
-        except Exception as e:
-            logger.error(f"Error getting tenant {tenant_id}: {str(e)}")
-            return jsonify({"error": "Failed to get tenant"}), 500
+        adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+        adapter = db_session.scalars(adapter_stmt).first()
+        return jsonify(_tenant_to_detail(tenant, adapter is not None))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>", methods=["PUT"])
@@ -484,46 +564,415 @@ def update_tenant(tenant_id):
 
 @tenant_management_api.route("/tenants/<tenant_id>", methods=["DELETE"])
 @require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=TenantDetail, HTTP_404=ApiError, HTTP_409=ApiError, HTTP_400=ApiError))
 def delete_tenant(tenant_id):
-    """Delete a tenant (soft delete by default)."""
+    """Soft-delete a tenant by default. Hard-delete requires ``?hard=true`` and ``X-Confirm-Delete: yes``.
+
+    Returns 409 ``tenant_has_active_resources`` if the tenant has any active media buys.
+    """
+    hard = request.args.get("hard", "false").lower() in ("true", "1", "yes")
+
     with get_db_session() as db_session:
-        try:
-            # Check if tenant exists
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = db_session.scalars(stmt).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
+        db_session.info["management_api_caller"] = True
 
-            # Soft delete by default
-            hard_delete = request.args.get("hard_delete", "false").lower() == "true"
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-            # Check request body for hard_delete flag (not query params)
-            data = request.get_json(force=True, silent=True) or {}
-            hard_delete = data.get("hard_delete", False)
+        # Active-resources guard fires for both soft and hard delete: a tenant with live buys
+        # should not be flipped inactive without an explicit policy decision upstream.
+        active_count = db_session.scalar(
+            select(func.count())
+            .select_from(MediaBuy)
+            .where(MediaBuy.tenant_id == tenant_id, MediaBuy.status.in_(("active", "live", "running")))
+        )
+        if active_count and active_count > 0:
+            return _api_error(
+                "tenant_has_active_resources",
+                f"Tenant {tenant_id!r} has {active_count} active media buys",
+                409,
+                details={"active_media_buys": int(active_count)},
+            )
 
-            if hard_delete:
-                # Delete related records first due to foreign key constraints
-                db_session.execute(delete(AdapterConfig).where(AdapterConfig.tenant_id == tenant_id))
-                db_session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-                db_session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-                db_session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
-                db_session.execute(delete(AuditLog).where(AuditLog.tenant_id == tenant_id))
-                db_session.execute(delete(User).where(User.tenant_id == tenant_id))
-
-                # Finally delete the tenant
-                db_session.delete(tenant)
-                message = "Tenant and all related data permanently deleted"
-            else:
-                # Just mark as inactive
-                tenant.is_active = False
-                tenant.updated_at = datetime.now(UTC)
-                message = "Tenant deactivated successfully"
-
+        if hard:
+            confirm = request.headers.get("X-Confirm-Delete", "").lower()
+            if confirm != "yes":
+                return _api_error(
+                    "confirmation_required",
+                    "Hard delete requires X-Confirm-Delete: yes header",
+                    400,
+                )
+            tenant_detail = _tenant_to_detail(tenant, adapter_configured=False)
+            # Hard delete relies on Tenant's ``cascade="all, delete-orphan"`` relationships
+            # for most child tables. PropertyTag uses a backref without a delete cascade,
+            # so wipe its rows first via the FK ON DELETE rule. Issuing the bulk delete
+            # explicitly avoids the unit-of-work attempting to NULL composite-PK columns.
+            db_session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == tenant_id))
+            db_session.delete(tenant)
             db_session.commit()
+            return jsonify(tenant_detail)
 
-            return jsonify({"message": message, "tenant_id": tenant_id})
-
-        except Exception as e:
+        tenant.is_active = False
+        tenant.updated_at = datetime.now(UTC)
+        adapter_present = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
+        try:
+            db_session.commit()
+        except ManagedTenantWriteError as exc:
             db_session.rollback()
-            logger.error(f"Error deleting tenant {tenant_id}: {str(e)}")
-            return jsonify({"error": f"Failed to delete tenant: {str(e)}"}), 500
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        return jsonify(_tenant_to_detail(tenant, adapter_present))
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1 endpoints (managed-tenant mode)
+# ---------------------------------------------------------------------------
+
+
+@tenant_management_api.route("/tenants/provision", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=ProvisionTenantRequest,
+    resp=Response(
+        HTTP_201=ProvisionTenantResponse,
+        HTTP_400=ApiError,
+        HTTP_409=ApiError,
+        HTTP_500=ApiError,
+    ),
+)
+def provision_tenant():
+    """Provision a managed tenant (one-shot create + adapter + currency + property tag + optional principal)."""
+    req: ProvisionTenantRequest = request.context.json
+
+    # Step 1: external_org_id uniqueness check (informational — not unique at DB level today).
+    with get_db_session() as preflight:
+        existing = preflight.scalars(
+            select(Tenant).filter_by(external_org_id=req.external_org_id, external_source=req.external_source)
+        ).first()
+        if existing is not None:
+            return _api_error(
+                "external_org_id_conflict",
+                f"external_org_id {req.external_org_id!r} already maps to tenant {existing.tenant_id!r}",
+                409,
+                details={"tenant_id": existing.tenant_id},
+            )
+
+    # Step 2: probe the adapter BEFORE writing anything. A failure here means we never
+    # touch the DB at all — keeps the table free of half-configured tenants.
+    adapter_dict = _adapter_config_to_dict(req.adapter)
+    success, error = test_adapter_connection(adapter_dict["type"], adapter_dict)
+    if not success:
+        return _api_error(
+            "adapter_connection_failed",
+            f"Adapter {adapter_dict['type']!r} connection probe failed: {error}",
+            400,
+            details={"adapter_type": adapter_dict["type"], "error": error},
+        )
+
+    # Step 3: open a transaction; create everything in one commit.
+    tenant_id = f"tenant_{uuid.uuid4().hex[:8]}"
+    subdomain_seed = req.external_org_id.lower().replace("_", "-")
+    subdomain = f"{subdomain_seed}-{tenant_id[-8:]}"
+
+    initial_principal_id: str | None = None
+    initial_principal_name: str | None = None
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        new_tenant = Tenant(
+            tenant_id=tenant_id,
+            name=req.name,
+            subdomain=subdomain,
+            ad_server=adapter_dict["type"],
+            is_active=True,
+            billing_plan=req.billing_plan,
+            billing_contact=req.contact_email,
+            managed_externally=True,
+            external_org_id=req.external_org_id,
+            external_source=req.external_source,
+            authorized_emails=[req.contact_email],
+            authorized_domains=[],
+            human_review_required=True,
+            auto_approve_format_ids=[],
+            measurement_providers={"providers": ["Publisher Ad Server"], "default": "Publisher Ad Server"},
+        )
+        session.add(new_tenant)
+        session.flush()
+
+        _persist_adapter_config(session, tenant_id, req.adapter)
+
+        # Default CurrencyLimit (USD or override).
+        session.add(
+            CurrencyLimit(
+                tenant_id=tenant_id,
+                currency_code=req.default_currency,
+                min_package_budget=None,
+                max_daily_package_spend=None,
+            )
+        )
+
+        # Default PropertyTag — products that don't pin specific properties default to all_inventory.
+        session.add(
+            PropertyTag(
+                tenant_id=tenant_id,
+                tag_id="all_inventory",
+                name="All Inventory",
+                description="Default property tag for all inventory",
+            )
+        )
+
+        if req.initial_principal is not None:
+            initial_principal_id = f"principal_{uuid.uuid4().hex[:8]}"
+            initial_principal_name = req.initial_principal.name
+            platform_mappings: dict[str, dict] = {}
+            if adapter_dict["type"] == "google_ad_manager":
+                advertiser = req.initial_principal.external_advertiser_id or "placeholder"
+                platform_mappings = {"google_ad_manager": {"advertiser_id": advertiser}}
+            elif adapter_dict["type"] == "mock":
+                platform_mappings = {
+                    "mock": {"advertiser_id": req.initial_principal.external_advertiser_id or "default"}
+                }
+
+            # Managed-mode principals don't carry a buyer-protocol token (see sprint 2).
+            # We still need a non-null access_token for backward compatibility with non-managed
+            # callers that read this column; use a marker prefix so it can never be confused
+            # with a real bearer token.
+            session.add(
+                Principal(
+                    tenant_id=tenant_id,
+                    principal_id=initial_principal_id,
+                    name=initial_principal_name,
+                    platform_mappings=platform_mappings,
+                    access_token=f"managed-mode-no-token:{secrets.token_urlsafe(8)}",
+                )
+            )
+
+        try:
+            session.commit()
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        except Exception as exc:
+            session.rollback()
+            logger.exception("Provision failed")
+            return _api_error("internal_error", f"Provision failed: {exc}", 500)
+
+        # Pull updated_at/created_at after commit so the response is accurate.
+        session.refresh(new_tenant)
+        created_at = new_tenant.created_at
+
+    mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id)
+    response = ProvisionTenantResponse(
+        tenant_id=tenant_id,
+        name=req.name,
+        external_org_id=req.external_org_id,
+        external_source=req.external_source,
+        managed_externally=True,
+        created_at=created_at,
+        mcp_url=mcp_url,
+        a2a_url=a2a_url,
+        admin_url_path=admin_url_path,
+        adapter=AdapterStatusResponse(
+            type=adapter_dict["type"],
+            configured=True,
+            connection_test_passed=True,
+            connection_test_error=None,
+        ),
+        initial_principal=(
+            ProvisionedPrincipalResponse(principal_id=initial_principal_id, name=initial_principal_name)
+            if initial_principal_id and initial_principal_name
+            else None
+        ),
+    )
+    return jsonify(response.model_dump(mode="json")), 201
+
+
+@tenant_management_api.route("/tenants/<tenant_id>", methods=["PATCH"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=UpdateTenantRequest,
+    resp=Response(HTTP_200=TenantDetail, HTTP_404=ApiError, HTTP_400=ApiError),
+)
+def patch_tenant(tenant_id: str):
+    """Update platform-managed fields on a tenant (PATCH semantics — only listed fields are touched)."""
+    req: UpdateTenantRequest = request.context.json  # type: ignore[attr-defined]
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        if req.name is not None:
+            tenant.name = req.name
+        if req.contact_email is not None:
+            tenant.billing_contact = req.contact_email
+        if req.billing_plan is not None:
+            tenant.billing_plan = req.billing_plan
+        tenant.updated_at = datetime.now(UTC)
+
+        try:
+            session.commit()
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+
+        adapter_present = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
+        return jsonify(_tenant_to_detail(tenant, adapter_present))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/deactivate", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=TenantDetail, HTTP_404=ApiError))
+def deactivate_tenant(tenant_id: str):
+    """Idempotently deactivate a tenant. Calling on an already-inactive tenant is a no-op."""
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        if tenant.is_active:
+            tenant.is_active = False
+            tenant.updated_at = datetime.now(UTC)
+            try:
+                session.commit()
+            except ManagedTenantWriteError as exc:
+                session.rollback()
+                return _api_error("managed_tenant_write_blocked", str(exc), 403)
+
+        adapter_present = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
+        return jsonify(_tenant_to_detail(tenant, adapter_present))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/reactivate", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=TenantDetail, HTTP_404=ApiError))
+def reactivate_tenant(tenant_id: str):
+    """Idempotently reactivate a tenant."""
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        if not tenant.is_active:
+            tenant.is_active = True
+            tenant.updated_at = datetime.now(UTC)
+            try:
+                session.commit()
+            except ManagedTenantWriteError as exc:
+                session.rollback()
+                return _api_error("managed_tenant_write_blocked", str(exc), 403)
+
+        adapter_present = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
+        return jsonify(_tenant_to_detail(tenant, adapter_present))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/adapter-config", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=AdapterConfigResponse, HTTP_404=ApiError))
+def get_adapter_config(tenant_id: str):
+    """Return the tenant's adapter config with secrets redacted."""
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+        return jsonify(_build_adapter_config_response(adapter).model_dump(mode="json"))
+
+
+def _adapter_request_schema():
+    """Adapter-config PUT body uses the same discriminated union as provision."""
+    # Wrapper class so spectree can attach the discriminator on the JSON root.
+    from pydantic import RootModel
+
+    class AdapterConfigEnvelope(RootModel[AdapterConfigSchema]):
+        model_config = {"arbitrary_types_allowed": True}
+
+    return AdapterConfigEnvelope
+
+
+_ADAPTER_PUT_SCHEMA = _adapter_request_schema()
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/adapter-config", methods=["PUT"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=_ADAPTER_PUT_SCHEMA,
+    resp=Response(HTTP_200=AdapterConfigResponse, HTTP_400=ApiError, HTTP_404=ApiError),
+)
+def put_adapter_config(tenant_id: str):
+    """Replace the tenant's adapter config. Tests the connection before commit."""
+    body = request.context.json  # type: ignore[attr-defined]
+    adapter_schema: AdapterConfigSchema = body.root
+    adapter_dict = _adapter_config_to_dict(adapter_schema)
+
+    success, error = test_adapter_connection(adapter_dict["type"], adapter_dict)
+    if not success:
+        return _api_error(
+            "adapter_connection_failed",
+            f"Adapter {adapter_dict['type']!r} connection probe failed: {error}",
+            400,
+            details={"adapter_type": adapter_dict["type"], "error": error},
+        )
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        new_adapter = _persist_adapter_config(session, tenant_id, adapter_schema)
+        try:
+            session.commit()
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        session.refresh(new_adapter)
+        return jsonify(_build_adapter_config_response(new_adapter).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/adapter-config/test-connection", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=TestConnectionResponse, HTTP_404=ApiError))
+def adapter_test_connection(tenant_id: str):
+    """Probe the saved adapter config without modifying state."""
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+        if adapter is None:
+            return jsonify(
+                TestConnectionResponse(
+                    success=False, error="No adapter configured", tested_at=datetime.now(UTC)
+                ).model_dump(mode="json")
+            )
+
+        config: dict = {}
+        if adapter.adapter_type == "google_ad_manager":
+            config = {
+                "network_code": adapter.gam_network_code,
+                "service_account_json": adapter.gam_service_account_json,
+                "refresh_token": adapter.gam_refresh_token,
+            }
+        elif adapter.adapter_type == "mock":
+            config = {"dry_run": bool(adapter.mock_dry_run)}
+
+        success, error = test_adapter_connection(adapter.adapter_type, config)
+        return jsonify(
+            TestConnectionResponse(success=success, error=error, tested_at=datetime.now(UTC)).model_dump(mode="json")
+        )
+
+
+# Register all spectree-validated routes with the OpenAPI generator.
+# This is a no-op for non-validated handlers; only routes with @spec.validate participate.
+spec.register(tenant_management_api)
