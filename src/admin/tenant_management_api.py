@@ -1,6 +1,6 @@
 """Tenant Management API for managing tenants.
 
-Sprint 1 of [managed-tenant-mode](../../docs/design/managed-tenant-mode.md)
+Sprint 1 of [embedded-mode](../../docs/design/embedded-mode.md)
 extends this blueprint with spectree-validated endpoints for the platform-managed
 surface (provision / list / get / patch / deactivate / reactivate / delete /
 adapter-config / adapter-config test). Legacy non-spectree endpoints below
@@ -55,7 +55,7 @@ from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
-from src.core.database.managed_tenant_guard import ManagedTenantWriteError
+from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
     Account,
     AdapterConfig,
@@ -103,13 +103,17 @@ def _api_error(code: str, message: str, status: int, details: dict | None = None
 
 def _tenant_to_summary(tenant: Tenant, adapter_configured: bool) -> dict:
     """Serialize a :class:`Tenant` as a :class:`TenantSummary`-compatible dict."""
+    embedded = bool(tenant.is_embedded)
     return TenantSummary(
         tenant_id=tenant.tenant_id,
         name=tenant.name,
         subdomain=tenant.subdomain,
         external_org_id=tenant.external_org_id,
         external_source=tenant.external_source,
-        managed_externally=bool(tenant.managed_externally),
+        # Both fields populated from the same source; ``managed_externally`` is a
+        # deprecated alias kept on the wire so existing Storefront callers keep working.
+        is_embedded=embedded,
+        managed_externally=embedded,
         is_active=bool(tenant.is_active),
         billing_plan=tenant.billing_plan or "standard",
         ad_server=tenant.ad_server,
@@ -122,13 +126,17 @@ def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
     """Serialize a :class:`Tenant` as a :class:`TenantDetail`-compatible dict."""
     contact_email = tenant.billing_contact if tenant.billing_contact and "@" in (tenant.billing_contact or "") else None
     default_currency = _resolve_default_currency(tenant.tenant_id)
+    embedded = bool(tenant.is_embedded)
     return TenantDetail(
         tenant_id=tenant.tenant_id,
         name=tenant.name,
         subdomain=tenant.subdomain,
         external_org_id=tenant.external_org_id,
         external_source=tenant.external_source,
-        managed_externally=bool(tenant.managed_externally),
+        # Both fields populated from the same source; ``managed_externally`` is a
+        # deprecated alias kept on the wire so existing Storefront callers keep working.
+        is_embedded=embedded,
+        managed_externally=embedded,
         is_active=bool(tenant.is_active),
         billing_plan=tenant.billing_plan or "standard",
         ad_server=tenant.ad_server,
@@ -232,8 +240,9 @@ def health_check():
 @require_tenant_management_api_key
 @spec.validate(resp=Response(HTTP_200=ListTenantsResponse, HTTP_500=ApiError))
 def list_tenants():
-    """List tenants. Optional query params: ``managed_externally``, ``is_active``, ``external_source``."""
-    managed_filter = request.args.get("managed_externally")
+    """List tenants. Optional query params: ``is_embedded`` (or deprecated ``managed_externally``), ``is_active``, ``external_source``."""
+    # ``managed_externally`` query-param kept as deprecated alias for Storefront.
+    embedded_filter = request.args.get("is_embedded") or request.args.get("managed_externally")
     active_filter = request.args.get("is_active")
     source_filter = request.args.get("external_source")
 
@@ -244,9 +253,9 @@ def list_tenants():
 
     with get_db_session() as db_session:
         stmt = select(Tenant).order_by(Tenant.created_at.desc())
-        managed_bool = _to_bool(managed_filter)
-        if managed_bool is not None:
-            stmt = stmt.filter(Tenant.managed_externally.is_(managed_bool))
+        embedded_bool = _to_bool(embedded_filter)
+        if embedded_bool is not None:
+            stmt = stmt.filter(Tenant.is_embedded.is_(embedded_bool))
         active_bool = _to_bool(active_filter)
         if active_bool is not None:
             stmt = stmt.filter(Tenant.is_active.is_(active_bool))
@@ -640,7 +649,7 @@ def delete_tenant(tenant_id):
         adapter_present = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first() is not None
         try:
             db_session.commit()
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             db_session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         return jsonify(_tenant_to_detail(tenant, adapter_present))
@@ -710,7 +719,7 @@ def provision_tenant():
             is_active=True,
             billing_plan=req.billing_plan,
             billing_contact=req.contact_email,
-            managed_externally=True,
+            is_embedded=True,
             external_org_id=req.external_org_id,
             external_source=req.external_source,
             house_domain=req.house_domain,
@@ -759,7 +768,7 @@ def provision_tenant():
                     "mock": {"advertiser_id": req.initial_principal.external_advertiser_id or "default"}
                 }
 
-            # Managed-mode principals don't carry a buyer-protocol token (see sprint 2).
+            # Embedded-mode principals don't carry a buyer-protocol token (see sprint 2).
             # We still need a non-null access_token for backward compatibility with non-managed
             # callers that read this column; use a marker prefix so it can never be confused
             # with a real bearer token.
@@ -769,13 +778,13 @@ def provision_tenant():
                     principal_id=initial_principal_id,
                     name=initial_principal_name,
                     platform_mappings=platform_mappings,
-                    access_token=f"managed-mode-no-token:{secrets.token_urlsafe(8)}",
+                    access_token=f"embedded-mode-no-token:{secrets.token_urlsafe(8)}",
                 )
             )
 
         try:
             session.commit()
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         except Exception as exc:
@@ -793,6 +802,8 @@ def provision_tenant():
         name=req.name,
         external_org_id=req.external_org_id,
         external_source=req.external_source,
+        # ``managed_externally`` retained as deprecated alias for Storefront.
+        is_embedded=True,
         managed_externally=True,
         created_at=created_at,
         mcp_url=mcp_url,
@@ -875,7 +886,7 @@ def patch_tenant(tenant_id: str):
 
         try:
             session.commit()
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
 
@@ -901,7 +912,7 @@ def deactivate_tenant(tenant_id: str):
             tenant.updated_at = datetime.now(UTC)
             try:
                 session.commit()
-            except ManagedTenantWriteError as exc:
+            except EmbeddedTenantWriteError as exc:
                 session.rollback()
                 return _api_error("managed_tenant_write_blocked", str(exc), 403)
             invalidate_status_cache(tenant_id)
@@ -927,7 +938,7 @@ def reactivate_tenant(tenant_id: str):
             tenant.updated_at = datetime.now(UTC)
             try:
                 session.commit()
-            except ManagedTenantWriteError as exc:
+            except EmbeddedTenantWriteError as exc:
                 session.rollback()
                 return _api_error("managed_tenant_write_blocked", str(exc), 403)
             invalidate_status_cache(tenant_id)
@@ -995,7 +1006,7 @@ def put_adapter_config(tenant_id: str):
         new_adapter = _persist_adapter_config(session, tenant_id, adapter_schema)
         try:
             session.commit()
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(new_adapter)
@@ -1209,7 +1220,7 @@ def upsert_account(tenant_id: str):
             session.add(account)
             try:
                 session.commit()
-            except ManagedTenantWriteError as exc:
+            except EmbeddedTenantWriteError as exc:
                 session.rollback()
                 return _api_error("managed_tenant_write_blocked", str(exc), 403)
             session.refresh(account)
@@ -1232,7 +1243,7 @@ def upsert_account(tenant_id: str):
 
         try:
             session.commit()
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(existing)
@@ -1425,7 +1436,7 @@ def create_buyer_advertiser_mapping(tenant_id: str):
                     },
                 )
             raise
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(rule)
@@ -1502,7 +1513,7 @@ def patch_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
                     },
                 )
             raise
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(rule)
@@ -1535,7 +1546,7 @@ def delete_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
         session.delete(rule)
         try:
             session.commit()
-        except ManagedTenantWriteError as exc:
+        except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
 
@@ -1657,7 +1668,7 @@ def list_recent_buyers(tenant_id: str):
 
 # Sync types that ``POST /refresh`` fans out to. The status endpoint
 # (sprint 1.5) reports state per type; Storefront's UI hides per-sync
-# trigger buttons in managed mode and surfaces a single "Refresh tenant"
+# trigger buttons in embedded mode and surfaces a single "Refresh tenant"
 # action that calls this endpoint.
 _REFRESH_SYNC_TYPES: tuple[str, ...] = ("inventory", "custom_targeting", "advertisers")
 

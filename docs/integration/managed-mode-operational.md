@@ -30,7 +30,7 @@ This document covers the deployment-side concerns that complement the API design
 - `org.opencontainers.image.documentation=https://github.com/prebid/salesagent/blob/main/docs/quickstart.md`
 - `org.opencontainers.image.licenses=MIT`
 
-**Image size note:** the Dockerfile is multi-stage; runtime image excludes build deps (gcc, libpq-dev, git). Includes nginx and supercronic for legacy single-binary topologies — managed-mode deployments may not need either if running the core greenfield (`docker-compose.core.yml`) or just the API server.
+**Image size note:** the Dockerfile is multi-stage; runtime image excludes build deps (gcc, libpq-dev, git). Includes nginx and supercronic for legacy single-binary topologies — embedded-mode deployments may not need either if running the core greenfield (`docker-compose.core.yml`) or just the API server.
 
 ## D.2 — Local dev
 
@@ -39,21 +39,21 @@ The repo has multiple compose files:
 | File | Purpose | Default port |
 |---|---|---|
 | `docker-compose.yml` | Standard dev stack — Postgres + adcp-server + nginx proxy. Hot-reload via bind mount. | 8000 |
-| `docker-compose.core.yml` | Newer "no-nginx" topology — single Starlette binary serves admin + MCP + A2A. Cleaner for managed-mode integration testing. | 3091 |
+| `docker-compose.core.yml` | Newer "no-nginx" topology — single Starlette binary serves admin + MCP + A2A. Cleaner for embedded-mode integration testing. | 3091 |
 | `docker-compose.multi-tenant.yml` | Multi-tenant subdomain routing variant | n/a |
 | `docker-compose.e2e.yml` | E2E test stack | n/a |
 | `docker-compose.override.yml` | Auto-loaded local overrides; in-flight work | — |
 
 ### Recommended for Scope3 dev
 
-For Storefront integration testing, use `docker-compose.core.yml` — closer to managed-mode topology (no nginx in the way; single port). Standard invocation:
+For Storefront integration testing, use `docker-compose.core.yml` — closer to embedded-mode topology (no nginx in the way; single port). Standard invocation:
 
 ```bash
 # In the salesagent repo:
 docker compose -p core -f docker-compose.core.yml up
 
 # Salesagent is now reachable at http://localhost:3091
-#   /admin/                — admin UI (will be proxied behind Storefront in managed mode)
+#   /admin/                — admin UI (will be proxied behind Storefront in embedded mode)
 #   /mcp                    — MCP buyer protocol
 #   /                       — A2A buyer protocol + .well-known/agent-card.json
 #   /api/v1/tenant-management/  — Tenant Management API
@@ -68,7 +68,7 @@ For Scope3 engineers wiring a local Storefront to a local salesagent:
 SALESAGENT_BASE_URL: http://localhost:3091
 SALESAGENT_TENANT_MANAGEMENT_API_KEY: <set in salesagent's .env as TENANT_MANAGEMENT_API_KEY>
 
-# Storefront proxy config (nginx example) — see managed-mode-identity-contract.md
+# Storefront proxy config (nginx example) — see embedded-mode-identity-contract.md
 location /storefront/salesagent/ {
     proxy_pass http://localhost:3091/;
     proxy_set_header X-Forwarded-Host $host;
@@ -103,14 +103,14 @@ After `docker compose -p core -f docker-compose.core.yml up -d`:
 4. `ADCP_AUTH_TEST_MODE=true` is set in the compose file by default; the
    admin UI accepts the test login without Google OAuth in dev.
 
-### Managed-mode environment flags
+### Embedded-mode environment flags
 
 The core compose sets the contract-required env vars listed in
-[`managed-mode-identity-contract.md`](./managed-mode-identity-contract.md):
+[`embedded-mode-identity-contract.md`](./embedded-mode-identity-contract.md):
 
 | Env var | Default in core compose | Effect |
 |---|---|---|
-| `MANAGED_INSTANCE` | `true` | When true + `tenant.managed_externally=true`, `/tenant/<id>/*` admin UI auth flows from `X-Identity-*` headers (sprint 2 — landed). Open-instance tenants on the same deployment continue to use Google OAuth. |
+| `MANAGED_INSTANCE` | `true` | When true + `tenant.is_embedded=true`, `/tenant/<id>/*` admin UI auth flows from `X-Identity-*` headers (sprint 2 — landed). Open-instance tenants on the same deployment continue to use Google OAuth. |
 | `IDENTITY_TRUST_MODE` | `network` | Per the identity contract — trust the headers because the salesagent is reachable only through the upstream proxy. |
 | `MANAGED_MODE_FRAME_ANCESTORS` | empty (no CSP set) | When set, every response gets a `Content-Security-Policy: frame-ancestors <value>` header so the upstream proxy can embed the admin UI as an iframe. Set to e.g. `"'self' https://*.scope3.com"` in production. |
 
@@ -129,7 +129,7 @@ header is set, so any origin can embed it. For production:
 
    - `?embedded=1` is on the request URL (explicit, per-load — works for
      any tenant including open-instance), OR
-   - the request authorized via `X-Identity-*` (managed-mode tenants
+   - the request authorized via `X-Identity-*` (embedded-mode tenants
      are always embedded).
 
    Per-page sub-nav (breadcrumbs, page titles, action buttons) stays.
@@ -154,15 +154,15 @@ header is set, so any origin can embed it. For production:
    doesn't know the parent's origin; the parent should validate
    `event.source` matches its iframe element on receipt.
 
-4. **Cookies.** Managed-mode auth is stateless via headers — no session
+4. **Cookies.** Embedded-mode auth is stateless via headers — no session
    cookies are set on these requests, so cross-origin iframe embedding
    doesn't hit the `SameSite=Lax`/`SameSite=None` snag that breaks
    classic OAuth in iframes.
 
 ### Known dev caveats
 
-- **Subdomain routing**: the legacy stack uses `default.localhost` and similar. For managed-mode dev, this is irrelevant — tenant comes from URL path + `external_org_id` claim. The core compose already disables this complexity.
-- **OAuth callback URL**: `localtest.me` is used for dev OAuth (Google rejects `*.localhost`). For Storefront-proxied managed mode this doesn't matter — Storefront handles OAuth.
+- **Subdomain routing**: the legacy stack uses `default.localhost` and similar. For embedded-mode dev, this is irrelevant — tenant comes from URL path + `external_org_id` claim. The core compose already disables this complexity.
+- **OAuth callback URL**: `localtest.me` is used for dev OAuth (Google rejects `*.localhost`). For Storefront-proxied embedded mode this doesn't matter — Storefront handles OAuth.
 - **PostgreSQL bind**: postgres has no host port mapping; access via `docker compose exec postgres psql -U adcp_user -d adcp` or expose port if you want external access.
 
 ## D.3 — GAM service account permissions
@@ -234,11 +234,11 @@ The salesagent has automation for this: `POST /create-service-account` (existing
 
 Each runs as part of `sync_all_tenants.py`; they're separate progress trackers but share a schedule.
 
-**Known caveat:** the current `sync_all_tenants.py` filters to tenants with `gam_refresh_token` set (OAuth-flow tenants). For service-account-flow tenants (the recommended managed-mode posture), the same script needs to also pick up tenants with `gam_service_account_json` set. **This is an existing gap to verify before sprint 1 ships** — managed-mode tenants will all be SA-flow, so the cron must include them. Likely a one-line filter change in `sync_all_tenants.py`.
+**Known caveat:** the current `sync_all_tenants.py` filters to tenants with `gam_refresh_token` set (OAuth-flow tenants). For service-account-flow tenants (the recommended embedded-mode posture), the same script needs to also pick up tenants with `gam_service_account_json` set. **This is an existing gap to verify before sprint 1 ships** — embedded-mode tenants will all be SA-flow, so the cron must include them. Likely a one-line filter change in `sync_all_tenants.py`.
 
 ## Open items for follow-up
 
-1. ~~**`docker-compose.core.yml` is untracked**~~ — committed in `b54b4e22`; canonical dev stack for managed-mode testing.
+1. ~~**`docker-compose.core.yml` is untracked**~~ — committed in `b54b4e22`; canonical dev stack for embedded-mode testing.
 2. **Sync filter for SA-flow tenants** — verify and fix `sync_all_tenants.py` if the current filter excludes service-account auth.
 3. ~~**Tenant Management API key bootstrap**~~ — env-var-first (`TENANT_MANAGEMENT_API_KEY`), DB-fallback on miss. Core compose ships a dev default. Use `scripts/initialize_tenant_mgmt_api_key.py` to mint a production key.
 4. **Health check endpoints** — `docker-compose.core.yml` healthchecks `/admin/health`. Scope3's deployment monitoring should probably also poll `/api/v1/tenant-management/health` (existing) and `/mcp/health` if available.

@@ -123,11 +123,11 @@ class Tenant(Base, JSONValidatorMixin):
     # Can be an absolute URL or a path to an uploaded file (e.g., /static/favicons/tenant_id/favicon.ico)
     favicon_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # Managed-tenant mode: platform-managed surfaces are locked to the Tenant Management API.
-    # When True, the model-layer write guard (managed_tenant_guard) blocks non-API mutations
+    # Embedded mode: platform-managed surfaces are locked to the Tenant Management API.
+    # When True, the model-layer write guard (embedded_tenant_guard) blocks non-API mutations
     # to platform-managed columns/tables (Tenant core fields, AdapterConfig). Publisher-managed
     # tables (Product, Principal, Creative, etc.) remain writable from the UI regardless.
-    managed_externally: Mapped[bool] = mapped_column(
+    is_embedded: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         server_default=text("false"),
@@ -141,7 +141,7 @@ class Tenant(Base, JSONValidatorMixin):
     # Accounts in pending_provision (calls CompanyService.createCompanies on
     # first buy). When False, returns ACCOUNT_NOT_PROVISIONED so publishers
     # map manually via the Admin UI / Tenant Management API.
-    # Default False keeps today's open-instance behavior intact; managed-mode
+    # Default False keeps today's open-instance behavior intact; embedded-mode
     # provisioning sets True per-tenant.
     auto_provision_advertisers: Mapped[bool] = mapped_column(
         Boolean,
@@ -154,11 +154,11 @@ class Tenant(Base, JSONValidatorMixin):
     # the manually-maintained AuthorizedProperty table for new tenants.
     house_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # public_agent_url is what publishers list in their adagents.json to
-    # authorize this tenant's agent. Managed-mode tenants share one
+    # authorize this tenant's agent. Embedded-mode tenants share one
     # (https://interchange.io); self-hosted publishers use their own salesagent.
     public_agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Sprint 1.8 buyer-advertiser routing — see
-    # docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md.
+    # docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md.
     # Required-before-activation fallback advertiser. Buys whose
     # (operator_domain, brand_house, brand_id) triple doesn't match a
     # routing rule fall through to this advertiser; if NULL, the routing
@@ -1964,7 +1964,7 @@ class AdvertiserRoutingRule(Base):
     (operator + brand + sandbox triple). Precedence: exact → house
     wildcard → operator wildcard → tenant default → reject.
 
-    See ``docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md``.
+    See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
     """
 
     __tablename__ = "advertiser_routing_rules"

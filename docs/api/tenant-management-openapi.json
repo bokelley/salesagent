@@ -708,7 +708,7 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "managed_externally": {
+          "is_embedded": {
             "title": "Managed Externally",
             "type": "boolean"
           },
@@ -736,7 +736,7 @@
         "required": [
           "tenant_id",
           "name",
-          "managed_externally",
+          "is_embedded",
           "is_active",
           "billing_plan",
           "adapter_configured",
@@ -1157,7 +1157,7 @@
             ],
             "default": null
           },
-          "managed_externally": {
+          "is_embedded": {
             "const": true,
             "default": true,
             "title": "Managed Externally",
@@ -1229,7 +1229,7 @@
       },
       "ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse": {
         "additionalProperties": false,
-        "description": "Initial principal returned from provision.\n\nNote: managed-mode buyer-protocol auth flows through the identity-propagation\ncontract, not per-principal tokens (see sprint 2 \u00a7 Auth boundary). No\n``api_token`` field is emitted here.",
+        "description": "Initial principal returned from provision.\n\nNote: embedded-mode buyer-protocol auth flows through the identity-propagation\ncontract, not per-principal tokens (see sprint 2 \u00a7 Auth boundary). No\n``api_token`` field is emitted here.",
         "properties": {
           "name": {
             "title": "Name",
@@ -1341,7 +1341,7 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "managed_externally": {
+          "is_embedded": {
             "title": "Managed Externally",
             "type": "boolean"
           },
@@ -1381,7 +1381,7 @@
         "required": [
           "tenant_id",
           "name",
-          "managed_externally",
+          "is_embedded",
           "is_active",
           "billing_plan",
           "adapter_configured",
@@ -1524,7 +1524,7 @@
       },
       "TenantStatusResponse.f44f287.StatusPackagesBlock": {
         "additionalProperties": false,
-        "description": "Package-level counters (line items inside media buys).\n\n``last_24h_impressions`` is set to 0 until delivery aggregation is wired\nup \u2014 see :mod:`docs/design/managed-tenant-mode-sprint-1.5.md` Open Q #3.",
+        "description": "Package-level counters (line items inside media buys).\n\n``last_24h_impressions`` is set to 0 until delivery aggregation is wired\nup \u2014 see :mod:`docs/design/embedded-mode-sprint-1.5.md` Open Q #3.",
         "properties": {
           "active_count": {
             "default": 0,
@@ -1889,7 +1889,7 @@
             "description": "Internal Server Error"
           }
         },
-        "summary": "List tenants. Optional query params: ``managed_externally``, ``is_active``, ``external_source``.",
+        "summary": "List tenants. Optional query params: ``is_embedded``, ``is_active``, ``external_source``.",
         "tags": []
       },
       "post": {

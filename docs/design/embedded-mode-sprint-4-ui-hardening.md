@@ -1,13 +1,13 @@
 # Sprint 4 Spec: UI Hardening for Managed-Mode Tenants
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
-**Builds on:** [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md), [sprint 1.8](./managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
+**Builds on:** [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md), [sprint 1.8](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md)
 **Status:** Captured (sprint-4 territory)
 **Last updated:** 2026-05-04
 
 ## Scope
 
-When `tenant.managed_externally=true`, the publisher-facing admin UI
+When `tenant.is_embedded=true`, the publisher-facing admin UI
 hides platform-managed surfaces. We pre-fill these at provision time
 or own them via the upstream platform — surfacing the "edit" affordance
 in the publisher iframe would invite drift between the platform's
@@ -24,14 +24,14 @@ entirely so publishers don't see fields they can't edit.
 
 | Route | Why |
 |---|---|
-| `/tenant/{id}/users` | Identity flows through `X-Identity-*` per the [identity contract](../integration/managed-mode-identity-contract.md) — no salesagent-side User records needed for managed tenants |
+| `/tenant/{id}/users` | Identity flows through `X-Identity-*` per the [identity contract](../integration/embedded-mode-identity-contract.md) — no salesagent-side User records needed for managed tenants |
 
 ### Hidden sections within `/tenant/{id}/settings`
 
 #### Account
 - **Organization Information** (tenant `name`, `billing_plan`) — Scope3 owns
 - **Branding** (operator_domain / brand resolution) — upstream-owned
-- **Domain Configuration** (custom CNAME) — unused in managed mode
+- **Domain Configuration** (custom CNAME) — unused in embedded mode
 - **🔐 Access Control** (SSO/OIDC) — identity forwarded via X-Identity-* contract
 
 #### Ad Server Configuration
@@ -92,7 +92,7 @@ Pattern in `src/admin/blueprints/users.py` (illustrative):
 @bp.route("/tenant/<tenant_id>/users")
 def users_index(tenant_id):
     tenant = get_tenant_or_404(tenant_id)
-    if tenant.managed_externally:
+    if tenant.is_embedded:
         return render_template("_managed_mode_locked.html", tenant=tenant), 200
     # ... existing code
 ```
@@ -101,7 +101,7 @@ def users_index(tenant_id):
 just can't manage users from this side.
 
 ### Hiding sections
-`templates/tenant_settings.html` gains `{% if not tenant.managed_externally %}`
+`templates/tenant_settings.html` gains `{% if not tenant.is_embedded %}`
 guards around the hidden sections. The Settings nav (left rail) drops the
 matching tabs entirely so there's no "Access Control (locked)" stub.
 
@@ -109,7 +109,7 @@ matching tabs entirely so there's no "Access Control (locked)" stub.
 `templates/tenant_settings.html` Organization Information block:
 
 ```jinja
-{% if tenant.managed_externally %}
+{% if tenant.is_embedded %}
   <div class="form-group">
     <label>Currency</label>
     <input type="text" value="{{ tenant.default_currency }}" readonly>
@@ -157,7 +157,7 @@ defense-in-depth.
 
 - Sprint 1.6 §6 first half — Pydantic validators + model-layer guard
   (write-path lockdown). This sprint is the read-path counterpart.
-- [Identity contract](../integration/managed-mode-identity-contract.md)
+- [Identity contract](../integration/embedded-mode-identity-contract.md)
   — drives the "no Users page" decision.
 - Sprint 1.8 §7 — `setup_tasks` block. `configure_path` items with
   `scope=platform` land on the banner page rather than dead-ends.

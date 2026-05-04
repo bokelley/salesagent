@@ -1,17 +1,17 @@
 """Model-layer write guard for platform-managed tenant surfaces.
 
-Sprint 1 of [managed-tenant-mode](../../../docs/design/managed-tenant-mode.md):
+Sprint 1 of [embedded-mode](../../../docs/design/embedded-mode.md):
 the boundary between platform-managed and publisher-managed surfaces is
 infrastructure vs. business. Platform-managed surfaces (Tenant core columns,
 AdapterConfig) are locked to the Tenant Management API on tenants flagged
-`managed_externally=True`. Publisher-managed surfaces (Product, Principal,
-Creative, Workflow, etc.) remain writable from the UI for managed tenants.
+`is_embedded=True`. Publisher-managed surfaces (Product, Principal,
+Creative, Workflow, etc.) remain writable from the UI for embedded tenants.
 
 Enforcement: SQLAlchemy mapper-level `before_insert`/`before_update` listeners
 inspect the active session for an authorization flag set by the management
 API entrypoint (or a super-admin override for ops). Any write to a
 platform-managed surface from any other code path raises
-:class:`ManagedTenantWriteError`.
+:class:`EmbeddedTenantWriteError`.
 
 API endpoints set the flag on entry::
 
@@ -37,11 +37,11 @@ from sqlalchemy.orm.attributes import get_history
 from src.core.database.models import AdapterConfig, Tenant
 
 
-class ManagedTenantWriteError(Exception):
-    """Raised when a non-API caller mutates a platform-managed surface on a managed tenant."""
+class EmbeddedTenantWriteError(Exception):
+    """Raised when a non-API caller mutates a platform-managed surface on an embedded tenant."""
 
 
-# Per-table allow-list of fields a non-API caller may still write on a managed tenant.
+# Per-table allow-list of fields a non-API caller may still write on an embedded tenant.
 # Anything not in this set (or any platform-managed table not listed at all) is locked.
 # Today's Tenant model has no publisher-writable platform-managed columns — name,
 # billing_plan, is_active, external_* are all platform concerns. Listed empty for clarity.
@@ -91,16 +91,16 @@ def _changed_fields(mapper, target) -> set[str]:
     return changed
 
 
-def _resolve_managed_flag(target: Any, connection: Any) -> bool:
-    """Return True if the parent tenant of ``target`` is flagged ``managed_externally``."""
+def _resolve_embedded_flag(target: Any, connection: Any) -> bool:
+    """Return True if the parent tenant of ``target`` is flagged ``is_embedded``."""
     if isinstance(target, Tenant):
-        return bool(target.managed_externally)
+        return bool(target.is_embedded)
 
     tenant_id = getattr(target, "tenant_id", None)
     if not tenant_id:
         return False
 
-    result = connection.execute(select(Tenant.managed_externally).where(Tenant.tenant_id == tenant_id)).scalar()
+    result = connection.execute(select(Tenant.is_embedded).where(Tenant.tenant_id == tenant_id)).scalar()
     return bool(result)
 
 
@@ -108,12 +108,12 @@ def _enforce(mapper, connection, target, *, op: str) -> None:
     """Block ``op`` on ``target`` unless the caller is authorized.
 
     Allows the write through unchanged when:
-    - The parent tenant is not flagged managed_externally (open-instance tenant), or
+    - The parent tenant is not flagged is_embedded (open-instance tenant), or
     - The caller has set ``management_api_caller`` or ``super_admin_override``, or
     - For updates, every changed field is in the publisher-writable allow-list for
       this model.
     """
-    if not _resolve_managed_flag(target, connection):
+    if not _resolve_embedded_flag(target, connection):
         return
 
     if _caller_is_authorized(target, connection):
@@ -132,7 +132,7 @@ def _enforce(mapper, connection, target, *, op: str) -> None:
         return
 
     detail = sorted(changed) if changed else "(insert)"
-    raise ManagedTenantWriteError(
+    raise EmbeddedTenantWriteError(
         f"{type(target).__name__} for tenant "
         f"{getattr(target, 'tenant_id', '?')!r} is platform-managed; "
         f"changes to {detail} must go through the Tenant Management API."
@@ -146,13 +146,13 @@ def _block_tenant_update(mapper, connection, target):
 
 @event.listens_for(Tenant, "before_insert")
 def _block_tenant_insert(mapper, connection, target):
-    # Inserts are only blocked when the new row itself is flagged managed_externally;
-    # creating an unmanaged tenant from any code path is fine.
-    if not getattr(target, "managed_externally", False):
+    # Inserts are only blocked when the new row itself is flagged is_embedded;
+    # creating a non-embedded tenant from any code path is fine.
+    if not getattr(target, "is_embedded", False):
         return
     if _caller_is_authorized(target, connection):
         return
-    raise ManagedTenantWriteError("Inserting a Tenant with managed_externally=True requires the Tenant Management API.")
+    raise EmbeddedTenantWriteError("Inserting a Tenant with is_embedded=True requires the Tenant Management API.")
 
 
 @event.listens_for(AdapterConfig, "before_update")

@@ -1,6 +1,6 @@
 # Sprint 1 Spec: Managed Tenant Mode Foundation
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
@@ -8,7 +8,7 @@
 
 Sprint 1 delivers the **complete platform-managed surface** Scope3 needs to fully manage tenants via API:
 
-1. Schema migration for managed mode (`managed_externally`, `external_org_id`, `external_source` on `Tenant`; `external_*` fields on `AuditLog`).
+1. Schema migration for embedded mode (`is_embedded`, `external_org_id`, `external_source` on `Tenant`; `external_*` fields on `AuditLog`).
 2. Identity-propagation middleware (reads `X-Identity-*` headers; sprint 1 ships the reader only — request scoping lands in sprint 4).
 3. spectree wired up; `GET /api/v1/tenant-management/openapi.json` and `/docs` (Swagger UI) live.
 4. **Tenant lifecycle endpoints** — full CRUD over the platform-managed scope:
@@ -29,8 +29,8 @@ Sprint 1 delivers the **complete platform-managed surface** Scope3 needs to full
 After sprint 1, Scope3 can fully provision, configure, update, deactivate, and delete tenants; it can manage adapter credentials and test connections — all via API with a published OpenAPI spec.
 
 Not in sprint 1:
-- Consolidated `GET /status` endpoint + adapter preview — [sprint 1.5](./managed-tenant-mode-sprint-1.5.md).
-- UI hardening, banner / nav hiding, network-policy lockdown for `MANAGED_INSTANCE`, MCP/A2A managed-mode `resolve_identity()` — [sprint 2](./managed-tenant-mode-sprint-2.md).
+- Consolidated `GET /status` endpoint + adapter preview — [sprint 1.5](./embedded-mode-sprint-1.5.md).
+- UI hardening, banner / nav hiding, network-policy lockdown for `MANAGED_INSTANCE`, MCP/A2A embedded-mode `resolve_identity()` — [sprint 2](./managed-tenant-mode-sprint-2.md).
 - Workflow approve/reject + drill-down read endpoints (workflows list/detail, media-buys, audit-log, sync-history) — [sprint 3](./managed-tenant-mode-sprint-3.md).
 - Publisher-managed CRUD via API (principals, products, sub-resources) — sprints 4–5 (optional).
 - Outbound webhooks — sprint 6 (optional).
@@ -41,7 +41,7 @@ Not in sprint 1:
 
 ```python
 def upgrade():
-    op.add_column("tenants", sa.Column("managed_externally", sa.Boolean(), nullable=False, server_default="false"))
+    op.add_column("tenants", sa.Column("is_embedded", sa.Boolean(), nullable=False, server_default="false"))
     op.add_column("tenants", sa.Column("external_org_id", sa.String(255), nullable=True))
     op.add_column("tenants", sa.Column("external_source", sa.String(64), nullable=True))
     op.create_index("ix_tenants_external_org_id", "tenants", ["external_org_id"])
@@ -51,7 +51,7 @@ def downgrade():
     op.drop_index("ix_tenants_external_org_id", "tenants")
     op.drop_column("tenants", "external_source")
     op.drop_column("tenants", "external_org_id")
-    op.drop_column("tenants", "managed_externally")
+    op.drop_column("tenants", "is_embedded")
 ```
 
 ### Migration: `add_external_identity_to_audit_log`
@@ -72,7 +72,7 @@ def downgrade():
 
 ### Scoped write guard for platform-managed columns/tables
 
-The boundary is *infrastructure vs. business* (see [parent design § 1a](./managed-tenant-mode.md#1a-platform-managed-vs-publisher-managed-surfaces)). Only platform-managed surfaces are locked; publisher-managed surfaces (products, principals, creatives, workflows, etc.) remain writable from the UI.
+The boundary is *infrastructure vs. business* (see [parent design § 1a](./embedded-mode.md#1a-platform-managed-vs-publisher-managed-surfaces)). Only platform-managed surfaces are locked; publisher-managed surfaces (products, principals, creatives, workflows, etc.) remain writable from the UI.
 
 ```python
 # src/core/database/managed_tenant_guard.py
@@ -80,11 +80,11 @@ from sqlalchemy import event
 from sqlalchemy.orm.attributes import get_history
 from src.core.database.models import Tenant, AdapterConfig
 
-# Per-table allow-list of mutable fields when managed_externally=true.
+# Per-table allow-list of mutable fields when is_embedded=true.
 # Anything NOT in this list (or any table not listed here) is platform-managed
 # and requires the management API session flag.
 PUBLISHER_WRITABLE_FIELDS: dict[type, set[str]] = {
-    # Tenant columns the publisher can never touch in managed mode are platform-managed.
+    # Tenant columns the publisher can never touch in embedded mode are platform-managed.
     # Today's Tenant model has no publisher-writable fields — name/billing/active/external_*
     # are all platform concerns. Listed empty for clarity.
     Tenant: set(),
@@ -108,12 +108,12 @@ def block_platform_managed_writes(mapper, connection, target):
     tenant_id = target.tenant_id if hasattr(target, "tenant_id") else target.tenant_id
     # In practice, Tenant.tenant_id IS the tenant; AdapterConfig has FK
     if isinstance(target, Tenant):
-        if not target.managed_externally:
+        if not target.is_embedded:
             return
     else:
         # Look up the parent tenant's managed flag via the same connection
         parent_managed = connection.execute(
-            select(Tenant.managed_externally).where(Tenant.tenant_id == tenant_id)
+            select(Tenant.is_embedded).where(Tenant.tenant_id == tenant_id)
         ).scalar()
         if not parent_managed:
             return
@@ -137,7 +137,7 @@ def block_platform_managed_writes(mapper, connection, target):
 @event.listens_for(AdapterConfig, "before_insert")
 def block_platform_managed_inserts(mapper, connection, target):
     # Inserts into platform-managed tables for managed tenants must come from the API.
-    if isinstance(target, Tenant) and not target.managed_externally:
+    if isinstance(target, Tenant) and not target.is_embedded:
         return
     if not _caller_is_authorized(connection):
         raise ManagedTenantWriteError(
@@ -149,7 +149,7 @@ The Tenant Management API endpoints set `session.info["management_api_caller"] =
 
 Critically: writes to publisher-managed tables (Product, Principal, Creative, Workflow, Property, etc.) are **not** intercepted by this guard. Their existing UI handlers continue to work for managed tenants without any code change.
 
-Sprint 1 ships the guard wired up for `Tenant` and `AdapterConfig` only. Other platform-managed surfaces (domain config, OIDC config) are added to the guard list as their tables are touched in later sprints, but they're not commonly written-to in managed mode anyway.
+Sprint 1 ships the guard wired up for `Tenant` and `AdapterConfig` only. Other platform-managed surfaces (domain config, OIDC config) are added to the guard list as their tables are touched in later sprints, but they're not commonly written-to in embedded mode anyway.
 
 ## Pydantic schemas
 
@@ -212,7 +212,7 @@ class ProvisionTenantRequest(BaseModel):
 class ProvisionedPrincipalResponse(BaseModel):
     principal_id: str
     name: str
-    # No api_token — buyer-protocol auth in managed mode flows through the
+    # No api_token — buyer-protocol auth in embedded mode flows through the
     # identity-propagation contract, not per-principal tokens. See sprint 2 § Auth boundary.
 
 class AdapterStatusResponse(BaseModel):
@@ -226,7 +226,7 @@ class ProvisionTenantResponse(BaseModel):
     name: str
     external_org_id: str
     external_source: str
-    managed_externally: Literal[True]
+    is_embedded: Literal[True]
     created_at: datetime
 
     # Surfaces — URLs Scope3 needs to know
@@ -249,7 +249,7 @@ class TenantSummary(BaseModel):
     name: str
     external_org_id: str | None
     external_source: str | None
-    managed_externally: bool
+    is_embedded: bool
     is_active: bool
     billing_plan: str
     ad_server: str | None
@@ -322,7 +322,7 @@ class ApiError(BaseModel):
 2. Check `external_org_id` doesn't already exist. 409 if it does.
 3. Test the adapter connection *before* writing anything. 400 if it fails.
 4. Open a transaction. In a single commit:
-   - Create `Tenant` with `managed_externally=true`, `external_org_id`, `external_source`.
+   - Create `Tenant` with `is_embedded=true`, `external_org_id`, `external_source`.
    - Create `AdapterConfig`.
    - Create default `CurrencyLimit` (USD or `default_currency`).
    - Create default `PropertyTag` (`all_inventory`).
@@ -334,7 +334,7 @@ The adapter test happens before the transaction so failures don't pollute the DB
 
 ### `GET /tenants`
 
-Returns `ListTenantsResponse`. Optional query params: `?managed_externally=true|false`, `?is_active=true|false`, `?external_source=scope3`.
+Returns `ListTenantsResponse`. Optional query params: `?is_embedded=true|false`, `?is_active=true|false`, `?external_source=scope3`.
 
 ### `GET /tenants/{id}`
 

@@ -3,10 +3,10 @@
 **Version:** v1
 **Status:** Stable
 **Owner:** Sales Agent
-**Audience:** Upstream platforms running the salesagent in managed mode (e.g., Scope3 Storefront)
+**Audience:** Upstream platforms running the salesagent in embedded mode (e.g., Scope3 Storefront)
 **Last updated:** 2026-05-04
 
-This document specifies the contract by which an upstream platform passes authenticated user identity to the salesagent. It is the integration spec; design rationale lives in [`docs/design/managed-tenant-mode.md`](../design/managed-tenant-mode.md).
+This document specifies the contract by which an upstream platform passes authenticated user identity to the salesagent. It is the integration spec; design rationale lives in [`docs/design/embedded-mode.md`](../design/embedded-mode.md).
 
 This contract is stable. Breaking changes will be published as `v2`. Non-breaking additions (new optional headers, new role values) may be added without a version bump.
 
@@ -77,7 +77,7 @@ The error response body follows the standard `ApiError` shape:
 ```json
 {
   "error": "identity_required",
-  "message": "Managed mode requires X-Identity-* headers; missing X-Identity-Email, X-Identity-Org-Id",
+  "message": "Embedded mode requires X-Identity-* headers; missing X-Identity-Email, X-Identity-Org-Id",
   "details": { "missing_headers": ["X-Identity-Email", "X-Identity-Org-Id"] }
 }
 ```

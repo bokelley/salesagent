@@ -154,7 +154,7 @@ def test_initial_principal_request_rejects_blank_name():
 
 
 def test_provisioned_principal_response_has_no_token_field():
-    # Sprint 1 contract: managed-mode principals do not carry per-principal API tokens.
+    # Sprint 1 contract: embedded-mode principals do not carry per-principal API tokens.
     fields = set(ProvisionedPrincipalResponse.model_fields.keys())
     assert "api_token" not in fields
     assert fields == {"principal_id", "name"}
@@ -166,6 +166,7 @@ def test_provision_response_managed_externally_is_locked_to_true():
         "name": "Acme",
         "external_org_id": "org_x",
         "external_source": "scope3",
+        "is_embedded": True,
         "managed_externally": True,
         "created_at": datetime.now().isoformat(),
         "mcp_url": "/mcp/",
@@ -174,7 +175,9 @@ def test_provision_response_managed_externally_is_locked_to_true():
         "adapter": AdapterStatusResponse(type="mock", configured=True, connection_test_passed=True).model_dump(),
     }
     resp = ProvisionTenantResponse.model_validate(payload)
+    # Both ``is_embedded`` (canonical) and ``managed_externally`` (deprecated alias) must be True.
     assert resp.managed_externally is True
+    assert resp.is_embedded is True
 
     # Setting it to False must be rejected (Literal[True]).
     payload["managed_externally"] = False
@@ -191,6 +194,7 @@ def test_tenant_summary_minimum_fields():
     summary = TenantSummary(
         tenant_id="t1",
         name="Test",
+        is_embedded=False,
         managed_externally=False,
         is_active=True,
         billing_plan="standard",
@@ -198,6 +202,9 @@ def test_tenant_summary_minimum_fields():
         created_at=datetime.now(),
     )
     assert summary.external_org_id is None
+    # Both ``is_embedded`` and the deprecated alias ``managed_externally`` are exposed.
+    assert summary.is_embedded is False
+    assert summary.managed_externally is False
 
 
 def test_list_tenants_response_round_trip():
@@ -206,6 +213,7 @@ def test_list_tenants_response_round_trip():
             {
                 "tenant_id": "t1",
                 "name": "Test",
+                "is_embedded": False,
                 "managed_externally": False,
                 "is_active": True,
                 "billing_plan": "standard",
@@ -217,12 +225,15 @@ def test_list_tenants_response_round_trip():
     }
     resp = ListTenantsResponse.model_validate(payload)
     assert resp.count == 1
+    assert resp.tenants[0].is_embedded is False
+    assert resp.tenants[0].managed_externally is False
 
 
 def test_tenant_detail_inherits_summary_fields():
     detail = TenantDetail(
         tenant_id="t1",
         name="Test",
+        is_embedded=False,
         managed_externally=False,
         is_active=True,
         billing_plan="standard",
@@ -232,6 +243,8 @@ def test_tenant_detail_inherits_summary_fields():
         default_currency="USD",
     )
     assert detail.contact_email == "x@y.example.com"
+    assert detail.is_embedded is False
+    assert detail.managed_externally is False
 
 
 def test_update_tenant_request_all_optional():
@@ -283,7 +296,7 @@ def test_api_error_minimum():
 
 
 def test_provision_request_accepts_default_gam_advertiser_id():
-    """Sprint 1.8 — managed-mode provision can pass the fall-through advertiser inline."""
+    """Sprint 1.8 — embedded-mode provision can pass the fall-through advertiser inline."""
     req = ProvisionTenantRequest.model_validate(_provision_payload(default_gam_advertiser_id="12345"))
     assert req.default_gam_advertiser_id == "12345"
 
@@ -310,6 +323,7 @@ def test_tenant_detail_carries_default_gam_advertiser_id():
     detail = TenantDetail(
         tenant_id="t1",
         name="Test",
+        is_embedded=True,
         managed_externally=True,
         is_active=True,
         billing_plan="standard",

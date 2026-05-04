@@ -130,7 +130,7 @@ with get_db_session() as s:
     s.info["management_api_caller"] = True
     if not s.scalars(select(Principal).filter_by(tenant_id={tenant_id!r}, principal_id='verify_buyer')).first():
         s.add(Principal(tenant_id={tenant_id!r}, principal_id='verify_buyer', name='Verify Buyer',
-                        access_token='managed-mode-no-token:verify',
+                        access_token='embedded-mode-no-token:verify',
                         platform_mappings={{'mock': {{'advertiser_id': 'placeholder'}}}}))
         s.commit()
 
@@ -160,7 +160,7 @@ except Exception as e:
         if line.startswith("@@RESULT@@"):
             return json.loads(line[len("@@RESULT@@") :])
         if line.startswith("@@ERROR@@"):
-            print(f"  -> in-container error: {line[len('@@ERROR@@'):]}")
+            print(f"  -> in-container error: {line[len('@@ERROR@@') :]}")
             return None
     print(f"  -> unexpected output: {out[-500:]}")
     return None
@@ -249,7 +249,11 @@ def main() -> int:
             "gam_advertiser_id": "rule_adv_222",
         },
     )
-    _say(new_rule.status_code == 201, "POST /buyer-advertiser-mappings creates rule", f"status={new_rule.status_code}: {new_rule.text[:200]}")
+    _say(
+        new_rule.status_code == 201,
+        "POST /buyer-advertiser-mappings creates rule",
+        f"status={new_rule.status_code}: {new_rule.text[:200]}",
+    )
 
     # Duplicate should 409
     dup = _post(

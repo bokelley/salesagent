@@ -1,13 +1,13 @@
 # Sprint 1.8 Spec: Buyer-Advertiser Routing for Managed Storefronts
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1.6](./sync-accounts-advertiser-mapping.md), [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
 ## Scope
 
-Closes the agent-billed loop on managed-mode storefronts: every buy that lands on a managed publisher gets attributed to the right GAM advertiser based on the buyer's `(operator, brand)` context, with publisher-controlled overrides and a tenant default for the unmatched case.
+Closes the agent-billed loop on embedded-mode storefronts: every buy that lands on a managed publisher gets attributed to the right GAM advertiser based on the buyer's `(operator, brand)` context, with publisher-controlled overrides and a tenant default for the unmatched case.
 
 Five required pieces + two optional:
 
@@ -15,7 +15,7 @@ Five required pieces + two optional:
 2. **`advertiser_routing_rules` table** — ordered overrides keyed by `(operator_domain, brand_house, brand_id)` with null-as-wildcard. Resolution precedence: exact → house wildcard → operator wildcard → tenant default → reject.
 3. **Two read endpoints** — paginated/searchable `/gam/advertisers` (powers UI pickers; large GAM networks have 10k+ companies) + `/recent-buyers` rollup with `resolved_via` per row (lets publishers spot fall-through buyers landing on the default).
 4. **§5 preview-adapter advertisers extension** *(optional)* — onboarding flow gets advertisers in the same round trip that confirms the GAM grant.
-5. **§6 platform-managed lock-down** — `house_domain` + `public_agent_url` (sprint 1.7 fields) become read-only in the publisher UI when `tenant.managed_externally=true`; model-layer write guard enforces.
+5. **§6 platform-managed lock-down** — `house_domain` + `public_agent_url` (sprint 1.7 fields) become read-only in the publisher UI when `tenant.is_embedded=true`; model-layer write guard enforces.
 6. **§7 `setup_tasks` block on `/status`** — folds the existing setup checklist into the status response with `scope: platform | publisher` annotation so Storefront can route gaps correctly (escalate "platform" gaps to itself; deep-link "publisher" gaps into the iframe).
 7. **§8 auto-run syncs + collapsed refresh** — per-tenant `sync_cadence_minutes`, first-sync on provision, single `POST /refresh` endpoint replaces N per-sync triggers in the publisher UI.
 
@@ -192,7 +192,7 @@ GET /tenants/{tid}/recent-buyers?days=30&limit=100
       }
 ```
 
-Source data: `Account` rows for managed-mode tenants — each Account already carries `(operator, brand_house, brand_id)` from sync_accounts upserts AND the resolved `platform_mappings.google_ad_manager.advertiser_id`. We need to add `Account.resolved_via` (one of `"account" | "sandbox" | "exact" | "house" | "operator" | "default"`) at first-creation time, and aggregate `request_count` / `last_seen_at` from `MediaBuy` rows joined to Account.
+Source data: `Account` rows for embedded-mode tenants — each Account already carries `(operator, brand_house, brand_id)` from sync_accounts upserts AND the resolved `platform_mappings.google_ad_manager.advertiser_id`. We need to add `Account.resolved_via` (one of `"account" | "sandbox" | "exact" | "house" | "operator" | "default"`) at first-creation time, and aggregate `request_count` / `last_seen_at` from `MediaBuy` rows joined to Account.
 
 `get_products` requests carry `account: AccountReference | None` too — when populated, they hit the same routing chain. Recent-buyers therefore covers both flows uniformly when the buyer supplies the field.
 
@@ -221,7 +221,7 @@ Pydantic field validators on `ProvisionTenantRequest` and `UpdateTenantRequest`:
 
 ### Lock-down via the model-layer write guard
 
-`src/core/database/managed_tenant_guard.py` (sprint 1) blocks UI-driven writes to platform-managed columns when `tenant.managed_externally=true` AND the session isn't flagged with `info["management_api_caller"]`. Today's protected set on `Tenant` is empty (the comment notes "no publisher-writable platform-managed columns").
+`src/core/database/managed_tenant_guard.py` (sprint 1) blocks UI-driven writes to platform-managed columns when `tenant.is_embedded=true` AND the session isn't flagged with `info["management_api_caller"]`. Today's protected set on `Tenant` is empty (the comment notes "no publisher-writable platform-managed columns").
 
 Add `house_domain` and `public_agent_url` to the protected set. Result:
 - `PATCH /tenants/{tid}` (Tenant Management API, sets `info["management_api_caller"]=True`) → writes succeed.
@@ -232,7 +232,7 @@ Add `house_domain` and `public_agent_url` to the protected set. Result:
 `templates/tenant_settings.html` (or wherever the Settings form lives) gains:
 
 ```jinja
-{% if tenant.managed_externally %}
+{% if tenant.is_embedded %}
 <div class="alert alert-info">
   <i class="fas fa-lock"></i>
   These values are platform-managed by {{ tenant.external_source | default('your platform') | title }}.
@@ -243,7 +243,7 @@ Add `house_domain` and `public_agent_url` to the protected set. Result:
 <input type="text"
        name="house_domain"
        value="{{ tenant.house_domain }}"
-       {% if tenant.managed_externally %}readonly{% endif %}>
+       {% if tenant.is_embedded %}readonly{% endif %}>
 ```
 
 The `readonly` attribute is cosmetic (DOM-side only) — the model-layer guard is what enforces. Even if a publisher bypasses the form (e.g. crafted POST), the guard still rejects.
@@ -254,7 +254,7 @@ Sprint 1.7 added "Publisher House Domain" + "Public Agent URL" as the first two 
 
 ```python
 # src/services/setup_checklist_service.py:_check_critical_tasks
-if not (tenant.managed_externally and tenant.house_domain and tenant.public_agent_url):
+if not (tenant.is_embedded and tenant.house_domain and tenant.public_agent_url):
     tasks.append(SetupTask(key="house_domain", ...))
     tasks.append(SetupTask(key="public_agent_url", ...))
 ```
@@ -263,7 +263,7 @@ Open-instance tenants always see both tasks (today's behavior). Managed-external
 
 ### Backfill
 
-No migration needed beyond Sprint 1.7's existing nullable columns. Existing managed-mode tenants get `house_domain` + `public_agent_url` populated by Scope3 via PATCH; legacy open-instance tenants keep NULL and continue to see the setup tasks.
+No migration needed beyond Sprint 1.7's existing nullable columns. Existing embedded-mode tenants get `house_domain` + `public_agent_url` populated by Scope3 via PATCH; legacy open-instance tenants keep NULL and continue to see the setup tasks.
 
 ## §7: `setup_tasks` block on `GET /tenants/{tid}/status`
 
@@ -329,7 +329,7 @@ Sprint 1.5's status cache (5s TTL, per-tenant) covers the new block automaticall
 
 ## §8: Auto-run syncs + collapsed refresh button
 
-Sprint 1.5's status endpoint exposes per-sync state (`syncs.inventory`, `syncs.custom_targeting`, `syncs.advertisers`); Sprint 1.5 + crontab already auto-run them every 6h via `sync_all_tenants.py`. What's missing for managed-mode UX:
+Sprint 1.5's status endpoint exposes per-sync state (`syncs.inventory`, `syncs.custom_targeting`, `syncs.advertisers`); Sprint 1.5 + crontab already auto-run them every 6h via `sync_all_tenants.py`. What's missing for embedded-mode UX:
 
 1. **Configurable per-tenant cadence** so publishers with high-volume catalogs can pull more frequently (or low-volume publishers can save cron load).
 2. **First-sync-on-provision** so a managed tenant has data the moment Scope3 finishes provisioning (no "wait 6 hours").
@@ -368,9 +368,9 @@ Idempotent under rapid re-clicks: if a sync of the same type is `running` or sta
 
 `POST /tenants/provision` already runs the adapter test before committing the tenant row. On test success, enqueue the same three syncs the manual `/refresh` endpoint runs. Returned response gains `initial_sync.sync_run_ids` (same shape as `/refresh`) so Storefront can show a progress indicator immediately.
 
-### Hide per-sync triggers in managed-mode UI
+### Hide per-sync triggers in embedded-mode UI
 
-`templates/tenant_settings.html` (or wherever sync triggers live today) gets a `{% if not tenant.managed_externally %}` guard around the per-sync buttons. The `Refresh tenant` button calls `POST /refresh` and is shown unconditionally. Open-instance tenants keep today's UI (per-sync buttons + Refresh All).
+`templates/tenant_settings.html` (or wherever sync triggers live today) gets a `{% if not tenant.is_embedded %}` guard around the per-sync buttons. The `Refresh tenant` button calls `POST /refresh` and is shown unconditionally. Open-instance tenants keep today's UI (per-sync buttons + Refresh All).
 
 The `/status.syncs` block stays unchanged — Storefront renders per-sync health from it but exposes only the unified refresh action. Per the spec: "the action surface collapses to one button."
 
@@ -378,7 +378,7 @@ The `/status.syncs` block stays unchanged — Storefront renders per-sync health
 
 Five migrations + Sprint 1.6 cleanup:
 
-1. **`add_default_gam_advertiser_id_to_tenant`** — nullable string column. Tenant Management API requires it on managed-mode activation flows.
+1. **`add_default_gam_advertiser_id_to_tenant`** — nullable string column. Tenant Management API requires it on embedded-mode activation flows.
 2. **`create_advertiser_routing_rules_table`** — schema above. Indexed on (tenant_id) and (tenant_id, operator_domain).
 3. **`add_resolved_via_to_account`** — nullable enum (`"account" | "sandbox" | "exact" | "house" | "operator" | "default"`). Backfill is null for legacy rows; new rows populated by the resolution chain.
 4. **`add_gam_sandbox_advertiser_id_to_adapter_config`** — Sprint 1.6's deferred sandbox-advertiser cache (Q4 decision: prerequisite for the sprint 1.8 routing chain's sandbox early-return). Nullable; lazy-populated on first sandbox call by `ensure_sandbox_advertiser(tenant_id)`.
@@ -396,7 +396,7 @@ Five migrations + Sprint 1.6 cleanup:
 - **`src/services/recent_buyers_rollup.py`** — joins Account + MediaBuy for `/recent-buyers`.
 - **`src/services/setup_checklist_service.py`** — hide `house_domain` + `public_agent_url` tasks when tenant is managed-externally and both fields are populated. Add `scope` ("platform" | "publisher") + `severity` ("blocker" | "warning" | "info") fields to `SetupTask` for §7. Extend `get_setup_status` to emit the §7-shaped output.
 - **`src/admin/services/tenant_status_service.py`** — fold setup_checklist output into `_build_status` as the new `setup_tasks` block (sprint 1.5 cache covers it for free).
-- **`templates/tenant_settings.html`** — `readonly` on house_domain + public_agent_url inputs when `tenant.managed_externally`; "Platform-managed by Scope3" banner. `{% if not managed_externally %}` guard around per-sync trigger buttons (§8); `Refresh tenant` button always visible.
+- **`templates/tenant_settings.html`** — `readonly` on house_domain + public_agent_url inputs when `tenant.is_embedded`; "Platform-managed by Scope3" banner. `{% if not is_embedded %}` guard around per-sync trigger buttons (§8); `Refresh tenant` button always visible.
 - **`src/admin/tenant_management_api.py`** — `POST /tenants/{tid}/refresh` endpoint (§8). Returns 202 with `sync_run_ids`. 60s idempotency window via the existing `SyncJob.started_at` index.
 - **`scripts/sync_all_tenants.py`** — branch on `Tenant.sync_cadence_minutes` per tenant (§8). NULL = 360min default.
 - **Optional `src/admin/services/adapter_connection_tester.py`** — extend `AdapterPreview` with `advertisers: list[GamAdvertiser]` field; wire GAM CompanyService.getCompaniesByStatement (limit 100) into `_preview_gam`.
@@ -443,10 +443,10 @@ Five migrations + Sprint 1.6 cleanup:
 - [ ] `POST /tenants/provision` rejects `house_domain` with scheme/path/uppercase (422 with field validator error). Force-lowercase before persist.
 - [ ] `POST /tenants/provision` rejects `public_agent_url=http://...` (422); accepts `https://...`.
 - [ ] `PATCH /tenants/{tid}` (Tenant Management API) updates both fields successfully on a managed-externally tenant.
-- [ ] Direct DB write to `Tenant.house_domain` outside the management API on a `managed_externally=true` tenant raises `ManagedTenantWriteError` (model-layer guard).
+- [ ] Direct DB write to `Tenant.house_domain` outside the management API on a `is_embedded=true` tenant raises `ManagedTenantWriteError` (model-layer guard).
 - [ ] Setup checklist for managed-externally tenant with both fields set OMITS the "Publisher House Domain" + "Public Agent URL" critical-tasks items.
-- [ ] Settings page renders `readonly` on both fields + "Platform-managed by Scope3" banner when `tenant.managed_externally=true`.
-- [ ] Open-instance (managed_externally=false) tenants always see editable fields + setup tasks (no behavior change).
+- [ ] Settings page renders `readonly` on both fields + "Platform-managed by Scope3" banner when `tenant.is_embedded=true`.
+- [ ] Open-instance (is_embedded=false) tenants always see editable fields + setup tasks (no behavior change).
 
 ### §7 setup_tasks block on /status
 - [ ] `GET /tenants/{tid}/status` response includes `setup_tasks` block with `blocker_count`, `warning_count`, `items[]`.
@@ -461,7 +461,7 @@ Five migrations + Sprint 1.6 cleanup:
 - [ ] `POST /tenants/{tid}/refresh` returns 202 with `sync_run_ids` for inventory/custom_targeting/advertisers.
 - [ ] Re-POST within 60s returns the SAME `sync_run_ids` (idempotent — no duplicate jobs queued).
 - [ ] `POST /tenants/provision` happy-path response includes `initial_sync.sync_run_ids` after the adapter test passes.
-- [ ] Settings page hides per-sync trigger buttons when `tenant.managed_externally=true`; "Refresh tenant" button stays visible.
+- [ ] Settings page hides per-sync trigger buttons when `tenant.is_embedded=true`; "Refresh tenant" button stays visible.
 - [ ] `/status.syncs` block continues to show per-sync health regardless of UI hiding (Storefront renders health from it).
 - [ ] cron driver respects `tenant.sync_cadence_minutes` — a tenant with cadence=120 syncs every 2h on the 6h scan, a tenant with cadence=720 only every 12h.
 
@@ -479,7 +479,7 @@ Five migrations + Sprint 1.6 cleanup:
 
 ## Sprint placement + estimate
 
-**Sprint 1.8** — slots after 1.7 lands. Activation-gate aspect makes it the last sprint required for managed-mode commercial go-live.
+**Sprint 1.8** — slots after 1.7 lands. Activation-gate aspect makes it the last sprint required for embedded-mode commercial go-live.
 
 Estimated scope: **~5 days**.
 - 0.5d migrations (×5) + Tenant Management API field additions (incl. `default_gam_advertiser_id`, `sync_cadence_minutes`).
@@ -497,4 +497,4 @@ Estimated scope: **~5 days**.
 
 - [Sprint 1.6](./sync-accounts-advertiser-mapping.md) — Account + advertiser pre-mapping. The resolved Account row IS the persistent record; this sprint adds the rules that decide *what advertiser to attach* on first creation.
 - [Sprint 1.7](./replace-authorized-properties-with-aao-lookup.md) — `Tenant.public_agent_url` (the agent URL publishers list in their adagents.json). Conceptually the "operator side" of routing — the operator_domain in this sprint is the *buyer*'s agent_url.
-- [Identity contract](../integration/managed-mode-identity-contract.md) — these endpoints stay on `X-Tenant-Management-API-Key` auth (publishers manipulate routing config via the upstream platform's UI, not via X-Identity-* iframe sessions).
+- [Identity contract](../integration/embedded-mode-identity-contract.md) — these endpoints stay on `X-Tenant-Management-API-Key` auth (publishers manipulate routing config via the upstream platform's UI, not via X-Identity-* iframe sessions).

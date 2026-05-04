@@ -1,20 +1,20 @@
 # Sprint 2 Spec: Managed-Mode Hardening — UI, Network, Buyer-Protocol Auth
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./managed-tenant-mode-sprint-1.5.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
+**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
 ## Scope
 
-Sprints 1 + 1.5 built the platform-managed API surface and the storefront-integration essentials (preview, status, identity contract). Sprint 2 makes the runtime actually behave correctly in managed mode:
+Sprints 1 + 1.5 built the platform-managed API surface and the storefront-integration essentials (preview, status, identity contract). Sprint 2 makes the runtime actually behave correctly in embedded mode:
 
 1. **UI middleware** — scopes nav, hides platform-managed config pages, renders read-only banners. Publisher-managed pages remain fully writable.
 2. **Identity-propagation request scoping** — the `X-Identity-*` header reader (built in sprint 1) gets wired into the request lifecycle so every UI request on a managed instance is identity-scoped. Audit log captures it.
 3. **Network policy enforcement** — when `MANAGED_INSTANCE=true`, every surface (MCP/A2A, Tenant Management API, admin UI direct URL) rejects traffic outside the configured private CIDR.
-4. **`resolve_identity()` for MCP/A2A in managed mode** — header-based principal/tenant scoping, no bearer tokens. Open-instance behavior unchanged.
+4. **`resolve_identity()` for MCP/A2A in embedded mode** — header-based principal/tenant scoping, no bearer tokens. Open-instance behavior unchanged.
 
-After sprint 2, a managed-mode salesagent is fully operational end-to-end. No public exposure, no per-principal tokens, all writes either go through the Tenant Management API (platform-managed) or through the proxied UI scoped by upstream identity (publisher-managed).
+After sprint 2, a embedded-mode salesagent is fully operational end-to-end. No public exposure, no per-principal tokens, all writes either go through the Tenant Management API (platform-managed) or through the proxied UI scoped by upstream identity (publisher-managed).
 
 Out of scope for sprint 2 (deferred to sprints 3+):
 - Workflow approve/reject + remaining read-only operational endpoints (workflow detail, media-buys, audit-log, sync-history) — sprint 3
@@ -62,7 +62,7 @@ def managed_tenant_middleware():
 
 ```python
 def platform_managed(view_func):
-    """Mark a Flask route as platform-managed in managed mode (read-only for publishers)."""
+    """Mark a Flask route as platform-managed in embedded mode (read-only for publishers)."""
     view_func._platform_managed = True
     return view_func
 
@@ -112,9 +112,9 @@ Sprint 1 shipped the `read_identity_from_request()` reader as a function. Sprint
 
 - `managed_tenant_middleware` calls it, sets `g.managed_context.external_identity`.
 - Audit log decorator (`src/admin/utils/audit_decorator.py`) reads `g.managed_context.external_identity` and populates the new `external_*` columns on `AuditLog` rows.
-- Existing user-resolution code (`src/admin/auth_helpers.py`) returns the propagated identity when `is_managed && !is_super_admin_override`, so existing handlers don't need to know whether they're running in managed mode — they just see "current user" with role.
+- Existing user-resolution code (`src/admin/auth_helpers.py`) returns the propagated identity when `is_managed && !is_super_admin_override`, so existing handlers don't need to know whether they're running in embedded mode — they just see "current user" with role.
 
-### 4. `resolve_identity()` for MCP/A2A in managed mode
+### 4. `resolve_identity()` for MCP/A2A in embedded mode
 
 Today's `resolve_identity()` (in `src/core/auth.py` or similar) reads `x-adcp-auth` bearer token, looks up the principal by token, returns a `ResolvedIdentity` with tenant + principal scope.
 
@@ -128,16 +128,16 @@ def resolve_identity(headers: Headers, *, protocol: Literal["mcp", "a2a"]) -> Re
 
 def _resolve_identity_managed(headers, *, protocol) -> ResolvedIdentity:
     """
-    Managed mode: trust is network-based, no bearer tokens.
+    Embedded mode: trust is network-based, no bearer tokens.
     Caller specifies tenant + principal via headers.
     """
     tenant_id = headers.get("X-Tenant-Id")
     principal_id = headers.get("X-Principal-Id")
     if not tenant_id or not principal_id:
-        raise IdentityRequiredError("Managed mode requires X-Tenant-Id and X-Principal-Id headers")
+        raise IdentityRequiredError("Embedded mode requires X-Tenant-Id and X-Principal-Id headers")
 
     tenant = TenantRepository.get(tenant_id)
-    if not tenant or not tenant.managed_externally:
+    if not tenant or not tenant.is_embedded:
         raise InvalidTenantError(tenant_id)
 
     principal = PrincipalRepository.get(tenant_id, principal_id)
@@ -159,7 +159,7 @@ def _resolve_identity_open(headers, *, protocol) -> ResolvedIdentity:
     ...
 ```
 
-**Why**: open-instance behavior is unchanged — same auth path that exists today. Managed mode opts out of bearer tokens entirely; trust is network-based per the parent design.
+**Why**: open-instance behavior is unchanged — same auth path that exists today. Embedded mode opts out of bearer tokens entirely; trust is network-based per the parent design.
 
 The branch is at the entry point; all downstream code (tools, repositories, etc.) operates on `ResolvedIdentity` regardless of how it was resolved. No changes needed below `resolve_identity()`.
 
@@ -222,7 +222,7 @@ The new `external_*` columns on `AuditLog` (added in sprint 1) get populated as 
 |---|---|---|---|---|
 | UI request from Scope3 proxy | `X-Identity-Email` | `X-Identity-User-Id` | `X-Identity-Org-Id` | `X-Identity-Source` |
 | Tenant Management API call | null | null | null | `"management_api"` |
-| MCP/A2A call (managed mode) | `X-Identity-Email` if present | `X-Identity-User-Id` if present | `X-Identity-Org-Id` if present | `X-Identity-Source` or `"managed_header"` |
+| MCP/A2A call (embedded mode) | `X-Identity-Email` if present | `X-Identity-User-Id` if present | `X-Identity-Org-Id` if present | `X-Identity-Source` or `"managed_header"` |
 | Super-admin override | super-admin email (Google) | null | null | `"super_admin_override"` |
 | Open-instance request | null (existing User row used instead) | null | null | null |
 
@@ -261,10 +261,10 @@ Returned as 403 responses.
 - [ ] Audit log entries on managed-tenant mutations carry the external_* fields populated from headers.
 - [ ] Audit log entries via Tenant Management API carry `external_source="management_api"`.
 
-**MCP/A2A managed-mode resolve_identity:**
+**MCP/A2A embedded-mode resolve_identity:**
 - [ ] Call to MCP with `X-Tenant-Id` + `X-Principal-Id` resolves correctly; no bearer token required or accepted.
 - [ ] Call to MCP without those headers returns the protocol's auth-error response (e.g., MCP error -32001).
-- [ ] Call to MCP with bearer token `x-adcp-auth` on a managed instance is **ignored** (not a fallback) — managed mode rejects the call same as no headers.
+- [ ] Call to MCP with bearer token `x-adcp-auth` on a managed instance is **ignored** (not a fallback) — embedded mode rejects the call same as no headers.
 - [ ] On `MANAGED_INSTANCE=false`, existing bearer-token flow works unchanged (regression test).
 
 **Network policy:**
@@ -297,9 +297,9 @@ Returned as 403 responses.
 
 ## What sprints 5+ build on this
 
-Sprint 2 closes out the runtime hardening. After sprints 1, 1.5, and 2, a managed-mode salesagent is fully usable end-to-end:
+Sprint 2 closes out the runtime hardening. After sprints 1, 1.5, and 2, a embedded-mode salesagent is fully usable end-to-end:
 - API automation surface for everything Scope3 cares about (sprint 1 + 1.5).
-- Runtime safety — UI middleware, network policy, managed-mode buyer-protocol auth (sprint 2).
+- Runtime safety — UI middleware, network policy, embedded-mode buyer-protocol auth (sprint 2).
 - Storefront has tenant status visibility (`GET /status` from sprint 1.5).
 
 After sprint 2:

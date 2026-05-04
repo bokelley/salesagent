@@ -67,7 +67,7 @@ class CustomProxyFix:
             script_name = environ.get("HTTP_X_FORWARDED_PREFIX", "")
 
         if script_name:
-            # Managed-mode reverse-proxy quirk: when Storefront sets
+            # Embedded-mode reverse-proxy quirk: when Storefront sets
             # X-Forwarded-Prefix=/storefront/psa/tenant/<id> AND forwards the
             # original /tenant/<id>/<page> path through unchanged, naively
             # using the prefix as SCRIPT_NAME causes url_for() to emit
@@ -216,7 +216,7 @@ def create_app(config=None):
         app.wsgi_app = CustomProxyFix(app.wsgi_app)
     else:
         # In development, apply WerkzeugProxyFix too so X-Forwarded-Host /
-        # X-Forwarded-Proto from a managed-mode upstream proxy (Scope3
+        # X-Forwarded-Proto from a embedded-mode upstream proxy (Scope3
         # Storefront iframe) are honored. Without it, Flask's automatic
         # redirects (e.g. trailing-slash 308 on /creatives → /creatives/)
         # use ``request.host`` = ``localhost:3091``, leaking the upstream
@@ -348,22 +348,22 @@ def create_app(config=None):
         # Inject sales agent domain for URL generation in templates
         context["sales_agent_domain"] = get_sales_agent_domain() or "example.com"
 
-        # Managed-mode chrome flag — true when this request authorized via
+        # Embedded-mode chrome flag — true when this request authorized via
         # the X-Identity-* bypass (sprint 2).
-        managed_user = isinstance(getattr(g, "user", None), dict) and bool(g.user.get("managed_mode"))
-        context["managed_mode"] = managed_user
+        embedded_user = isinstance(getattr(g, "user", None), dict) and bool(g.user.get("embedded_mode"))
+        context["embedded_mode"] = embedded_user
 
         # ``embedded`` is the broader iframe-rendering flag — true when:
         # (a) the upstream proxy passes ``?embedded=1`` on the iframe URL
         #     (explicit, per-load opt-in; works for any tenant), OR
-        # (b) the request authorized via X-Identity-* (managed mode is
+        # (b) the request authorized via X-Identity-* (embedded mode is
         #     always embedded in the upstream proxy's chrome).
         # Templates use this to hide the salesagent's own top nav strip
         # and any global controls (logout / switch tenant) — the upstream
         # proxy owns those in its outer chrome. Per-page sub-nav (breadcrumbs,
         # action buttons) stays.
         explicit_embed = request.args.get("embedded") in ("1", "true", "yes")
-        context["embedded"] = explicit_embed or managed_user
+        context["embedded"] = explicit_embed or embedded_user
 
         # Inject fresh tenant data if user is logged in with a tenant
         tenant_id = session.get("tenant_id")
@@ -381,7 +381,7 @@ def create_app(config=None):
 
     # Iframe embedding policy. ``MANAGED_MODE_FRAME_ANCESTORS`` is a CSP
     # frame-ancestors directive value (e.g., ``'self' https://*.scope3.com``).
-    # Set on managed-mode deployments to allow the upstream Storefront to
+    # Set on embedded-mode deployments to allow the upstream Storefront to
     # embed the admin UI as an iframe; legacy deployments leave it unset
     # and the existing X-Frame-Options-less behavior persists.
     @app.after_request

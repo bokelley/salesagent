@@ -245,8 +245,8 @@ ignore-comments = true
 ignore-signatures = true
 
 # ─── uv source overrides ──────────────────────────────────────────────────────
-# Point adcp at the local working dir of adcp-client-python so we pick up
-# bleeding-edge migration docs and unreleased features without waiting for
-# PyPI. Switch back to a registry pin once 4.4+ stabilises.
+# adcp is pinned to the v4.4.0 git tag (PyPI direct downloads are blocked by
+# safe-chain's minimum-package-age check; the git tag points at the same
+# commit as the PyPI release).
 [tool.uv.sources]
-adcp = { git = "https://github.com/adcontextprotocol/adcp-client-python.git", branch = "main" }
+adcp = { git = "https://github.com/adcontextprotocol/adcp-client-python.git", tag = "v4.4.0" }

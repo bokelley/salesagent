@@ -1,6 +1,6 @@
 # Sprint 6 Spec: Outbound Webhooks (Optional)
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md) – [sprint 5](./managed-tenant-mode-sprint-5.md)
 **Status:** Draft, optional
 **Last updated:** 2026-05-04
@@ -164,10 +164,10 @@ Reuses sprint 1's `ApiError`. New error codes:
 
 ## After sprint 6
 
-Managed mode is feature-complete. The integration covers: provisioning (sprint 1), storefront integration essentials (sprint 1.5), runtime hardening (sprint 2), workflow mutations + drill-down reads (sprint 3), publisher-managed CRUD via API (sprints 4–5, optional), async notifications (sprint 6, optional). Open instances continue working in parallel.
+Embedded mode is feature-complete. The integration covers: provisioning (sprint 1), storefront integration essentials (sprint 1.5), runtime hardening (sprint 2), workflow mutations + drill-down reads (sprint 3), publisher-managed CRUD via API (sprints 4–5, optional), async notifications (sprint 6, optional). Open instances continue working in parallel.
 
 Future work, not part of this design line:
 - Multi-control-plane support (per-control-plane API keys, scoped permissions).
 - Per-tenant role-mapping config tables (replacing the hardcoded `admin/member/viewer`).
 - A Scope3-native UI built on the API (replacing the proxied salesagent UI).
-- Open-instance migration tooling (move existing direct-customer tenants into managed mode).
+- Open-instance migration tooling (move existing direct-customer tenants into embedded mode).

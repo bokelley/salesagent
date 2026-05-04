@@ -4,7 +4,7 @@ Walks every step of the precedence chain end-to-end against a real
 Postgres database, plus the sandbox carve-out and the
 ``TENANT_NOT_ACTIVATED`` fall-through.
 
-See ``docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md``.
+See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _make_account_ref(
 
 @pytest.fixture
 def tenant_id_factory(integration_db):
-    """Provision a managed-mode tenant + AdapterConfig for routing-chain tests.
+    """Provision a embedded-mode tenant + AdapterConfig for routing-chain tests.
 
     Returns a callable so tests that need multiple isolated tenants get
     distinct rows; keeps cleanup mechanical.
@@ -62,7 +62,7 @@ def tenant_id_factory(integration_db):
                 ad_server="google_ad_manager",
                 is_active=True,
                 billing_plan="standard",
-                managed_externally=True,
+                is_embedded=True,
                 external_org_id=tid,
                 external_source="test",
                 house_domain="test.example.com",

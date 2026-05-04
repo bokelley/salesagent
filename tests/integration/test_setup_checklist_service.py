@@ -852,15 +852,15 @@ class TestTaskDetails:
 
 class TestSprint18AaoChecklistHide:
     """Both AAO items disappear from the critical-tasks list when the
-    tenant is managed_externally AND both fields are populated.
+    tenant is is_embedded AND both fields are populated.
 
-    Open-instance tenants always see them (legacy behavior). Managed
+    Open-instance tenants always see them (legacy behavior). Embedded
     tenants with NULL fields still see them — that signals the platform
     hasn't finished provisioning.
     """
 
     def _make_tenant(
-        self, tenant_id: str, *, managed_externally: bool, house_domain: str | None, public_agent_url: str | None
+        self, tenant_id: str, *, is_embedded: bool, house_domain: str | None, public_agent_url: str | None
     ):
         """Create a tenant directly (architecture guard allowlist applies to this file)."""
         from datetime import UTC, datetime
@@ -878,9 +878,9 @@ class TestSprint18AaoChecklistHide:
                 created_at=now,
                 updated_at=now,
                 is_active=True,
-                managed_externally=managed_externally,
-                external_org_id=tenant_id if managed_externally else None,
-                external_source="scope3" if managed_externally else None,
+                is_embedded=is_embedded,
+                external_org_id=tenant_id if is_embedded else None,
+                external_source="scope3" if is_embedded else None,
                 house_domain=house_domain,
                 public_agent_url=public_agent_url,
             )
@@ -901,7 +901,7 @@ class TestSprint18AaoChecklistHide:
         tid = "tid_aao_hide_managed"
         self._make_tenant(
             tid,
-            managed_externally=True,
+            is_embedded=True,
             house_domain="acme.example.com",
             public_agent_url="https://agent.scope3.com/x",
         )
@@ -918,7 +918,7 @@ class TestSprint18AaoChecklistHide:
         tid = "tid_aao_open_instance"
         self._make_tenant(
             tid,
-            managed_externally=False,
+            is_embedded=False,
             house_domain="acme.example.com",
             public_agent_url="https://agent.scope3.com/x",
         )
@@ -937,7 +937,7 @@ class TestSprint18AaoChecklistHide:
         tid = "tid_aao_managed_partial"
         self._make_tenant(
             tid,
-            managed_externally=True,
+            is_embedded=True,
             house_domain=None,
             public_agent_url="https://agent.scope3.com/x",
         )

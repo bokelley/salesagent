@@ -329,7 +329,7 @@ def _setup_tasks_block(session: Session, tenant_id: str) -> SetupTasksBlock:
     from src.services.setup_checklist_service import SetupChecklistService
 
     tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-    is_managed = bool(tenant and tenant.managed_externally)
+    is_managed = bool(tenant and tenant.is_embedded)
 
     checklist = SetupChecklistService(tenant_id).get_setup_status()
 

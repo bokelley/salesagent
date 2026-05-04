@@ -263,28 +263,28 @@ def require_auth(admin_only=False):
         def decorated_function(*args, **kwargs):
             from flask import request
 
-            # Managed-mode bypass — checked BEFORE session-based auth.
+            # Embedded-mode bypass — checked BEFORE session-based auth.
             # Routes registered under /tenant/<tenant_id>/... receive
             # tenant_id as a kwarg; if MANAGED_INSTANCE=true and the
-            # tenant is managed externally, X-Identity-* headers from
+            # tenant is embedded, X-Identity-* headers from
             # the upstream proxy authorize the request without OAuth.
             # See docs/integration/managed-mode-identity-contract.md.
             tenant_id_kw = kwargs.get("tenant_id")
             if tenant_id_kw:
-                from src.admin.utils.managed_mode_auth import (
-                    ManagedAuthDeny,
-                    ManagedAuthOk,
-                    authorize_managed_request,
+                from src.admin.utils.embedded_mode_auth import (
+                    EmbeddedAuthDeny,
+                    EmbeddedAuthOk,
+                    authorize_embedded_request,
                     synthetic_user_dict,
                 )
 
-                managed_result = authorize_managed_request(request, tenant_id_kw)
-                if isinstance(managed_result, ManagedAuthDeny):
-                    abort(403, description=f"{managed_result.error}: {managed_result.message}")
-                if isinstance(managed_result, ManagedAuthOk):
-                    g.user = synthetic_user_dict(managed_result.identity)
+                embedded_result = authorize_embedded_request(request, tenant_id_kw)
+                if isinstance(embedded_result, EmbeddedAuthDeny):
+                    abort(403, description=f"{embedded_result.error}: {embedded_result.message}")
+                if isinstance(embedded_result, EmbeddedAuthOk):
+                    g.user = synthetic_user_dict(embedded_result.identity)
                     return f(*args, **kwargs)
-                # ManagedAuthPassthrough → fall through to existing OAuth path
+                # EmbeddedAuthPassthrough → fall through to existing OAuth path
 
             # Check for test mode
             test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
@@ -338,26 +338,26 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # Managed-mode bypass — checked BEFORE session-based auth.
-            # When MANAGED_INSTANCE=true and the tenant is managed externally,
+            # Embedded-mode bypass — checked BEFORE session-based auth.
+            # When MANAGED_INSTANCE=true and the tenant is embedded,
             # X-Identity-* headers from the upstream proxy authorize the
             # request. See docs/integration/managed-mode-identity-contract.md.
-            from src.admin.utils.managed_mode_auth import (
-                ManagedAuthDeny,
-                ManagedAuthOk,
-                authorize_managed_request,
+            from src.admin.utils.embedded_mode_auth import (
+                EmbeddedAuthDeny,
+                EmbeddedAuthOk,
+                authorize_embedded_request,
                 synthetic_user_dict,
             )
 
-            managed_result = authorize_managed_request(request, tenant_id)
-            if isinstance(managed_result, ManagedAuthDeny):
+            embedded_result = authorize_embedded_request(request, tenant_id)
+            if isinstance(embedded_result, EmbeddedAuthDeny):
                 if api_mode:
-                    return jsonify({"error": managed_result.error, "message": managed_result.message}), 403
-                abort(403, description=f"{managed_result.error}: {managed_result.message}")
-            if isinstance(managed_result, ManagedAuthOk):
-                g.user = synthetic_user_dict(managed_result.identity)
+                    return jsonify({"error": embedded_result.error, "message": embedded_result.message}), 403
+                abort(403, description=f"{embedded_result.error}: {embedded_result.message}")
+            if isinstance(embedded_result, EmbeddedAuthOk):
+                g.user = synthetic_user_dict(embedded_result.identity)
                 return f(tenant_id, *args, **kwargs)
-            # ManagedAuthPassthrough → fall through to existing OAuth path
+            # EmbeddedAuthPassthrough → fall through to existing OAuth path
 
             # Check for test mode (global env var OR per-tenant auth_setup_mode)
             test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"

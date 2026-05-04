@@ -1,6 +1,6 @@
 # Sprint 1.5 Spec: Storefront Integration Essentials
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
@@ -11,7 +11,7 @@ Sprint 1.5 lands the three small things Scope3 needs to ship the Storefront inte
 
 1. **`POST /tenants/preview-adapter`** — pre-provision adapter test that returns network metadata. Lets the Storefront UI confirm the GAM service-account grant + auto-fill currency/timezone before committing to a tenant.
 2. **`GET /tenants/{tid}/status`** — consolidated operational status. Replaces what would have been per-domain summary endpoints (sync, workflows, media-buys, etc.) — one round-trip, one place to tune caching.
-3. **Identity-propagation contract sign-off** — lock the `X-Identity-*` header schema and `IDENTITY_TRUST_MODE=network` as a stable integration spec at `docs/integration/managed-mode-identity-contract.md`.
+3. **Identity-propagation contract sign-off** — lock the `X-Identity-*` header schema and `IDENTITY_TRUST_MODE=network` as a stable integration spec at `docs/integration/embedded-mode-identity-contract.md`.
 
 This sprint exists because Scope3 needs status visibility from day one to surface in the Storefront tenant overview, and adapter preview meaningfully improves the provisioning UX. Publisher-CRUD-via-API (sprints 4–5 in the new phasing) is no longer time-critical because publishers operate via the proxied UI.
 
@@ -156,7 +156,7 @@ Use the existing cache infrastructure if any (Redis? In-memory?). If none, in-me
 
 ## Identity-propagation contract sign-off
 
-Write `docs/integration/managed-mode-identity-contract.md` as a stable, versioned integration spec — separate from the design doc so Scope3 has a single canonical reference and can wire its edge middleware with a stable contract. Content covers:
+Write `docs/integration/embedded-mode-identity-contract.md` as a stable, versioned integration spec — separate from the design doc so Scope3 has a single canonical reference and can wire its edge middleware with a stable contract. Content covers:
 
 - Header schema (the 6 headers from the design)
 - Role enum: `admin | member | viewer`
@@ -165,7 +165,7 @@ Write `docs/integration/managed-mode-identity-contract.md` as a stable, versione
 - Versioning: `v1` is the current; breaking changes get `v2` field added; non-breaking additions don't bump
 - Failure modes: missing required headers → 403 `identity_required`; org claim doesn't match URL tenant → 403 `identity_org_mismatch`
 
-The contract doc is "this is final, ship the edge middleware against it." See [docs/integration/managed-mode-identity-contract.md](../integration/managed-mode-identity-contract.md).
+The contract doc is "this is final, ship the edge middleware against it." See [docs/integration/embedded-mode-identity-contract.md](../integration/embedded-mode-identity-contract.md).
 
 ## Acceptance criteria
 
@@ -184,7 +184,7 @@ The contract doc is "this is final, ship the edge middleware against it." See [d
 - [ ] Tenant with no activity returns sensible defaults (zero counts, null timestamps) rather than errors.
 
 **Identity contract:**
-- [ ] `docs/integration/managed-mode-identity-contract.md` exists and is versioned.
+- [ ] `docs/integration/embedded-mode-identity-contract.md` exists and is versioned.
 - [ ] Contains schema, role enum, config knob, failure modes.
 - [ ] Marked stable / final.
 
@@ -201,6 +201,6 @@ The contract doc is "this is final, ship the edge middleware against it." See [d
 
 ## What sprint 2 builds on this
 
-Sprint 2 (runtime hardening) ships the UI middleware, network policy, and `resolve_identity()` change for managed-mode MCP/A2A — closing out the operational-safety side. Sprint 1 + 1.5 + 2 = managed mode is fully operational and observable; publishers can do their work via the proxied UI; Scope3 has the API automation surface for everything Scope3 cares about.
+Sprint 2 (runtime hardening) ships the UI middleware, network policy, and `resolve_identity()` change for embedded-mode MCP/A2A — closing out the operational-safety side. Sprint 1 + 1.5 + 2 = embedded mode is fully operational and observable; publishers can do their work via the proxied UI; Scope3 has the API automation surface for everything Scope3 cares about.
 
 Sprints 4–5 (publisher CRUD via API) become opt-in convenience features for bulk operations / future automation. They're no longer prerequisite for Scope3's launch.

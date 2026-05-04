@@ -38,7 +38,7 @@ Today's `src/admin/tenant_management_api.py` is a partial step: 6 endpoints unde
 ## Non-goals
 
 - A full REST refactor of the admin UI. Open instances keep their Flask UI handlers untouched.
-- Replacing buyer-facing MCP/A2A. The protocol stays as-is — managed mode just controls *who can reach it*.
+- Replacing buyer-facing MCP/A2A. The protocol stays as-is — embedded mode just controls *who can reach it*.
 - Multi-tenant control plane in v1. A managed instance has one control plane (Scope3) authenticated with one global API key.
 - A Scope3-native UI. v1 reverse-proxies the existing salesagent admin UI. Scope3 may build a native UI later on the Tenant Management API; that's a separate project.
 
@@ -74,19 +74,19 @@ All three communication paths between Scope3 and the salesagent are internal-onl
 Two layered controls:
 
 - **Instance mode** (`MANAGED_INSTANCE=true|false`, env var, default `false`): drives network policy. When `true`, public buyer-protocol endpoints reject external traffic; the salesagent expects to live behind a private network with Scope3 as the only client.
-- **Tenant flag** (`Tenant.managed_externally: bool`): drives platform-config locking and UI nav scoping on a per-tenant basis. In a managed instance, every tenant gets `managed_externally=true` automatically. The flag also exists on open instances for any tenant the operator wants to put under external control.
+- **Tenant flag** (`Tenant.is_embedded: bool`): drives platform-config locking and UI nav scoping on a per-tenant basis. In a managed instance, every tenant gets `is_embedded=true` automatically. The flag also exists on open instances for any tenant the operator wants to put under external control.
 
-The two-layer design lets future deployments use managed mode without locking down their entire instance. For the Scope3 deployment, both are on, all the time.
+The two-layer design lets future deployments use embedded mode without locking down their entire instance. For the Scope3 deployment, both are on, all the time.
 
 ### 1a. Platform-managed vs. publisher-managed surfaces
 
-The defining design choice of managed mode: only *platform-managed* surfaces are locked to the Tenant Management API. *Publisher-managed* surfaces remain writable via the proxied UI so publishers can do their job without round-tripping through Scope3.
+The defining design choice of embedded mode: only *platform-managed* surfaces are locked to the Tenant Management API. *Publisher-managed* surfaces remain writable via the proxied UI so publishers can do their job without round-tripping through Scope3.
 
 | Platform-managed (Tenant Management API only — UI is read-only with a banner) | Publisher-managed (UI writable, also exposed via API for automation) |
 |---|---|
-| `Tenant` core: name, billing_plan, is_active, managed_externally, external_org_id, external_source | Products (CRUD, autogenerate-from-GAM) |
+| `Tenant` core: name, billing_plan, is_active, is_embedded, external_org_id, external_source | Products (CRUD, autogenerate-from-GAM) |
 | `AdapterConfig` (GAM creds, network code, etc.) | Principals / advertisers (CRUD, token rotation) |
-| Subdomain / domain config (largely unused in managed mode anyway) | Creatives (review, approve, reject) |
+| Subdomain / domain config (largely unused in embedded mode anyway) | Creatives (review, approve, reject) |
 | OIDC config (unused — identity comes from upstream platform) | Workflow approvals |
 | Initial provisioning defaults (currency, default property tag) | Authorized properties (post-initial-setup) |
 | Tenant lifecycle (provision / deactivate / delete) | Inventory profiles |
@@ -100,9 +100,9 @@ Enforcement is a **scoped write guard** at the model layer (see [sprint 1 spec](
 
 ### 2. Authentication: identity propagation from the platform edge
 
-The salesagent does not authenticate publisher users itself in managed mode. Authentication happens at the upstream platform's edge (Scope3 Storefront uses Google OIDC; another platform might use something else). The platform forwards the authenticated identity to the salesagent as trusted headers on the proxied request.
+The salesagent does not authenticate publisher users itself in embedded mode. Authentication happens at the upstream platform's edge (Scope3 Storefront uses Google OIDC; another platform might use something else). The platform forwards the authenticated identity to the salesagent as trusted headers on the proxied request.
 
-The salesagent defines this identity-propagation contract as a deployment requirement of managed mode. Any platform running the salesagent in managed mode — Scope3 or otherwise — implements it. The contract:
+The salesagent defines this identity-propagation contract as a deployment requirement of embedded mode. Any platform running the salesagent in embedded mode — Scope3 or otherwise — implements it. The contract:
 
 ```
 X-Identity-Email      string, required
@@ -209,8 +209,8 @@ The marquee endpoint is `POST /tenants/provision`. It bundles tenant creation + 
 Endpoints removed from this list compared to v1 of the proposal:
 - `/oidc-config` — managed instances use the global Scope3 SSO config, not per-tenant OIDC.
 - `/users` — Scope3 owns publisher-side users; no salesagent User records for managed tenants.
-- `/domains` — no per-tenant subdomains in managed mode.
-- `/favicon`, `/slack/test` and similar UI-utility endpoints — operations console reads them via the read endpoints; mutations not needed in managed mode.
+- `/domains` — no per-tenant subdomains in embedded mode.
+- `/favicon`, `/slack/test` and similar UI-utility endpoints — operations console reads them via the read endpoints; mutations not needed in embedded mode.
 
 ### 6. OpenAPI from day one
 
@@ -225,7 +225,7 @@ Alternatives rejected: hand-written `openapi.yaml` (drifts from code); FastAPI f
 
 ### 7. UI behavior on managed instances
 
-Middleware checks `managed_externally` on every tenant-scoped request. The UI is *not* fully read-only — it's *bounded* to the publisher-managed scope.
+Middleware checks `is_embedded` on every tenant-scoped request. The UI is *not* fully read-only — it's *bounded* to the publisher-managed scope.
 
 **Platform-managed pages** (settings → general, settings → adapter, settings → domains, settings → OIDC, account/billing, tenant lifecycle):
 - Render read-only with the banner: *"Platform settings managed by Scope3 Storefront."*
@@ -239,7 +239,7 @@ Middleware checks `managed_externally` on every tenant-scoped request. The UI is
 **Operational pages** (dashboard, media-buy viewer, audit log, sync status):
 - Always read-only by nature. Identical for managed and unmanaged tenants.
 
-The super-admin backdoor sees all tenants without restriction — managed mode does not block salesagent staff. They can still write to platform-managed surfaces directly via super-admin tools (the model guard checks for the Tenant Management API session flag *or* a super-admin escape flag).
+The super-admin backdoor sees all tenants without restriction — embedded mode does not block salesagent staff. They can still write to platform-managed surfaces directly via super-admin tools (the model guard checks for the Tenant Management API session flag *or* a super-admin escape flag).
 
 ### 8. Network surface (managed instance)
 
@@ -264,15 +264,15 @@ For Scope3 to surface live state without polling, add outbound webhooks: workflo
 |---|---|
 | Sprint | Deliverable | Required for launch? |
 |---|---|---|
-| **1** | **Full platform-managed surface via API.** Migrations (`managed_externally`, `external_org_id`, `external_source` on Tenant; external identity fields on AuditLog). `MANAGED_INSTANCE` env. Scoped write guard at the model layer. spectree wired up. Tenant lifecycle endpoints (provision, list, get, patch, deactivate, reactivate, delete). Adapter management endpoints (get, put, test-connection). Identity-header reader middleware. Reverse-proxy compatibility verified. Swagger UI live. *After this sprint, Scope3 can fully manage tenants via API.* | yes |
+| **1** | **Full platform-managed surface via API.** Migrations (`is_embedded`, `external_org_id`, `external_source` on Tenant; external identity fields on AuditLog). `MANAGED_INSTANCE` env. Scoped write guard at the model layer. spectree wired up. Tenant lifecycle endpoints (provision, list, get, patch, deactivate, reactivate, delete). Adapter management endpoints (get, put, test-connection). Identity-header reader middleware. Reverse-proxy compatibility verified. Swagger UI live. *After this sprint, Scope3 can fully manage tenants via API.* | yes |
 | **1.5** | **Storefront integration essentials.** `POST /tenants/preview-adapter` (test creds + return network metadata before provisioning). `GET /tenants/{tid}/status` (consolidated operational status — adapter, syncs, workflows, media-buys, packages, creatives, webhooks). Identity-propagation contract sign-off as a stable integration spec. *Unblocks Scope3 Storefront UX.* | yes |
-| **2** | **Runtime hardening.** UI middleware that scopes nav by `managed_externally`, hides platform-config pages, renders banners. Network policy for `MANAGED_INSTANCE` (CIDR allow-lists; fail-closed on missing config). `resolve_identity()` change for MCP/A2A in managed mode (header-scoped, no per-principal tokens). Super-admin override path. *After this sprint, the system is safely deployable in managed mode.* | yes |
+| **2** | **Runtime hardening.** UI middleware that scopes nav by `is_embedded`, hides platform-config pages, renders banners. Network policy for `MANAGED_INSTANCE` (CIDR allow-lists; fail-closed on missing config). `resolve_identity()` change for MCP/A2A in embedded mode (header-scoped, no per-principal tokens). Super-admin override path. *After this sprint, the system is safely deployable in embedded mode.* | yes |
 | **3** | **Workflow mutations + drill-down reads.** Workflow approve/reject. List + detail endpoints for workflows, media-buys, audit-log. Sync history. Backs the `GET /status` summary with detail views Scope3 can drill into. | yes |
 | **4 (optional)** | **Publisher-managed CRUD via API.** Principals + Products + autogenerate-from-GAM. Automation conveniences — publishers also do these via the proxied UI. | only if needed |
 | **5 (optional)** | **Remaining publisher-managed sub-resources via API.** Tags, authorized properties (incl. bulk import), inventory profiles, currency limits, slack, business rules, policy, creative agents, signals agents. | only if needed |
 | **6 (optional)** | **Outbound webhooks.** Scope3 receives signed payloads on state changes; replaces polling load. | only if needed |
 
-**Sprints 1, 1.5, 2, 3 are the required path** — they deliver everything Scope3 needs for a managed-mode launch. Each is independently shippable.
+**Sprints 1, 1.5, 2, 3 are the required path** — they deliver everything Scope3 needs for a embedded-mode launch. Each is independently shippable.
 
 Sprints 4–6 are optional automation conveniences. They become relevant if Scope3 wants programmatic publisher-side management (sprints 4–5) or near-real-time push notifications (sprint 6). Defer until there's a concrete need.
 
@@ -320,11 +320,11 @@ If the optional publisher-managed sprints (4–5) ship, the publisher-managed UI
 
 ## Open questions
 
-1. **Identity contract canonical doc location.** The `X-Identity-*` header schema is owned by the salesagent and consumed by upstream platforms. Should it live as a top-level integration spec (e.g., `docs/integration/managed-mode-identity-contract.md`) referenced from this design, so platforms can read it without wading through the design rationale?
+1. **Identity contract canonical doc location.** The `X-Identity-*` header schema is owned by the salesagent and consumed by upstream platforms. Should it live as a top-level integration spec (e.g., `docs/integration/embedded-mode-identity-contract.md`) referenced from this design, so platforms can read it without wading through the design rationale?
 2. **One external org → one salesagent tenant.** True for now, but design should leave room — if a publisher has multiple GAM networks, they may want multiple tenants under one org. Probably modeled as `Tenant.external_org_id` (non-unique, with a "primary" tenant for ambiguous routes) but defer until needed.
-3. **Conflict resolution.** What happens if a super-admin manually edits a managed tenant's DB row directly? Hard-block at the model layer (`Tenant.save()` rejects writes when `managed_externally=true` and caller isn't the Tenant Management API), or trust the middleware? Recommend hard-block — middleware drift is a class of bug not worth tolerating.
+3. **Conflict resolution.** What happens if a super-admin manually edits a managed tenant's DB row directly? Hard-block at the model layer (`Tenant.save()` rejects writes when `is_embedded=true` and caller isn't the Tenant Management API), or trust the middleware? Recommend hard-block — middleware drift is a class of bug not worth tolerating.
 4. **Audit trail for managed tenants.** With no User table, every mutation is "by control plane" or "by upstream user X (email Y, org Z)". Schema change to `AuditLog`: optional `external_user_email`, `external_user_id`, `external_org_id`, `external_source`.
-5. **Migration strategy for existing tenants.** If you decide later to migrate a direct-customer tenant to managed mode, what's the cutover? Probably: `PATCH /tenants/{id}` with `managed_externally=true` + `external_org_id`, then forward future writes through Scope3. Document but don't build tooling in v1.
+5. **Migration strategy for existing tenants.** If you decide later to migrate a direct-customer tenant to embedded mode, what's the cutover? Probably: `PATCH /tenants/{id}` with `is_embedded=true` + `external_org_id`, then forward future writes through Scope3. Document but don't build tooling in v1.
 
 ## Risks
 

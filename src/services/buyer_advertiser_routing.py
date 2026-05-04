@@ -14,7 +14,7 @@ The function returns a (advertiser_id, resolved_via) tuple. ``resolved_via``
 is stamped on Account rows at first-creation so /recent-buyers can color-
 code matches vs fall-throughs without re-running the chain.
 
-See ``docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md``.
+See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
 """
 
 from __future__ import annotations
@@ -332,7 +332,7 @@ def create_account_from_routing(
     # skip this — access is governed by tenant-wide auth instead.
     #
     # Defense-in-depth: only grant if the Principal row exists. The
-    # managed-mode auth bypass creates Principals on first identity-
+    # embedded-mode auth bypass creates Principals on first identity-
     # header request, so in production this should always be true.
     # Skipping the FK insert avoids killing the buy flow if the auth
     # path drifts; the access check downstream will surface as a

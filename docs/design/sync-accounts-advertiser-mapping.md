@@ -9,7 +9,7 @@
 
 The salesagent's `sync_accounts` AdCP tool today is pure-internal: it upserts `Account` rows in our DB keyed by `(operator, brand.domain, brand.brand_id, sandbox)` and never touches the seller's ad server. When a buyer agent later calls `create_media_buy` for that account, the impl needs a `gam_advertiser_id` to attach the GAM Order to — but `Account.platform_mappings` is empty.
 
-Today this works for Wonderstruck because there's exactly one advertiser per principal in `Principal.platform_mappings`, hard-coded by the publisher. That's the wrong shape for managed mode where Scope3 will sync hundreds of (operator, brand) pairs and expect them to wire up to real GAM advertisers without manual ops work per pair.
+Today this works for Wonderstruck because there's exactly one advertiser per principal in `Principal.platform_mappings`, hard-coded by the publisher. That's the wrong shape for embedded mode where Scope3 will sync hundreds of (operator, brand) pairs and expect them to wire up to real GAM advertisers without manual ops work per pair.
 
 This doc decides:
 1. What the natural granularity is — when do two `(operator, brand)` calls produce one advertiser vs. two?
@@ -77,7 +77,7 @@ The `ACCOUNT_NOT_PROVISIONED` path is the conservative default — publishers wi
 
 ### `Tenant.auto_provision_advertisers`
 
-New boolean column on `Tenant`. Default `false` for backward compatibility with today's open-instance tenants. The Tenant Management API's `POST /tenants/provision` accepts it as a request field (default `true` for managed-mode tenants — Scope3 wants automation by default). Open-instance Admin UI exposes it as a config toggle on the GAM adapter page.
+New boolean column on `Tenant`. Default `false` for backward compatibility with today's open-instance tenants. The Tenant Management API's `POST /tenants/provision` accepts it as a request field (default `true` for embedded-mode tenants — Scope3 wants automation by default). Open-instance Admin UI exposes it as a config toggle on the GAM adapter page.
 
 Migration: `add_auto_provision_advertisers_to_tenant` adds the column with `server_default='false'`.
 
@@ -192,13 +192,13 @@ Code changes:
 - [ ] `create_media_buy` for `pending_provision` Account on tenant with `auto_provision_advertisers=false` → raises `ACCOUNT_NOT_PROVISIONED`. Admin UI shows the account with a "Map advertiser" prompt.
 - [ ] Two media buys against the same `pending_provision` Account in quick succession (race) → only one GAM CompanyService.createCompanies call (idempotency on the provision step keyed by `account_id`).
 - [ ] Advertiser-name collision in GAM → existing advertiser id is attached, no error. Audit log records the attach.
-- [ ] Tenant Management API `POST /tenants/provision` accepts `auto_provision_advertisers` in the request; default `true` for managed-mode tenants (`managed_externally=true`), `false` otherwise.
+- [ ] Tenant Management API `POST /tenants/provision` accepts `auto_provision_advertisers` in the request; default `true` for embedded-mode tenants (`is_embedded=true`), `false` otherwise.
 - [ ] Existing open-instance tenants unaffected after migration — `auto_provision_advertisers=false` by default keeps today's manual-mapping flow intact.
 
 ## Open questions
 
 1. **GAM dry-run semantics** — does `dry_run=true` on order create produce visible-but-non-serving Orders, or reject at the API? Affects whether sandbox shares the production GAM network or needs its own.
-2. **Cross-agent advertiser sharing on operator-billed accounts** — when two buyer agents sync the same `(operator, brand_domain, brand_id)` with `billing=operator`, do they end up sharing one Account row (current natural key) or get separate `AgentAccountAccess` rows pointing at one Account? Today it's the latter; confirm that's still right for managed mode.
+2. **Cross-agent advertiser sharing on operator-billed accounts** — when two buyer agents sync the same `(operator, brand_domain, brand_id)` with `billing=operator`, do they end up sharing one Account row (current natural key) or get separate `AgentAccountAccess` rows pointing at one Account? Today it's the latter; confirm that's still right for embedded mode.
 3. **Provisioning idempotency** — what happens if the GAM `CompanyService.createCompanies` call succeeds but the salesagent's commit-to-DB fails? On retry we'd duplicate the advertiser. Mitigation: `create_advertiser` always queries existing-by-name first, OR persist intent before the GAM call (`Account.platform_mappings.advertiser_create_pending=true`) and reconcile on retry.
 4. **Manual mapping UX** — the Admin UI's existing GAM advertiser picker shows all advertisers in the network. For large publishers (10k+ advertisers), it needs search. Out of scope here; flag for the Admin UI sprint.
 

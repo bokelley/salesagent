@@ -1,11 +1,11 @@
-"""Reader for the managed-mode identity propagation contract.
+"""Reader for the embedded-mode identity propagation contract.
 
 Sprint 1 ships only the *reader* — the request-scoping middleware that maps
 ``X-Identity-Org-Id`` to a tenant lands in sprint 4 along with the rest of
 the UI hardening. The reader is exposed now so audit-log code that wants to
 attach external-identity columns has a single canonical extraction point.
 
-See [parent design § 2](../../../docs/design/managed-tenant-mode.md#2-authentication-identity-propagation-from-the-platform-edge)
+See [parent design § 2](../../../docs/design/embedded-mode.md#2-authentication-identity-propagation-from-the-platform-edge)
 for the contract:
 
     X-Identity-Email      string, required
@@ -59,7 +59,7 @@ def read_identity_from_request(request: Any) -> PropagatedIdentity | None:
 
     The caller decides whether absence is allowed. Sprint 1 callers (audit log
     enrichment) treat absence as "no upstream identity" and proceed; sprint 4
-    middleware will fail closed for managed-mode UI requests.
+    middleware will fail closed for embedded-mode UI requests.
 
     Raises:
         InvalidPropagatedIdentity: if the required headers are present but

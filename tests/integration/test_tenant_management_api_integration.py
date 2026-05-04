@@ -222,7 +222,9 @@ class TestTenantManagementAPIIntegration:
         assert data["subdomain"] == "test-detail"
         assert data["ad_server"] == "google_ad_manager"
         assert data["adapter_configured"] is True
+        # ``managed_externally`` is the deprecated alias of ``is_embedded`` — both must match.
         assert data["managed_externally"] is False
+        assert data["is_embedded"] is False
 
         # Adapter config now lives at its own endpoint.
         adapter_resp = client.get(

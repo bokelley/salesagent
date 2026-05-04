@@ -1,7 +1,7 @@
 # Sprint 3 Spec: Workflow Mutations + Detail Read Endpoints
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./managed-tenant-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
+**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md)
 **Status:** Draft
 **Last updated:** 2026-05-04
 
@@ -237,10 +237,10 @@ Reuses sprint 1's `ApiError`. New error codes:
 
 ## What sprint 4+ builds on this
 
-After sprints 1, 1.5, 2, 3, the managed-mode salesagent is feature-complete for Scope3's launch. Remaining sprints are optional:
+After sprints 1, 1.5, 2, 3, the embedded-mode salesagent is feature-complete for Scope3's launch. Remaining sprints are optional:
 
 - **Sprint 4 (optional)**: publisher-managed CRUD via API (principals, products) — automation conveniences for bulk operations.
 - **Sprint 5 (optional)**: remaining publisher-managed sub-resources (tags, properties, profiles, etc.) via API.
 - **Sprint 6 (optional)**: outbound webhooks — sync failed, workflow created, media buy delivered, adapter connection lost. Reduces polling load on `GET /status` and `GET /workflows`.
 
-After sprint 6, the managed-mode integration is complete: provisioning, configuration, runtime, observability, async notifications. Everything Scope3 needs to embed the salesagent as a managed service.
+After sprint 6, the embedded-mode integration is complete: provisioning, configuration, runtime, observability, async notifications. Everything Scope3 needs to embed the salesagent as a managed service.

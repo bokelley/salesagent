@@ -348,7 +348,7 @@ class SetupChecklistService:
         # provisioning, which the §7 setup_tasks scope=platform annotation
         # surfaces to Storefront).
         aao_managed_and_complete = (
-            bool(tenant.managed_externally) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
+            bool(tenant.is_embedded) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
         )
         if not aao_managed_and_complete:
             tasks.append(
@@ -375,7 +375,7 @@ class SetupChecklistService:
                     name="Public Agent URL",
                     description=(
                         "The agent URL publishers list in their adagents.json to "
-                        "authorize this tenant. Managed-mode tenants share one "
+                        "authorize this tenant. Embedded-mode tenants share one "
                         "(e.g., https://interchange.io); self-hosted publishers "
                         "use their own salesagent's URL."
                     ),
@@ -861,7 +861,7 @@ class SetupChecklistService:
         # See sprint 1.8 §6: managed-externally tenants with both fields set
         # don't see these items (they belong to the platform).
         aao_managed_and_complete = (
-            bool(tenant.managed_externally) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
+            bool(tenant.is_embedded) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
         )
         if not aao_managed_and_complete:
             tasks.append(
@@ -888,7 +888,7 @@ class SetupChecklistService:
                     name="Public Agent URL",
                     description=(
                         "The agent URL publishers list in their adagents.json to "
-                        "authorize this tenant. Managed-mode tenants share one "
+                        "authorize this tenant. Embedded-mode tenants share one "
                         "(e.g., https://interchange.io); self-hosted publishers "
                         "use their own salesagent's URL."
                     ),

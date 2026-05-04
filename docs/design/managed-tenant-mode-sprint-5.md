@@ -1,7 +1,7 @@
 # Sprint 5 Spec: Remaining Publisher-Managed Sub-Resources via API (Optional)
 
-**Parent design:** [managed-tenant-mode.md](./managed-tenant-mode.md)
-**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./managed-tenant-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md), [sprint 3](./managed-tenant-mode-sprint-3.md), [sprint 4](./managed-tenant-mode-sprint-4.md)
+**Parent design:** [embedded-mode](./embedded-mode.md)
+**Builds on:** [sprint 1](./managed-tenant-mode-sprint-1.md), [sprint 1.5](./embedded-mode-sprint-1.5.md), [sprint 2](./managed-tenant-mode-sprint-2.md), [sprint 3](./managed-tenant-mode-sprint-3.md), [sprint 4](./managed-tenant-mode-sprint-4.md)
 **Status:** Draft, optional
 **Last updated:** 2026-05-04
 

@@ -61,10 +61,9 @@ Scope3-coupling is mostly in copy and test fixtures, not the protocol.
 - All `# managed-mode` / `# managed-externally` comments → embedded-mode
 
 ### Documentation
-- `docs/design/managed-tenant-mode.md` → `docs/design/embedded-mode.md`
-- `docs/design/managed-tenant-mode-sprint-1.8-buyer-advertiser-routing.md` →
-  `docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md`
-- All cross-references updated.
+- The original design docs were named `managed-tenant-mode-*.md`; renamed
+  to `embedded-mode-*.md` as part of the sweep. All cross-references
+  updated.
 - Search-and-replace "managed mode" → "embedded mode" /
   "managed-mode" → "embedded-mode" (case-preserving) in all docs.
 - "managed_externally" → "is_embedded" in every code reference.

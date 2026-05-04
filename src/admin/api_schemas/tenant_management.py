@@ -130,7 +130,7 @@ class ProvisionTenantRequest(BaseModel):
     external_source: str = Field(..., min_length=1, max_length=64)
     contact_email: EmailStr
 
-    # AAO model (sprint 1.7) — both required for managed-mode tenants.
+    # AAO model (sprint 1.7) — both required for embedded-mode tenants.
     # ``house_domain`` is where the publisher's brand.json lives;
     # ``public_agent_url`` is what publishers list in adagents.json to
     # authorize this tenant. Replaces the old AuthorizedProperty table.
@@ -168,7 +168,7 @@ class ProvisionTenantRequest(BaseModel):
 class ProvisionedPrincipalResponse(BaseModel):
     """Initial principal returned from provision.
 
-    Note: managed-mode buyer-protocol auth flows through the identity-propagation
+    Note: embedded-mode buyer-protocol auth flows through the identity-propagation
     contract, not per-principal tokens (see sprint 2 § Auth boundary). No
     ``api_token`` field is emitted here.
     """
@@ -199,6 +199,9 @@ class ProvisionTenantResponse(BaseModel):
     name: str
     external_org_id: str
     external_source: str
+    # ``managed_externally`` retained as a deprecated alias of ``is_embedded``
+    # so existing Storefront callers continue to function during the rename.
+    is_embedded: Literal[True] = True
     managed_externally: Literal[True] = True
     created_at: datetime
 
@@ -228,6 +231,9 @@ class TenantSummary(BaseModel):
     subdomain: str | None = None
     external_org_id: str | None = None
     external_source: str | None = None
+    is_embedded: bool
+    # ``managed_externally`` retained as a deprecated alias of ``is_embedded``
+    # so existing Storefront callers continue to function during the rename.
     managed_externally: bool
     is_active: bool
     billing_plan: str
@@ -425,7 +431,7 @@ class StatusPackagesBlock(BaseModel):
     """Package-level counters (line items inside media buys).
 
     ``last_24h_impressions`` is set to 0 until delivery aggregation is wired
-    up — see :mod:`docs/design/managed-tenant-mode-sprint-1.5.md` Open Q #3.
+    up — see :mod:`docs/design/embedded-mode-sprint-1.5.md` Open Q #3.
     """
 
     model_config = _config()

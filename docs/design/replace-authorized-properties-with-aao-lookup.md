@@ -3,7 +3,7 @@
 **Status:** Draft
 **Owner:** Sales Agent
 **Last updated:** 2026-05-04
-**Related:** [managed-tenant-mode.md](./managed-tenant-mode.md), [sync-accounts-advertiser-mapping.md](./sync-accounts-advertiser-mapping.md)
+**Related:** [embedded-mode](./embedded-mode.md), [sync-accounts-advertiser-mapping.md](./sync-accounts-advertiser-mapping.md)
 
 ## Problem
 
@@ -14,7 +14,7 @@ The AAO model is simpler: a publisher publishes one canonical `brand.json` at a 
 The salesagent only needs to know two things to participate in this model:
 
 1. **`Tenant.house_domain`** — where the publisher's `brand.json` lives (`https://{house_domain}/.well-known/brand.json`). The list of properties is whatever's in that file at request time.
-2. **`Tenant.public_agent_url`** — the agent URL that publishers list in their `adagents.json`. For Scope3 managed-mode tenants this is `https://interchange.io`. For self-hosted publishers it's their own salesagent's URL.
+2. **`Tenant.public_agent_url`** — the agent URL that publishers list in their `adagents.json`. For Scope3 embedded-mode tenants this is `https://interchange.io`. For self-hosted publishers it's their own salesagent's URL.
 
 Everything else — the property list, the verification, the partner roster — gets looked up via the AAO SDK on demand. No `AuthorizedProperty` table, no per-property setup form, no "add 47 sites" gate.
 
@@ -31,7 +31,7 @@ Existing tables:
 
 - `PublisherPartner` — **stays as-is**. It already tracks "publisher domains we have a relationship with" + adagents.json verification status. It's the right shape for the partnership graph.
 - `AuthorizedProperty` — **deprecated**. Old tenants keep their rows; new tenants don't write to it; reads route through the AAO lookup with a fallback to the cached rows for the deprecation window. Migration removes it once usage drops to zero (target: 90 days).
-- `PropertyTag` — **stays**. Tags reference is independent of how property records are sourced; managed-mode tenants still want logical groupings like "all_inventory" or "us_traffic_only".
+- `PropertyTag` — **stays**. Tags reference is independent of how property records are sourced; embedded-mode tenants still want logical groupings like "all_inventory" or "us_traffic_only".
 
 ### Onboarding
 
@@ -43,7 +43,7 @@ Required to start:
   ✓ Public agent URL         (e.g., https://interchange.io)
 ```
 
-Both fields are required — without them the salesagent can't fetch brand.json or verify adagents.json. The Tenant Management API's `POST /tenants/provision` accepts both as request fields; managed-mode tenants get them at provision time from Scope3, open-instance tenants fill them in via the Admin UI.
+Both fields are required — without them the salesagent can't fetch brand.json or verify adagents.json. The Tenant Management API's `POST /tenants/provision` accepts both as request fields; embedded-mode tenants get them at provision time from Scope3, open-instance tenants fill them in via the Admin UI.
 
 The "Authorized Properties" task on the setup checklist is replaced with a **brand.json reachability probe**: hit `https://{house_domain}/.well-known/brand.json`, validate it parses, count properties — green if it works, yellow with a hint if it doesn't ("we couldn't fetch your brand.json at the configured house_domain — see [doc link]").
 
@@ -115,14 +115,14 @@ Three migrations + a deprecation window:
 }
 ```
 
-Both fields required for managed-mode provision (where Scope3 already knows them); optional for the legacy open-instance create endpoint until existing tenants migrate.
+Both fields required for embedded-mode provision (where Scope3 already knows them); optional for the legacy open-instance create endpoint until existing tenants migrate.
 
 Add `PATCH /tenants/{tid}` support for both fields so publishers can update them via the Admin UI without touching the database directly.
 
 ## Acceptance criteria
 
 - [ ] `Tenant.house_domain` and `Tenant.public_agent_url` exist as nullable columns; migration applied.
-- [ ] `POST /tenants/provision` (managed-mode) requires both fields and rejects requests missing either.
+- [ ] `POST /tenants/provision` (embedded-mode) requires both fields and rejects requests missing either.
 - [ ] Setup checklist for a new tenant lists "Publisher house domain" + "Public agent URL" as the **first two** items, before any other onboarding step.
 - [ ] `list_authorized_properties` for a tenant with `house_domain` set returns properties from a live `brand.json` fetch (with 5-minute cache).
 - [ ] `list_authorized_properties` for a tenant with `house_domain=NULL` falls back to the `AuthorizedProperty` cache (deprecation-window behavior).
@@ -139,7 +139,7 @@ Add `PATCH /tenants/{tid}` support for both fields so publishers can update them
 
 ## Sprint placement
 
-Roughly the same scope as Sprint 1.6: a migration + ~3 code changes + Admin UI deprecation banner. Recommend slotting as **Sprint 1.7** since it's a managed-mode onboarding requirement (a tenant can't list_authorized_properties until they have these fields), and Scope3's first managed-mode tenants will hit it the moment they try to ship a media buy.
+Roughly the same scope as Sprint 1.6: a migration + ~3 code changes + Admin UI deprecation banner. Recommend slotting as **Sprint 1.7** since it's a embedded-mode onboarding requirement (a tenant can't list_authorized_properties until they have these fields), and Scope3's first embedded-mode tenants will hit it the moment they try to ship a media buy.
 
 Estimated scope: ~2 days.
 - 0.5d migration + Tenant Management API field validation.

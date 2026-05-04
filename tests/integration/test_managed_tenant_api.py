@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.database_session import get_db_session
-from src.core.database.managed_tenant_guard import ManagedTenantWriteError
+from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
     AdapterConfig,
     Creative,
@@ -118,7 +118,7 @@ def _provision_payload(**overrides):
         "external_org_id": "org_acme",
         "external_source": "scope3",
         "contact_email": "ops@example.com",
-        # Sprint 1.7: AAO model — both required for managed-mode provision.
+        # Sprint 1.7: AAO model — both required for embedded-mode provision.
         "house_domain": "acme.example",
         "public_agent_url": "https://interchange.io",
         "adapter": {
@@ -146,6 +146,7 @@ class TestProvision:
         assert response.status_code == 201, response.get_data(as_text=True)
         body = response.get_json()
         assert body["managed_externally"] is True
+        assert body["is_embedded"] is True
         assert body["external_org_id"] == "org_provision_happy"
         assert body["adapter"]["type"] == "google_ad_manager"
         assert body["adapter"]["connection_test_passed"] is True
@@ -238,7 +239,7 @@ class TestProvision:
         assert d["public_agent_url"] == "https://interchange.io"
 
     def test_provision_rejects_missing_aao_fields(self, client, auth_headers):
-        """Sprint 1.7: managed-mode provision REQUIRES both AAO fields."""
+        """Sprint 1.7: embedded-mode provision REQUIRES both AAO fields."""
         payload = _provision_payload(external_org_id="org_no_aao")
         del payload["house_domain"]
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
@@ -287,6 +288,7 @@ class TestLifecycle:
         assert managed_tenant in ids
         for t in body["tenants"]:
             assert t["managed_externally"] is True
+            assert t["is_embedded"] is True
             assert t["external_source"] == "scope3"
 
     def test_get_tenant_returns_detail_or_404(self, client, auth_headers, managed_tenant):
@@ -294,6 +296,7 @@ class TestLifecycle:
         assert ok.status_code == 200
         body = ok.get_json()
         assert body["managed_externally"] is True
+        assert body["is_embedded"] is True
 
         missing = client.get("/api/v1/tenant-management/tenants/tenant_nope_404", headers=auth_headers)
         assert missing.status_code == 404
@@ -485,7 +488,7 @@ class TestWriteGuard:
             ad_server="mock",
             billing_plan="standard",
             is_active=True,
-            managed_externally=False,
+            is_embedded=False,
         )
         yield "t_unmanaged_guard"
         with get_db_session() as session:
@@ -499,7 +502,7 @@ class TestWriteGuard:
             tenant = session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
             assert tenant is not None
             tenant.name = "Should Not Persist"
-            with pytest.raises(ManagedTenantWriteError):
+            with pytest.raises(EmbeddedTenantWriteError):
                 session.commit()
             session.rollback()
 
@@ -546,7 +549,7 @@ class TestWriteGuard:
             adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
             assert adapter is not None
             adapter.gam_network_code = "blocked-rewrite"
-            with pytest.raises(ManagedTenantWriteError):
+            with pytest.raises(EmbeddedTenantWriteError):
                 session.commit()
             session.rollback()
 
@@ -581,7 +584,7 @@ class TestEndToEnd:
         with get_db_session() as session:
             tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             tenant.name = "UI Should Not Persist"
-            with pytest.raises(ManagedTenantWriteError):
+            with pytest.raises(EmbeddedTenantWriteError):
                 session.commit()
             session.rollback()
 
@@ -987,7 +990,7 @@ class TestStatusSetupTasks:
     def test_open_instance_tenant_aao_tasks_have_publisher_scope(
         self, client, auth_headers, bound_factories, cleanup_tenants
     ):
-        """Open-instance tenant (managed_externally=False) sees AAO items as
+        """Open-instance tenant (is_embedded=False) sees AAO items as
         ``scope=publisher`` — they're the publisher's job, not the platform's."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
@@ -997,7 +1000,7 @@ class TestStatusSetupTasks:
             name="Open Instance",
             subdomain="open-instance",
             ad_server="mock",
-            managed_externally=False,
+            is_embedded=False,
         )
         cleanup_tenants.append(tid)
         invalidate_status_cache(tid)

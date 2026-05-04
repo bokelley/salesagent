@@ -1,6 +1,6 @@
-"""Integration tests for sprint 2 managed-mode auth bypass.
+"""Integration tests for sprint 2 embedded-mode auth bypass.
 
-When ``MANAGED_INSTANCE=true`` and a tenant is ``managed_externally``,
+When ``MANAGED_INSTANCE=true`` and a tenant is ``is_embedded=True``,
 ``X-Identity-*`` headers from the upstream proxy authorize the request
 without going through the salesagent's Google OAuth flow.
 
@@ -14,7 +14,7 @@ Failure modes match docs/integration/managed-mode-identity-contract.md:
 - Open-instance tenant on a managed instance → falls through to OAuth
   redirect (today's behavior preserved)
 - ``MANAGED_INSTANCE`` unset → bypass disabled, OAuth required for all
-  tenants regardless of ``managed_externally`` flag
+  tenants regardless of ``is_embedded`` flag
 """
 
 from __future__ import annotations
@@ -22,9 +22,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from flask import Flask
 
-from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from tests.helpers.managed_tenant_api import install_management_api_key
@@ -32,7 +30,7 @@ from tests.helpers.managed_tenant_api import install_management_api_key
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-API_KEY = "sk-managed-mode-auth-test-key"
+API_KEY = "sk-embedded-mode-auth-test-key"
 
 
 @pytest.fixture
@@ -66,7 +64,6 @@ def client(app):
 def managed_tenant(integration_db):
     """Insert a managed tenant directly — bypasses the management API to
     keep the fixture cheap and self-contained."""
-    from sqlalchemy import select
 
     from src.core.database.models import (
         AdapterConfig,
@@ -79,7 +76,7 @@ def managed_tenant(integration_db):
     org_id = f"org_{uuid.uuid4().hex[:8]}"
     with get_db_session() as session:
         # The model-layer write guard requires ``management_api_caller`` to
-        # insert managed_externally=True. Tests bypass the actual API for
+        # insert is_embedded=True. Tests bypass the actual API for
         # speed; this flag is the same one the API endpoint sets.
         session.info["management_api_caller"] = True
         session.add(
@@ -94,7 +91,7 @@ def managed_tenant(integration_db):
                 authorized_domains=[],
                 auto_approve_format_ids=[],
                 policy_settings={},
-                managed_externally=True,
+                is_embedded=True,
                 external_org_id=org_id,
                 external_source="scope3",
             )
@@ -119,7 +116,7 @@ def _identity_headers(org_id: str, *, role: str = "admin") -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# MANAGED_INSTANCE=true + managed_externally=True
+# MANAGED_INSTANCE=true + is_embedded=True
 # ---------------------------------------------------------------------------
 
 
@@ -135,13 +132,9 @@ class TestManagedModeAuthBypass:
         # but NOT 302 to /login — that would mean auth failed.
         assert resp.status_code in (200, 302), resp.get_data(as_text=True)
         if resp.status_code == 302:
-            assert "login" not in (resp.location or ""), (
-                f"unexpected redirect to login: {resp.location}"
-            )
+            assert "login" not in (resp.location or ""), f"unexpected redirect to login: {resp.location}"
 
-    def test_missing_headers_returns_403_identity_required(
-        self, client, managed_tenant, monkeypatch
-    ):
+    def test_missing_headers_returns_403_identity_required(self, client, managed_tenant, monkeypatch):
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         resp = client.get(f"/tenant/{managed_tenant['tenant_id']}")
         assert resp.status_code == 403
@@ -158,9 +151,7 @@ class TestManagedModeAuthBypass:
         body = resp.get_data(as_text=True)
         assert "identity_org_mismatch" in body, body
 
-    def test_invalid_role_returns_403_identity_required(
-        self, client, managed_tenant, monkeypatch
-    ):
+    def test_invalid_role_returns_403_identity_required(self, client, managed_tenant, monkeypatch):
         """X-Identity-Role outside admin|member|viewer enum → 403.
 
         The reader raises InvalidPropagatedIdentity which the bypass
@@ -180,9 +171,7 @@ class TestManagedModeAuthBypass:
 
 
 class TestBypassIsOptIn:
-    def test_managed_instance_unset_falls_through_to_oauth(
-        self, client, managed_tenant, monkeypatch
-    ):
+    def test_managed_instance_unset_falls_through_to_oauth(self, client, managed_tenant, monkeypatch):
         """Without MANAGED_INSTANCE=true, X-Identity-* headers are ignored
         and the request hits the normal OAuth gate (302 to /login)."""
         monkeypatch.delenv("MANAGED_INSTANCE", raising=False)
@@ -195,10 +184,8 @@ class TestBypassIsOptIn:
         assert resp.status_code == 302
         assert "login" in (resp.location or "")
 
-    def test_open_instance_tenant_on_managed_deployment_uses_oauth(
-        self, client, integration_db, monkeypatch
-    ):
-        """Tenant with managed_externally=False on a MANAGED_INSTANCE=true
+    def test_open_instance_tenant_on_managed_deployment_uses_oauth(self, client, integration_db, monkeypatch):
+        """Tenant with is_embedded=False on a MANAGED_INSTANCE=true
         deployment falls through to OAuth — managed instances still host
         legacy/staff open-instance tenants."""
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
@@ -218,7 +205,7 @@ class TestBypassIsOptIn:
                     authorized_domains=[],
                     auto_approve_format_ids=[],
                     policy_settings={},
-                    managed_externally=False,
+                    is_embedded=False,
                 )
             )
             session.commit()

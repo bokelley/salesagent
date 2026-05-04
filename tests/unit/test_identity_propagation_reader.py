@@ -1,4 +1,4 @@
-"""Unit tests for the managed-mode identity propagation reader.
+"""Unit tests for the embedded-mode identity propagation reader.
 
 Sprint 1 only ships the reader (header parser); request scoping is sprint 4.
 These tests cover:

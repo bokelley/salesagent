@@ -1,4 +1,4 @@
-"""Migration roundtrip tests for the managed-tenant-mode columns.
+"""Migration roundtrip tests for the embedded-mode columns.
 
 Uses the shared :func:`migration_db` fixture, which provisions an isolated
 PostgreSQL database without applying any migrations. The test then drives
@@ -37,8 +37,11 @@ def test_managed_tenant_migrations_roundtrip(migration_db):
     # Bring the empty DB up to head.
     run_alembic_upgrade(db_url, "head")
 
-    # New columns must be present at head.
-    assert _column_exists(engine, "tenants", "managed_externally")
+    # New columns must be present at head. After the embedded-mode rename migration,
+    # the column is named ``is_embedded`` (the old ``managed_externally`` was renamed
+    # in alembic revision c4d5e6f7a8b9).
+    assert _column_exists(engine, "tenants", "is_embedded")
+    assert not _column_exists(engine, "tenants", "managed_externally")
     assert _column_exists(engine, "tenants", "external_org_id")
     assert _column_exists(engine, "tenants", "external_source")
     assert _column_exists(engine, "audit_logs", "external_user_email")
@@ -52,7 +55,7 @@ def test_managed_tenant_migrations_roundtrip(migration_db):
                 "INSERT INTO tenants (tenant_id, name, subdomain, ad_server, is_active, "
                 "billing_plan, enable_axe_signals, human_review_required, approval_mode, "
                 "creative_auto_approve_threshold, creative_auto_reject_threshold, "
-                "managed_externally, external_org_id, external_source, "
+                "is_embedded, external_org_id, external_source, "
                 "created_at, updated_at) "
                 "VALUES ('tenant_mig_rt', 'Migration Roundtrip', 'mig-rt', 'mock', TRUE, "
                 "'standard', TRUE, FALSE, 'require-human', 0.9, 0.1, "
@@ -63,6 +66,7 @@ def test_managed_tenant_migrations_roundtrip(migration_db):
     # Step the schema back past both new migrations.
     run_alembic_downgrade(db_url, PARENT)
 
+    assert not _column_exists(engine, "tenants", "is_embedded")
     assert not _column_exists(engine, "tenants", "managed_externally")
     assert not _column_exists(engine, "tenants", "external_org_id")
     assert not _column_exists(engine, "audit_logs", "external_user_email")
@@ -75,12 +79,12 @@ def test_managed_tenant_migrations_roundtrip(migration_db):
     # Re-apply migrations.
     run_alembic_upgrade(db_url, "head")
 
-    assert _column_exists(engine, "tenants", "managed_externally")
+    assert _column_exists(engine, "tenants", "is_embedded")
     assert _column_exists(engine, "audit_logs", "external_user_email")
 
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT managed_externally, external_org_id FROM tenants WHERE tenant_id = 'tenant_mig_rt'")
+            text("SELECT is_embedded, external_org_id FROM tenants WHERE tenant_id = 'tenant_mig_rt'")
         ).first()
         assert row is not None
         # Existing row preserved across the roundtrip; the new columns picked up server defaults.
