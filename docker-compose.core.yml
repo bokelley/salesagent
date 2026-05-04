@@ -155,7 +155,12 @@ services:
       - adcp_global_uv_cache:/cache/uv
     command: ["python", "-m", "core.main"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3091/admin/health"]
+      # Inside the container the app listens on ADCP_PORT (3001), and the
+      # health endpoint lives at root (/health) — there's no /admin/health.
+      # Earlier versions probed /admin/health on the host port (3091) which
+      # 404'd AND wasn't reachable from inside the container; the resulting
+      # "(unhealthy)" status was misleading.
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -122,12 +122,39 @@ header is set, so any origin can embed it. For production:
 1. Set `MANAGED_MODE_FRAME_ANCESTORS` to the upstream proxy's origin (CSP
    `frame-ancestors` directive value). This restricts who can iframe the
    UI without breaking the embed.
-2. The salesagent's own top nav strip (the dark navy "<tenant> Sales
-   Agent Dashboard" header) is automatically hidden when the request
-   authorizes via `X-Identity-*` headers — Scope3 Storefront's chrome
-   wraps the iframe instead, so the inner header is redundant. See the
-   `{% if not managed_mode %}` guard in `templates/base.html`.
-3. Cookies: managed-mode auth is stateless via headers — no session
+
+2. **Chrome stripping.** The salesagent's own top nav strip (the dark
+   navy "<tenant> Sales Agent Dashboard" header + global Logout / role
+   badge) is hidden when **either** of these is true:
+
+   - `?embedded=1` is on the request URL (explicit, per-load — works for
+     any tenant including open-instance), OR
+   - the request authorized via `X-Identity-*` (managed-mode tenants
+     are always embedded).
+
+   Per-page sub-nav (breadcrumbs, page titles, action buttons) stays.
+   See the `{% if not embedded %}` guard in `templates/base.html`.
+
+3. **Outer-URL sync via `postMessage`.** When `embedded=true`, every
+   page fires a `postMessage` on `DOMContentLoaded` so the parent frame
+   can update its outer URL (`/{customer}/storefront/psa/{tenantId}/...`)
+   for deep-linking + browser back-button support:
+
+   ```js
+   window.parent.postMessage({
+     type: 'psa:navigate',
+     pathname: '/tenant/<tenant_id>/products',
+     search: '?embedded=1',
+     title: 'Products — <tenant>'
+   }, '*')
+   ```
+
+   The parent listens for `message` events with `event.data.type ===
+   'psa:navigate'`. We use `targetOrigin '*'` because the salesagent
+   doesn't know the parent's origin; the parent should validate
+   `event.source` matches its iframe element on receipt.
+
+4. **Cookies.** Managed-mode auth is stateless via headers — no session
    cookies are set on these requests, so cross-origin iframe embedding
    doesn't hit the `SameSite=Lax`/`SameSite=None` snag that breaks
    classic OAuth in iframes.

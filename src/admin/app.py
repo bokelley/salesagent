@@ -316,11 +316,21 @@ def create_app(config=None):
         context["sales_agent_domain"] = get_sales_agent_domain() or "example.com"
 
         # Managed-mode chrome flag — true when this request authorized via
-        # the X-Identity-* bypass (sprint 2). Templates use this to hide
-        # the salesagent's own top nav strip; the upstream proxy (Scope3
-        # Storefront) provides chrome around the iframe instead.
+        # the X-Identity-* bypass (sprint 2).
         managed_user = isinstance(getattr(g, "user", None), dict) and bool(g.user.get("managed_mode"))
         context["managed_mode"] = managed_user
+
+        # ``embedded`` is the broader iframe-rendering flag — true when:
+        # (a) the upstream proxy passes ``?embedded=1`` on the iframe URL
+        #     (explicit, per-load opt-in; works for any tenant), OR
+        # (b) the request authorized via X-Identity-* (managed mode is
+        #     always embedded in the upstream proxy's chrome).
+        # Templates use this to hide the salesagent's own top nav strip
+        # and any global controls (logout / switch tenant) — the upstream
+        # proxy owns those in its outer chrome. Per-page sub-nav (breadcrumbs,
+        # action buttons) stays.
+        explicit_embed = request.args.get("embedded") in ("1", "true", "yes")
+        context["embedded"] = explicit_embed or managed_user
 
         # Inject fresh tenant data if user is logged in with a tenant
         tenant_id = session.get("tenant_id")

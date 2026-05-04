@@ -142,8 +142,12 @@
     </style>
 </head>
 <body>
-    {# Managed-mode hides salesagent chrome — Scope3 Storefront wraps the iframe with its own #}
-    {% if not managed_mode %}
+    {# Embedded mode hides salesagent chrome — the upstream proxy (Scope3
+       Storefront, etc.) wraps the iframe with its own nav. Triggered by
+       either ?embedded=1 (explicit, per-load) or managed-mode auth bypass
+       (sprint 2 — managed tenants are always embedded). Per-page sub-nav
+       (breadcrumbs, action buttons, page titles) stays. #}
+    {% if not embedded %}
     {% if g.test_mode %}
     <div style="background: #ff9800; color: white; padding: 0.75rem 1rem; text-align: center; font-weight: bold; position: fixed; top: 0; left: 0; right: 0; z-index: 9999;">
         ⚠️ TEST MODE ACTIVE - Authentication bypassed for testing. DO NOT USE IN PRODUCTION!
@@ -241,6 +245,35 @@
     <script src="{{ script_name }}/static/validation.js"></script>
     <!-- Bootstrap Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    {% if embedded %}
+    {# Embedded-mode navigation breadcrumbs for the upstream proxy.
+       Fires once on DOMContentLoaded so the parent frame can update its
+       outer URL (e.g. /{customer}/storefront/psa/{tenantId}/products) so
+       deep-links + browser back-button work. The parent listens for
+       ``message`` events with ``e.data.type === 'psa:navigate'``. We
+       targetOrigin '*' because the salesagent doesn't know the parent's
+       origin — the parent should validate the message ``source`` matches
+       its iframe element on receipt. #}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            if (window.parent === window) {
+                return;  // not in an iframe; nothing to notify
+            }
+            try {
+                window.parent.postMessage({
+                    type: 'psa:navigate',
+                    pathname: window.location.pathname,
+                    search: window.location.search,
+                    title: document.title
+                }, '*');
+            } catch (err) {
+                // Cross-origin postMessage failure is non-fatal — the iframe
+                // still works, the parent just won't update its outer URL.
+                console.debug('psa:navigate postMessage failed:', err);
+            }
+        });
+    </script>
+    {% endif %}
     {% block scripts %}{% endblock %}
 </body>
 </html>
