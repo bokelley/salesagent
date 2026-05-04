@@ -124,6 +124,8 @@ def test_publisher_properties_uses_tags_when_present(mock_session_with_product, 
 
     result = platform.get_products(req={}, ctx=ctx)
     pubs = result["products"][0]["publisher_properties"]
-    assert len(pubs) == 2
-    assert all(p["selection_type"] == "by_tag" for p in pubs)
-    assert {p["publisher_tag"] for p in pubs} == {"sports", "premium"}
+    # by_tag selector ships one entry with all tags in property_tags array
+    assert len(pubs) == 1
+    assert pubs[0]["selection_type"] == "by_tag"
+    assert set(pubs[0]["property_tags"]) == {"sports", "premium"}
+    assert "publisher_domain" in pubs[0]

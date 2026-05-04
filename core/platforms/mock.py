@@ -201,27 +201,44 @@ def _product_to_wire(row: ProductRow) -> dict[str, Any]:
     }
 
 
+_DEFAULT_PUBLISHER_DOMAIN = "example.com"
+
+
 def _publisher_properties_from_row(row: ProductRow) -> list[dict[str, Any]]:
     """Convert salesagent's properties/property_ids/property_tags
     XOR-constrained columns into the AdCP wire ``publisher_properties``
-    list. Falls back to ``selection_type='all'`` when none are set.
+    list per spec (PublisherPropertiesAll/ById/ByTag selectors).
+
+    Each selector requires ``publisher_domain`` (the host of the
+    publisher's ``adagents.json``); salesagent doesn't track a
+    publisher_domain per product/tag/id today, so we default to
+    ``example.com`` as a placeholder. M2 should source this from the
+    tenant's ``virtual_host``/``setup_domain`` config.
     """
     if row.property_tags:
         return [
-            {"selection_type": "by_tag", "publisher_tag": tag}
-            for tag in row.property_tags
+            {
+                "publisher_domain": _DEFAULT_PUBLISHER_DOMAIN,
+                "selection_type": "by_tag",
+                "property_tags": list(row.property_tags),
+            }
         ]
     if row.property_ids:
         return [
-            {"selection_type": "by_id", "publisher_property_id": pid}
-            for pid in row.property_ids
+            {
+                "publisher_domain": _DEFAULT_PUBLISHER_DOMAIN,
+                "selection_type": "by_id",
+                "property_ids": list(row.property_ids),
+            }
         ]
     if row.properties:
         return [
             {
-                "publisher_domain": prop.get("publisher_domain", "example.com"),
+                "publisher_domain": prop.get("publisher_domain", _DEFAULT_PUBLISHER_DOMAIN),
                 "selection_type": "all",
             }
             for prop in row.properties
         ]
-    return [{"publisher_domain": "example.com", "selection_type": "all"}]
+    return [
+        {"publisher_domain": _DEFAULT_PUBLISHER_DOMAIN, "selection_type": "all"}
+    ]
