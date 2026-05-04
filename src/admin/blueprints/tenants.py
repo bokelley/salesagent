@@ -55,10 +55,16 @@ def get_available_currencies():
     return currencies
 
 
-@tenants_bp.route("/<tenant_id>")
+@tenants_bp.route("/<tenant_id>", strict_slashes=False)
 @require_tenant_access()
 def dashboard(tenant_id):
-    """Show tenant dashboard using single data source pattern."""
+    """Show tenant dashboard using single data source pattern.
+
+    ``strict_slashes=False`` accepts both ``/tenant/<id>`` and
+    ``/tenant/<id>/`` — important for reverse-proxy callers (Scope3
+    Storefront) that may generate URLs with trailing slashes. Without
+    this flag Flask 404s on the trailing variant.
+    """
     try:
         # Use DashboardService for all dashboard data (SINGLE DATA SOURCE PATTERN)
         dashboard_service = DashboardService(tenant_id)
