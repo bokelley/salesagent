@@ -1,6 +1,7 @@
 # Embedded Mode — Operational Reference
 
-**Status:** Working draft (answers Scope3 operational asks D.1–D.4)
+**Status:** Working draft
+**Audience:** Operators deploying salesagent in embedded mode behind a host product (Scope3 Storefront cited as the first reference deployment)
 **Last updated:** 2026-05-04
 
 This document covers the deployment-side concerns that complement the API design: where to pull images, how to run locally, what GAM permissions to instruct publishers to grant, and when sync runs.
@@ -19,7 +20,7 @@ This document covers the deployment-side concerns that complement the API design
 - `1` — latest minor in major line
 - `latest` — newest release
 
-**For Scope3's deployment:**
+**Recommended for production deployments (host-managed):**
 - Pin to a **specific patch tag** (e.g., `ghcr.io/prebid/salesagent:1.2.3`) for production. Don't use `latest` or major-only tags — both can pull breaking changes silently.
 - Subscribe to release-please-generated GitHub releases for changelog visibility.
 - For staging, `1.2` is reasonable — picks up patch fixes automatically without minor-version surprises.
@@ -44,7 +45,7 @@ The repo has multiple compose files:
 | `docker-compose.e2e.yml` | E2E test stack | n/a |
 | `docker-compose.override.yml` | Auto-loaded local overrides; in-flight work | — |
 
-### Recommended for Scope3 dev
+### Recommended for embedded-mode dev (host-product integration testing)
 
 For Storefront integration testing, use `docker-compose.core.yml` — closer to embedded-mode topology (no nginx in the way; single port). Standard invocation:
 
@@ -61,7 +62,7 @@ docker compose -p core -f docker-compose.core.yml up
 
 ### Storefront → salesagent dev configuration
 
-For Scope3 engineers wiring a local Storefront to a local salesagent:
+For host-product engineers wiring a local UI to a local salesagent (the Scope3 Storefront integration uses this flow):
 
 ```yaml
 # Storefront-side env for dev
@@ -169,14 +170,14 @@ header is set, so any origin can embed it. For production:
 
 **Recommended role: Trafficker.** Full doc at `docs/adapters/gam/service-account-setup.md`.
 
-### Publisher-facing instructions (what Scope3 should tell publishers)
+### Publisher-facing instructions (what the host product should tell publishers)
 
 > To grant the Sales Agent access to your Google Ad Manager network:
 >
 > 1. Log into Google Ad Manager.
 > 2. Navigate to **Admin → Global Settings → API access** and ensure **API access** is toggled on.
 > 3. Click **Add a service account user**. *(Important: do **not** use the regular Users page — that sends an email invitation, which a service account cannot accept.)*
-> 4. Paste the service account email provided by Scope3.
+> 4. Paste the service account email provided by the host product (the operator running the salesagent).
 > 5. Assign role: **Trafficker**.
 > 6. Optionally restrict to specific advertisers under **Teams** for additional security.
 > 7. Save.
@@ -195,7 +196,7 @@ header is set, so any origin can embed it. For production:
 | Modify network settings | ❌ |
 | Create new advertisers | ❌ |
 
-The "cannot create advertisers" limitation is intentional — publishers create advertiser entities themselves; Scope3's salesagent attaches campaigns to existing advertisers via the `external_advertiser_id` field on Principal.
+The "cannot create advertisers" limitation is intentional — publishers create advertiser entities themselves; the salesagent attaches campaigns to existing advertisers via the `external_advertiser_id` field on Principal.
 
 ### Custom-role minimum (for security-strict publishers)
 
@@ -203,7 +204,7 @@ If a publisher won't grant Trafficker, the minimum custom permissions are docume
 
 ### Service account provisioning model
 
-Scope3 (or any operator) creates service accounts in **its own GCP project** and provides only the email to publishers. Publishers grant access via that email — they never see or store the private key. This is the recommended security posture (private key + GAM grant are two-factor; publisher controls the GAM grant, Scope3 controls the key, neither alone is sufficient).
+The host product (or any operator running the salesagent) creates service accounts in **its own GCP project** and provides only the email to publishers. Publishers grant access via that email — they never see or store the private key. This is the recommended security posture (private key + GAM grant are two-factor; publisher controls the GAM grant, the operator controls the key, neither alone is sufficient).
 
 The salesagent has automation for this: `POST /create-service-account` (existing GAM blueprint endpoint) creates an SA in the configured GCP project, returns the email. Requires `GCP_PROJECT_ID` env var + `roles/iam.serviceAccountAdmin` on the salesagent's runtime credentials.
 
@@ -222,7 +223,7 @@ The salesagent has automation for this: `POST /create-service-account` (existing
 | Scheduled (daily 7 UTC ≈ 2am EST) | 1×/day | Belt-and-suspenders, matches a quiet window for most US publishers |
 | On-demand | Anytime | `POST /api/sync/trigger/<tenant_id>` (existing `sync_api`); also via Admin UI button |
 
-**Implication for Scope3 status caching:** the homepage status card can be ~6h stale at most under normal scheduling. Scope3's UI should:
+**Implication for host-product status caching:** the homepage status card can be ~6h stale at most under normal scheduling. The host's UI should:
 - Show "Last synced: <time>" prominently on the tenant overview.
 - Offer a "Sync now" button that calls `POST /api/sync/trigger/<tenant_id>` for users who want fresher data.
 - Not assume real-time freshness without an explicit on-demand sync.
@@ -241,6 +242,6 @@ Each runs as part of `sync_all_tenants.py`; they're separate progress trackers b
 1. ~~**`docker-compose.core.yml` is untracked**~~ — committed in `b54b4e22`; canonical dev stack for embedded-mode testing.
 2. **Sync filter for SA-flow tenants** — verify and fix `sync_all_tenants.py` if the current filter excludes service-account auth.
 3. ~~**Tenant Management API key bootstrap**~~ — env-var-first (`TENANT_MANAGEMENT_API_KEY`), DB-fallback on miss. Core compose ships a dev default. Use `scripts/initialize_tenant_mgmt_api_key.py` to mint a production key.
-4. **Health check endpoints** — `docker-compose.core.yml` healthchecks `/admin/health`. Scope3's deployment monitoring should probably also poll `/api/v1/tenant-management/health` (existing) and `/mcp/health` if available.
+4. **Health check endpoints** — `docker-compose.core.yml` healthchecks `/admin/health`. Host-product deployment monitoring should probably also poll `/api/v1/tenant-management/health` (existing) and `/mcp/health` if available.
 
-These don't block sprint 1 implementation, but should be resolved before Scope3 deploys to its own staging.
+These don't block sprint 1 implementation, but should be resolved before any host product deploys to its own staging environment.

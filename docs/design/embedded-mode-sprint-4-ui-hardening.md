@@ -29,7 +29,7 @@ entirely so publishers don't see fields they can't edit.
 ### Hidden sections within `/tenant/{id}/settings`
 
 #### Account
-- **Organization Information** (tenant `name`, `billing_plan`) — Scope3 owns
+- **Organization Information** (tenant `name`, `billing_plan`) — host product owns
 - **Branding** (operator_domain / brand resolution) — upstream-owned
 - **Domain Configuration** (custom CNAME) — unused in embedded mode
 - **🔐 Access Control** (SSO/OIDC) — identity forwarded via X-Identity-* contract
@@ -67,7 +67,7 @@ not platform infrastructure:
 
 Hidden-section URLs render the standard banner instead of returning 404:
 
-> **Platform settings managed by Scope3 Storefront.**
+> **Platform settings managed by {host product name}.**  *(banner reads `tenant.external_source` through a display-name filter)*
 
 This is a deep-link safety net for the setup-tasks panel (sprint 1.8 §7):
 when a publisher clicks a `configure_path` from a status item that's
@@ -128,13 +128,13 @@ defense-in-depth.
 ## Acceptance criteria
 
 ### Hidden pages
-- [ ] `/tenant/{id}/users` on a embedded tenant returns 200 with the
-      "Platform settings managed by Scope3 Storefront." banner — not 404.
+- [ ] `/tenant/{id}/users` on an embedded tenant returns 200 with the
+      "Platform settings managed by {host product name}." banner — not 404.
 - [ ] Same route on an open-instance tenant continues to render the
       Users & Access page unchanged.
 
 ### Hidden settings sections
-- [ ] Settings page on a embedded tenant omits the Account → Organization
+- [ ] Settings page on an embedded tenant omits the Account → Organization
       Information, Branding, Domain Configuration, Access Control sections.
 - [ ] Same page omits Ad Server Configuration entirely.
 - [ ] Settings nav (left rail) drops the matching tabs.

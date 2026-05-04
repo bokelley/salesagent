@@ -36,7 +36,7 @@ Lives in `src/admin/middleware/embedded_tenant.py`. Registered as a Flask `befor
 def embedded_tenant_middleware():
     """
     Runs before every admin route. Determines whether the current request
-    is on a embedded tenant, and if so, applies the platform-managed scoping rules.
+    is on an embedded tenant, and if so, applies the platform-managed scoping rules.
 
     Sets g.embedded_context with:
       - is_managed: bool
@@ -200,9 +200,9 @@ def network_policy_middleware(allowed_cidrs: list[str], surface_name: str):
 | Tenant Management API | `MANAGEMENT_API_ALLOWED_CIDRS` |
 | Admin UI direct (super-admin backdoor) | `ADMIN_UI_ALLOWED_CIDRS` (typically VPN range) |
 
-If a surface's env var is unset on a embedded instance, the salesagent **fails to start** with a configuration error. Forces deployers to make a deliberate choice — never silent "allow all" defaults.
+If a surface's env var is unset on an embedded instance, the salesagent **fails to start** with a configuration error. Forces deployers to make a deliberate choice — never silent "allow all" defaults.
 
-**Trusted-proxy handling**: `TRUSTED_PROXY_CIDRS` lists the upstream proxy ranges (Scope3's nginx). Requests from those IPs have their `X-Forwarded-For` honored; everything else uses `remote_addr`. Standard pattern — `werkzeug.middleware.proxy_fix.ProxyFix` configured at app init also relies on this.
+**Trusted-proxy handling**: `TRUSTED_PROXY_CIDRS` lists the host product's upstream proxy ranges (e.g., the host's nginx in front of the salesagent). Requests from those IPs have their `X-Forwarded-For` honored; everything else uses `remote_addr`. Standard pattern — `werkzeug.middleware.proxy_fix.ProxyFix` configured at app init also relies on this.
 
 **Listener binding**: the salesagent's gunicorn/uvicorn must bind to a private interface only. Documented in deployment guide. Not enforced by app code (it's a deployment concern), but the startup script can refuse to bind `0.0.0.0` when `MANAGED_INSTANCE=true` is set — small belt-and-suspenders.
 
@@ -222,13 +222,13 @@ The new `external_*` columns on `AuditLog` (added in sprint 1) get populated as 
 
 | Caller path | external_user_email | external_user_id | external_org_id | external_source |
 |---|---|---|---|---|
-| UI request from Scope3 proxy | `X-Identity-Email` | `X-Identity-User-Id` | `X-Identity-Org-Id` | `X-Identity-Source` |
+| UI request from host product's proxy | `X-Identity-Email` | `X-Identity-User-Id` | `X-Identity-Org-Id` | `X-Identity-Source` |
 | Tenant Management API call | null | null | null | `"management_api"` |
 | MCP/A2A call (embedded mode) | `X-Identity-Email` if present | `X-Identity-User-Id` if present | `X-Identity-Org-Id` if present | `X-Identity-Source` or `"managed_header"` |
 | Super-admin override | super-admin email (Google) | null | null | `"super_admin_override"` |
 | Open-instance request | null (existing User row used instead) | null | null | null |
 
-Audit log queries can filter on `external_source` to slice by traffic origin. Useful for "show me everything Scope3 control plane changed today" or "show me all super-admin override events."
+Audit log queries can filter on `external_source` to slice by traffic origin. Useful for "show me everything the host control plane changed today" or "show me all super-admin override events."
 
 ## Pydantic schemas
 
@@ -258,7 +258,7 @@ Returned as 403 responses.
 - [ ] Banner renders only on embedded-tenant pages, never on non-embedded or super-admin-override sessions.
 
 **Identity propagation:**
-- [ ] Request to a embedded-tenant URL without `X-Identity-*` headers returns 403 `identity_required`.
+- [ ] Request to an embedded-tenant URL without `X-Identity-*` headers returns 403 `identity_required`.
 - [ ] Request with `X-Identity-Org-Id` not matching the URL's tenant returns 403 `identity_org_mismatch`.
 - [ ] Audit log entries on embedded-tenant mutations carry the external_* fields populated from headers.
 - [ ] Audit log entries via Tenant Management API carry `external_source="management_api"`.
@@ -266,7 +266,7 @@ Returned as 403 responses.
 **MCP/A2A embedded-mode resolve_identity:**
 - [ ] Call to MCP with `X-Tenant-Id` + `X-Principal-Id` resolves correctly; no bearer token required or accepted.
 - [ ] Call to MCP without those headers returns the protocol's auth-error response (e.g., MCP error -32001).
-- [ ] Call to MCP with bearer token `x-adcp-auth` on a embedded instance is **ignored** (not a fallback) — embedded mode rejects the call same as no headers.
+- [ ] Call to MCP with bearer token `x-adcp-auth` on an embedded instance is **ignored** (not a fallback) — embedded mode rejects the call same as no headers.
 - [ ] On `MANAGED_INSTANCE=false`, existing bearer-token flow works unchanged (regression test).
 
 **Network policy:**
@@ -282,8 +282,8 @@ Returned as 403 responses.
 - [ ] Non-super-admin Google session attempting same: 403.
 
 **Integration:**
-- [ ] End-to-end: provision a embedded tenant via API; visit the proxied UI as a Scope3 user; products page is editable; tenant settings page is read-only with banner; attempt POST to settings update → 403; super-admin login bypass works.
-- [ ] End-to-end: Scope3 buyer agent calls `/mcp/get_products` with `X-Tenant-Id`/`X-Principal-Id` → succeeds. Same call from public IP → 403. Same call without headers → auth error.
+- [ ] End-to-end: provision an embedded tenant via API; visit the proxied UI as a host-product user; products page is editable; tenant settings page is read-only with banner; attempt POST to settings update → 403; super-admin login bypass works.
+- [ ] End-to-end: host's buyer agent calls `/mcp/get_products` with `X-Tenant-Id`/`X-Principal-Id` → succeeds. Same call from public IP → 403. Same call without headers → auth error.
 
 **Regressions:**
 - [ ] Open-instance integration tests pass unchanged on `MANAGED_INSTANCE=false`.
@@ -291,21 +291,21 @@ Returned as 403 responses.
 
 ## Open questions
 
-1. **Per-tenant role mapping config.** `X-Identity-Role` values come from upstream platforms with their own role taxonomies. Today: hardcode `admin | member | viewer` mapping. Future: per-tenant or per-source role config tables. Defer until Scope3 has multi-role needs.
-2. **`X-Forwarded-For` chain trust.** With Scope3's proxy in front of our network policy middleware, the chain is `client → Scope3 nginx → salesagent`. We trust the last hop (Scope3 nginx IP in `TRUSTED_PROXY_CIDRS`). Confirm Scope3 nginx is the only hop between the public internet and us; if there's an L7 LB in between, its IP needs to be in the trust list too.
+1. **Per-tenant role mapping config.** `X-Identity-Role` values come from host products with their own role taxonomies. Today: hardcode `admin | member | viewer` mapping. Future: per-tenant or per-source role config tables. Defer until a host hits multi-role needs.
+2. **`X-Forwarded-For` chain trust.** With the host product's proxy in front of our network policy middleware, the chain is `client → host nginx → salesagent`. We trust the last hop (host's nginx IP in `TRUSTED_PROXY_CIDRS`). Confirm the host's nginx is the only hop between the public internet and us; if there's an L7 LB in between, its IP needs to be in the trust list too.
 3. **Failure mode if model-layer guard trips for a non-platform-managed write.** The guard is built per sprint 1 to fire only on platform-managed columns/tables. If it fires unexpectedly (someone added a new platform-managed table without updating the guard), the user sees a 500. Worth logging this case prominently and perhaps adding a structural guard that catches "platform-managed tables not in the write-guard registry."
 4. **MCP/A2A response when `MANAGED_INSTANCE=true` but headers missing.** Should this be a network-policy 403 (request shouldn't have arrived) or an MCP-spec auth error? Probably MCP-spec auth error to keep buyer-agent error handling consistent across modes; document in the buyer-protocol auth docs.
 5. **Listener binding enforcement.** The "fail to start if `MANAGED_INSTANCE=true` and binding to 0.0.0.0" check requires reading the WSGI server config — easy with gunicorn args, harder with uvicorn config files. Decide whether this is worth doing in app code or just documenting as a deployment requirement.
 
 ## What sprints 5+ build on this
 
-Sprint 2 closes out the runtime hardening. After sprints 1, 1.5, and 2, a embedded-mode salesagent is fully usable end-to-end:
-- API automation surface for everything Scope3 cares about (sprint 1 + 1.5).
+Sprint 2 closes out the runtime hardening. After sprints 1, 1.5, and 2, an embedded-mode salesagent is fully usable end-to-end:
+- API automation surface for everything the host product cares about (sprint 1 + 1.5).
 - Runtime safety — UI middleware, network policy, embedded-mode buyer-protocol auth (sprint 2).
-- Storefront has tenant status visibility (`GET /status` from sprint 1.5).
+- Host has tenant status visibility (`GET /status` from sprint 1.5).
 
 After sprint 2:
-- **Sprint 3**: workflow approve/reject + remaining read-only operations (workflow detail, media-buys, audit-log, sync-history). Detail views to back the status summary; operational mutations Scope3 wants in its UI.
+- **Sprint 3**: workflow approve/reject + remaining read-only operations (workflow detail, media-buys, audit-log, sync-history). Detail views to back the status summary; operational mutations the host wants surfaced in its UI.
 - **Sprint 4 (optional)**: publisher-managed CRUD via API (principals, products) — automation conveniences. Publishers also do these via the proxied UI.
 - **Sprint 5 (optional)**: remaining publisher-managed sub-resources (tags, properties, profiles, etc.) via API.
 - **Sprint 6 (optional)**: outbound webhooks for state changes. Replaces polling `GET /status`.

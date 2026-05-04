@@ -7,9 +7,9 @@
 
 ## Scope
 
-Sprint 5 fills out the remaining publisher-managed sub-resources via API. Like sprint 4, this is **optional** — these surfaces are editable via the proxied UI, so API endpoints are an automation convenience, not a prerequisite for Scope3's launch. Build this only if there's a concrete need to manage these entities programmatically.
+Sprint 5 fills out the remaining publisher-managed sub-resources via API. Like sprint 4, this is **optional** — these surfaces are editable via the proxied UI, so API endpoints are an automation convenience, not a prerequisite for an embedded-mode launch. Build this only if there's a concrete need to manage these entities programmatically.
 
-After sprint 5 (combined with sprint 4), the API surface is feature-complete for every config knob the publisher can set in the UI — Scope3 can automate or bulk-edit anything if it wants.
+After sprint 5 (combined with sprint 4), the API surface is feature-complete for every config knob the publisher can set in the UI — a host can automate or bulk-edit anything if it wants.
 
 20 endpoints across 7 sub-resource groups:
 
@@ -155,9 +155,9 @@ class VerifyAuthorizedPropertyResponse(BaseModel):
     verified_at: datetime
 ```
 
-`POST /authorized-properties/{pid}/verify` triggers the verification check synchronously (typically <2s). For network failures or timeouts, returns 504 with the property left unverified — Scope3 retries.
+`POST /authorized-properties/{pid}/verify` triggers the verification check synchronously (typically <2s). For network failures or timeouts, returns 504 with the property left unverified — the caller retries.
 
-`POST /authorized-properties/bulk` is synchronous with a 60s timeout; for very large imports (>1000 rows), Scope3 chunks. Per-row failures collected in `items[]` rather than rolling back the whole import — same pattern as sprint 2's `autogenerate-from-gam`.
+`POST /authorized-properties/bulk` is synchronous with a 60s timeout; for very large imports (>1000 rows), the caller chunks. Per-row failures collected in `items[]` rather than rolling back the whole import — same pattern as sprint 2's `autogenerate-from-gam`.
 
 ### Currency limits (singleton sub-resource, PUT replaces)
 
@@ -200,7 +200,7 @@ class TestAgentResponse(BaseModel):
     tested_at: datetime
 ```
 
-`POST /{agent}/test` calls the agent's discovery/health endpoint with the configured auth. Used by Scope3 to validate connection before saving and by health-check automation.
+`POST /{agent}/test` calls the agent's discovery/health endpoint with the configured auth. Used by host products to validate connection before saving and by health-check automation.
 
 ## Endpoint behavior (per group, briefly)
 
@@ -273,7 +273,7 @@ Reuses sprint 1's `ApiError`. New error codes introduced in sprint 5:
 2. **CSV parsing strictness.** Match pandas-style permissive parsing (existing UI behavior) or strict RFC 4180? Existing UI uses Python's `csv` module with default settings — replicate exactly to avoid surprises.
 3. **Authorized property verification queue.** Sprint 5 ships sync verification (one property per call). For tenants with hundreds of properties, periodic background re-verification is desirable — punt to a follow-up.
 4. **Agent capabilities discovery format.** What does "calling agent discovery" actually look like? Likely a GET on the agent's well-known endpoint returning a capabilities manifest. Confirm by reading existing agent test code in `creative_agents.py` and `signals_agents.py`.
-5. **Per-tenant policy schema stability.** The `Policy` model exists today. Is it stable enough to expose as PUT-replaces, or are there nested fields that warrant sub-resources of their own (e.g., `/policy/rules`)? Keep PUT-replaces for sprint 5; refactor to sub-resources later if Scope3 finds it awkward.
+5. **Per-tenant policy schema stability.** The `Policy` model exists today. Is it stable enough to expose as PUT-replaces, or are there nested fields that warrant sub-resources of their own (e.g., `/policy/rules`)? Keep PUT-replaces for sprint 5; refactor to sub-resources later if a host integrator finds it awkward.
 
 ## What sprint 6 builds on this
 

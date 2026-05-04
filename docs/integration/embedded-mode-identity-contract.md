@@ -61,7 +61,7 @@ The salesagent's behavior toward identity headers is controlled by the `IDENTITY
 | `network` (default for `MANAGED_INSTANCE=true`) | Headers are trusted as-is. Trust is established by the network: the salesagent is reachable only through the upstream platform's authenticated proxy, so any request that reaches the salesagent has already passed the platform's auth. The `X-Identity-Signature` header, if present, is ignored. |
 | `signed` | The salesagent verifies `X-Identity-Signature` against a configured public key (HMAC-SHA256 by default; algorithm configurable). Requests without a valid signature are rejected with 403. Use this mode when the network trust assumption is weaker (e.g., multiple internal services share the salesagent's network without an authenticated proxy in front). |
 
-For Scope3's deployment: `IDENTITY_TRUST_MODE=network`. No signature required.
+For deployments where the salesagent is reachable only through the host's authenticated proxy (e.g., the Scope3 reference): `IDENTITY_TRUST_MODE=network`. No signature required.
 
 ## Failure modes
 
@@ -86,7 +86,7 @@ The error response body follows the standard `ApiError` shape:
 
 Because the contract relies on network trust in the default `network` mode, the salesagent's deployment must:
 
-- Bind the salesagent listener to a private interface only — never `0.0.0.0` on a embedded instance.
+- Bind the salesagent listener to a private interface only — never `0.0.0.0` on an embedded instance.
 - Allow-list the upstream proxy's source IP/range at the salesagent's listener (`BUYER_PROTOCOL_ALLOWED_CIDRS`, `MANAGEMENT_API_ALLOWED_CIDRS`, `ADMIN_UI_ALLOWED_CIDRS` — see deployment docs).
 - Reject any request missing the required `X-Identity-*` headers — fail closed.
 - Audit-log the headers on every request for post-hoc detection.

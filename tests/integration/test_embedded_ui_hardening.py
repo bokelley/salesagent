@@ -274,3 +274,132 @@ class TestLockBanner:
             assert "Platform settings managed by Your Platform" in body
         finally:
             _cleanup(tid)
+
+
+# ---------------------------------------------------------------------------
+# Settings → Publisher Partnerships
+# ---------------------------------------------------------------------------
+
+
+class TestPublisherPartnershipsHiddenOnEmbedded:
+    """Publisher Partnerships section is fully hidden on embedded tenants.
+
+    AAO ``/publisher/{domain}`` is the canonical surface for partnership
+    data; embedded-mode publishers manage these via the upstream platform.
+    """
+
+    def test_embedded_omits_publisher_partnerships_section(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # Section heading and the Add-Publisher modal markup are gone.
+        assert "<h2>Publisher Partnerships</h2>" not in body
+        assert "showAddPublisherModal()" not in body
+        assert 'id="add-publisher-modal"' not in body
+        assert "syncAllPublishers()" not in body
+
+    def test_embedded_drops_publishers_nav_tab(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        # The data-section="publishers" anchor is the nav-rail link.
+        assert 'data-section="publishers"' not in body
+
+    def test_open_tenant_renders_publisher_partnerships(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/settings")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "<h2>Publisher Partnerships</h2>" in body
+        assert 'data-section="publishers"' in body
+        assert "showAddPublisherModal()" in body
+
+
+# ---------------------------------------------------------------------------
+# Settings → Danger Zone
+# ---------------------------------------------------------------------------
+
+
+class TestDangerZoneHiddenOnEmbedded:
+    """Danger Zone is fully hidden on embedded tenants.
+
+    Scope3 owns tenant lifecycle (provision / deactivate / reactivate via
+    Tenant Management API).
+    """
+
+    def test_embedded_omits_danger_zone_section(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # Heading + the deactivate POST endpoint must both be gone.
+        assert "Danger Zone" not in body
+        assert "/deactivate" not in body
+        assert "Deactivate Sales Agent" not in body
+        assert 'id="danger-zone"' not in body
+
+    def test_embedded_drops_danger_zone_nav_tab(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        assert 'data-section="danger-zone"' not in body
+
+    def test_open_tenant_renders_danger_zone(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/settings")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "Danger Zone" in body
+        assert "Deactivate Sales Agent" in body
+        assert "/deactivate" in body
+
+
+# ---------------------------------------------------------------------------
+# Settings → Advertisers (read-only directory on embedded)
+# ---------------------------------------------------------------------------
+
+
+class TestAdvertisersDirectoryReadOnlyOnEmbedded:
+    """Advertisers directory stays visible on embedded tenants but write
+    actions (create / rename / delete) are hidden.
+
+    Advertiser identity is managed via routing rules in the upstream
+    platform's settings; the local directory is a read-only view of who's
+    mapped to this tenant's inventory.
+    """
+
+    def test_embedded_keeps_advertisers_section_and_nav_tab(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # The directory section heading and nav tab remain.
+        assert "<h2>Advertiser Management</h2>" in body
+        assert 'data-section="advertisers"' in body
+        # Read-only note is visible.
+        assert "Advertiser identity is managed via routing rules" in body
+
+    def test_embedded_hides_advertiser_create_button(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        # No "Add Advertiser" / "Create First Advertiser" CTAs, no link to /principals/create.
+        assert "Add Advertiser" not in body
+        assert "Create First Advertiser" not in body
+        assert "/principals/create" not in body
+
+    def test_embedded_hides_per_row_edit_and_delete_controls(self, client, embedded_tenant_id):
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        # Per-row Edit link and Delete button are gone.
+        assert "deletePrincipal(" not in body
+        assert 'title="Edit Advertiser"' not in body
+        assert 'title="Delete Advertiser"' not in body
+
+    def test_open_tenant_shows_full_advertiser_write_ui(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/settings")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        # Section + nav tab are present (regression guard).
+        assert "<h2>Advertiser Management</h2>" in body
+        assert 'data-section="advertisers"' in body
+        # Read-only note is NOT shown on open-instance tenants.
+        assert "Advertiser identity is managed via routing rules" not in body
+        # Create CTA is present.
+        # When there are 0 advertisers, "Create First Advertiser" renders;
+        # otherwise the header "Add Advertiser" renders. Either is fine —
+        # the /principals/create route link is the single canonical signal.
+        assert "/principals/create" in body

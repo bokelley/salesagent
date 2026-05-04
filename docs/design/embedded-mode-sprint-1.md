@@ -143,7 +143,7 @@ def block_platform_managed_inserts(mapper, connection, target):
         return
     if not _caller_is_authorized(connection):
         raise EmbeddedTenantWriteError(
-            f"Inserting {type(target).__name__} for a embedded tenant requires the Tenant Management API."
+            f"Inserting {type(target).__name__} for an embedded tenant requires the Tenant Management API."
         )
 ```
 
@@ -487,14 +487,14 @@ Anything that turns up gets a `request.script_root` fix.
 - [ ] `GET /docs` renders Swagger UI; every endpoint executable from the UI with an API key.
 
 **Write guard:**
-- [ ] Attempting to update a embedded tenant's platform-managed columns (name, billing_plan, external_org_id, etc.) via any non-API path raises `EmbeddedTenantWriteError`.
-- [ ] Attempting to update a embedded tenant's `AdapterConfig` via any non-API path raises `EmbeddedTenantWriteError`.
-- [ ] Updating a publisher-managed table (Product, Principal, Creative) for a embedded tenant via the **existing UI handlers** succeeds — the guard does not fire.
+- [ ] Attempting to update an embedded tenant's platform-managed columns (name, billing_plan, external_org_id, etc.) via any non-API path raises `EmbeddedTenantWriteError`.
+- [ ] Attempting to update an embedded tenant's `AdapterConfig` via any non-API path raises `EmbeddedTenantWriteError`.
+- [ ] Updating a publisher-managed table (Product, Principal, Creative) for an embedded tenant via the **existing UI handlers** succeeds — the guard does not fire.
 - [ ] The super-admin override flag (`session.info["super_admin_override"]`) bypasses the guard cleanly.
 
 **Integration:**
 - [ ] Reverse-proxy smoke test: salesagent admin UI works correctly when mounted at a non-root path prefix.
-- [ ] End-to-end test: provision a embedded tenant via API; update its name via API (succeeds); attempt to update its name via UI handler (fails with `EmbeddedTenantWriteError`); mutate a Product via UI handler (succeeds); deactivate via API; verify subsequent provision attempts with the same `external_org_id` fail or are blocked correctly.
+- [ ] End-to-end test: provision an embedded tenant via API; update its name via API (succeeds); attempt to update its name via UI handler (fails with `EmbeddedTenantWriteError`); mutate a Product via UI handler (succeeds); deactivate via API; verify subsequent provision attempts with the same `external_org_id` fail or are blocked correctly.
 
 **Schema testing:**
 - [ ] Unit test: each Pydantic schema validates the happy path and rejects each failure mode (missing required fields, bad currency code, etc.).

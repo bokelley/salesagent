@@ -5,11 +5,13 @@
 **Status:** Draft
 **Last updated:** 2026-05-04
 
+> **Reference deployment.** Concrete examples cite Scope3 Storefront as the first reference deployment. The deliverables are generic.
+
 ## Scope
 
 Sprint 1.5 already shipped the consolidated `GET /tenants/{tid}/status` summary endpoint. Sprint 3 adds:
 
-1. **Workflow approve/reject mutations** — Scope3 wants these in its own UI rather than sending users into the salesagent UI for approvals.
+1. **Workflow approve/reject mutations** — host products typically want these in their own UI rather than sending users into the salesagent UI for approvals.
 2. **Detail read endpoints** behind the status summary — workflow detail, media-buy list/detail, audit-log search, sync history. The status endpoint surfaces aggregates; these endpoints back the drill-downs.
 
 8 endpoints:
@@ -111,7 +113,7 @@ class ListMediaBuysResponse(BaseModel):
 
 Filter params: `?status=`, `?principal_id=`, `?from_date=`, `?to_date=`, `?limit=N&cursor=...`.
 
-**No POST/PATCH/DELETE on media buys.** Buys are owned by the buyer protocol (MCP/A2A); the API only reads them. If Scope3 needs to cancel a buy on behalf of a customer, that's a buyer-agent action, not a tenant-management one.
+**No POST/PATCH/DELETE on media buys.** Buys are owned by the buyer protocol (MCP/A2A); the API only reads them. If a host product needs to cancel a buy on behalf of a customer, that's a buyer-agent action, not a tenant-management one.
 
 ### Audit log
 
@@ -162,7 +164,7 @@ class ListSyncHistoryResponse(BaseModel):
     next_cursor: str | None
 ```
 
-Filter params: `?sync_type=inventory&status=failed`, `?limit=N&cursor=...`. Default `limit=20`. Used by Scope3 to render a sync timeline / health graph.
+Filter params: `?sync_type=inventory&status=failed`, `?limit=N&cursor=...`. Default `limit=20`. Used by host products to render a sync timeline / health graph.
 
 ## Pagination
 
@@ -222,7 +224,7 @@ Reuses sprint 1's `ApiError`. New error codes:
 - [ ] Historical entries match the most-recent values surfaced in `GET /status` (sprint 1.5).
 
 **Integration with prior sprints:**
-- [ ] Provision a embedded tenant; trigger a sync via existing `sync_api`; `GET /sync-history` includes the run; `GET /status` reflects current state.
+- [ ] Provision an embedded tenant; trigger a sync via existing `sync_api`; `GET /sync-history` includes the run; `GET /status` reflects current state.
 - [ ] Create a workflow (via internal mechanism — workflows are created by buyer protocol, not API); approve via API; status flips; audit log records the decision; `GET /status.workflows.open_count` decreases on next fetch.
 
 **OpenAPI:**
@@ -231,16 +233,16 @@ Reuses sprint 1's `ApiError`. New error codes:
 
 ## Open questions
 
-1. **Multi-currency budget aggregation.** Media-buy summaries can include buys in different currencies. Options: (a) convert to a single reporting currency using a configurable rate, (b) return per-currency breakdown, (c) report only the tenant's default currency. Decide at implementation time based on Scope3's UI needs.
-2. **Workflow expiration policy.** Today's workflows may not have `expires_at`. If Scope3 wants SLA-driven auto-expiration, that's a separate feature — sprint 3 reads whatever the existing workflow model has.
-3. **Audit log retention.** Long-running tenants accumulate large audit logs. Retention policy (e.g., keep 90d hot, archive older) isn't sprint 3 work but is worth noting — Scope3 may need a separate archive query interface.
+1. **Multi-currency budget aggregation.** Media-buy summaries can include buys in different currencies. Options: (a) convert to a single reporting currency using a configurable rate, (b) return per-currency breakdown, (c) report only the tenant's default currency. Decide at implementation time based on host-product UI needs.
+2. **Workflow expiration policy.** Today's workflows may not have `expires_at`. If a host product wants SLA-driven auto-expiration, that's a separate feature — sprint 3 reads whatever the existing workflow model has.
+3. **Audit log retention.** Long-running tenants accumulate large audit logs. Retention policy (e.g., keep 90d hot, archive older) isn't sprint 3 work but is worth noting — hosts may need a separate archive query interface.
 
 ## What sprint 4+ builds on this
 
-After sprints 1, 1.5, 2, 3, the embedded-mode salesagent is feature-complete for Scope3's launch. Remaining sprints are optional:
+After sprints 1, 1.5, 2, 3, the embedded-mode salesagent is feature-complete for a host-product launch. Remaining sprints are optional:
 
 - **Sprint 4 (optional)**: publisher-managed CRUD via API (principals, products) — automation conveniences for bulk operations.
 - **Sprint 5 (optional)**: remaining publisher-managed sub-resources (tags, properties, profiles, etc.) via API.
 - **Sprint 6 (optional)**: outbound webhooks — sync failed, workflow created, media buy delivered, adapter connection lost. Reduces polling load on `GET /status` and `GET /workflows`.
 
-After sprint 6, the embedded-mode integration is complete: provisioning, configuration, runtime, observability, async notifications. Everything Scope3 needs to embed the salesagent as a managed service.
+After sprint 6, the embedded-mode integration is complete: provisioning, configuration, runtime, observability, async notifications. Everything a host product needs to embed the salesagent as a managed service.

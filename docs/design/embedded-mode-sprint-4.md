@@ -5,14 +5,16 @@
 **Status:** Draft, optional
 **Last updated:** 2026-05-04
 
+> **Reference deployment.** Concrete examples cite Scope3 Storefront as the first reference deployment. The deliverables are generic.
+
 ## Scope
 
-Sprint 4 expands the Tenant Management API into the **publisher-managed scope**: principals (advertisers) and products. These surfaces are also editable from the proxied UI, so the API is purely an automation/bulk-management convenience — **not a prerequisite for Scope3's launch**. Build this only when there's a concrete need to manage these entities programmatically (bulk advertiser onboarding, scripted product autogeneration, etc.).
+Sprint 4 expands the Tenant Management API into the **publisher-managed scope**: principals (advertisers) and products. These surfaces are also editable from the proxied UI, so the API is purely an automation/bulk-management convenience — **not a prerequisite for an embedded-mode launch**. Build this only when there's a concrete need to manage these entities programmatically (bulk advertiser onboarding, scripted product autogeneration, etc.).
 
 Reasons to do sprint 4:
 
-1. Scope3 may want to push initial product catalogs in bulk (especially via `autogenerate-from-gam`) rather than have publishers configure them in the UI.
-2. Bulk advertiser onboarding from a Scope3-side CSV/import is much smoother via API.
+1. A host product may want to push initial product catalogs in bulk (especially via `autogenerate-from-gam`) rather than have publishers configure them in the UI.
+2. Bulk advertiser onboarding from a host-side CSV/import is much smoother via API.
 3. The plumbing established in sprint 1 (spectree, Pydantic, management-API-key, ORM repositories) makes adding these endpoints cheap.
 
 11 endpoints in total:
@@ -36,7 +38,7 @@ POST    /tenants/{tid}/products/autogenerate-from-gam
 
 ## Auth boundary
 
-Token management is intentionally not part of the Tenant Management API. On a embedded instance, the salesagent doesn't authenticate callers at all — network ACL is the trust boundary. Any service that can reach the salesagent's port is, by definition, authorized.
+Token management is intentionally not part of the Tenant Management API. On an embedded instance, the salesagent doesn't authenticate callers at all — network ACL is the trust boundary. Any service that can reach the salesagent's port is, by definition, authorized.
 
 This applies uniformly:
 - **UI proxy**: identity comes from `X-Identity-*` headers, trusted because the network is private.
@@ -57,7 +59,7 @@ Out of scope for sprint 4 (in other sprints):
 - Creative review/approval API (publishers do this in the UI; not commonly automated)
 - Workflow approval API (already in [sprint 3](./embedded-mode-sprint-3.md))
 - Authorized properties / inventory profiles / business rules / agents / policy ([sprint 5](./embedded-mode-sprint-5.md), also optional)
-- Bulk endpoints for principals (`POST /principals/bulk`). Single-create + reasonable rate limits is fine for v1; bulk added if Scope3 needs it.
+- Bulk endpoints for principals (`POST /principals/bulk`). Single-create + reasonable rate limits is fine for v1; bulk added if a host needs it.
 
 The model-layer write guard from sprint 1 is **not** modified. Principals, Products, and their child tables are publisher-managed — the existing UI handlers continue to write to them without the guard firing.
 
@@ -261,7 +263,7 @@ Returns `ProductDetail`. 404 if missing or wrong tenant.
 
 #### `PATCH /tenants/{tid}/products/{pid}`
 
-Sparse update. Pricing-model changes revalidated against adapter compatibility. `is_active` toggle is allowed (lets Scope3 hide products without deleting).
+Sparse update. Pricing-model changes revalidated against adapter compatibility. `is_active` toggle is allowed (lets the host hide products without deleting).
 
 #### `DELETE /tenants/{tid}/products/{pid}`
 
@@ -279,10 +281,10 @@ The marquee endpoint of sprint 4. Bootstraps a product catalog from the publishe
    - If ad unit is inactive and `include_inactive_ad_units=false`, mark `skipped_inactive`.
    - Else: build a `Product` from the ad unit (name = ad unit display name, formats from supported sizes, pricing from defaults).
 5. If `dry_run=true`, return the would-be results without committing.
-6. Else commit the batch in one transaction. Per-product failures are collected (validation errors, adapter rejections) and returned in `failed[]`. Successfully created products are committed; partial failure does not roll back successes — Scope3 sees exactly what was created and what wasn't.
+6. Else commit the batch in one transaction. Per-product failures are collected (validation errors, adapter rejections) and returned in `failed[]`. Successfully created products are committed; partial failure does not roll back successes — the caller sees exactly what was created and what wasn't.
 7. Return `AutogenerateProductsResponse`.
 
-**Synchronous, with timeout**: GAM ad-unit queries are typically fast for small/medium networks. Hard timeout at 60s; if GAM is slow, return 504 `gam_query_timeout` and Scope3 retries. Async-with-job-tracking is a future enhancement if a deployment hits this regularly.
+**Synchronous, with timeout**: GAM ad-unit queries are typically fast for small/medium networks. Hard timeout at 60s; if GAM is slow, return 504 `gam_query_timeout` and the caller retries. Async-with-job-tracking is a future enhancement if a deployment hits this regularly.
 
 **Idempotency**: re-running with the same parameters and `skip_existing=true` is safe — already-created products are skipped, not duplicated.
 
@@ -352,8 +354,8 @@ The existing UI blueprints (`src/admin/blueprints/principals.py`, `src/admin/blu
 - [ ] Returns 400 `adapter_not_gam` for non-GAM tenants.
 
 **Integration with prior sprints:**
-- [ ] After sprints 1–4: provision a embedded tenant, autogenerate products from GAM, create a principal — entire flow works via API only without touching the UI.
-- [ ] After sprints 1–4: existing UI handlers for principals/products on a embedded tenant still work — the model write guard does not fire on these tables.
+- [ ] After sprints 1–4: provision an embedded tenant, autogenerate products from GAM, create a principal — entire flow works via API only without touching the UI.
+- [ ] After sprints 1–4: existing UI handlers for principals/products on an embedded tenant still work — the model write guard does not fire on these tables.
 
 **OpenAPI:**
 - [ ] All 11 endpoints listed in the OpenAPI spec.
@@ -364,7 +366,7 @@ The existing UI blueprints (`src/admin/blueprints/principals.py`, `src/admin/blu
 1. **`resolve_identity()` change for MCP/A2A in embedded mode.** Concrete header names (`X-Principal-Id`, `X-Tenant-Id` vs. reusing existing identity headers), and how the salesagent toggles between bearer-token mode (open instance) and header-scope mode (embedded instance). Confirm the existing `resolve_identity()` callsites can branch cleanly on `MANAGED_INSTANCE`. Implementation detail, not a separate design doc.
 3. **GAM ad-unit-to-product mapping table.** `skip_existing` requires knowing which products were autogenerated from which ad units. Add `Product.source_ad_unit_id` (nullable string) populated by autogenerate; query by it for the skip check. Does this exist today?
 4. **Product field mapping from GAM ad units.** The autogenerate endpoint needs deterministic rules for mapping ad-unit attributes (sizes → formats, targeting → product targeting, etc.). Specify these mappings in a separate `gam-product-autogenerate-mapping.md` doc since they're substantive.
-5. **Bulk principal creation.** Sprint 4 ships single-create. If Scope3 needs to onboard hundreds at a time, add `POST /principals/bulk` accepting a list. Defer until Scope3 confirms.
+5. **Bulk principal creation.** Sprint 4 ships single-create. If a host needs to onboard hundreds at a time, add `POST /principals/bulk` accepting a list. Defer until concretely requested.
 
 ## What sprint 5+ builds on this
 

@@ -7,7 +7,7 @@
 
 ## Scope
 
-Sprint 6 is optional. It replaces polling-based observability (sprint 1.5 status + sprint 3 workflows/audit-log) with push-based notifications, so Scope3 doesn't have to call `GET /status` and `GET /workflows` on a schedule to surface live state. Worth doing once polling load becomes problematic or once Scope3 wants near-real-time UX (e.g., a workflow approval notification appears in Storefront seconds after it's created in the salesagent).
+Sprint 6 is optional. It replaces polling-based observability (sprint 1.5 status + sprint 3 workflows/audit-log) with push-based notifications, so the host product doesn't have to call `GET /status` and `GET /workflows` on a schedule to surface live state. Worth doing once polling load becomes problematic or once the host wants near-real-time UX (e.g., a workflow approval notification appears in the host's UI seconds after it's created in the salesagent).
 
 Scope:
 1. Webhook subscription management (register/list/delete URLs per tenant).
@@ -105,7 +105,7 @@ Receivers verify the signature before processing. The `event_id` is a stable per
 
 **Implementation choice.** The salesagent already has Celery / RQ / a similar background-task layer (confirm at implementation time). Webhook deliveries enqueue a task on event publication; the worker handles HTTP posting + retries. Persist event records in a `webhook_events` table for the dead-letter queue and for replay.
 
-**Synchronous test endpoint.** `POST /webhooks/{wid}/test` posts a minimal `webhook.test` payload synchronously (≤10s) and returns the response. Used by Scope3 when registering a webhook to verify the receiver works.
+**Synchronous test endpoint.** `POST /webhooks/{wid}/test` posts a minimal `webhook.test` payload synchronously (≤10s) and returns the response. Used by host products when registering a webhook to verify the receiver works.
 
 ## Security
 
@@ -157,8 +157,8 @@ Reuses sprint 1's `ApiError`. New error codes:
 ## Open questions
 
 1. **Background-task infrastructure.** Confirm the salesagent has a worker stack ready (Celery/RQ/etc.) or whether sprint 6 introduces one. If new, this sprint grows substantially. Investigate before committing.
-2. **Per-tenant rate limits on webhook delivery.** A misbehaving tenant (e.g., a workflow that flaps approve/reject in a loop) could spam Scope3's receiver. Add per-tenant per-event-type rate limits in sprint 6, or defer.
-3. **Replay endpoint.** Scope3 may want to replay past events into a new receiver (e.g., after a Storefront rewrite). Add `POST /webhooks/{wid}/replay?from=ISO_DATE` or defer.
+2. **Per-tenant rate limits on webhook delivery.** A misbehaving tenant (e.g., a workflow that flaps approve/reject in a loop) could spam the host's webhook receiver. Add per-tenant per-event-type rate limits in sprint 6, or defer.
+3. **Replay endpoint.** A host may want to replay past events into a new receiver (e.g., after a UI rewrite). Add `POST /webhooks/{wid}/replay?from=ISO_DATE` or defer.
 4. **DLQ surface.** Dead-letter records are stored but no API surfaces them. Add `GET /webhooks/{wid}/dead-letter` later; not sprint 6 v1.
 5. **Static-header secrets.** Subscription `headers` field can carry a bearer token. Store encrypted; never log. Consider whether this should be a separate `auth_config` field with a discriminated union (none/bearer/basic) for clarity. Defer to implementation review.
 
@@ -169,5 +169,5 @@ Embedded mode is feature-complete. The integration covers: provisioning (sprint 
 Future work, not part of this design line:
 - Multi-control-plane support (per-control-plane API keys, scoped permissions).
 - Per-tenant role-mapping config tables (replacing the hardcoded `admin/member/viewer`).
-- A Scope3-native UI built on the API (replacing the proxied salesagent UI).
+- A host-native UI built on the API (replacing the proxied salesagent UI) — e.g., a Scope3-native UI in the Storefront.
 - Open-instance migration tooling (move existing direct-customer tenants into embedded mode).

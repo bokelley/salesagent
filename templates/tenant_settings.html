@@ -484,10 +484,14 @@
 
         <div class="settings-nav-separator"></div>
 
+        {% if not tenant.is_embedded %}
+        {# AAO `/publisher/{domain}` is the canonical surface for partnership data;
+           embedded-mode publishers manage these via the upstream platform. #}
         <a class="settings-nav-item" data-section="publishers">
             <span class="settings-nav-icon">🌐</span>
             <span>Publishers</span>
         </a>
+        {% endif %}
 
         <a class="settings-nav-item" data-section="products">
             <span class="settings-nav-icon">📦</span>
@@ -506,7 +510,9 @@
             <span>Advertisers</span>
         </a>
 
-        {% if not single_tenant_mode %}
+        {% if not single_tenant_mode and not tenant.is_embedded %}
+        {# Scope3 owns tenant lifecycle (provision / deactivate / reactivate via
+           Tenant Management API) on embedded tenants. #}
         <div class="settings-nav-separator"></div>
 
         <a class="settings-nav-item" data-section="danger-zone">
@@ -1992,6 +1998,9 @@ Exclude any products that don't match the brand's tone.</pre>
         </div>
 
         <!-- Publishers Settings -->
+        {# AAO `/publisher/{domain}` is the canonical surface for partnership data;
+           embedded-mode publishers manage these via the upstream platform. #}
+        {% if not tenant.is_embedded %}
         <div id="publishers" class="settings-section">
             <div class="settings-header">
                 <h2>Publisher Partnerships</h2>
@@ -2058,6 +2067,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 </div>
             </div>
         </div>
+        {% endif %}
 
         <!-- Products Settings -->
         <div id="products" class="settings-section">
@@ -2105,11 +2115,19 @@ Exclude any products that don't match the brand's tone.</pre>
         <!-- Formats are now fetched from creative agents via AdCP, not stored in local DB -->
 
         <!-- Advertisers Settings -->
+        {# On embedded tenants the Advertisers directory stays visible (so
+           publishers can see which buyers are mapped to their inventory) but
+           write actions are hidden — advertiser identity is managed via
+           routing rules in the upstream platform's settings. #}
         <div id="advertisers" class="settings-section">
             <div class="settings-header">
                 <h2>Advertiser Management</h2>
                 <p>Manage advertisers who can access your inventory</p>
             </div>
+
+            {% if tenant.is_embedded %}
+            <p class="text-muted">Advertiser identity is managed via routing rules in your platform's settings.</p>
+            {% endif %}
 
             <div class="status-card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -2119,9 +2137,11 @@ Exclude any products that don't match the brand's tone.</pre>
                             {{ active_advertisers }} active this month
                         </p>
                     </div>
+                    {% if not tenant.is_embedded %}
                     <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary btn-small">
                         Add Advertiser
                     </a>
+                    {% endif %}
                 </div>
             </div>
 
@@ -2203,6 +2223,7 @@ Exclude any products that don't match the brand's tone.</pre>
                                         </div>
                                     </td>
                                     <td>
+                                        {% if not tenant.is_embedded %}
                                         <div class="btn-group btn-group-sm">
                                             <a href="{{ url_for('principals.edit_principal', tenant_id=tenant_id, principal_id=principal.principal_id) }}"
                                                class="btn btn-outline-secondary btn-sm"
@@ -2215,6 +2236,9 @@ Exclude any products that don't match the brand's tone.</pre>
                                                 🗑️
                                             </button>
                                         </div>
+                                        {% else %}
+                                        <span class="text-muted">—</span>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -2227,9 +2251,11 @@ Exclude any products that don't match the brand's tone.</pre>
             <div class="card" style="margin-top: 1rem;">
                 <div class="card-body text-center text-muted">
                     <p>No advertisers registered yet.</p>
+                    {% if not tenant.is_embedded %}
                     <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary">
                         Create First Advertiser
                     </a>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}
@@ -2732,6 +2758,9 @@ result = await client.tools.get_products(brief="video ads")</pre>
             </div>
         </div>
 
+        {# Scope3 owns tenant lifecycle (provision / deactivate / reactivate via
+           Tenant Management API) on embedded tenants. #}
+        {% if not tenant.is_embedded %}
         <!-- Danger Zone -->
         <div id="danger-zone" class="settings-section">
             <div class="settings-header">
@@ -2785,6 +2814,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
             </div>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 </div>
 

@@ -1,16 +1,18 @@
 # Rename "managed mode" → "embedded mode"
 
-**Status:** Captured (sweep-refactor scoped for after sprint 1.8)
+**Status:** In progress — codebase rename underway, docs renamed
 **Last updated:** 2026-05-04
 
 ## Why
 
 PSA's "managed mode" was named when Scope3 was the first concrete
 adopter. The abstraction is broader: it's how PSA is *embedded* into a
-host product (Scope3, Manticore, any future hosting provider) where
-the host owns identity, branding, billing, and chrome. "Managed mode"
-muddles that with "is_active" / lifecycle semantics that already exist
-on the Tenant.
+host product — any SSP console, publisher tools SaaS, wrapper-management
+service, or other host where the host owns identity, branding, billing,
+and chrome. "Managed mode" muddles that with "is_active" / lifecycle
+semantics that already exist on the Tenant. Naming it "embedded mode"
+also signals positioning for adoption: PSA can ship inside another
+product, not just be hosted on its own.
 
 Renaming to **embedded mode** clarifies positioning for adoption — it
 signals "PSA can be embedded in your product" and makes the API surface

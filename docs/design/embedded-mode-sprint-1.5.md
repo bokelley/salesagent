@@ -7,13 +7,13 @@
 
 ## Scope
 
-Sprint 1.5 lands the three small things Scope3 needs to ship the Storefront integration end-to-end:
+Sprint 1.5 lands the three small things a host product needs to ship the embedded-mode integration end-to-end:
 
 1. **`POST /tenants/preview-adapter`** — pre-provision adapter test that returns network metadata. Lets the Storefront UI confirm the GAM service-account grant + auto-fill currency/timezone before committing to a tenant.
 2. **`GET /tenants/{tid}/status`** — consolidated operational status. Replaces what would have been per-domain summary endpoints (sync, workflows, media-buys, etc.) — one round-trip, one place to tune caching.
 3. **Identity-propagation contract sign-off** — lock the `X-Identity-*` header schema and `IDENTITY_TRUST_MODE=network` as a stable integration spec at `docs/integration/embedded-mode-identity-contract.md`.
 
-This sprint exists because Scope3 needs status visibility from day one to surface in the Storefront tenant overview, and adapter preview meaningfully improves the provisioning UX. Publisher-CRUD-via-API (sprints 4–5 in the new phasing) is no longer time-critical because publishers operate via the proxied UI.
+This sprint exists because the host product needs status visibility from day one to surface in its tenant overview, and adapter preview meaningfully improves the provisioning UX. Publisher-CRUD-via-API (sprints 4–5 in the new phasing) is no longer time-critical because publishers operate via the proxied UI.
 
 3 endpoints + 1 contract doc.
 
@@ -55,7 +55,7 @@ The hard 4xx cases (malformed request body, missing API key) still return their 
 ### Implementation notes
 
 - The GAM adapter today supports `test_connection()` (sprint 1 scope item). It also supports network-metadata calls; needs to be confirmed the metadata-fetch is exposed cleanly. If not, add a small `get_network_metadata()` method.
-- `advertiser_count` is a nice-to-have. If the GAM read for it costs more than ~500ms, drop it from v1 — Scope3 confirmed "whatever's easy."
+- `advertiser_count` is a nice-to-have. If the GAM read for it costs more than ~500ms, drop it from v1.
 - For the Mock adapter, return canned values (`network_name="Mock Network"`, `currency_code="USD"`, etc.) so dev environments work.
 
 ## `GET /api/v1/tenant-management/tenants/{tid}/status`
@@ -119,7 +119,7 @@ class TenantStatusResponse(BaseModel):
     fetched_at: datetime
 ```
 
-All field names snake_case; Scope3 maps to camelCase at its edge.
+All field names snake_case; the host maps to its preferred convention at the edge.
 
 ### Behavior
 
@@ -134,7 +134,7 @@ All field names snake_case; Scope3 maps to camelCase at its edge.
 3. Aggressive caching: 5–10s server-side cache keyed by `tenant_id`. Storefront may call this on every page render, so cache invalidation is critical — bust on adapter test, sync completion, workflow state change, etc.
 4. Single round-trip means cache invalidation is also single-keyed.
 
-Why one endpoint vs. several: Scope3 explicitly requested consolidation. Per-domain endpoints exist separately for *detail* views (sprint 3 keeps `GET /workflows`, `GET /media-buys`, etc. for drill-downs) but the homepage card needs aggregate view in one call.
+Why one endpoint vs. several: host-product UIs typically want one call for the overview tile. Per-domain endpoints exist separately for *detail* views (sprint 3 keeps `GET /workflows`, `GET /media-buys`, etc. for drill-downs) but the overview card needs aggregate view in one call.
 
 ### Caching
 
@@ -156,12 +156,12 @@ Use the existing cache infrastructure if any (Redis? In-memory?). If none, in-me
 
 ## Identity-propagation contract sign-off
 
-Write `docs/integration/embedded-mode-identity-contract.md` as a stable, versioned integration spec — separate from the design doc so Scope3 has a single canonical reference and can wire its edge middleware with a stable contract. Content covers:
+Write `docs/integration/embedded-mode-identity-contract.md` as a stable, versioned integration spec — separate from the design doc so any host product has a single canonical reference and can wire its edge middleware with a stable contract. Content covers:
 
 - Header schema (the 6 headers from the design)
 - Role enum: `admin | member | viewer`
 - `IDENTITY_TRUST_MODE = network | signed` config
-- For Scope3's deployment: `IDENTITY_TRUST_MODE = network`, no signature required
+- For deployments where the salesagent is reachable only through the host's authenticated proxy (e.g., the Scope3 reference): `IDENTITY_TRUST_MODE = network`, no signature required
 - Versioning: `v1` is the current; breaking changes get `v2` field added; non-breaking additions don't bump
 - Failure modes: missing required headers → 403 `identity_required`; org claim doesn't match URL tenant → 403 `identity_org_mismatch`
 
@@ -201,6 +201,6 @@ The contract doc is "this is final, ship the edge middleware against it." See [d
 
 ## What sprint 2 builds on this
 
-Sprint 2 (runtime hardening) ships the UI middleware, network policy, and `resolve_identity()` change for embedded-mode MCP/A2A — closing out the operational-safety side. Sprint 1 + 1.5 + 2 = embedded mode is fully operational and observable; publishers can do their work via the proxied UI; Scope3 has the API automation surface for everything Scope3 cares about.
+Sprint 2 (runtime hardening) ships the UI middleware, network policy, and `resolve_identity()` change for embedded-mode MCP/A2A — closing out the operational-safety side. Sprint 1 + 1.5 + 2 = embedded mode is fully operational and observable; publishers can do their work via the proxied UI; the host product has the API automation surface for everything it cares about.
 
-Sprints 4–5 (publisher CRUD via API) become opt-in convenience features for bulk operations / future automation. They're no longer prerequisite for Scope3's launch.
+Sprints 4–5 (publisher CRUD via API) become opt-in convenience features for bulk operations / future automation. They're no longer prerequisite for an embedded-mode launch.

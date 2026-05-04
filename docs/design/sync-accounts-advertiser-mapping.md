@@ -9,7 +9,7 @@
 
 The salesagent's `sync_accounts` AdCP tool today is pure-internal: it upserts `Account` rows in our DB keyed by `(operator, brand.domain, brand.brand_id, sandbox)` and never touches the seller's ad server. When a buyer agent later calls `create_media_buy` for that account, the impl needs a `gam_advertiser_id` to attach the GAM Order to — but `Account.platform_mappings` is empty.
 
-Today this works for Wonderstruck because there's exactly one advertiser per principal in `Principal.platform_mappings`, hard-coded by the publisher. That's the wrong shape for embedded mode where Scope3 will sync hundreds of (operator, brand) pairs and expect them to wire up to real GAM advertisers without manual ops work per pair.
+Today this works for Wonderstruck because there's exactly one advertiser per principal in `Principal.platform_mappings`, hard-coded by the publisher. That's the wrong shape for embedded mode, where a host product will sync hundreds of (operator, brand) pairs and expect them to wire up to real GAM advertisers without manual ops work per pair.
 
 This doc decides:
 1. What the natural granularity is — when do two `(operator, brand)` calls produce one advertiser vs. two?
@@ -73,11 +73,11 @@ if account.status == "pending_provision":
         )
 ```
 
-The `ACCOUNT_NOT_PROVISIONED` path is the conservative default — publishers with strong GAM-side ops governance keep `auto_provision_advertisers=false` and the salesagent files an approval workflow visible in the Admin UI. The `auto_provision_advertisers=true` path is for tenants who've delegated advertiser-create authority to the salesagent (Scope3-embedded tenants will turn this on at provision time).
+The `ACCOUNT_NOT_PROVISIONED` path is the conservative default — publishers with strong GAM-side ops governance keep `auto_provision_advertisers=false` and the salesagent files an approval workflow visible in the Admin UI. The `auto_provision_advertisers=true` path is for tenants who've delegated advertiser-create authority to the salesagent (host-product-embedded tenants typically turn this on at provision time).
 
 ### `Tenant.auto_provision_advertisers`
 
-New boolean column on `Tenant`. Default `false` for backward compatibility with today's open-instance tenants. The Tenant Management API's `POST /tenants/provision` accepts it as a request field (default `true` for embedded-mode tenants — Scope3 wants automation by default). Open-instance Admin UI exposes it as a config toggle on the GAM adapter page.
+New boolean column on `Tenant`. Default `false` for backward compatibility with today's open-instance tenants. The Tenant Management API's `POST /tenants/provision` accepts it as a request field (default `true` for embedded-mode tenants — host products generally want automation by default). Open-instance Admin UI exposes it as a config toggle on the GAM adapter page.
 
 Migration: `add_auto_provision_advertisers_to_tenant` adds the column with `server_default='false'`.
 
@@ -119,7 +119,7 @@ Sandbox accounts (`Account.sandbox=true`) NEVER get a real GAM advertiser. Behav
 
 ## Pre-mapping (Tenant Management API)
 
-Publishers — and Scope3 driving them programmatically — need a way to wire GAM advertisers to billing keys *before* any buyer agent calls `sync_accounts`. Otherwise every first-buy on a new brand burns an `ACCOUNT_NOT_PROVISIONED` round trip even when the publisher already knows which advertiser belongs where.
+Publishers — and host products driving them programmatically — need a way to wire GAM advertisers to billing keys *before* any buyer agent calls `sync_accounts`. Otherwise every first-buy on a new brand burns an `ACCOUNT_NOT_PROVISIONED` round trip even when the publisher already knows which advertiser belongs where.
 
 The mapping IS the Account. We expose Account upsert through the Tenant Management API; pre-mapping is just creating Accounts ahead of time with `platform_mappings.gam_advertiser_id` pre-attached and `status=active`.
 
@@ -166,7 +166,7 @@ POST handles upsert (create or remap an existing Account's advertiser id by re-P
 
 ### Tradeoff: exact-match vs. wildcards
 
-This design requires one Account row per natural-key combination — no wildcards like "any agent on AccuWeather × cocacola.com → advertiser 12345." For `billing=operator` that's fine (one row per operator/brand). For `billing=agent` it's potentially N×M (every agent × every brand). Defer the wildcard question until Scope3 actually hits cardinality pain — then a separate `account_advertiser_rules` table can express patterns and `_sync_accounts_impl` consults it as a fallback when no exact-match Account exists.
+This design requires one Account row per natural-key combination — no wildcards like "any agent on AccuWeather × cocacola.com → advertiser 12345." For `billing=operator` that's fine (one row per operator/brand). For `billing=agent` it's potentially N×M (every agent × every brand). Defer the wildcard question until a real deployment hits cardinality pain — then a separate `account_advertiser_rules` table can express patterns and `_sync_accounts_impl` consults it as a fallback when no exact-match Account exists.
 
 ## Migration plan
 
@@ -204,7 +204,7 @@ Code changes:
 
 ## Sprint placement
 
-This work fits in **Sprint 1.6 or Sprint 4** of the embedded-mode plan. Lighter than Sprint 4's full publisher-CRUD scope; depends on Sprint 1's Tenant Management API existing (which it does). Recommend landing as a discrete sprint right after 1.5 since Scope3's first real `create_media_buy` will hit `ACCOUNT_NOT_PROVISIONED` without it.
+This work fits in **Sprint 1.6 or Sprint 4** of the embedded-mode plan. Lighter than Sprint 4's full publisher-CRUD scope; depends on Sprint 1's Tenant Management API existing (which it does). Recommend landing as a discrete sprint right after 1.5 since the first embedded-mode `create_media_buy` will hit `ACCOUNT_NOT_PROVISIONED` without it.
 
 Estimated scope: ~3 days.
 - 0.5d migrations + Tenant flag.
