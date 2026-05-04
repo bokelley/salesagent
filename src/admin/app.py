@@ -67,12 +67,37 @@ class CustomProxyFix:
             script_name = environ.get("HTTP_X_FORWARDED_PREFIX", "")
 
         if script_name:
+            # Managed-mode reverse-proxy quirk: when Storefront sets
+            # X-Forwarded-Prefix=/storefront/psa/tenant/<id> AND forwards the
+            # original /tenant/<id>/<page> path through unchanged, naively
+            # using the prefix as SCRIPT_NAME causes url_for() to emit
+            # /storefront/psa/tenant/<id>/tenant/<id>/<page> — the tenant
+            # segment doubles because both the prefix and the route URL
+            # reference it. Strip the overlapping /tenant/<id> tail from
+            # script_name so SCRIPT_NAME stops at the storefront mount and
+            # Flask's url_for produces correctly-nested paths.
+            #
+            # Heuristic: prefix ends with /tenant/<segment> AND PATH_INFO
+            # also starts with that exact /tenant/<segment>. Using <segment>
+            # generically (not regex-matching tenant_id format) keeps this
+            # robust to whatever id scheme the storefront uses.
+            path_info = environ.get("PATH_INFO", "")
+            if "/tenant/" in script_name:
+                _root, _, tail = script_name.rpartition("/tenant/")
+                tenant_segment = f"/tenant/{tail}"
+                if (
+                    _root  # there's something before /tenant/<id>
+                    and tail  # tenant_id non-empty
+                    and "/" not in tail  # tail is a single segment, not /tenant/X/foo
+                    and path_info.startswith(tenant_segment + "/")
+                ):
+                    script_name = _root  # drop the /tenant/<id> tail
+
             # Store for use in response wrapper
             self.active_script_name = script_name
             # Set SCRIPT_NAME so Flask knows it's mounted at this path
             environ["SCRIPT_NAME"] = script_name
             # Also ensure PATH_INFO is correct
-            path_info = environ.get("PATH_INFO", "")
             if path_info.startswith(script_name):
                 environ["PATH_INFO"] = path_info[len(script_name) :]
                 if not environ["PATH_INFO"]:

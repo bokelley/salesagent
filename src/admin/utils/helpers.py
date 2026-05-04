@@ -261,6 +261,31 @@ def require_auth(admin_only=False):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            from flask import request
+
+            # Managed-mode bypass — checked BEFORE session-based auth.
+            # Routes registered under /tenant/<tenant_id>/... receive
+            # tenant_id as a kwarg; if MANAGED_INSTANCE=true and the
+            # tenant is managed externally, X-Identity-* headers from
+            # the upstream proxy authorize the request without OAuth.
+            # See docs/integration/managed-mode-identity-contract.md.
+            tenant_id_kw = kwargs.get("tenant_id")
+            if tenant_id_kw:
+                from src.admin.utils.managed_mode_auth import (
+                    ManagedAuthDeny,
+                    ManagedAuthOk,
+                    authorize_managed_request,
+                    synthetic_user_dict,
+                )
+
+                managed_result = authorize_managed_request(request, tenant_id_kw)
+                if isinstance(managed_result, ManagedAuthDeny):
+                    abort(403, description=f"{managed_result.error}: {managed_result.message}")
+                if isinstance(managed_result, ManagedAuthOk):
+                    g.user = synthetic_user_dict(managed_result.identity)
+                    return f(*args, **kwargs)
+                # ManagedAuthPassthrough → fall through to existing OAuth path
+
             # Check for test mode
             test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
             if test_mode and "test_user" in session:
@@ -269,10 +294,13 @@ def require_auth(admin_only=False):
 
             if "user" not in session:
                 logger.info(f"require_auth: No 'user' in session. Session keys: {list(session.keys())}")
-                # Store the original URL to redirect back after login
-                from flask import request
-
-                return redirect(url_for("auth.login", next=request.url))
+                # Store the original URL to redirect back after login.
+                # Use the path-only form (request.full_path) so the
+                # ``next=`` parameter doesn't leak the upstream origin
+                # (e.g., ``localhost:3091``) when the salesagent is
+                # behind a reverse proxy.
+                next_url = request.full_path.rstrip("?")
+                return redirect(url_for("auth.login", next=next_url))
 
             # Store user in g for access in view functions
             g.user = session["user"]
@@ -357,8 +385,11 @@ def require_tenant_access(api_mode=False):
             if "user" not in session:
                 if api_mode:
                     return jsonify({"error": "Authentication required"}), 401
-                # Redirect to tenant-specific login (preserves tenant context)
-                return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
+                # Redirect to tenant-specific login (preserves tenant context).
+                # Use path-only ``next`` so reverse-proxy callers (Scope3
+                # Storefront iframe) don't see the upstream origin leaked.
+                next_url = request.full_path.rstrip("?")
+                return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=next_url))
 
             user_info = session["user"]
 
