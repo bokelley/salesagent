@@ -447,11 +447,18 @@
     </a>
 </div>
 
+{# Single source of truth for the default-active settings section.
+   Embedded tenants land on Business Rules (Account / Ad Server are
+   platform-managed and rendered as banner stubs). Open-instance
+   tenants land on Account. Both nav-active and section-active read
+   off this variable so they can't drift out of sync. #}
+{% set default_section = "business-rules" if tenant.is_embedded else "account" %}
+
 <div class="settings-layout">
     <!-- Settings Navigation -->
     <nav class="settings-nav">
         {% if not tenant.is_embedded %}
-        <a class="settings-nav-item active" data-section="account">
+        <a class="settings-nav-item{% if default_section == 'account' %} active{% endif %}" data-section="account">
             <span class="settings-nav-icon">🏢</span>
             <span>Account</span>
         </a>
@@ -478,7 +485,7 @@
         </a>
         {% endif %}
 
-        <a class="settings-nav-item{% if tenant.is_embedded %} active{% endif %}" data-section="business-rules">
+        <a class="settings-nav-item{% if default_section == 'business-rules' %} active{% endif %}" data-section="business-rules">
             <span class="settings-nav-icon">📋</span>
             <span>Policies & Workflows</span>
         </a>
@@ -542,7 +549,7 @@
         </div>
         {% else %}
         <!-- Account Settings (renamed from General) -->
-        <div id="account" class="settings-section active">
+        <div id="account" class="settings-section{% if default_section == 'account' %} active{% endif %}">
             <div class="settings-header">
                 <h2>Account</h2>
                 <p>Organization identity, virtual host configuration, and access control</p>
@@ -1198,7 +1205,7 @@
         {% endif %}{# End: not tenant.is_embedded — account + adserver sections #}
 
         <!-- Policies & Workflows Section -->
-        <div id="business-rules" class="settings-section">
+        <div id="business-rules" class="settings-section{% if default_section == 'business-rules' %} active{% endif %}">
             <div class="settings-header">
                 <h2>Policies & Workflows</h2>
                 <p>Configure how your organization operates: budgets, naming conventions, approval workflows</p>

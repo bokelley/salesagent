@@ -217,6 +217,48 @@ class TestSettingsHiddenSectionsOnEmbedded:
         assert 'data-section="account"' in body
         assert 'data-section="adserver"' in body
 
+    def test_embedded_default_section_is_business_rules(self, client, embedded_tenant_id):
+        """Regression: in embedded mode the Account section is hidden as
+        a banner stub, so something else must be the initial-render
+        ``.active`` section. The shared ``default_section`` template
+        variable should ensure exactly one section AND its matching
+        nav item carry ``.active``, and they must agree."""
+        import re
+
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # Exactly one settings-section with .active — JS show/hide has
+        # something to display on first render.
+        active_sections = re.findall(r'<div id="([^"]+)" class="settings-section active"', body)
+        assert len(active_sections) == 1, f"Expected exactly one .active section; got {active_sections}"
+        assert active_sections[0] == "business-rules"
+
+        # The matching nav item is also .active and points to the same target.
+        active_nav = re.findall(
+            r'<a class="settings-nav-item active" data-section="([^"]+)"', body
+        )
+        assert active_nav == ["business-rules"], (
+            f"Nav-active and section-active must agree; got nav={active_nav}, section={active_sections}"
+        )
+
+    def test_open_default_section_is_account(self, client, open_tenant_id):
+        """Mirror of the embedded case for open-instance: Account is the
+        default landing both in nav and in section initial-render."""
+        import re
+
+        resp = client.get(f"/tenant/{open_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+
+        active_sections = re.findall(r'<div id="([^"]+)" class="settings-section active"', body)
+        assert active_sections == ["account"], f"Expected only 'account' section .active; got {active_sections}"
+
+        active_nav = re.findall(
+            r'<a class="settings-nav-item active" data-section="([^"]+)"', body
+        )
+        assert active_nav == ["account"], f"Expected only 'account' nav .active; got {active_nav}"
+
 
 # ---------------------------------------------------------------------------
 # Currency lock
