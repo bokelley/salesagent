@@ -117,8 +117,14 @@ def build_router() -> PlatformRouter:
 
 
 def _allowed_hosts() -> list[str]:
-    """Loadable subdomains for FastMCP's DNS-rebinding allowlist."""
-    hosts: list[str] = []
+    """FastMCP DNS-rebinding allowlist.
+
+    Includes per-tenant subdomain variants from the DB plus the loopback
+    + container-bridge addresses so dev tools running on the host (e.g.
+    ``npx @adcp/sdk http://localhost:3001/mcp``) aren't rejected before
+    the subdomain router sees the request.
+    """
+    hosts: list[str] = ["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "0.0.0.0", "0.0.0.0:*"]
     for host in _load_tenant_subdomain_map():
         hosts.extend([host, f"{host}:*"])
     return hosts
