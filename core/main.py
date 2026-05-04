@@ -36,9 +36,12 @@ from adcp.decisioning.capabilities import (
     SupportedProtocol,
 )
 from adcp.server import (
-    InMemorySubdomainTenantRouter,
+    BearerTokenAuthMiddleware,
+    CallableSubdomainTenantRouter,
+    Principal,
     SubdomainTenantMiddleware,
     Tenant,
+    auth_context_factory,
 )
 from sqlalchemy import select
 
@@ -46,34 +49,87 @@ from core.platforms.gam import WonderstruckGamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
+from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
 
 logger = logging.getLogger(__name__)
 
 
-def _load_tenant_subdomain_map() -> dict[str, Tenant]:
-    """Build the SubdomainTenantMiddleware host map from the DB.
+# ---- Tenant resolution (uses adcp PR #544 CallableSubdomainTenantRouter) ----
 
-    Each active tenant row contributes ``<subdomain>.localhost`` for
-    local dev and ``<subdomain>.example.com`` for production. The
-    framework's router lower-cases hosts and strips ``:port`` so a
-    single registration covers both ``acme.localhost`` and
-    ``acme.localhost:3001``.
+
+async def _resolve_tenant(host: str) -> Tenant | None:
+    """Map a normalized host (lower-cased, port-stripped) to a Tenant.
+
+    Strips ``.localhost`` / ``.example.com`` suffix to get the subdomain,
+    then looks up the matching active row in the ``tenants`` table.
+    Production deployments add their actual base domain to this matcher.
     """
-    with get_db_session() as session:
-        rows = session.scalars(select(TenantRow).filter_by(is_active=True)).all()
+    # Strip known dev/prod suffixes; whatever's left is the subdomain.
+    subdomain = host
+    for suffix in (".localhost", ".example.com"):
+        if subdomain.endswith(suffix):
+            subdomain = subdomain[: -len(suffix)]
+            break
+    if not subdomain or subdomain == host:
+        # No recognized suffix → host has no tenant prefix
+        return None
 
-    mapping: dict[str, Tenant] = {}
-    for row in rows:
-        if not row.subdomain:
-            continue
-        tenant = Tenant(id=row.tenant_id, display_name=row.name)
-        for host in (
-            f"{row.subdomain}.localhost",
-            f"{row.subdomain}.example.com",
-        ):
-            mapping[host] = tenant
-    return mapping
+    with get_db_session() as session:
+        row = session.scalars(
+            select(TenantRow).filter_by(subdomain=subdomain, is_active=True)
+        ).first()
+
+    if row is None:
+        return None
+    return Tenant(id=row.tenant_id, display_name=row.name)
+
+
+def build_subdomain_router() -> CallableSubdomainTenantRouter:
+    """Create the tenant router with a 60-second cache.
+
+    The cache is small but bounded — tenants change infrequently relative
+    to request volume, so even a low-traffic seller hits the cache often
+    enough to benefit. ``invalidate(host)`` is called from the admin
+    flow when a tenant is created / deactivated / has its subdomain
+    rotated (M2 wiring).
+    """
+    return CallableSubdomainTenantRouter(
+        _resolve_tenant,
+        cache_size=512,
+        cache_ttl_seconds=60.0,
+    )
+
+
+# ---- Token auth (uses adcp PR #545 BearerTokenAuthMiddleware kwargs) -------
+
+
+def _validate_token(token: str) -> Principal | None:
+    """Resolve an ``x-adcp-auth`` token to the matching :class:`Principal`.
+
+    Looks up ``Principal.access_token`` in the existing salesagent
+    schema. Returns ``None`` (NOT raises) on miss — see the
+    ``BearerTokenAuthMiddleware`` docstring for the security rationale.
+
+    Memory profile: each call opens a short-lived DB session, queries by
+    indexed token column, returns the row. No state retained outside the
+    session. Per-request cost; matches the framework's expected shape.
+    """
+    if not token:
+        return None
+    with get_db_session() as session:
+        row = session.scalars(
+            select(PrincipalRow).filter_by(access_token=token)
+        ).first()
+    if row is None:
+        return None
+    return Principal(
+        caller_identity=row.principal_id,
+        tenant_id=row.tenant_id,
+    )
+
+
+# ---- Per-tenant DecisioningPlatform loading -------------------------------
 
 
 def _load_platforms() -> dict[str, MockSellerPlatform | WonderstruckGamPlatform]:
@@ -117,17 +173,25 @@ def build_router() -> PlatformRouter:
 
 
 def _allowed_hosts() -> list[str]:
-    """FastMCP DNS-rebinding allowlist.
+    """FastMCP DNS-rebinding allowlist for the dev/prod base domains.
 
-    Includes per-tenant subdomain variants from the DB plus the loopback
-    + container-bridge addresses so dev tools running on the host (e.g.
-    ``npx @adcp/sdk http://localhost:3001/mcp``) aren't rejected before
-    the subdomain router sees the request.
+    The framework auto-synthesizes ``host:*`` siblings (PR #537) so we
+    only register the bare hosts. Per-tenant subdomain validation
+    happens AFTER the allowlist filter, inside our resolver — adding
+    the wildcards here would defeat the per-tenant scoping.
+
+    Production adds its actual base domain (e.g.
+    ``*.sales-agent.example.com``) by extending this list.
     """
-    hosts: list[str] = ["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "0.0.0.0", "0.0.0.0:*"]
-    for host in _load_tenant_subdomain_map():
-        hosts.extend([host, f"{host}:*"])
-    return hosts
+    return [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        # Tenant subdomains — wildcard pattern matches any subdomain
+        # under these bases.
+        "*.localhost",
+        "*.example.com",
+    ]
 
 
 if __name__ == "__main__":
@@ -136,15 +200,28 @@ if __name__ == "__main__":
     port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
 
     router = build_router()
-    subdomain_router = InMemorySubdomainTenantRouter(
-        tenants=_load_tenant_subdomain_map()
-    )
+    subdomain_router = build_subdomain_router()
 
     serve(
         router,
         name="salesagent-core",
         port=port,
         auto_emit_completion_webhooks=False,
-        asgi_middleware=[(SubdomainTenantMiddleware, {"router": subdomain_router})],
+        # Auth + tenant resolution chain. Order matters: subdomain runs
+        # outermost so unknown hosts 404 before token validation, then
+        # token auth populates the principal contextvar that
+        # auth_context_factory reads to build ToolContext.
+        asgi_middleware=[
+            (SubdomainTenantMiddleware, {"router": subdomain_router}),
+            (
+                BearerTokenAuthMiddleware,
+                {
+                    "validate_token": _validate_token,
+                    "header_name": "x-adcp-auth",
+                    "bearer_prefix_required": False,
+                },
+            ),
+        ],
+        context_factory=auth_context_factory,
         allowed_hosts=_allowed_hosts(),
     )

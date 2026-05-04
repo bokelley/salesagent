@@ -26,11 +26,20 @@ from adcp.decisioning.capabilities import (
     MediaBuy,
     SupportedProtocol,
 )
+from adcp.server.idempotency import IdempotencyStore, MemoryBackend
 from sqlalchemy import select
 
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductRow
+
+# Single-process idempotency dedup. Multi-worker deployments need
+# ``PgBackend`` for cross-worker dedup — tracked upstream as
+# adcp-client-python#548. ``MemoryBackend`` is sufficient for the
+# greenfield single-process boot today and satisfies the framework's
+# new boot-time ``validate_idempotency_wiring`` check (PR-just-merged
+# upstream — round-2 #17 from salesagent's SDK_FEEDBACK).
+_IDEMPOTENCY = IdempotencyStore(backend=MemoryBackend(), ttl_seconds=86400)
 
 
 class MockSellerPlatform(DecisioningPlatform):
@@ -74,6 +83,7 @@ class MockSellerPlatform(DecisioningPlatform):
             "products": [_product_to_wire(row) for row in rows],
         }
 
+    @_IDEMPOTENCY.wrap
     def create_media_buy(
         self,
         req: Any,
@@ -105,6 +115,7 @@ class MockSellerPlatform(DecisioningPlatform):
             ],
         }
 
+    @_IDEMPOTENCY.wrap
     def update_media_buy(
         self,
         media_buy_id: str,
@@ -117,6 +128,7 @@ class MockSellerPlatform(DecisioningPlatform):
             "packages": [],
         }
 
+    @_IDEMPOTENCY.wrap
     def sync_creatives(
         self,
         req: Any,

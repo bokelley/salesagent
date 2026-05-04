@@ -32,12 +32,19 @@ from adcp.decisioning.capabilities import (
     MediaBuy,
     SupportedProtocol,
 )
+from adcp.server.idempotency import IdempotencyStore, MemoryBackend
 from googleads import ad_manager
 
 from core.platforms._gam_client import get_gam_client
 from core.stores.accounts import SalesagentAccountStore
 
 logger = logging.getLogger(__name__)
+
+# Single-process idempotency dedup. Adopt PgBackend for multi-worker
+# durability when adcp-client-python#548 lands. Required by the
+# framework's boot-time ``validate_idempotency_wiring`` because we
+# advertise ``IdempotencySupported(supported=True)`` below.
+_IDEMPOTENCY = IdempotencyStore(backend=MemoryBackend(), ttl_seconds=86400)
 
 
 class WonderstruckGamPlatform(DecisioningPlatform):
@@ -84,6 +91,7 @@ class WonderstruckGamPlatform(DecisioningPlatform):
         )
         return {"products": products}
 
+    @_IDEMPOTENCY.wrap
     def create_media_buy(
         self,
         req: Any,
@@ -117,6 +125,7 @@ class WonderstruckGamPlatform(DecisioningPlatform):
             ],
         }
 
+    @_IDEMPOTENCY.wrap
     def update_media_buy(
         self,
         media_buy_id: str,
@@ -125,6 +134,7 @@ class WonderstruckGamPlatform(DecisioningPlatform):
     ) -> dict[str, Any]:
         return {"media_buy_id": media_buy_id, "status": "active", "packages": []}
 
+    @_IDEMPOTENCY.wrap
     def sync_creatives(
         self,
         req: Any,
