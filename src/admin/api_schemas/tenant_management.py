@@ -228,6 +228,38 @@ class TestConnectionResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 1.5 — preview adapter (no persistence)
+# ---------------------------------------------------------------------------
+
+
+class PreviewAdapterRequest(BaseModel):
+    """Pre-provision adapter probe — same union as :class:`ProvisionTenantRequest`."""
+
+    model_config = _config()
+
+    adapter: AdapterConfig
+
+
+class PreviewAdapterResponse(BaseModel):
+    """Adapter preview with network metadata for the Storefront UX.
+
+    ``ok=False`` (bad creds) is returned with HTTP 200 — Storefront renders
+    this inline. Hard errors (malformed body, missing API key) still surface
+    via the normal 4xx path.
+    """
+
+    model_config = _config()
+
+    ok: bool
+    network_name: str | None = None
+    network_code: str | None = None
+    currency_code: str | None = None
+    time_zone: str | None = None
+    inventory_reachable: bool = False
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 

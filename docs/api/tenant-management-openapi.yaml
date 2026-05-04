@@ -200,6 +200,125 @@ components:
       - created_at
       title: TenantSummary
       type: object
+    PreviewAdapterRequest.f44f287:
+      additionalProperties: false
+      description: "Pre-provision adapter probe \u2014 same union as :class:`ProvisionTenantRequest`."
+      properties:
+        adapter:
+          discriminator:
+            mapping:
+              google_ad_manager: '#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig'
+              mock: '#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig'
+            propertyName: type
+          oneOf:
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig'
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig'
+          title: Adapter
+      required:
+      - adapter
+      title: PreviewAdapterRequest
+      type: object
+    PreviewAdapterRequest.f44f287.GAMAdapterConfig:
+      additionalProperties: false
+      description: Google Ad Manager adapter configuration.
+      properties:
+        network_code:
+          maxLength: 32
+          minLength: 1
+          title: Network Code
+          type: string
+        refresh_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          maxLength: 255
+          minLength: 3
+          title: Service Account Email
+          type: string
+        service_account_key_json:
+          format: password
+          title: Service Account Key Json
+          type: string
+          writeOnly: true
+        type:
+          const: google_ad_manager
+          default: google_ad_manager
+          title: Type
+          type: string
+      required:
+      - network_code
+      - service_account_email
+      - service_account_key_json
+      title: GAMAdapterConfig
+      type: object
+    PreviewAdapterRequest.f44f287.MockAdapterConfig:
+      additionalProperties: false
+      description: Mock adapter configuration (no real backend).
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        type:
+          const: mock
+          default: mock
+          title: Type
+          type: string
+      title: MockAdapterConfig
+      type: object
+    PreviewAdapterResponse.f44f287:
+      additionalProperties: false
+      description: "Adapter preview with network metadata for the Storefront UX.\n\
+        \n``ok=False`` (bad creds) is returned with HTTP 200 \u2014 Storefront renders\n\
+        this inline. Hard errors (malformed body, missing API key) still surface\n\
+        via the normal 4xx path."
+      properties:
+        currency_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Currency Code
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        inventory_reachable:
+          default: false
+          title: Inventory Reachable
+          type: boolean
+        network_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network Code
+        network_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network Name
+        ok:
+          title: Ok
+          type: boolean
+        time_zone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Time Zone
+      required:
+      - ok
+      title: PreviewAdapterResponse
+      type: object
     ProvisionTenantRequest.f44f287:
       additionalProperties: false
       description: Request body for ``POST /tenants/provision``.
@@ -632,6 +751,41 @@ paths:
       parameters: []
       responses: {}
       summary: Create a new tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/preview-adapter:
+    post:
+      description: "Lets the Storefront UI confirm an adapter grant + auto-fill currency\
+        \ and timezone before committing to a tenant. Bad creds return 200 with ``ok=false``\
+        \ (renders inline) \u2014 only malformed bodies / missing API key surface\
+        \ as 4xx via the normal middleware path."
+      operationId: post__api_v1_tenant-management_tenants_preview-adapter
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviewAdapterRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewAdapterResponse.f44f287'
+          description: OK
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: "Probe an adapter and return network metadata \u2014 no persistence."
       tags: []
   /api/v1/tenant-management/tenants/provision:
     post:

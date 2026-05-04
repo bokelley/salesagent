@@ -598,3 +598,148 @@ class TestOpenAPI:
         assert "/adapter-config" in joined
         assert "/deactivate" in joined
         assert "/reactivate" in joined
+        # Sprint-1.5
+        assert "/tenants/preview-adapter" in joined
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.5: preview-adapter
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_adapter_test_disabled(monkeypatch):
+    """Stub ``preview_adapter`` to passthrough — used by tests that don't care about adapter type."""
+    from src.admin.services.adapter_connection_tester import AdapterPreview
+    import src.admin.tenant_management_api as api_module
+
+    def _stub(adapter_type, cfg):
+        if adapter_type == "mock":
+            return AdapterPreview(
+                ok=True,
+                network_name="Mock Network",
+                network_code="mock",
+                currency_code="USD",
+                time_zone="UTC",
+                inventory_reachable=True,
+            )
+        return AdapterPreview(ok=True, network_code=str(cfg.get("network_code") or ""))
+
+    monkeypatch.setattr(api_module, "preview_adapter", _stub)
+
+
+class TestPreviewAdapter:
+    """``POST /tenants/preview-adapter`` — pre-provision probe with no persistence.
+
+    Bad creds return ``200 + ok=false`` so Storefront can render inline.
+    Malformed bodies still surface as 4xx via spectree.
+    """
+
+    URL = "/api/v1/tenant-management/tenants/preview-adapter"
+
+    def test_mock_adapter_returns_canned_metadata(self, client, auth_headers, real_adapter_test_disabled):
+        resp = client.post(
+            self.URL,
+            headers=auth_headers,
+            json={"adapter": {"type": "mock", "dry_run": True}},
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body["network_name"] == "Mock Network"
+        assert body["currency_code"] == "USD"
+        assert body["time_zone"] == "UTC"
+        assert body["inventory_reachable"] is True
+
+    def test_gam_happy_path_returns_network_metadata(self, client, auth_headers, monkeypatch):
+        """Stub ``preview_adapter`` to simulate a successful GAM probe."""
+        from src.admin.services.adapter_connection_tester import AdapterPreview
+        import src.admin.tenant_management_api as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "preview_adapter",
+            lambda atype, cfg: AdapterPreview(
+                ok=True,
+                network_name="Acme News",
+                network_code="123456",
+                currency_code="USD",
+                time_zone="America/New_York",
+                inventory_reachable=True,
+            ),
+        )
+
+        resp = client.post(
+            self.URL,
+            headers=auth_headers,
+            json={
+                "adapter": {
+                    "type": "google_ad_manager",
+                    "network_code": "123456",
+                    "service_account_email": "sa@example.com",
+                    "service_account_key_json": '{"type":"service_account"}',
+                }
+            },
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body["network_name"] == "Acme News"
+        assert body["currency_code"] == "USD"
+        assert body["time_zone"] == "America/New_York"
+
+    def test_bad_creds_return_200_with_ok_false(self, client, auth_headers, monkeypatch):
+        """Bad creds are a normal flow — surface as 200 + ok=false, not 4xx."""
+        from src.admin.services.adapter_connection_tester import AdapterPreview
+        import src.admin.tenant_management_api as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "preview_adapter",
+            lambda atype, cfg: AdapterPreview(ok=False, error="invalid_grant", inventory_reachable=False),
+        )
+
+        resp = client.post(
+            self.URL,
+            headers=auth_headers,
+            json={
+                "adapter": {
+                    "type": "google_ad_manager",
+                    "network_code": "123456",
+                    "service_account_email": "sa@example.com",
+                    "service_account_key_json": '{"type":"bad"}',
+                }
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is False
+        assert body["inventory_reachable"] is False
+        assert body["error"] == "invalid_grant"
+
+    def test_no_tenant_row_created(self, client, auth_headers, real_adapter_test_disabled):
+        """Preview must not create any tenant row as a side effect."""
+        from sqlalchemy import func
+
+        with get_db_session() as session:
+            count_before = session.scalar(select(func.count()).select_from(Tenant))
+
+        resp = client.post(
+            self.URL,
+            headers=auth_headers,
+            json={"adapter": {"type": "mock"}},
+        )
+        assert resp.status_code == 200
+
+        with get_db_session() as session:
+            count_after = session.scalar(select(func.count()).select_from(Tenant))
+        assert count_after == count_before
+
+    def test_malformed_body_returns_422(self, client, auth_headers):
+        """Pydantic validation failure surfaces as 422, not 200 + ok=false."""
+        resp = client.post(self.URL, headers=auth_headers, json={"adapter": {"type": "unknown"}})
+        assert resp.status_code == 422
+
+    def test_missing_api_key_returns_401(self, client):
+        resp = client.post(self.URL, json={"adapter": {"type": "mock"}})
+        assert resp.status_code in (401, 403)

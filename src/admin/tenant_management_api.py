@@ -28,6 +28,8 @@ from src.admin.api_schemas.tenant_management import (
     GAMAdapterConfig,
     ListTenantsResponse,
     MockAdapterConfig,
+    PreviewAdapterRequest,
+    PreviewAdapterResponse,
     ProvisionedPrincipalResponse,
     ProvisionTenantRequest,
     ProvisionTenantResponse,
@@ -37,7 +39,7 @@ from src.admin.api_schemas.tenant_management import (
     UpdateTenantRequest,
 )
 from src.admin.auth_helpers import require_api_key_auth
-from src.admin.services.adapter_connection_tester import test_adapter_connection
+from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
 from src.core.database.database_session import get_db_session
 from src.core.database.managed_tenant_guard import ManagedTenantWriteError
 from src.core.database.models import (
@@ -786,6 +788,35 @@ def provision_tenant():
         ),
     )
     return jsonify(response.model_dump(mode="json")), 201
+
+
+@tenant_management_api.route("/tenants/preview-adapter", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=PreviewAdapterRequest,
+    resp=Response(HTTP_200=PreviewAdapterResponse, HTTP_500=ApiError),
+)
+def preview_adapter_endpoint():
+    """Probe an adapter and return network metadata — no persistence.
+
+    Lets the Storefront UI confirm an adapter grant + auto-fill currency
+    and timezone before committing to a tenant. Bad creds return 200 with
+    ``ok=false`` (renders inline) — only malformed bodies / missing API key
+    surface as 4xx via the normal middleware path.
+    """
+    req: PreviewAdapterRequest = request.context.json  # type: ignore[attr-defined]
+    adapter_dict = _adapter_config_to_dict(req.adapter)
+    preview = preview_adapter(adapter_dict["type"], adapter_dict)
+    response = PreviewAdapterResponse(
+        ok=preview.ok,
+        network_name=preview.network_name,
+        network_code=preview.network_code,
+        currency_code=preview.currency_code,
+        time_zone=preview.time_zone,
+        inventory_reachable=preview.inventory_reachable,
+        error=preview.error,
+    )
+    return jsonify(response.model_dump(mode="json"))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>", methods=["PATCH"])
