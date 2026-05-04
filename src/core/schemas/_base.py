@@ -1395,6 +1395,13 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     # layer (ResolvedIdentity), not from the request payload, so account is optional here.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
 
+    # Library v4.4.0 made idempotency_key required. Salesagent allows it
+    # optional — buyers that don't pass one fall through to the legacy
+    # MediaBuy.create_idempotency_key behavior. Override the field as
+    # optional with None default. Buyers who DO pass one still get
+    # PgBackend dedup via @IdempotencyStore.wrap on the platform method.
+    idempotency_key: str | None = None  # type: ignore[assignment]
+
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
@@ -1577,6 +1584,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
     budget: Budget | float | None = None
+    # Library v4.4.0 made account + idempotency_key required. Salesagent
+    # resolves identity at the transport boundary (ResolvedIdentity), not from
+    # the request payload, so account stays optional. idempotency_key is
+    # optional for backward-compat with buyers that don't send one (the
+    # underlying impl is idempotent at the DB layer regardless).
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 

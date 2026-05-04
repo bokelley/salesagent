@@ -2772,6 +2772,7 @@ class TestProductV36FieldContract:
         from tests.helpers.adcp_factories import (
             create_test_cpm_pricing_option,
             create_test_publisher_properties_by_tag,
+            create_test_reporting_capabilities,
         )
 
         defaults = {
@@ -2783,6 +2784,7 @@ class TestProductV36FieldContract:
             "delivery_measurement": {"provider": "publisher", "notes": "Standard measurement"},
             "publisher_properties": [create_test_publisher_properties_by_tag()],
             "pricing_options": [create_test_cpm_pricing_option()],
+            "reporting_capabilities": create_test_reporting_capabilities(),
         }
         defaults.update(overrides)
         return Product(**defaults)

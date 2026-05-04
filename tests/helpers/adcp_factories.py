@@ -19,6 +19,25 @@ from adcp.types.generated_poc.brand import Brand
 from src.core.schemas import Package, PackageRequest, url
 
 
+def create_test_reporting_capabilities(**overrides: Any) -> dict[str, Any]:
+    """Default ``reporting_capabilities`` for test Products.
+
+    Library v4.4.0 made this field required on :class:`Product` (was
+    optional in v4.3.x). Returns a minimal-but-valid block; tests that
+    care about the specific values pass overrides.
+    """
+    defaults = {
+        "available_metrics": ["impressions", "spend"],
+        "available_reporting_frequencies": ["daily"],
+        "date_range_support": "date_range",
+        "supports_webhooks": False,
+        "expected_delay_minutes": 60,
+        "timezone": "UTC",
+    }
+    defaults.update(overrides)
+    return defaults
+
+
 def create_test_product(
     product_id: str = "test_product",
     name: str = "Test Product",
@@ -28,6 +47,7 @@ def create_test_product(
     delivery_type: str = "guaranteed",
     pricing_options: list[dict[str, Any]] | None = None,
     delivery_measurement: dict[str, Any] | None = None,
+    reporting_capabilities: dict[str, Any] | None = None,
     **kwargs,
 ) -> Product:
     """Create a test Product with all required fields.
@@ -91,6 +111,9 @@ def create_test_product(
     if pricing_options is None:
         pricing_options = [create_test_cpm_pricing_option()]
 
+    if reporting_capabilities is None:
+        reporting_capabilities = create_test_reporting_capabilities()
+
     return Product(
         product_id=product_id,
         name=name,
@@ -100,6 +123,7 @@ def create_test_product(
         delivery_type=delivery_type,
         pricing_options=pricing_options,
         delivery_measurement=delivery_measurement,
+        reporting_capabilities=reporting_capabilities,
         **kwargs,
     )
 
@@ -122,6 +146,7 @@ def create_minimal_product(**overrides) -> Product:
         "delivery_type": "guaranteed",
         "pricing_options": [create_test_cpm_pricing_option()],
         "delivery_measurement": {"provider": "test", "notes": "Test"},
+        "reporting_capabilities": create_test_reporting_capabilities(),
     }
     defaults.update(overrides)
     return Product(**defaults)

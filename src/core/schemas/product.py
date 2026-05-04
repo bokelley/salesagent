@@ -77,6 +77,14 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
+    # Library v4.4.0 made this required; salesagent treats it as optional
+    # (the ORM column is nullable, and historical products predate the field).
+    # Override the inherited field-required semantics with a None default so
+    # ORM → Pydantic conversion of legacy rows doesn't ValidationError. New
+    # products serialize the field when set; the buyer protocol still
+    # surfaces real capabilities to clients that ask.
+    reporting_capabilities: Any | None = Field(default=None)
+
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
         default=None,
