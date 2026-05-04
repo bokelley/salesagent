@@ -198,6 +198,63 @@ Single round trip during onboarding: publisher pastes GAM creds → modal confir
 
 Cap at first 100 advertisers without pagination — the preview is for confirming reachability, not browsing. Full searchable list is `/gam/advertisers`.
 
+## §6: Platform-managed `house_domain` + `public_agent_url`
+
+Sprint 1.7 added the fields and made them optional on PATCH/PROVISION. Sprint 1.8 lands the platform-managed lock-down per the sprint-1 platform-vs-publisher split.
+
+### Validation
+
+Pydantic field validators on `ProvisionTenantRequest` and `UpdateTenantRequest`:
+
+- `house_domain` — bare domain (no scheme, no path). Regex: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`. Reject `https://wonderstruck.org`, `wonderstruck.org/foo`, `WONDERSTRUCK.ORG` (force-lowercase before validate). Length cap: 253 chars (DNS).
+- `public_agent_url` — valid HTTPS URL. Use Pydantic's `HttpUrl` with a custom validator rejecting `http://` (only `https://` accepted). No path-component restriction — `https://interchange.io` and `https://buyer.scope3.com/agent` are both valid.
+
+### Lock-down via the model-layer write guard
+
+`src/core/database/managed_tenant_guard.py` (sprint 1) blocks UI-driven writes to platform-managed columns when `tenant.managed_externally=true` AND the session isn't flagged with `info["management_api_caller"]`. Today's protected set on `Tenant` is empty (the comment notes "no publisher-writable platform-managed columns").
+
+Add `house_domain` and `public_agent_url` to the protected set. Result:
+- `PATCH /tenants/{tid}` (Tenant Management API, sets `info["management_api_caller"]=True`) → writes succeed.
+- Publisher-facing Settings UI POST → write attempt raises `ManagedTenantWriteError`, surfaced as 403 with the existing `managed_tenant_write_blocked` error code.
+
+### Settings page UX
+
+`templates/tenant_settings.html` (or wherever the Settings form lives) gains:
+
+```jinja
+{% if tenant.managed_externally %}
+<div class="alert alert-info">
+  <i class="fas fa-lock"></i>
+  These values are platform-managed by {{ tenant.external_source | default('your platform') | title }}.
+  Contact your account team to change them.
+</div>
+{% endif %}
+
+<input type="text"
+       name="house_domain"
+       value="{{ tenant.house_domain }}"
+       {% if tenant.managed_externally %}readonly{% endif %}>
+```
+
+The `readonly` attribute is cosmetic (DOM-side only) — the model-layer guard is what enforces. Even if a publisher bypasses the form (e.g. crafted POST), the guard still rejects.
+
+### Setup-checklist hide-when-set
+
+Sprint 1.7 added "Publisher House Domain" + "Public Agent URL" as the first two critical-tasks items. Sprint 1.8 hides them when both are populated AND tenant is managed-externally:
+
+```python
+# src/services/setup_checklist_service.py:_check_critical_tasks
+if not (tenant.managed_externally and tenant.house_domain and tenant.public_agent_url):
+    tasks.append(SetupTask(key="house_domain", ...))
+    tasks.append(SetupTask(key="public_agent_url", ...))
+```
+
+Open-instance tenants always see both tasks (today's behavior). Managed-externally tenants with both fields set never see them — those decisions live with Scope3, not the publisher. The "Authorized Properties" task already short-circuits to "brand.json reachability probe" when `house_domain` is set (Sprint 1.7), so it's effectively hidden once the platform pre-fills `house_domain`.
+
+### Backfill
+
+No migration needed beyond Sprint 1.7's existing nullable columns. Existing managed-mode tenants get `house_domain` + `public_agent_url` populated by Scope3 via PATCH; legacy open-instance tenants keep NULL and continue to see the setup tasks.
+
 ## Migration plan
 
 Three migrations + Sprint 1.6 cleanup:
@@ -209,12 +266,15 @@ Three migrations + Sprint 1.6 cleanup:
 
 ### Code changes
 
-- **`src/admin/api_schemas/tenant_management.py`** — `BuyerAdvertiserMapping` (request + response variants), `GamAdvertiser`, `RecentBuyer`, `ListBuyerAdvertiserMappingsResponse`, `ListGamAdvertisersResponse`, `ListRecentBuyersResponse`. Plus `default_gam_advertiser_id` on `ProvisionTenantRequest`, `UpdateTenantRequest`, `TenantDetail`.
+- **`src/admin/api_schemas/tenant_management.py`** — `BuyerAdvertiserMapping` (request + response variants), `GamAdvertiser`, `RecentBuyer`, `ListBuyerAdvertiserMappingsResponse`, `ListGamAdvertisersResponse`, `ListRecentBuyersResponse`. Plus `default_gam_advertiser_id` on `ProvisionTenantRequest`, `UpdateTenantRequest`, `TenantDetail`. Plus field validators on `house_domain` (domain regex, force-lowercase) and `public_agent_url` (HTTPS-only).
 - **`src/admin/tenant_management_api.py`** — five new endpoints (mapping CRUD: GET/POST/PATCH/DELETE; mapping-list GET, advertisers GET, recent-buyers GET).
+- **`src/core/database/managed_tenant_guard.py`** — add `house_domain` + `public_agent_url` to the `Tenant` protected-columns set. UI writes from managed-externally tenants raise `ManagedTenantWriteError`.
 - **`src/services/buyer_advertiser_routing.py`** — new module: `resolve_advertiser_for_buy(tenant_id, account_ref)` runs the precedence chain.
 - **`src/core/tools/media_buy_create.py`** — replace Sprint 1.6's `resolve_account_advertiser` call with the new routing service. Account row creation moves into the resolver.
 - **`src/services/gam_advertiser_search.py`** — search/paginate the local `gam_advertisers` cache for `/gam/advertisers`.
 - **`src/services/recent_buyers_rollup.py`** — joins Account + MediaBuy for `/recent-buyers`.
+- **`src/services/setup_checklist_service.py`** — hide `house_domain` + `public_agent_url` tasks when tenant is managed-externally and both fields are populated.
+- **`templates/tenant_settings.html`** — `readonly` on house_domain + public_agent_url inputs when `tenant.managed_externally`; "Platform-managed by Scope3" banner.
 - **Optional `src/admin/services/adapter_connection_tester.py`** — extend `AdapterPreview` with `advertisers: list[GamAdvertiser]` field; wire GAM CompanyService.getCompaniesByStatement (limit 100) into `_preview_gam`.
 
 ## Acceptance criteria
@@ -254,30 +314,40 @@ Three migrations + Sprint 1.6 cleanup:
 - [ ] `POST /tenants/preview-adapter` GAM happy-path returns `advertisers` list with up to 100 entries.
 - [ ] Bad creds: `advertisers` is omitted (or empty), `ok=false` with the existing error message — no regression on the existing field set.
 
-## Open questions
+### §6 Platform-managed lock-down
+- [ ] `POST /tenants/provision` rejects `house_domain` with scheme/path/uppercase (422 with field validator error). Force-lowercase before persist.
+- [ ] `POST /tenants/provision` rejects `public_agent_url=http://...` (422); accepts `https://...`.
+- [ ] `PATCH /tenants/{tid}` (Tenant Management API) updates both fields successfully on a managed-externally tenant.
+- [ ] Direct DB write to `Tenant.house_domain` outside the management API on a `managed_externally=true` tenant raises `ManagedTenantWriteError` (model-layer guard).
+- [ ] Setup checklist for managed-externally tenant with both fields set OMITS the "Publisher House Domain" + "Public Agent URL" critical-tasks items.
+- [ ] Settings page renders `readonly` on both fields + "Platform-managed by Scope3" banner when `tenant.managed_externally=true`.
+- [ ] Open-instance (managed_externally=false) tenants always see editable fields + setup tasks (no behavior change).
 
-1. **`operator_domain` source on `get_products` flows.** `CreateMediaBuyRequest` carries `account: AccountReference` which (when inline) gives us `(operator, brand, sandbox)`. `GetProductsRequest` doesn't have an account field — does the operator come from the calling agent's auth context (bearer token's `Principal`), or from a header the buyer sets? If the latter, we need a defined way to pass it. `/recent-buyers` only sees `create_media_buy` activity until that's resolved.
+## Resolved questions
 
-2. **`operator_domain` validation.** Should the API validate it against an AAO operator registry (the operator must publish `adagents.json` listing this tenant's `public_agent_url`)? That gives us a stronger guarantee than free-text strings, at the cost of an extra fetch on every CRUD call. Suggest YES for POST (cache the result for 6h via Sprint 1.7's `is_agent_authorized_by_publisher`) but NO for GET (read-side stays cheap).
+1. ~~**`operator_domain` source on `get_products` flows.**~~ **Both endpoints carry it.** `GetProductsRequest.account: AccountReference | None` is real (verified against adcp 4.4.0). Routing chain runs uniformly across both flows; `/recent-buyers` aggregates over `Account` rows that get touched by either. (My initial read was wrong — the field is optional but present.)
 
-3. **`Tenant.default_gam_advertiser_id` activation gate.** Where does the gate enforce? Probably the `POST /tenants/{tid}/activate` endpoint that doesn't exist yet — Sprint 1's deactivate/reactivate are toggle-style, not "activate-from-pending". For sprint 1.8 we can either (a) add a new explicit activation endpoint that checks the gate, or (b) reject `create_media_buy` with `TENANT_NOT_ACTIVATED` and let the routing chain be the de-facto gate. Recommend (b) — simpler, and the buyer-protocol response is the right place to surface "publisher hasn't finished setup."
+2. **`operator_domain` validation: AAO-validated on POST with cache.** Routing-rule POST/PATCH validates the operator publishes a valid adagents.json listing this tenant's `public_agent_url`. Reuses Sprint 1.7's `is_agent_authorized_by_publisher` (6h cache). Read endpoints (GET `/buyer-advertiser-mappings`) stay cheap — no validation on read.
 
-4. **Sandbox interaction.** `AccountReference2.sandbox` is a third dimension we ignored in routing. Should sandbox buys always go through a per-tenant sandbox advertiser (Sprint 1.6's deferred follow-up), bypassing the routing rules? Recommend YES — sandbox traffic is ops-test, not commercial, and shouldn't touch real publisher routing.
+3. **Activation gate: deferred — open.** Recommended (b) reject `create_media_buy` with `TENANT_NOT_ACTIVATED` when the chain falls through to no default. No separate `POST /activate` endpoint in this sprint. Brian flagged as TBD.
 
-5. **Account.resolved_via on legacy rows.** Migration backfills NULL. The recent-buyers endpoint surfaces NULL as `"unknown"` in the response. Acceptable? Alternative: backfill by re-running the chain on every existing Account at migration time. Recommend NULL → "unknown" (cheap, no migration data plane), with a follow-up tool that publishers can run to re-resolve.
+4. **Sandbox interaction: deferred — open.** Recommended sandbox routes through per-tenant sandbox advertiser (Sprint 1.6 § Sandbox) and bypasses these rules entirely. Brian flagged as TBD.
+
+5. **Legacy `Account.resolved_via`: NULL → "unknown".** Migration backfills NULL; recent-buyers surfaces NULL as `"unknown"` in responses. No re-resolve job in this sprint. Optional follow-up tool publishers can run on demand.
 
 ## Sprint placement + estimate
 
 **Sprint 1.8** — slots after 1.7 lands. Activation-gate aspect makes it the last sprint required for managed-mode commercial go-live.
 
-Estimated scope: **~3 days**.
-- 0.5d migrations (×3) + Tenant Management API field additions.
-- 0.5d `BuyerAdvertiserMapping` schemas + CRUD endpoints.
+Estimated scope: **~3.5 days**.
+- 0.5d migrations (×3) + Tenant Management API field additions (incl. `default_gam_advertiser_id`).
+- 0.5d `BuyerAdvertiserMapping` schemas + CRUD endpoints + AAO-validate operator_domain on POST.
 - 0.5d resolution chain + Sprint 1.6 cleanup (auto_provision_advertisers retirement).
 - 0.5d `/gam/advertisers` searchable + paginated.
 - 0.5d `/recent-buyers` rollup with resolved_via.
+- 0.5d §6 platform-managed lock-down (validators + guard + checklist hide + Settings UI banner).
 - 0.25d preview-adapter advertisers extension (optional).
-- 0.25d tests (resolution-chain matrix, CRUD happy paths, dedup constraint, validation errors).
+- 0.25d tests (resolution-chain matrix, CRUD happy paths, dedup constraint, validation errors, guard-rejection on managed-externally writes).
 
 ## Cross-references
 
