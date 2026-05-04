@@ -113,7 +113,7 @@ services:
       # honoring these in sprint 2 (request scoping + network policy);
       # setting them now lets Scope3 wire its edge against the final
       # contract today.
-      MANAGED_INSTANCE: "${MANAGED_INSTANCE:-false}"
+      MANAGED_INSTANCE: "${MANAGED_INSTANCE:-true}"
       IDENTITY_TRUST_MODE: "${IDENTITY_TRUST_MODE:-network}"
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"

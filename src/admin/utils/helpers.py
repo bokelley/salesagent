@@ -310,6 +310,27 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
+            # Managed-mode bypass — checked BEFORE session-based auth.
+            # When MANAGED_INSTANCE=true and the tenant is managed externally,
+            # X-Identity-* headers from the upstream proxy authorize the
+            # request. See docs/integration/managed-mode-identity-contract.md.
+            from src.admin.utils.managed_mode_auth import (
+                ManagedAuthDeny,
+                ManagedAuthOk,
+                authorize_managed_request,
+                synthetic_user_dict,
+            )
+
+            managed_result = authorize_managed_request(request, tenant_id)
+            if isinstance(managed_result, ManagedAuthDeny):
+                if api_mode:
+                    return jsonify({"error": managed_result.error, "message": managed_result.message}), 403
+                abort(403, description=f"{managed_result.error}: {managed_result.message}")
+            if isinstance(managed_result, ManagedAuthOk):
+                g.user = synthetic_user_dict(managed_result.identity)
+                return f(tenant_id, *args, **kwargs)
+            # ManagedAuthPassthrough → fall through to existing OAuth path
+
             # Check for test mode (global env var OR per-tenant auth_setup_mode)
             test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
 
