@@ -700,6 +700,21 @@ class CreativeAgentRegistry:
         Returns:
             Format object or None if not found
         """
+        # Standard-agent + IAB-standard format → hardcoded catalog. Skips the
+        # network round trip to the reference creative agent for the common
+        # case (display/video/audio/native standards GAM and most ad servers
+        # already support). Custom formats AND non-standard agents fall
+        # through to the live lookup. See src/core/standard_formats.py.
+        from src.core.standard_formats import (
+            get_standard_format,
+            is_standard_agent,
+        )
+
+        if is_standard_agent(agent_url):
+            cached = get_standard_format(format_id)
+            if cached is not None:
+                return cached
+
         # Find agent
         agent = CreativeAgent(agent_url=agent_url, name="Unknown", enabled=True)
         formats = await self.get_formats_for_agent(agent)
