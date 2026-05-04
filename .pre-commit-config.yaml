@@ -284,22 +284,24 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
 
-  # Type checking with mypy - ENFORCED (0 errors in src/)
-  # After achieving 100% compliance, mypy is now mandatory for all commits
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+  # Type checking with mypy via the project's own venv (NOT
+  # mirrors-mypy's isolated environment). The previous hook listed
+  # ad-hoc additional_dependencies (including a stale adcp==3.2.0
+  # pin against an actual 4.x dependency, plus an incomplete
+  # type-stub set) which surfaced 200+ false-positive
+  # import-resolution errors that didn't appear under canonical
+  # `make quality`. Same class of bug fixed for adcp-client-python
+  # in upstream PR #431. Running with `uv run --extra dev mypy`
+  # gives the hook the same dependency resolution `make quality`
+  # uses — single source of truth.
+  - repo: local
     hooks:
       - id: mypy
+        name: mypy
+        entry: uv run --extra dev mypy
         args: [--config-file=mypy.ini]
-        additional_dependencies:
-          - sqlalchemy[mypy]==2.0.36
-          - types-requests
-          - types-python-dateutil
-          - types-pytz
-          - types-Markdown
-          - types-waitress
-          - adcp==3.2.0
-          - fastmcp
-          - alembic
+        language: system
+        types: [python]
+        pass_filenames: false
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'
