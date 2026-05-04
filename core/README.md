@@ -77,5 +77,58 @@ core/
 ## How to follow along
 
 The codemod report at `/tmp/codemod-report.json` lists every v3→v4 issue in
-`src/`. Until those are fixed and `pyproject.toml` is bumped to `adcp>=4.3`,
-nothing in `core/` actually runs.
+`src/`. The current `pyproject.toml` pins `adcp` to github main so all
+4.3.0+ surfaces (`PlatformRouter`, `ProposalManager`, etc.) are available.
+
+## Live in dev
+
+`docker compose up -d` brings the full stack up. To run `core/main.py`
+alongside the legacy server:
+
+```bash
+docker compose exec -d adcp-server bash -c \
+  'ADCP_PORT=3001 nohup python -m core.main > /tmp/core-main.log 2>&1 &'
+```
+
+Then inside the container:
+
+```bash
+curl -X POST http://localhost:3001/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Host: default.localhost" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"get_products","arguments":{
+      "account":{"account_id":"default:demo"},
+      "buying_mode":"brief",
+      "brief":"display ads",
+      "promoted_offering":"shoes"
+    }
+  }}'
+```
+
+The Host header drives `SubdomainTenantMiddleware` to resolve `default`
+from the `tenants` table. Products come back from the real Postgres rows.
+
+## Auth status (M1 vs M2)
+
+M1's `SalesagentAccountStore` resolves tenants via:
+1. Subdomain contextvar (set by `SubdomainTenantMiddleware`), or
+2. Explicit `account.account_id = "<tenant_id>:<rest>"` prefix (storyboard
+   convention, also what `MultiTenantAccountStore` does in the framework's
+   `multi_platform_seller` example).
+
+It does **not** yet validate the `x-adcp-auth` token against the
+`principals.access_token` column the way the legacy server does. M2 wires
+this via:
+
+- A small Starlette middleware that reads `x-adcp-auth`, looks up
+  `Principal.access_token`, and sets `auth_info.principal = principal_id`
+  on the request-scoped contextvar.
+- A `context_factory` passed to `serve()` that reads that contextvar to
+  populate `ToolContext.auth_info`.
+- The framework's `FromAuthAccounts` then resolves principal → account.
+
+Until then, `core/main.py` works with explicit-prefix account refs (which
+is what storyboards use anyway), and the legacy server continues to
+serve the token-authenticated path.
