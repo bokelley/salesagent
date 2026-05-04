@@ -126,6 +126,8 @@ def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
         created_at=tenant.created_at,
         contact_email=contact_email,
         default_currency=default_currency,
+        house_domain=tenant.house_domain,
+        public_agent_url=tenant.public_agent_url,
     ).model_dump(mode="json")
 
 
@@ -700,6 +702,8 @@ def provision_tenant():
             managed_externally=True,
             external_org_id=req.external_org_id,
             external_source=req.external_source,
+            house_domain=req.house_domain,
+            public_agent_url=req.public_agent_url,
             authorized_emails=[req.contact_email],
             authorized_domains=[],
             human_review_required=True,
@@ -849,6 +853,10 @@ def patch_tenant(tenant_id: str):
             tenant.billing_contact = req.contact_email
         if req.billing_plan is not None:
             tenant.billing_plan = req.billing_plan
+        if req.house_domain is not None:
+            tenant.house_domain = req.house_domain
+        if req.public_agent_url is not None:
+            tenant.public_agent_url = req.public_agent_url
         tenant.updated_at = datetime.now(UTC)
 
         try:

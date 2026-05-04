@@ -118,6 +118,9 @@ def _provision_payload(**overrides):
         "external_org_id": "org_acme",
         "external_source": "scope3",
         "contact_email": "ops@example.com",
+        # Sprint 1.7: AAO model — both required for managed-mode provision.
+        "house_domain": "acme.example",
+        "public_agent_url": "https://interchange.io",
         "adapter": {
             "type": "google_ad_manager",
             "network_code": "12345",
@@ -215,6 +218,55 @@ class TestProvision:
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         # spectree returns 422 for Pydantic validation failures.
         assert response.status_code == 422
+
+    def test_provision_persists_aao_fields(self, client, auth_headers, cleanup_tenants):
+        """Sprint 1.7: house_domain + public_agent_url survive provision and
+        round-trip on the Tenant detail response."""
+        payload = _provision_payload(
+            external_org_id="org_aao",
+            house_domain="acme.example",
+            public_agent_url="https://interchange.io",
+        )
+        response = client.post(
+            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
+        )
+        assert response.status_code == 201, response.get_data(as_text=True)
+        body = response.get_json()
+        cleanup_tenants.append(body["tenant_id"])
+
+        detail = client.get(
+            f"/api/v1/tenant-management/tenants/{body['tenant_id']}", headers=auth_headers
+        )
+        d = detail.get_json()
+        assert d["house_domain"] == "acme.example"
+        assert d["public_agent_url"] == "https://interchange.io"
+
+    def test_provision_rejects_missing_aao_fields(self, client, auth_headers):
+        """Sprint 1.7: managed-mode provision REQUIRES both AAO fields."""
+        payload = _provision_payload(external_org_id="org_no_aao")
+        del payload["house_domain"]
+        response = client.post(
+            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
+        )
+        assert response.status_code == 422
+
+    def test_patch_updates_aao_fields(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_aao_patch")
+        provision_resp = client.post(
+            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
+        )
+        tid = provision_resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        patch_resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"house_domain": "newhouse.example", "public_agent_url": "https://other.example"},
+        )
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+        body = patch_resp.get_json()
+        assert body["house_domain"] == "newhouse.example"
+        assert body["public_agent_url"] == "https://other.example"
 
 
 # ---------------------------------------------------------------------------

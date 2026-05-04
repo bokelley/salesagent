@@ -976,6 +976,12 @@
             "title": "External Source",
             "type": "string"
           },
+          "house_domain": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "House Domain",
+            "type": "string"
+          },
           "initial_principal": {
             "anyOf": [
               {
@@ -992,6 +998,12 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "public_agent_url": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Public Agent Url",
+            "type": "string"
           }
         },
         "required": [
@@ -999,6 +1011,8 @@
           "external_org_id",
           "external_source",
           "contact_email",
+          "house_domain",
+          "public_agent_url",
           "adapter"
         ],
         "title": "ProvisionTenantRequest",
@@ -1311,6 +1325,18 @@
             "default": null,
             "title": "External Source"
           },
+          "house_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "House Domain"
+          },
           "is_active": {
             "title": "Is Active",
             "type": "boolean"
@@ -1322,6 +1348,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "public_agent_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Public Agent Url"
           },
           "subdomain": {
             "anyOf": [
@@ -1702,6 +1740,20 @@
             "default": null,
             "title": "Contact Email"
           },
+          "house_domain": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "House Domain"
+          },
           "name": {
             "anyOf": [
               {
@@ -1715,6 +1767,20 @@
             ],
             "default": null,
             "title": "Name"
+          },
+          "public_agent_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Public Agent Url"
           }
         },
         "title": "UpdateTenantRequest",

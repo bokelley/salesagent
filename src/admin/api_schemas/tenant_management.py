@@ -85,6 +85,13 @@ class ProvisionTenantRequest(BaseModel):
     external_source: str = Field(..., min_length=1, max_length=64)
     contact_email: EmailStr
 
+    # AAO model (sprint 1.7) — both required for managed-mode tenants.
+    # ``house_domain`` is where the publisher's brand.json lives;
+    # ``public_agent_url`` is what publishers list in adagents.json to
+    # authorize this tenant. Replaces the old AuthorizedProperty table.
+    house_domain: str = Field(..., min_length=1, max_length=255)
+    public_agent_url: str = Field(..., min_length=1, max_length=500)
+
     # Adapter config (required — a tenant without an adapter is useless)
     adapter: AdapterConfig
 
@@ -174,6 +181,11 @@ class TenantDetail(TenantSummary):
 
     contact_email: EmailStr | None = None
     default_currency: str | None = None
+    # AAO model (sprint 1.7). Nullable on detail responses because
+    # legacy open-instance tenants migrated from the AuthorizedProperty
+    # path don't have these populated yet.
+    house_domain: str | None = None
+    public_agent_url: str | None = None
 
 
 class ListTenantsResponse(BaseModel):
@@ -196,6 +208,11 @@ class UpdateTenantRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     contact_email: EmailStr | None = None
     billing_plan: str | None = Field(default=None, max_length=64)
+    # AAO model — patchable post-creation. Publishers updating their brand.json
+    # location or an upstream platform rotating its public_agent_url both flow
+    # through here.
+    house_domain: str | None = Field(default=None, min_length=1, max_length=255)
+    public_agent_url: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 # ---------------------------------------------------------------------------

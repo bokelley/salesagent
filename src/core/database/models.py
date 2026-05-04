@@ -149,6 +149,15 @@ class Tenant(Base, JSONValidatorMixin):
         nullable=False,
         server_default=text("false"),
     )
+    # AAO model (sprint 1.7 — see docs/design/replace-authorized-properties-with-aao-lookup.md):
+    # house_domain is where the publisher's brand.json lives; properties are
+    # looked up live from https://{house_domain}/.well-known/brand.json. Replaces
+    # the manually-maintained AuthorizedProperty table for new tenants.
+    house_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # public_agent_url is what publishers list in their adagents.json to
+    # authorize this tenant's agent. Managed-mode tenants share one
+    # (https://interchange.io); self-hosted publishers use their own salesagent.
+    public_agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
