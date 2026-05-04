@@ -9,15 +9,15 @@
 
 Closes the agent-billed loop on managed-mode storefronts: every buy that lands on a managed publisher gets attributed to the right GAM advertiser based on the buyer's `(operator, brand)` context, with publisher-controlled overrides and a tenant default for the unmatched case.
 
-Three pieces:
+Five required pieces + two optional:
 
 1. **`Tenant.default_gam_advertiser_id`** — required-before-activation fallback advertiser. Replaces Sprint 1.6's `auto_provision_advertisers` flag (cleaner: explicit fallback wins over implicit auto-create).
-
 2. **`advertiser_routing_rules` table** — ordered overrides keyed by `(operator_domain, brand_house, brand_id)` with null-as-wildcard. Resolution precedence: exact → house wildcard → operator wildcard → tenant default → reject.
-
 3. **Two read endpoints** — paginated/searchable `/gam/advertisers` (powers UI pickers; large GAM networks have 10k+ companies) + `/recent-buyers` rollup with `resolved_via` per row (lets publishers spot fall-through buyers landing on the default).
-
-Plus an optional preview-adapter extension (§5) so the onboarding flow gets advertisers in the same round trip that confirms the GAM grant.
+4. **§5 preview-adapter advertisers extension** *(optional)* — onboarding flow gets advertisers in the same round trip that confirms the GAM grant.
+5. **§6 platform-managed lock-down** — `house_domain` + `public_agent_url` (sprint 1.7 fields) become read-only in the publisher UI when `tenant.managed_externally=true`; model-layer write guard enforces.
+6. **§7 `setup_tasks` block on `/status`** — folds the existing setup checklist into the status response with `scope: platform | publisher` annotation so Storefront can route gaps correctly (escalate "platform" gaps to itself; deep-link "publisher" gaps into the iframe).
+7. **§8 auto-run syncs + collapsed refresh** — per-tenant `sync_cadence_minutes`, first-sync on provision, single `POST /refresh` endpoint replaces N per-sync triggers in the publisher UI.
 
 ## Vocabulary
 
@@ -265,15 +265,125 @@ Open-instance tenants always see both tasks (today's behavior). Managed-external
 
 No migration needed beyond Sprint 1.7's existing nullable columns. Existing managed-mode tenants get `house_domain` + `public_agent_url` populated by Scope3 via PATCH; legacy open-instance tenants keep NULL and continue to see the setup tasks.
 
+## §7: `setup_tasks` block on `GET /tenants/{tid}/status`
+
+Sprint 1.5's status endpoint surfaces operational state (adapter, syncs, workflows, media_buys, packages, creatives, webhooks). It does NOT surface configuration completeness — Storefront has to call a separate path to render the homepage checklist.
+
+§7 folds the existing `setup_checklist_service` output into the `/status` response, with `scope` annotation so Storefront can route gaps correctly:
+
+```python
+class SetupTaskItem(BaseModel):
+    id: str                        # "house_domain", "default_advertiser", etc.
+    name: str                      # "Publisher House Domain"
+    severity: Literal["blocker", "warning", "info"]
+    scope: Literal["platform", "publisher"]
+    description: str
+    configure_path: str | None     # deep-link into the relevant settings page
+
+class SetupTasksBlock(BaseModel):
+    blocker_count: int
+    warning_count: int
+    items: list[SetupTaskItem]
+```
+
+`TenantStatusResponse` (Sprint 1.5) gains `setup_tasks: SetupTasksBlock` alongside the existing operational blocks.
+
+### Severity mapping
+
+`SetupTask.is_complete` → severity:
+- complete = `"info"` (or omit from items entirely — Storefront UI tradeoff, recommend keep + render as "✓")
+- incomplete + critical-tasks tier = `"blocker"`
+- incomplete + recommended-tasks tier = `"warning"`
+- incomplete + optional-tasks tier = `"info"`
+
+The existing `_check_critical_tasks` / `_check_recommended_tasks` / `_check_optional_tasks` split in `setup_checklist_service.py` already drives this — wire severity off the calling tier.
+
+### Scope mapping
+
+Per the sprint-1 platform-vs-publisher split:
+
+| Task | scope (managed-externally) | scope (open-instance) |
+|---|---|---|
+| `house_domain` | `platform` (Scope3 sets at provision) | `publisher` |
+| `public_agent_url` | `platform` | `publisher` |
+| `default_gam_advertiser_id` (from §1) | `publisher` | `publisher` |
+| `ad_server_connected` | `publisher` (creds belong to the operator) | `publisher` |
+| `currency_limits` | `publisher` | `publisher` |
+| `sso_configuration` | hidden (SSO managed by upstream platform) | `publisher` |
+| `authorized_properties` (legacy) | hidden (deprecated; brand.json drives in §1.7) | `publisher` |
+
+`scope=platform` items in a managed-externally tenant signal "Scope3 didn't finish provisioning" — Storefront should escalate that internally, not expose to the publisher. `scope=publisher` items deep-link via `configure_path` into the iframe at the right Settings tab.
+
+### `configure_path` shape
+
+Relative to the tenant root (so it composes cleanly with the storefront's iframe prefix). Examples:
+- `/settings#aao` for AAO config (house_domain, public_agent_url)
+- `/settings#advertiser-routing` for default advertiser (added in §1)
+- `/settings#adserver` for ad server config
+
+Storefront prepends its iframe prefix (`/storefront/psa/tenant/<id>`) when rendering deep-links.
+
+### Caching
+
+Sprint 1.5's status cache (5s TTL, per-tenant) covers the new block automatically — `setup_tasks` is computed in the same `_build_status` function and shares the cache key. Invalidation hooks Sprint 1.5 already wired (adapter test, PATCH, deactivate/reactivate) cover the relevant config-change events.
+
+## §8: Auto-run syncs + collapsed refresh button
+
+Sprint 1.5's status endpoint exposes per-sync state (`syncs.inventory`, `syncs.custom_targeting`, `syncs.advertisers`); Sprint 1.5 + crontab already auto-run them every 6h via `sync_all_tenants.py`. What's missing for managed-mode UX:
+
+1. **Configurable per-tenant cadence** so publishers with high-volume catalogs can pull more frequently (or low-volume publishers can save cron load).
+2. **First-sync-on-provision** so a managed tenant has data the moment Scope3 finishes provisioning (no "wait 6 hours").
+3. **Single `POST /tenants/{tid}/refresh` endpoint** that fires all enabled syncs together — Storefront's UI collapses N "Sync inventory" / "Sync targeting" / "Sync advertisers" buttons into one.
+
+### Schema
+
+New nullable column on `Tenant`:
+
+```python
+sync_cadence_minutes: int | None = None  # default in code: 360 (6h)
+```
+
+The cron driver (`sync_all_tenants.py`) reads this column when picking which tenants to sync this run; tenants with `cadence < 360` get included on the every-N-minute scan, tenants with `cadence > 360` get skipped on intermediate runs.
+
+### `POST /tenants/{tid}/refresh`
+
+```
+POST /api/v1/tenant-management/tenants/{tid}/refresh
+    → 202 Accepted
+    {
+      "sync_run_ids": {
+        "inventory": "sync_abc123",
+        "custom_targeting": "sync_def456",
+        "advertisers": "sync_ghi789"
+      },
+      "started_at": "2026-05-04T17:00:00Z"
+    }
+```
+
+Spawns one `SyncJob` per enabled sync type (existing table, sprint 1.5 already reads from it for the status block). Each job runs in the existing background worker — endpoint returns immediately with the new run ids so Storefront can poll `GET /status.syncs` for progress.
+
+Idempotent under rapid re-clicks: if a sync of the same type is `running` or started in the last 60 seconds, return the existing run id instead of spawning a duplicate. Avoids hammering GAM when a publisher mashes the button.
+
+### First-sync-on-provision
+
+`POST /tenants/provision` already runs the adapter test before committing the tenant row. On test success, enqueue the same three syncs the manual `/refresh` endpoint runs. Returned response gains `initial_sync.sync_run_ids` (same shape as `/refresh`) so Storefront can show a progress indicator immediately.
+
+### Hide per-sync triggers in managed-mode UI
+
+`templates/tenant_settings.html` (or wherever sync triggers live today) gets a `{% if not tenant.managed_externally %}` guard around the per-sync buttons. The `Refresh tenant` button calls `POST /refresh` and is shown unconditionally. Open-instance tenants keep today's UI (per-sync buttons + Refresh All).
+
+The `/status.syncs` block stays unchanged — Storefront renders per-sync health from it but exposes only the unified refresh action. Per the spec: "the action surface collapses to one button."
+
 ## Migration plan
 
-Four migrations + Sprint 1.6 cleanup:
+Five migrations + Sprint 1.6 cleanup:
 
 1. **`add_default_gam_advertiser_id_to_tenant`** — nullable string column. Tenant Management API requires it on managed-mode activation flows.
 2. **`create_advertiser_routing_rules_table`** — schema above. Indexed on (tenant_id) and (tenant_id, operator_domain).
 3. **`add_resolved_via_to_account`** — nullable enum (`"account" | "sandbox" | "exact" | "house" | "operator" | "default"`). Backfill is null for legacy rows; new rows populated by the resolution chain.
 4. **`add_gam_sandbox_advertiser_id_to_adapter_config`** — Sprint 1.6's deferred sandbox-advertiser cache (Q4 decision: prerequisite for the sprint 1.8 routing chain's sandbox early-return). Nullable; lazy-populated on first sandbox call by `ensure_sandbox_advertiser(tenant_id)`.
-5. **`drop_auto_provision_advertisers_from_tenant`** — Sprint 1.6's flag. Replaced by the routing chain. Deferred until impl is verified end-to-end so we have a rollback option.
+5. **`add_sync_cadence_minutes_to_tenant`** — §8 per-tenant sync cadence. Nullable (NULL = use default 360min in code). The cron driver branches on this value when picking tenants per run.
+6. **`drop_auto_provision_advertisers_from_tenant`** — Sprint 1.6's flag. Replaced by the routing chain. Deferred until impl is verified end-to-end so we have a rollback option.
 
 ### Code changes
 
@@ -284,8 +394,11 @@ Four migrations + Sprint 1.6 cleanup:
 - **`src/core/tools/media_buy_create.py`** — replace Sprint 1.6's `resolve_account_advertiser` call with the new routing service. Account row creation moves into the resolver.
 - **`src/services/gam_advertiser_search.py`** — search/paginate the local `gam_advertisers` cache for `/gam/advertisers`.
 - **`src/services/recent_buyers_rollup.py`** — joins Account + MediaBuy for `/recent-buyers`.
-- **`src/services/setup_checklist_service.py`** — hide `house_domain` + `public_agent_url` tasks when tenant is managed-externally and both fields are populated.
-- **`templates/tenant_settings.html`** — `readonly` on house_domain + public_agent_url inputs when `tenant.managed_externally`; "Platform-managed by Scope3" banner.
+- **`src/services/setup_checklist_service.py`** — hide `house_domain` + `public_agent_url` tasks when tenant is managed-externally and both fields are populated. Add `scope` ("platform" | "publisher") + `severity` ("blocker" | "warning" | "info") fields to `SetupTask` for §7. Extend `get_setup_status` to emit the §7-shaped output.
+- **`src/admin/services/tenant_status_service.py`** — fold setup_checklist output into `_build_status` as the new `setup_tasks` block (sprint 1.5 cache covers it for free).
+- **`templates/tenant_settings.html`** — `readonly` on house_domain + public_agent_url inputs when `tenant.managed_externally`; "Platform-managed by Scope3" banner. `{% if not managed_externally %}` guard around per-sync trigger buttons (§8); `Refresh tenant` button always visible.
+- **`src/admin/tenant_management_api.py`** — `POST /tenants/{tid}/refresh` endpoint (§8). Returns 202 with `sync_run_ids`. 60s idempotency window via the existing `SyncJob.started_at` index.
+- **`scripts/sync_all_tenants.py`** — branch on `Tenant.sync_cadence_minutes` per tenant (§8). NULL = 360min default.
 - **Optional `src/admin/services/adapter_connection_tester.py`** — extend `AdapterPreview` with `advertisers: list[GamAdvertiser]` field; wire GAM CompanyService.getCompaniesByStatement (limit 100) into `_preview_gam`.
 
 ## Acceptance criteria
@@ -335,6 +448,23 @@ Four migrations + Sprint 1.6 cleanup:
 - [ ] Settings page renders `readonly` on both fields + "Platform-managed by Scope3" banner when `tenant.managed_externally=true`.
 - [ ] Open-instance (managed_externally=false) tenants always see editable fields + setup tasks (no behavior change).
 
+### §7 setup_tasks block on /status
+- [ ] `GET /tenants/{tid}/status` response includes `setup_tasks` block with `blocker_count`, `warning_count`, `items[]`.
+- [ ] Each item carries `id`, `name`, `severity ∈ blocker|warning|info`, `scope ∈ platform|publisher`, `description`, `configure_path`.
+- [ ] `house_domain` / `public_agent_url` items render `scope="platform"` for managed-externally tenants, `scope="publisher"` for open-instance.
+- [ ] `default_gam_advertiser_id` (from §1) item renders `severity="blocker"` when null, `scope="publisher"`.
+- [ ] Items where the underlying task IS complete render `severity="info"` (Storefront UI choice on whether to display).
+- [ ] Status cache invalidation hooks (sprint 1.5: adapter test, PATCH, lifecycle) cover the new block — flipping a tenant's `default_gam_advertiser_id` reflects within 5s.
+
+### §8 auto-syncs + collapsed refresh
+- [ ] `Tenant.sync_cadence_minutes` migration runs cleanly; existing tenants get NULL (= use default 360min).
+- [ ] `POST /tenants/{tid}/refresh` returns 202 with `sync_run_ids` for inventory/custom_targeting/advertisers.
+- [ ] Re-POST within 60s returns the SAME `sync_run_ids` (idempotent — no duplicate jobs queued).
+- [ ] `POST /tenants/provision` happy-path response includes `initial_sync.sync_run_ids` after the adapter test passes.
+- [ ] Settings page hides per-sync trigger buttons when `tenant.managed_externally=true`; "Refresh tenant" button stays visible.
+- [ ] `/status.syncs` block continues to show per-sync health regardless of UI hiding (Storefront renders health from it).
+- [ ] cron driver respects `tenant.sync_cadence_minutes` — a tenant with cadence=120 syncs every 2h on the 6h scan, a tenant with cadence=720 only every 12h.
+
 ## Resolved questions
 
 1. ~~**`operator_domain` source on `get_products` flows.**~~ **Both endpoints carry it.** `GetProductsRequest.account: AccountReference | None` is real (verified against adcp 4.4.0). Routing chain runs uniformly across both flows; `/recent-buyers` aggregates over `Account` rows that get touched by either. (My initial read was wrong — the field is optional but present.)
@@ -351,15 +481,17 @@ Four migrations + Sprint 1.6 cleanup:
 
 **Sprint 1.8** — slots after 1.7 lands. Activation-gate aspect makes it the last sprint required for managed-mode commercial go-live.
 
-Estimated scope: **~3.5 days**.
-- 0.5d migrations (×3) + Tenant Management API field additions (incl. `default_gam_advertiser_id`).
+Estimated scope: **~5 days**.
+- 0.5d migrations (×5) + Tenant Management API field additions (incl. `default_gam_advertiser_id`, `sync_cadence_minutes`).
 - 0.5d `BuyerAdvertiserMapping` schemas + CRUD endpoints + AAO-validate operator_domain on POST.
-- 0.5d resolution chain + Sprint 1.6 cleanup (auto_provision_advertisers retirement).
+- 0.5d resolution chain (incl. sandbox early-return) + Sprint 1.6 cleanup (auto_provision_advertisers retirement, `ensure_sandbox_advertiser` helper).
 - 0.5d `/gam/advertisers` searchable + paginated.
 - 0.5d `/recent-buyers` rollup with resolved_via.
 - 0.5d §6 platform-managed lock-down (validators + guard + checklist hide + Settings UI banner).
+- 0.5d §7 `setup_tasks` block on /status (severity + scope wiring; fold into status cache).
+- 0.75d §8 auto-syncs + `/refresh` endpoint (cadence column + cron branch + provision first-sync + idempotency window + UI button collapse).
 - 0.25d preview-adapter advertisers extension (optional).
-- 0.25d tests (resolution-chain matrix, CRUD happy paths, dedup constraint, validation errors, guard-rejection on managed-externally writes).
+- 0.5d tests (resolution-chain matrix, CRUD happy paths, dedup constraint, validation errors, guard-rejection, status setup_tasks shape, refresh idempotency).
 
 ## Cross-references
 
