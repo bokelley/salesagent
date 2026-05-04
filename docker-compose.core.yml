@@ -100,6 +100,16 @@ services:
       SALES_AGENT_DOMAIN: "localtest.me:3091"
       # Per-tenant Setup Mode + test login enabled in dev
       ADCP_AUTH_TEST_MODE: "true"
+      # Managed-mode wiring for local Storefront / Scope3 integration testing.
+      # The Tenant Management API key reads from this env var first, then DB.
+      # Override with a real key in production via .env or your secret store.
+      TENANT_MANAGEMENT_API_KEY: "${TENANT_MANAGEMENT_API_KEY:-dev-tenant-management-key-change-me}"
+      # Forward-compatible managed-mode flags. The salesagent will start
+      # honoring these in sprint 2 (request scoping + network policy);
+      # setting them now lets Scope3 wire its edge against the final
+      # contract today.
+      MANAGED_INSTANCE: "${MANAGED_INSTANCE:-false}"
+      IDENTITY_TRUST_MODE: "${IDENTITY_TRUST_MODE:-network}"
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"
       FLASK_ENV: development
