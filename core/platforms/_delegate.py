@@ -245,6 +245,32 @@ async def _delegate_list_creative_formats(
     return _to_wire(response)
 
 
+async def _delegate_provide_performance_feedback(
+    req: Any, ctx: RequestContext[Any]
+) -> dict[str, Any]:
+    """Stub — salesagent doesn't yet have a performance-feedback impl.
+
+    Required by the v6.0-rc.1 SalesPlatform Protocol; the soft-warn at boot
+    fires when the platform omits it. Returns an acknowledgement matching
+    the protocol's response shape so the framework's validator + buyer
+    contract test pass. When a real performance-feedback pipeline lands
+    upstream, this delegate becomes a forward to the new ``_impl``.
+    """
+    # Coerce to dict for inspection. The library response type accepts
+    # status + ext, so we acknowledge the receipt without persisting.
+    if hasattr(req, "model_dump"):
+        payload = req.model_dump(exclude_none=True)
+    elif isinstance(req, dict):
+        payload = dict(req)
+    else:
+        payload = {}
+    return {
+        "status": "acknowledged",
+        "message": "performance feedback receipt is not yet wired in this salesagent",
+        "echo": payload,
+    }
+
+
 async def _delegate_list_creatives(
     req: Any, ctx: RequestContext[Any]
 ) -> dict[str, Any]:

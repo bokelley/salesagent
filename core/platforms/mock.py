@@ -51,7 +51,12 @@ from adcp.decisioning.capabilities import (
     SupportedProtocol,
 )
 from core.idempotency import get_idempotency_store
-from core.platforms._delegate import _delegate_get_products
+from core.platforms._delegate import (
+    _delegate_get_products,
+    _delegate_list_creative_formats,
+    _delegate_list_creatives,
+    _delegate_provide_performance_feedback,
+)
 from core.stores.accounts import SalesagentAccountStore
 
 # Process-singleton idempotency store wired through ``core.idempotency``.
@@ -364,6 +369,33 @@ class MockSellerPlatform(DecisioningPlatform):
                 for mb_id in ids
             ],
         }
+
+    # ───────────────────── v6.0-rc.1 SalesPlatform Protocol methods ────
+    # These were soft-warned as missing because MockSellerPlatform didn't
+    # register them on the class even though delegates exist. Full
+    # delegation to the same _impl functions GamPlatform uses — keeps the
+    # storyboard runner exercising the real listing + feedback paths.
+
+    async def list_creative_formats(
+        self,
+        req: Any,
+        ctx: RequestContext[Any],
+    ) -> dict[str, Any]:
+        return await _delegate_list_creative_formats(req, ctx)
+
+    async def list_creatives(
+        self,
+        req: Any,
+        ctx: RequestContext[Any],
+    ) -> dict[str, Any]:
+        return await _delegate_list_creatives(req, ctx)
+
+    async def provide_performance_feedback(
+        self,
+        req: Any,
+        ctx: RequestContext[Any],
+    ) -> dict[str, Any]:
+        return await _delegate_provide_performance_feedback(req, ctx)
 
 
 # ────────────────────────── helpers ──────────────────────────────────

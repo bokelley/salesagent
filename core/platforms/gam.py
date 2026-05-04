@@ -51,6 +51,7 @@ from core.platforms._delegate import (
     _delegate_get_products,
     _delegate_list_creative_formats,
     _delegate_list_creatives,
+    _delegate_provide_performance_feedback,
     _delegate_sync_creatives,
     _delegate_update_media_buy,
 )
@@ -145,3 +146,10 @@ class GamPlatform(DecisioningPlatform):
         ctx: RequestContext[Any],
     ) -> dict[str, Any]:
         return await _delegate_list_creatives(req, ctx)
+
+    async def provide_performance_feedback(
+        self,
+        req: Any,
+        ctx: RequestContext[Any],
+    ) -> dict[str, Any]:
+        return await _delegate_provide_performance_feedback(req, ctx)
