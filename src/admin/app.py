@@ -179,6 +179,19 @@ def create_app(config=None):
     app.jinja_env.filters["from_json"] = from_json_filter
     app.jinja_env.filters["markdown"] = markdown_filter
 
+    # Embed-mode breadcrumb root filter — see src/admin/utils/breadcrumbs.py.
+    # Templates compose: ``{% set crumbs = crumbs | with_embed_root %}``
+    # before including ``_breadcrumb.html``. The filter replaces the first
+    # crumb when an embed-mode override is active; pass-through otherwise.
+    from src.admin.utils.breadcrumbs import with_embed_root_filter
+
+    def _with_embed_root(crumbs):
+        from flask import g
+
+        return with_embed_root_filter(crumbs, getattr(g, "embed_breadcrumb_root", None))
+
+    app.jinja_env.filters["with_embed_root"] = _with_embed_root
+
     # Trust proxy headers in production
     if os.environ.get("PRODUCTION") == "true":
         app.config["PREFERRED_URL_SCHEME"] = "https"
@@ -365,9 +378,14 @@ def create_app(config=None):
         explicit_embed = request.args.get("embedded") in ("1", "true", "yes")
         context["embedded"] = explicit_embed or embedded_user
 
-        # Inject fresh tenant data if user is logged in with a tenant
+        # Inject fresh tenant data if user is logged in with a tenant.
+        # First check the session, then fall back to the URL ``tenant_id``
+        # route argument — admin pages are scoped to a tenant via the URL,
+        # not via the session, in test/embedded flows.
         tenant_id = session.get("tenant_id")
-        if tenant_id:
+        if not tenant_id and request.view_args:
+            tenant_id = request.view_args.get("tenant_id")
+        if tenant_id and tenant_id != "*":
             try:
                 with get_db_session() as db_session:
                     stmt = select(Tenant).filter_by(tenant_id=tenant_id)
@@ -376,6 +394,16 @@ def create_app(config=None):
                         context["tenant"] = tenant
             except Exception as e:
                 logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
+
+        # Resolve the embed-mode breadcrumb root override (header > tenant
+        # column > None). Cached on ``g`` so the Jinja ``with_embed_root``
+        # filter can pull it without re-resolving per template render.
+        from src.admin.utils.breadcrumbs import resolve_embed_breadcrumb_root
+
+        tenant_for_breadcrumb = context.get("tenant") or getattr(g, "tenant", None)
+        embed_root = resolve_embed_breadcrumb_root(tenant_for_breadcrumb)
+        g.embed_breadcrumb_root = embed_root
+        context["embed_breadcrumb_root"] = embed_root
 
         return context
 

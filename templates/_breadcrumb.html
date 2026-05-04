@@ -1,0 +1,33 @@
+{#
+  Shared breadcrumb partial.
+
+  Usage:
+    {% set crumbs = [
+      {"label": tenant_name, "url": url_for("tenants.dashboard", tenant_id=tenant_id)},
+      {"label": "Settings", "url": url_for("tenants.tenant_settings", tenant_id=tenant_id)},
+      {"label": "Users & Access"}
+    ] %}
+    {% set crumbs = crumbs | with_embed_root %}
+    {% include "_breadcrumb.html" %}
+
+  ``crumbs`` is a list of dicts with ``label`` (required) and ``url``
+  (optional — leaf crumbs omit it). The ``with_embed_root`` filter
+  swaps the first crumb when an embed-mode breadcrumb root override
+  is active for the current request (header > tenant column > none).
+  See ``src/admin/utils/breadcrumbs.py``.
+
+  follow-up: convert remaining templates with hand-coded breadcrumbs to
+  this partial. Six templates still inline the markup
+  (product_inventory_config, policy_settings, policy_settings_comprehensive,
+  policy_rules, policy_review, inventory_unified).
+#}
+<div class="breadcrumb">
+{% for crumb in crumbs %}
+  {% if crumb.url and not loop.last %}
+    <a href="{{ crumb.url }}">{{ crumb.label }}</a>
+    <span style="color: #9ca3af; margin: 0 0.5rem;">/</span>
+  {% else %}
+    <span style="color: #374151;">{{ crumb.label }}</span>
+  {% endif %}
+{% endfor %}
+</div>

@@ -395,13 +395,13 @@
 </style>
 
 <div class="users-container">
-    <div class="breadcrumb">
-        <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}">{{ tenant_name }}</a>
-        <span style="color: #9ca3af; margin: 0 0.5rem;">/</span>
-        <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant_id) }}">Settings</a>
-        <span style="color: #9ca3af; margin: 0 0.5rem;">/</span>
-        <span style="color: #374151;">Users & Access</span>
-    </div>
+    {% set crumbs = [
+        {"label": tenant_name, "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
+        {"label": "Settings", "url": url_for('tenants.tenant_settings', tenant_id=tenant_id)},
+        {"label": "Users & Access"}
+    ] %}
+    {% set crumbs = crumbs | with_embed_root %}
+    {% include "_breadcrumb.html" %}
 
     <div class="page-header">
         <h1>Users & Access</h1>

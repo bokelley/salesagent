@@ -147,6 +147,7 @@ def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
         house_domain=tenant.house_domain,
         public_agent_url=tenant.public_agent_url,
         default_gam_advertiser_id=tenant.default_gam_advertiser_id,
+        embed_breadcrumb_root=tenant.embed_breadcrumb_root,
     ).model_dump(mode="json")
 
 
@@ -725,6 +726,9 @@ def provision_tenant():
             house_domain=req.house_domain,
             public_agent_url=req.public_agent_url,
             default_gam_advertiser_id=req.default_gam_advertiser_id,
+            embed_breadcrumb_root=(
+                req.embed_breadcrumb_root.model_dump() if req.embed_breadcrumb_root is not None else None
+            ),
             authorized_emails=[req.contact_email],
             authorized_domains=[],
             human_review_required=True,
@@ -882,6 +886,8 @@ def patch_tenant(tenant_id: str):
             tenant.public_agent_url = req.public_agent_url
         if req.default_gam_advertiser_id is not None:
             tenant.default_gam_advertiser_id = req.default_gam_advertiser_id
+        if req.embed_breadcrumb_root is not None:
+            tenant.embed_breadcrumb_root = req.embed_breadcrumb_root.model_dump()
         tenant.updated_at = datetime.now(UTC)
 
         try:

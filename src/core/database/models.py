@@ -169,6 +169,12 @@ class Tenant(Base, JSONValidatorMixin):
     # default 6h. sync_all_tenants.py branches on this when picking
     # tenants per run.
     sync_cadence_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Embed-mode breadcrumb root override. Shape: ``{"label": str, "url": str}``.
+    # Only meaningful when ``is_embedded`` is True — open-instance tenants ignore
+    # the value. Replaces the default first crumb ("Dashboard") with the
+    # upstream host's storefront entry point so embedded breadcrumb trails feel
+    # native to the host.
+    embed_breadcrumb_root: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")

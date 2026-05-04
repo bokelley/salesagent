@@ -69,6 +69,40 @@ def _validate_public_agent_url(value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Embed-mode breadcrumb root override
+# ---------------------------------------------------------------------------
+
+
+class EmbedBreadcrumbRoot(BaseModel):
+    """First-crumb override for embedded-mode admin pages.
+
+    When the upstream host renders the salesagent admin UI inside its own
+    chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+    point back to the host's storefront homepage rather than the
+    salesagent's tenant dashboard. ``label`` is the visible link text;
+    ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+    Validated at schema boundary so bad input never reaches the rendered
+    template; the same model also gates the per-request
+    ``X-Embed-Breadcrumb-Root`` header value (see
+    :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(..., min_length=1, max_length=120)
+    url: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("url")
+    @classmethod
+    def _check_https(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped.startswith("https://"):
+            raise ValueError(f"embed_breadcrumb_root.url must start with 'https://'; got {value!r}")
+        return stripped
+
+
+# ---------------------------------------------------------------------------
 # Adapter config — discriminated union (sprint 1 ships GAM + Mock)
 # ---------------------------------------------------------------------------
 
@@ -151,6 +185,11 @@ class ProvisionTenantRequest(BaseModel):
 
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
+
+    # Embed-mode breadcrumb root override. Only meaningful when the
+    # tenant is embedded inside an upstream host — open-instance
+    # tenants ignore this even if set.
+    embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
 
     # Sprint 1.8 §6: AAO field validators (force-lowercase house_domain,
     # HTTPS-only public_agent_url).
@@ -256,6 +295,9 @@ class TenantDetail(TenantSummary):
     public_agent_url: str | None = None
     # Sprint 1.8 — fall-through advertiser. Nullable until activation.
     default_gam_advertiser_id: str | None = None
+    # Embed-mode breadcrumb root override (only meaningful when
+    # ``is_embedded`` is true).
+    embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
 
 
 class ListTenantsResponse(BaseModel):
@@ -288,6 +330,11 @@ class UpdateTenantRequest(BaseModel):
     # to leave unchanged; no path to clear an already-set value, since
     # clearing it would brick the routing chain).
     default_gam_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
+    # Embed-mode breadcrumb root override. Patch with a non-null object
+    # to install/replace the override. PATCH with omitted key leaves the
+    # current value alone (other fields use the same omit-to-leave
+    # semantic).
+    embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
 
     # Sprint 1.8 §6: same AAO validators as ProvisionTenantRequest.
     # ``mode='before'`` lets us short-circuit on None (PATCH with field
