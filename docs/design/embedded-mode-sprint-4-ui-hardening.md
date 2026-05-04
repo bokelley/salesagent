@@ -153,6 +153,67 @@ defense-in-depth.
       editable on embedded tenants.
 - [ ] Inventory Sync Status is read-only on embedded tenants but visible.
 
+## Terminology pin: "Advertiser" in PSA
+
+This sprint's hide-list says Settings → Advertisers stays visible as
+a read-only directory but the Create / Rename / Archive write actions
+are hidden in embedded mode. To avoid relitigating this in future
+sprints, pinning the terminology:
+
+- **`Principal`** (`src/core/database/models.py:Principal`) is a
+  buyer-protocol identity — `principal_id` + `name` + `access_token` +
+  `platform_mappings` (`{"google_ad_manager": {"advertiser_id": ...}}`).
+  In standalone mode the access_token authenticates buys; in embedded
+  mode the `X-Identity-Buyer-Principal-Id` header replaces the token
+  and the embedded auth bypass auto-creates the row on first request.
+
+- **"Create Advertiser" in PSA Settings** = create a Principal +
+  attach an existing GAM advertiser id. The form at
+  `src/admin/blueprints/principals.py:153` reads
+  `request.form.get("gam_advertiser_id")` and stores it on
+  `platform_mappings`. **It does NOT call CompanyService.createCompanies.**
+
+- **GAM company creation** (the actual "mint a new advertiser in GAM"
+  operation) only happens in `gam_create_advertiser_companyservice`
+  in `src/core/helpers/account_provisioning.py`. Two callers today:
+  the legacy `auto_provision_advertisers` flow (Sprint 1.8 retires it
+  in favor of the routing chain) and `ensure_sandbox_advertiser` for
+  the sandbox cache. **Real commercial advertisers always come from
+  the publisher's existing GAM network — PSA never mints them.**
+
+- **The mapping table + API** (Sprint 1.8 routing rules,
+  `default_gam_advertiser_id`, `Account.platform_mappings`) lives in
+  PSA and is owned by all tenant types — standalone publishers map
+  via the Admin UI; embedded hosts map via the Tenant Management API.
+  The mapping decides which existing GAM advertiser a buy gets
+  attributed to. It does not create anything in GAM.
+
+So the embedded hide on Settings → Advertisers writes is about
+"Principal creation is redundant when the auth bypass already
+auto-creates Principals from request headers" — not "advertiser
+creation is a host responsibility."
+
+## Open question for the host
+
+In embedded mode, the embedded auth bypass auto-creates Principal
+rows on first `X-Identity-Buyer-Principal-Id` request. Is that
+sufficient for the host's onboarding flow, or are there cases where
+publishers need a manual Principal-create surface in PSA before
+buyers transact?
+
+If the answer is "auto-create is sufficient": the Sprint 4 hide of
+Settings → Advertisers write actions stays as-is permanently. The
+read-only directory is enough for publishers to see who's
+transacting and what GAM advertiser each maps to.
+
+If the answer is "we need a manual create path": un-hide the create
+button on embedded tenants but rename it to "Add Advertiser
+Mapping" so the UI matches what the form actually does (attach an
+existing GAM advertiser id to a new Principal row).
+
+Either way, no new GAM company-creation surface needs to land in
+PSA — that's never been a publisher-facing path here.
+
 ## Cross-references
 
 - Sprint 1.6 §6 first half — Pydantic validators + model-layer guard

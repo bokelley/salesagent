@@ -400,9 +400,17 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
     """Advertisers directory stays visible on embedded tenants but write
     actions (create / rename / delete) are hidden.
 
-    Advertiser identity is managed via routing rules in the upstream
-    platform's settings; the local directory is a read-only view of who's
-    mapped to this tenant's inventory.
+    The "Advertiser" surface in PSA Settings = ``Principal`` (a
+    buyer-protocol identity bound to an existing GAM advertiser id).
+    Manual creation is redundant in embedded mode because the embedded
+    auth bypass auto-creates Principals from ``X-Identity-*`` headers
+    on first request — so the directory is a read-only view of who's
+    transacting + the resolved GAM advertiser they map to.
+
+    Note: this is NOT about hiding GAM company creation. PSA never
+    mints GAM companies for commercial traffic — only for sandbox.
+    See docs/design/embedded-mode-sprint-4-ui-hardening.md "Terminology
+    pin" for the full distinction.
     """
 
     def test_embedded_keeps_advertisers_section_and_nav_tab(self, client, embedded_tenant_id):
@@ -412,8 +420,9 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         # The directory section heading and nav tab remain.
         assert "<h2>Advertiser Management</h2>" in body
         assert 'data-section="advertisers"' in body
-        # Read-only note is visible.
-        assert "Advertiser identity is managed via routing rules" in body
+        # Read-only note is visible — surfaces the auto-create-from-headers
+        # rationale so publishers know why there's no Create button.
+        assert "auto-created from request headers" in body
 
     def test_embedded_hides_advertiser_create_button(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
@@ -439,7 +448,7 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         assert "<h2>Advertiser Management</h2>" in body
         assert 'data-section="advertisers"' in body
         # Read-only note is NOT shown on open-instance tenants.
-        assert "Advertiser identity is managed via routing rules" not in body
+        assert "auto-created from request headers" not in body
         # Create CTA is present.
         # When there are 0 advertisers, "Create First Advertiser" renders;
         # otherwise the header "Add Advertiser" renders. Either is fine —
