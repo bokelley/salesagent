@@ -1380,6 +1380,30 @@ async def _create_media_buy_impl(
             status=AdcpTaskStatus.failed.value,
         )
 
+    # Sprint 1.6 piece C: when the buyer references an Account, the
+    # advertiser id flows from Account.platform_mappings — not the legacy
+    # Principal.platform_mappings path. resolve_account_advertiser() returns
+    # the resolved id (creating a GAM advertiser lazily when the tenant has
+    # auto_provision_advertisers=True), or None when there's no account
+    # context (legacy buyers fall through to Principal mappings). Raises
+    # AdCPAccountNotProvisioned for pending_provision accounts on tenants
+    # without auto-provision — surfaces to the buyer as a structured error.
+    from src.core.helpers.account_provisioning import resolve_account_advertiser
+
+    _account_advertiser_id = resolve_account_advertiser(
+        identity, dry_run=False  # dry_run from testing_ctx is resolved later
+    )
+    if _account_advertiser_id is not None:
+        mappings = dict(principal.platform_mappings or {})
+        gam_block = dict(mappings.get("google_ad_manager") or {})
+        gam_block["advertiser_id"] = _account_advertiser_id
+        mappings["google_ad_manager"] = gam_block
+        principal.platform_mappings = mappings
+        logger.info(
+            f"[ACCOUNT_ADVERTISER] account_id={identity.account_id!r} resolved to "
+            f"GAM advertiser {_account_advertiser_id!r}; overriding principal mapping"
+        )
+
     # Idempotency check: if request carries an idempotency_key, look up an existing
     # media buy for the same (tenant, principal, key) triple.  Per adcp 3.12 spec,
     # retrying with the same key must return the original media_buy_id without
