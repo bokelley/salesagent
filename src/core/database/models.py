@@ -138,6 +138,17 @@ class Tenant(Base, JSONValidatorMixin):
     external_org_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Name of the upstream platform that owns this managed tenant ("scope3", etc.).
     external_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # When True, _create_media_buy_impl auto-provisions GAM advertisers for
+    # Accounts in pending_provision (calls CompanyService.createCompanies on
+    # first buy). When False, returns ACCOUNT_NOT_PROVISIONED so publishers
+    # map manually via the Admin UI / Tenant Management API.
+    # Default False keeps today's open-instance behavior intact; managed-mode
+    # provisioning sets True per-tenant.
+    auto_provision_advertisers: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
@@ -860,7 +871,8 @@ class Account(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('active', 'pending_approval', 'rejected', 'payment_required', 'suspended', 'closed')",
+            "status IN ('active', 'pending_approval', 'pending_provision', 'rejected', "
+            "'payment_required', 'suspended', 'closed')",
             name="ck_accounts_status",
         ),
         CheckConstraint(
