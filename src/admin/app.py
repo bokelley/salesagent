@@ -215,7 +215,15 @@ def create_app(config=None):
         # 3. CustomProxyFix handles X-Forwarded-Prefix (runs first, before Fly headers)
         app.wsgi_app = CustomProxyFix(app.wsgi_app)
     else:
-        # In development, still apply custom proxy fix if needed
+        # In development, apply WerkzeugProxyFix too so X-Forwarded-Host /
+        # X-Forwarded-Proto from a managed-mode upstream proxy (Scope3
+        # Storefront iframe) are honored. Without it, Flask's automatic
+        # redirects (e.g. trailing-slash 308 on /creatives → /creatives/)
+        # use ``request.host`` = ``localhost:3091``, leaking the upstream
+        # origin into the Location header. ProxyFix is a no-op when the
+        # forwarded headers are absent (pure local curl / non-proxied
+        # browser hits), so it's safe to always wire.
+        app.wsgi_app = WerkzeugProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=0)
         app.wsgi_app = CustomProxyFix(app.wsgi_app)
 
     # Initialize OAuth
