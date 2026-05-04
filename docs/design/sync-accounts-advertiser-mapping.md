@@ -117,6 +117,57 @@ Sandbox accounts (`Account.sandbox=true`) NEVER get a real GAM advertiser. Behav
 3. Sandbox media buys go to GAM but use `dry_run=true` (or whatever the GAM adapter calls it) so they create real Order rows but never serve. This keeps the buyer's storyboard exercising real GAM machinery without polluting production reports.
 4. **Open question 2:** confirm GAM's dry-run semantics actually create rows that show in the publisher's UI but don't serve, vs. rejecting at the API layer. If they reject, sandbox needs a separate "test GAM network" entirely — out of scope for v1.
 
+## Pre-mapping (Tenant Management API)
+
+Publishers — and Scope3 driving them programmatically — need a way to wire GAM advertisers to billing keys *before* any buyer agent calls `sync_accounts`. Otherwise every first-buy on a new brand burns an `ACCOUNT_NOT_PROVISIONED` round trip even when the publisher already knows which advertiser belongs where.
+
+The mapping IS the Account. We expose Account upsert through the Tenant Management API; pre-mapping is just creating Accounts ahead of time with `platform_mappings.gam_advertiser_id` pre-attached and `status=active`.
+
+### `POST /api/v1/tenant-management/tenants/{tid}/accounts`
+
+Upsert by the same natural key `_sync_accounts_impl` uses, with the GAM advertiser pre-attached:
+
+```python
+class CreateAccountRequest(BaseModel):
+    name: str | None = None        # display name; auto-generated if omitted
+    operator: str                  # required
+    brand: BrandReference          # {domain, brand_id?}
+    billing: Literal["operator", "agent"]
+    buyer_agent_principal_id: str | None = None  # required iff billing=agent
+    sandbox: bool = False
+    gam_advertiser_id: str         # the whole point of this endpoint
+    gam_advertiser_name: str | None = None  # optional cache for display
+    payment_terms: str | None = None
+    rate_card: str | None = None
+```
+
+Behavior:
+1. Validate request — `billing=agent` requires `buyer_agent_principal_id`; `sandbox=true` rejects `gam_advertiser_id` (sandbox accounts route to the per-tenant sandbox advertiser, not a caller-specified one).
+2. Look up by natural key. For `billing=operator|sandbox`: `(operator, brand_domain, brand_id, sandbox)`. For `billing=agent`: that key + `principal_id`.
+3. **Upsert:** existing → update `platform_mappings.gam_advertiser_id`, flip `status=active` if it was `pending_provision`, return 200 with the updated Account. Missing → create with status=`active`, return 201.
+4. Return the full `AccountDetail` either way.
+
+When `sync_accounts` later comes in for the same natural key, the existing upsert finds the row, updates fields if anything drifted, leaves the advertiser id intact, and returns `unchanged` or `updated`. No `pending_provision` round trip.
+
+### `GET /api/v1/tenant-management/tenants/{tid}/accounts`
+
+List accounts for a tenant. Optional filters:
+- `?operator=` — exact match
+- `?billing=operator|agent` — filter by billing model
+- `?advertiser_mapped=true|false` — has `platform_mappings.gam_advertiser_id` set?
+- `?status=active|pending_provision|...`
+- `?sandbox=true|false`
+
+Returns `ListAccountsResponse` with `accounts: list[AccountSummary]` and a `count`.
+
+### Why expose this and not `PATCH` / `DELETE` initially
+
+POST handles upsert (create or remap an existing Account's advertiser id by re-POSTing). GET answers "what's the current state?" — these two cover the Storefront-driven workflow (push mappings, verify, re-push deltas). Explicit `PATCH /accounts/{id}` and `DELETE` (soft-close to `status=closed`) can land if the cardinality of repeated POST upserts becomes an audit-log nuisance, but they're not on the critical path.
+
+### Tradeoff: exact-match vs. wildcards
+
+This design requires one Account row per natural-key combination — no wildcards like "any agent on AccuWeather × cocacola.com → advertiser 12345." For `billing=operator` that's fine (one row per operator/brand). For `billing=agent` it's potentially N×M (every agent × every brand). Defer the wildcard question until Scope3 actually hits cardinality pain — then a separate `account_advertiser_rules` table can express patterns and `_sync_accounts_impl` consults it as a fallback when no exact-match Account exists.
+
 ## Migration plan
 
 Three salesagent migrations + one schema bump:

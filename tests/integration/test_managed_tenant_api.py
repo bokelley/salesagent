@@ -853,3 +853,191 @@ class TestTenantStatus:
     def test_missing_api_key_returns_401(self, client, managed_tenant):
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status")
         assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.6: pre-map advertisers
+# ---------------------------------------------------------------------------
+
+
+class TestPreMapAdvertiser:
+    """``POST /tenants/{tid}/accounts`` and ``GET .../accounts``.
+
+    Verifies the Account upsert-by-natural-key behavior with a pre-attached
+    ``platform_mappings.google_ad_manager.advertiser_id``.
+    """
+
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_premap")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        t = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(t)
+        return t
+
+    def _post_account(self, client, auth_headers, tid, **overrides):
+        body = {
+            "operator": "accuweather.com",
+            "brand": {"domain": "cocacola.com"},
+            "billing": "operator",
+            "gam_advertiser_id": "12345",
+            "gam_advertiser_name": "Coca-Cola (AccuWeather)",
+        }
+        body.update(overrides)
+        return client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/accounts",
+            headers=auth_headers,
+            json=body,
+        )
+
+    def test_create_with_pre_attached_advertiser_returns_201(self, client, auth_headers, tid):
+        resp = self._post_account(client, auth_headers, tid)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["status"] == "active"
+        assert body["billing"] == "operator"
+        assert body["gam_advertiser_id"] == "12345"
+        assert body["gam_advertiser_name"] == "Coca-Cola (AccuWeather)"
+        assert body["advertiser_mapped"] is True
+        # Auto-generated name template
+        assert "accuweather.com" in body["name"] and "cocacola.com" in body["name"]
+
+    def test_repeat_post_upserts_existing_account(self, client, auth_headers, tid):
+        first = self._post_account(client, auth_headers, tid)
+        assert first.status_code == 201
+        first_account_id = first.get_json()["account_id"]
+
+        # Re-POST with the same natural key but different advertiser id
+        second = self._post_account(client, auth_headers, tid, gam_advertiser_id="99999")
+        assert second.status_code == 200
+        body = second.get_json()
+        assert body["account_id"] == first_account_id  # Same row
+        assert body["gam_advertiser_id"] == "99999"  # Updated
+
+    def test_billing_agent_requires_buyer_agent_principal_id(self, client, auth_headers, tid):
+        resp = self._post_account(client, auth_headers, tid, billing="agent")
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "buyer_agent_required"
+
+    def test_billing_agent_separates_per_agent(self, client, auth_headers, tid):
+        """Two buyer agents on the same (operator, brand) → two distinct Accounts."""
+        a1 = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            billing="agent",
+            buyer_agent_principal_id="scope3-buyer",
+            gam_advertiser_id="agent_adv_1",
+        )
+        a2 = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            billing="agent",
+            buyer_agent_principal_id="other-buyer",
+            gam_advertiser_id="agent_adv_2",
+        )
+        assert a1.status_code == 201
+        assert a2.status_code == 201
+        assert a1.get_json()["account_id"] != a2.get_json()["account_id"]
+        assert a1.get_json()["buyer_agent_principal_id"] == "scope3-buyer"
+        assert a2.get_json()["buyer_agent_principal_id"] == "other-buyer"
+
+    def test_sandbox_rejects_advertiser_id(self, client, auth_headers, tid):
+        resp = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            sandbox=True,
+            brand={"domain": "test.example"},
+            gam_advertiser_id="should_not_be_accepted",
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "sandbox_advertiser_managed"
+
+    def test_sandbox_creates_unmapped_account(self, client, auth_headers, tid):
+        resp = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            sandbox=True,
+            brand={"domain": "test.example"},
+            gam_advertiser_id=None,
+        )
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body["sandbox"] is True
+        # Sandbox accounts are unmapped at creation time — sprint 1.6 impl
+        # will route them to the per-tenant sandbox advertiser at first-buy.
+        assert body["advertiser_mapped"] is False
+
+    def test_post_unknown_tenant_returns_404(self, client, auth_headers):
+        resp = client.post(
+            "/api/v1/tenant-management/tenants/tenant_missing/accounts",
+            headers=auth_headers,
+            json={
+                "operator": "x",
+                "brand": {"domain": "y.com"},
+                "billing": "operator",
+                "gam_advertiser_id": "1",
+            },
+        )
+        assert resp.status_code == 404
+
+    def test_list_returns_pre_mapped_accounts(self, client, auth_headers, tid):
+        self._post_account(client, auth_headers, tid, brand={"domain": "a.com"})
+        self._post_account(client, auth_headers, tid, brand={"domain": "b.com"})
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/accounts", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["count"] == 2
+        domains = {a["brand"]["domain"] for a in body["accounts"]}
+        assert domains == {"a.com", "b.com"}
+        for a in body["accounts"]:
+            assert a["advertiser_mapped"] is True
+
+    def test_list_filters_by_advertiser_mapped(self, client, auth_headers, tid):
+        self._post_account(client, auth_headers, tid, brand={"domain": "mapped.com"})
+        self._post_account(
+            client,
+            auth_headers,
+            tid,
+            sandbox=True,
+            brand={"domain": "sandbox.com"},
+            gam_advertiser_id=None,
+        )
+
+        mapped = client.get(
+            f"/api/v1/tenant-management/tenants/{tid}/accounts?advertiser_mapped=true",
+            headers=auth_headers,
+        )
+        unmapped = client.get(
+            f"/api/v1/tenant-management/tenants/{tid}/accounts?advertiser_mapped=false",
+            headers=auth_headers,
+        )
+
+        assert mapped.get_json()["count"] == 1
+        assert mapped.get_json()["accounts"][0]["brand"]["domain"] == "mapped.com"
+        assert unmapped.get_json()["count"] == 1
+        assert unmapped.get_json()["accounts"][0]["brand"]["domain"] == "sandbox.com"
+
+    def test_list_filters_by_operator(self, client, auth_headers, tid):
+        self._post_account(client, auth_headers, tid, operator="op-a", brand={"domain": "x.com"})
+        self._post_account(client, auth_headers, tid, operator="op-b", brand={"domain": "x.com"})
+
+        resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tid}/accounts?operator=op-a",
+            headers=auth_headers,
+        )
+        body = resp.get_json()
+        assert body["count"] == 1
+        assert body["accounts"][0]["operator"] == "op-a"
+
+    def test_missing_api_key_returns_401(self, client, tid):
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/accounts",
+            json={"operator": "x", "brand": {"domain": "y.com"}, "billing": "operator", "gam_advertiser_id": "1"},
+        )
+        assert resp.status_code in (401, 403)

@@ -22,10 +22,14 @@ from src.admin.api_schemas.tenant_management import (
     AdapterConfig as AdapterConfigSchema,
 )
 from src.admin.api_schemas.tenant_management import (
+    AccountDetail,
+    AccountSummary,
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
+    CreateAccountRequest,
     GAMAdapterConfig,
+    ListAccountsManagedResponse,
     ListTenantsResponse,
     MockAdapterConfig,
     PreviewAdapterRequest,
@@ -45,6 +49,7 @@ from src.admin.services.tenant_status_service import get_tenant_status, invalida
 from src.core.database.database_session import get_db_session
 from src.core.database.managed_tenant_guard import ManagedTenantWriteError
 from src.core.database.models import (
+    Account,
     AdapterConfig,
     CurrencyLimit,
     MediaBuy,
@@ -1009,6 +1014,255 @@ def adapter_test_connection(tenant_id: str):
         return jsonify(
             TestConnectionResponse(success=success, error=error, tested_at=datetime.now(UTC)).model_dump(mode="json")
         )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.6 — pre-map advertisers
+# ---------------------------------------------------------------------------
+
+
+_ACCOUNT_GAM_KEY = "google_ad_manager"
+
+
+def _account_advertiser_id(account: Account) -> str | None:
+    """Extract the GAM advertiser id from ``platform_mappings``, or None."""
+    mappings = account.platform_mappings or {}
+    return (mappings.get(_ACCOUNT_GAM_KEY) or {}).get("advertiser_id")
+
+
+def _account_advertiser_name(account: Account) -> str | None:
+    mappings = account.platform_mappings or {}
+    return (mappings.get(_ACCOUNT_GAM_KEY) or {}).get("advertiser_name")
+
+
+def _set_account_advertiser(
+    account: Account,
+    advertiser_id: str,
+    advertiser_name: str | None,
+) -> None:
+    """Set GAM advertiser id/name on ``Account.platform_mappings``.
+
+    Preserves any other adapter blocks (kevel, triton) and other GAM fields
+    we don't manage from this endpoint. Re-assigns the dict so SQLAlchemy
+    sees the JSONType column as dirty even with mutation-tracking off.
+    """
+    mappings = dict(account.platform_mappings or {})
+    gam_block = dict(mappings.get(_ACCOUNT_GAM_KEY) or {})
+    gam_block["advertiser_id"] = advertiser_id
+    if advertiser_name is not None:
+        gam_block["advertiser_name"] = advertiser_name
+    gam_block.setdefault("provisioned_by", "manual:tenant-management-api")
+    gam_block.setdefault("provisioned_at", datetime.now(UTC).isoformat())
+    mappings[_ACCOUNT_GAM_KEY] = gam_block
+    account.platform_mappings = mappings
+
+
+def _account_to_summary(account: Account) -> AccountSummary:
+    """Project an :class:`Account` ORM row to the API summary shape."""
+    advertiser_id = _account_advertiser_id(account)
+    if account.brand is None:
+        brand_dict: dict | None = None
+    elif isinstance(account.brand, dict):
+        brand_dict = account.brand
+    elif hasattr(account.brand, "model_dump"):
+        brand_dict = account.brand.model_dump(exclude_none=True)
+    else:
+        brand_dict = dict(account.brand)
+    return AccountSummary(
+        account_id=account.account_id,
+        name=account.name,
+        status=account.status,
+        operator=account.operator,
+        brand=brand_dict,
+        billing=account.billing,
+        sandbox=account.sandbox,
+        buyer_agent_principal_id=account.principal_id if account.billing == "agent" else None,
+        gam_advertiser_id=advertiser_id,
+        gam_advertiser_name=_account_advertiser_name(account),
+        advertiser_mapped=advertiser_id is not None,
+    )
+
+
+def _account_to_detail(account: Account) -> AccountDetail:
+    summary = _account_to_summary(account)
+    return AccountDetail(
+        **summary.model_dump(),
+        payment_terms=account.payment_terms,
+        rate_card=account.rate_card,
+        created_at=account.created_at,
+        updated_at=account.updated_at,
+    )
+
+
+def _generate_pre_mapped_account_name(req: CreateAccountRequest) -> str:
+    """Default Account.name when the caller didn't pass one.
+
+    Mirrors the template hinted at in the design doc — operator × brand,
+    plus the buyer agent for billing=agent so multi-agent rows are
+    distinguishable in the Admin UI without inspecting platform_mappings.
+    """
+    base = f"{req.operator} × {req.brand.domain}"
+    if req.sandbox:
+        return f"{base} (sandbox)"
+    if req.billing == "agent" and req.buyer_agent_principal_id:
+        return f"{base} ({req.buyer_agent_principal_id})"
+    return base
+
+
+def _find_account_by_natural_key(
+    session, tenant_id: str, req: CreateAccountRequest
+) -> Account | None:
+    """Match the existing _sync_accounts_impl natural-key behavior, with the
+    agent extension for billing=agent."""
+    stmt = select(Account).where(
+        Account.tenant_id == tenant_id,
+        Account.operator == req.operator,
+        Account.brand["domain"].as_string() == req.brand.domain,
+        Account.sandbox.is_(req.sandbox),
+    )
+    if req.brand.brand_id is not None:
+        stmt = stmt.where(Account.brand["brand_id"].as_string() == req.brand.brand_id)
+    if req.billing == "agent" and req.buyer_agent_principal_id:
+        stmt = stmt.where(Account.principal_id == req.buyer_agent_principal_id)
+    return session.scalars(stmt).first()
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/accounts", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=CreateAccountRequest,
+    resp=Response(HTTP_200=AccountDetail, HTTP_201=AccountDetail, HTTP_400=ApiError, HTTP_404=ApiError),
+)
+def upsert_account(tenant_id: str):
+    """Pre-map a GAM advertiser to a billing key.
+
+    Upserts by the same natural key ``_sync_accounts_impl`` uses so a later
+    ``sync_accounts`` call from a buyer agent finds the row already wired
+    and skips the ``pending_provision`` round trip. Returns 201 on create,
+    200 on update.
+    """
+    req: CreateAccountRequest = request.context.json  # type: ignore[attr-defined]
+
+    # Validation that's awkward in Pydantic alone (cross-field).
+    if req.billing == "agent" and not req.buyer_agent_principal_id:
+        return _api_error(
+            "buyer_agent_required",
+            "billing='agent' requires buyer_agent_principal_id — that's the principal in the agent's billing relationship.",
+            400,
+        )
+    if req.sandbox and req.gam_advertiser_id:
+        return _api_error(
+            "sandbox_advertiser_managed",
+            "sandbox accounts route to the per-tenant sandbox advertiser — do not pass gam_advertiser_id.",
+            400,
+        )
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        existing = _find_account_by_natural_key(session, tenant_id, req)
+
+        if existing is None:
+            account = Account(
+                tenant_id=tenant_id,
+                account_id=f"acct_{uuid.uuid4().hex[:12]}",
+                name=req.name or _generate_pre_mapped_account_name(req),
+                status="active",
+                operator=req.operator,
+                brand={
+                    "domain": req.brand.domain,
+                    **({"brand_id": req.brand.brand_id} if req.brand.brand_id else {}),
+                },
+                billing=req.billing,
+                sandbox=req.sandbox,
+                principal_id=req.buyer_agent_principal_id if req.billing == "agent" else None,
+                payment_terms=req.payment_terms,
+                rate_card=req.rate_card,
+                platform_mappings={},
+            )
+            if req.gam_advertiser_id:
+                _set_account_advertiser(account, req.gam_advertiser_id, req.gam_advertiser_name)
+            session.add(account)
+            try:
+                session.commit()
+            except ManagedTenantWriteError as exc:
+                session.rollback()
+                return _api_error("managed_tenant_write_blocked", str(exc), 403)
+            session.refresh(account)
+            invalidate_status_cache(tenant_id)
+            return jsonify(_account_to_detail(account).model_dump(mode="json")), 201
+
+        # Update path — preserve account_id, refresh advertiser mapping +
+        # status, and let the caller bump display fields if they want.
+        if req.gam_advertiser_id:
+            _set_account_advertiser(existing, req.gam_advertiser_id, req.gam_advertiser_name)
+            if existing.status == "pending_provision":
+                existing.status = "active"
+        if req.name is not None:
+            existing.name = req.name
+        if req.payment_terms is not None:
+            existing.payment_terms = req.payment_terms
+        if req.rate_card is not None:
+            existing.rate_card = req.rate_card
+        existing.updated_at = datetime.now(UTC)
+
+        try:
+            session.commit()
+        except ManagedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        session.refresh(existing)
+        invalidate_status_cache(tenant_id)
+        return jsonify(_account_to_detail(existing).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/accounts", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListAccountsManagedResponse, HTTP_404=ApiError))
+def list_managed_accounts(tenant_id: str):
+    """List Accounts for a tenant. Filters: ``operator``, ``billing``,
+    ``status``, ``sandbox``, ``advertiser_mapped``."""
+    operator = request.args.get("operator")
+    billing = request.args.get("billing")
+    status_filter = request.args.get("status")
+    sandbox_arg = request.args.get("sandbox")
+    advertiser_mapped_arg = request.args.get("advertiser_mapped")
+
+    def _to_bool(value: str | None) -> bool | None:
+        if value is None:
+            return None
+        return value.lower() in ("true", "1", "yes")
+
+    sandbox_bool = _to_bool(sandbox_arg)
+    advertiser_mapped_bool = _to_bool(advertiser_mapped_arg)
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        stmt = select(Account).where(Account.tenant_id == tenant_id).order_by(Account.created_at.desc())
+        if operator:
+            stmt = stmt.where(Account.operator == operator)
+        if billing in ("operator", "agent"):
+            stmt = stmt.where(Account.billing == billing)
+        if status_filter:
+            stmt = stmt.where(Account.status == status_filter)
+        if sandbox_bool is not None:
+            stmt = stmt.where(Account.sandbox.is_(sandbox_bool))
+
+        accounts = list(session.scalars(stmt).all())
+
+    summaries = [_account_to_summary(a) for a in accounts]
+    if advertiser_mapped_bool is not None:
+        summaries = [s for s in summaries if s.advertiser_mapped == advertiser_mapped_bool]
+    return jsonify(
+        ListAccountsManagedResponse(accounts=summaries, count=len(summaries)).model_dump(mode="json")
+    )
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/status", methods=["GET"])

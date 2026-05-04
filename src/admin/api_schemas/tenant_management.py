@@ -367,6 +367,89 @@ class TenantStatusResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 1.6 — pre-map advertisers (POST/GET /tenants/{tid}/accounts)
+# ---------------------------------------------------------------------------
+
+
+class BrandRef(BaseModel):
+    """Compact brand reference. Mirrors AdCP ``BrandReference`` minimally —
+    ``domain`` is the natural-key field; ``brand_id`` is an optional
+    publisher-side stable id when one brand owns multiple domains."""
+
+    model_config = _config()
+
+    domain: str = Field(..., min_length=1, max_length=255)
+    brand_id: str | None = Field(default=None, max_length=255)
+
+
+class CreateAccountRequest(BaseModel):
+    """Pre-map a GAM advertiser to a billing key.
+
+    Upserts by the same natural key ``_sync_accounts_impl`` uses so the
+    next ``sync_accounts`` call from a buyer agent finds the row already
+    wired and skips ``pending_provision`` entirely.
+
+    Validation:
+    - ``billing=agent`` requires ``buyer_agent_principal_id``.
+    - ``sandbox=True`` rejects ``gam_advertiser_id`` — sandbox routes to
+      the per-tenant sandbox advertiser, not a caller-specified one.
+    """
+
+    model_config = _config()
+
+    operator: str = Field(..., min_length=1, max_length=255)
+    brand: BrandRef
+    billing: Literal["operator", "agent"]
+    buyer_agent_principal_id: str | None = Field(default=None, max_length=100)
+    sandbox: bool = False
+
+    gam_advertiser_id: str | None = Field(default=None, max_length=64)
+    gam_advertiser_name: str | None = Field(default=None, max_length=255)
+
+    name: str | None = Field(default=None, max_length=255)
+    payment_terms: Literal["net_15", "net_30", "net_45", "net_60", "net_90", "prepay"] | None = None
+    rate_card: str | None = Field(default=None, max_length=255)
+
+
+class AccountSummary(BaseModel):
+    """Compact account view used by list endpoints."""
+
+    model_config = _config()
+
+    account_id: str
+    name: str
+    status: str
+    operator: str | None = None
+    brand: dict[str, Any] | None = None
+    billing: str | None = None
+    sandbox: bool | None = None
+    buyer_agent_principal_id: str | None = None
+    gam_advertiser_id: str | None = None
+    gam_advertiser_name: str | None = None
+    advertiser_mapped: bool
+
+
+class AccountDetail(AccountSummary):
+    """Full account view returned from POST/GET-by-id."""
+
+    model_config = _config()
+
+    payment_terms: str | None = None
+    rate_card: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ListAccountsManagedResponse(BaseModel):
+    """Response body for ``GET /tenants/{tid}/accounts``."""
+
+    model_config = _config()
+
+    accounts: list[AccountSummary]
+    count: int
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 

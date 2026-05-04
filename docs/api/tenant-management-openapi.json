@@ -1,6 +1,157 @@
 {
   "components": {
     "schemas": {
+      "AccountDetail.f44f287": {
+        "additionalProperties": false,
+        "description": "Full account view returned from POST/GET-by-id.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "advertiser_mapped": {
+            "title": "Advertiser Mapped",
+            "type": "boolean"
+          },
+          "billing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Billing"
+          },
+          "brand": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Brand"
+          },
+          "buyer_agent_principal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Buyer Agent Principal Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "gam_advertiser_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gam Advertiser Id"
+          },
+          "gam_advertiser_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gam Advertiser Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "operator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operator"
+          },
+          "payment_terms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Payment Terms"
+          },
+          "rate_card": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rate Card"
+          },
+          "sandbox": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sandbox"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "name",
+          "status",
+          "advertiser_mapped",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AccountDetail",
+        "type": "object"
+      },
       "AdapterConfigEnvelope.61b280c": {
         "discriminator": {
           "mapping": {
@@ -188,6 +339,294 @@
           "message"
         ],
         "title": "ApiError",
+        "type": "object"
+      },
+      "CreateAccountRequest.f44f287": {
+        "additionalProperties": false,
+        "description": "Pre-map a GAM advertiser to a billing key.\n\nUpserts by the same natural key ``_sync_accounts_impl`` uses so the\nnext ``sync_accounts`` call from a buyer agent finds the row already\nwired and skips ``pending_provision`` entirely.\n\nValidation:\n- ``billing=agent`` requires ``buyer_agent_principal_id``.\n- ``sandbox=True`` rejects ``gam_advertiser_id`` \u2014 sandbox routes to\n  the per-tenant sandbox advertiser, not a caller-specified one.",
+        "properties": {
+          "billing": {
+            "enum": [
+              "operator",
+              "agent"
+            ],
+            "title": "Billing",
+            "type": "string"
+          },
+          "brand": {
+            "$ref": "#/components/schemas/CreateAccountRequest.f44f287.BrandRef"
+          },
+          "buyer_agent_principal_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Buyer Agent Principal Id"
+          },
+          "gam_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gam Advertiser Id"
+          },
+          "gam_advertiser_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gam Advertiser Name"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "operator": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Operator",
+            "type": "string"
+          },
+          "payment_terms": {
+            "anyOf": [
+              {
+                "enum": [
+                  "net_15",
+                  "net_30",
+                  "net_45",
+                  "net_60",
+                  "net_90",
+                  "prepay"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Payment Terms"
+          },
+          "rate_card": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rate Card"
+          },
+          "sandbox": {
+            "default": false,
+            "title": "Sandbox",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operator",
+          "brand",
+          "billing"
+        ],
+        "title": "CreateAccountRequest",
+        "type": "object"
+      },
+      "CreateAccountRequest.f44f287.BrandRef": {
+        "additionalProperties": false,
+        "description": "Compact brand reference. Mirrors AdCP ``BrandReference`` minimally \u2014\n``domain`` is the natural-key field; ``brand_id`` is an optional\npublisher-side stable id when one brand owns multiple domains.",
+        "properties": {
+          "brand_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Brand Id"
+          },
+          "domain": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Domain",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain"
+        ],
+        "title": "BrandRef",
+        "type": "object"
+      },
+      "ListAccountsManagedResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "Response body for ``GET /tenants/{tid}/accounts``.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/ListAccountsManagedResponse.f44f287.AccountSummary"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accounts",
+          "count"
+        ],
+        "title": "ListAccountsManagedResponse",
+        "type": "object"
+      },
+      "ListAccountsManagedResponse.f44f287.AccountSummary": {
+        "additionalProperties": false,
+        "description": "Compact account view used by list endpoints.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "advertiser_mapped": {
+            "title": "Advertiser Mapped",
+            "type": "boolean"
+          },
+          "billing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Billing"
+          },
+          "brand": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Brand"
+          },
+          "buyer_agent_principal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Buyer Agent Principal Id"
+          },
+          "gam_advertiser_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gam Advertiser Id"
+          },
+          "gam_advertiser_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gam Advertiser Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "operator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operator"
+          },
+          "sandbox": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sandbox"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "name",
+          "status",
+          "advertiser_mapped"
+        ],
+        "title": "AccountSummary",
         "type": "object"
       },
       "ListTenantsResponse.f44f287": {
@@ -1722,6 +2161,136 @@
         ],
         "responses": {},
         "summary": "Update a tenant.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/tenants/{tenant_id}/accounts": {
+      "get": {
+        "description": "",
+        "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_accounts",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAccountsManagedResponse.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "List Accounts for a tenant. Filters: ``operator``, ``billing``, ``status``, ``sandbox``, ``advertiser_mapped``.",
+        "tags": []
+      },
+      "post": {
+        "description": "Upserts by the same natural key ``_sync_accounts_impl`` uses so a later ``sync_accounts`` call from a buyer agent finds the row already wired and skips the ``pending_provision`` round trip. Returns 201 on create, 200 on update.",
+        "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_accounts",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccountRequest.f44f287"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail.f44f287"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Pre-map a GAM advertiser to a billing key.",
         "tags": []
       }
     },
