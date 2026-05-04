@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import pytest
 from adcp.types import ImageFormatAsset, VideoFormatAsset
-from adcp.types.generated_poc.core.format import Dimensions, Renders
-
+from adcp.types import Dimensions, Renders
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import TenantFactory
 from tests.harness import CreativeFormatsEnv

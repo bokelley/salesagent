@@ -29,6 +29,7 @@ import pytest
 
 from adcp.decisioning.serve import create_adcp_server_from_platform
 from adcp.server.base import ToolContext
+from adcp.testing import make_request_context  # noqa: F401 — shows the SDK now ships this helper
 from adcp.types import GetProductsRequest
 
 from core.platforms.mock import MockSellerPlatform

@@ -36,7 +36,7 @@ from adcp.types import (
     SyncCreativesRequest as LibrarySyncCreativesRequest,
 )
 from adcp.types import PaginationResponse as LibraryResponsePagination
-from adcp.types.generated_poc.core.provenance import AiTool
+from adcp.types import AiTool
 from adcp.types import (
     Creative as LibraryCreative,
 )

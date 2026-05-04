@@ -8,35 +8,33 @@ the proposed fix.
 Context: 270 files scanned, 141 codemod findings, 62 files modified to
 clear the test-collection cascade, 4253 tests collecting clean.
 
+> **Update (refresh from `main` 68699763):** items 1, 2, 10 below have
+> already shipped in `adcp` main since the original feedback. salesagent's
+> code is now refactored to use the new public surfaces. Big thanks 🙏
+
 ---
 
-## 🔴 High-impact: blocked progress until worked around
+## ✅ Closed in main since the original feedback
 
-### 1. `Dimensions` / `Renders` / `Responsive` are split inconsistently
+### ~~1. `Dimensions` / `Renders` / `Responsive` are split inconsistently~~ — DONE
 
-`Responsive` is on the public surface; `Dimensions` and `Renders` are not.
-They sit next to each other in `adcp.types.generated_poc.core.format` and
-adopters always import them as a triad.
+Now: `from adcp.types import Dimensions, Renders, Responsive`. salesagent
+refactored to use the public surface in commit (this branch).
 
-**Pain:** my batch rewrite of `from adcp.types.generated_poc.core.format
-import (...)` → `from adcp.types import (...)` worked for `Responsive` but
-silently broke when the same import line included `Dimensions` or
-`Renders`. Six tests had to be reverted to mixed imports.
+### ~~2. `MediaBuyFeatures` and `AiTool` not on public surface~~ — DONE
 
-**Ask:** add `Dimensions`, `Renders` to `adcp.types` re-exports.
+Now: `from adcp.types import MediaBuyFeatures, AiTool`. salesagent
+refactored.
 
-### 2. `MediaBuyFeatures` and `AiTool` not on public surface
+### ~~10. `RequestContext` is hard to construct in tests~~ — DONE
 
-Both are referenced by adopter code (`capabilities.py`, `creative.py`,
-`policy_check_service.py`) and both sit only at
-`adcp.types.generated_poc.{core.media_buy_features,core.provenance}`. The
-migration guide says "if a variant isn't aliased, file an issue."
+`adcp.testing.make_request_context(account=..., request_id=...)` now ships.
+Sane defaults for every factory field; salesagent's `core/tests/`
+refactored to use it.
 
-**Pain:** salesagent has 5+ call sites that constructed these by name.
-None of them have a stable replacement path.
+---
 
-**Ask:** alias both to `adcp.types`. (`AiTool` likely belongs in
-`adcp.types` since it appears in 5 different bundled request models.)
+## 🔴 Still open — high impact
 
 ### 3. `pending_activation` → `pending_start | pending_creatives` split is invisible to the codemod
 
@@ -271,3 +269,206 @@ The 30-line helper I wrote in salesagent does roughly this for
 - **CHANGELOG specificity.** "expand with salesagent migration
   production patterns (#326)" is the kind of changelog line that lets
   adopters know exactly what's relevant to them. Keep this style.
+
+---
+
+## 📦 Round 2 — new asks from M3 session (real GAM live)
+
+After landing **M1** (mock platform via shared ORM) and **M3 wave 1**
+(`WonderstruckGamPlatform` reading real placements from a Wonderstruck
+GAM network through `core/`), a new tier of adopter friction surfaced.
+These are framed as *"what should the SDK own so adopters write less?"*
+
+### 16. `IdempotencyBackend.PgBackend` is a scaffold, not a working impl
+
+`adcp.server.idempotency.backends.PgBackend` is documented as *"a
+scaffold for a SQLAlchemy/asyncpg-backed store that can be wrapped
+with adopter logic"* — i.e. not actually wireable yet. `MemoryBackend`
+is the only working backend.
+
+**Pain:** Adopters running multi-worker (anyone who scales beyond one
+process) have no first-party path for durable idempotency replay. We're
+left declaring `IdempotencySupported(supported=True, replay_ttl_seconds=86400)`
+in capabilities but unable to actually dedupe across workers.
+
+**Ask:** finish `PgBackend`. salesagent has a Postgres pool and would
+ship-test it the moment it lands. Adopter-facing API can be:
+
+```python
+from adcp.server.idempotency import IdempotencyStore, PgBackend
+store = IdempotencyStore(backend=PgBackend(pool=my_pool), ttl_seconds=86400)
+```
+
+…matching the `MemoryBackend` constructor shape. Schema migration can
+ship as `adcp/server/idempotency/idempotency.sql` next to the existing
+`adcp/decisioning/pg/decisioning_tasks.sql` pattern.
+
+### 17. Capability-vs-store-wired mismatch is silent
+
+If an adopter declares `IdempotencySupported(supported=True)` in
+capabilities but never wires an `IdempotencyStore`, the framework boots
+without warning — the agent advertises a feature it doesn't deliver,
+and a buyer who relies on the advertised dedup gets surprised.
+
+Same shape for several other features:
+- `auto_emit_completion_webhooks=True` without a `webhook_sender`
+- `compliance_testing` capability without a `TestControllerStore`
+- `signals` capability without the methods on the platform
+
+**Pain:** salesagent boots clean, looks healthy, lies to buyers.
+
+**Ask:** boot-time validator that cross-references declared
+capabilities against wired stores/handlers and either:
+- Fail-fast with a clear message ("capability X requires store Y; pass
+  `Y=...` to `serve()` or remove the declaration")
+- Auto-default to the in-memory backend with a `WARNING` log
+  ("`IdempotencySupported(supported=True)` declared but no store wired;
+  defaulting to `MemoryBackend` — single-process only")
+
+The current "soft warn on missing required methods" behavior at boot
+(rc.1 → strict transition) is the right shape; extend it to wired
+stores as well.
+
+### 18. First-class token-auth middleware
+
+The framework has all the pieces (`Principal`, `current_principal`
+contextvar, `principal_context_factory`), but the bridge "request comes
+in with `Authorization: Bearer <token>` → `ToolContext.caller_identity`
+is set" requires adopters to write all of:
+
+1. A Starlette middleware that reads the header
+2. Their token-table lookup
+3. A `Principal(...)` constructed from the row
+4. `current_principal.set(principal.caller_identity)`
+5. Pass `context_factory=principal_context_factory` to `serve()`
+
+**Pain:** every multi-tenant token-auth adopter writes the same 50 LOC.
+salesagent already had it once for the legacy server; we'll write it
+again for `core/`.
+
+**Ask:** ship a `TokenAuthMiddleware` that takes a Protocol-shaped
+adopter token store:
+
+```python
+class TokenStore(Protocol):
+    async def resolve(self, token: str) -> Principal | None: ...
+
+# adopter wires:
+serve(
+    handler,
+    asgi_middleware=[
+        (TokenAuthMiddleware, {"store": MyTokenStore(), "header": "x-adcp-auth"}),
+    ],
+    context_factory=principal_context_factory,
+)
+```
+
+Plus a reference impl `InMemoryTokenStore({"tok_abc": Principal(...)})` for
+tests. Adopter code is 5-10 LOC instead of 50.
+
+### 19. `WebhookSender` is required for `auto_emit_completion_webhooks`
+
+`hello_seller.py` opts out (`auto_emit_completion_webhooks=False`) to
+boot without a `webhook_sender`. The first-class buyer-experience
+default — sync completions emit webhooks — is *off* in the canonical
+example.
+
+**Pain:** new adopters either (a) opt out and ship without the feature
+or (b) wire `WebhookSender` themselves with no clear "default" guidance.
+
+**Ask:** ship `DefaultWebhookSender(supervisor=...)` that internally
+constructs an httpx-backed sender wired to the supplied supervisor.
+Default `serve()` uses it when `webhook_supervisor` is provided. Then
+adopters opt *in* by wiring a supervisor (which is the meaningful
+choice anyway), not by separately wiring sender + supervisor.
+
+### 20. `DbBackedSubdomainTenantRouter` reference impl
+
+The framework ships `InMemorySubdomainTenantRouter`. salesagent (and
+likely every multi-tenant adopter) has a tenants table and writes the
+DB-backed equivalent — see `core/main.py::_load_tenant_subdomain_map()`.
+
+**Pain:** ~25 LOC of glue that every adopter writes, with subtle bugs
+(must match `_normalize_host`'s port-stripping; must filter `is_active`,
+etc.).
+
+**Ask:** ship `DbBackedSubdomainTenantRouter(query: Callable[[str], Awaitable[Tenant | None]])`
+that takes a single async callable for the host→Tenant lookup and
+delegates port normalization/caching to the framework. Adopter writes
+~5 LOC; framework owns the host-parsing edge cases.
+
+### 21. Lazy `PlatformRouter` for adopters with N tenants
+
+`PlatformRouter(platforms={...})` requires every per-tenant
+`DecisioningPlatform` instance to be eagerly constructed at boot.
+salesagent has potentially hundreds of tenants and may not want every
+GAM client + auth handshake at startup.
+
+**Pain:** `core/main.py::_load_platforms()` instantiates every active
+tenant's platform at boot. For real GAM tenants, that means doing GAM
+auth handshake N times before the server can listen. It also means
+adding/removing tenants requires a restart.
+
+**Ask:** `LazyPlatformRouter(factory: Callable[[Tenant], DecisioningPlatform])`
+that resolves platforms on first request per tenant, caches the result,
+and supports `invalidate(tenant_id)` for hot reload. The eager
+constructor stays as a special case (`PlatformRouter(platforms=...)`).
+
+### 22. GAM client construction pattern is a paste-able template
+
+Every salesagent-shaped GAM adopter needs:
+- Read `gam_service_account_json` from per-tenant config (encrypted)
+- `service_account.Credentials.from_service_account_info(scopes=...)`
+- Wrap in a googleads `OAuth2Client` adapter (boilerplate ~15 LOC —
+  see `core/platforms/_gam_client.py::_ServiceAccountOAuthClient`)
+- Build `ad_manager.AdManagerClient(network_code=..., cache=None)`
+- Cache per-tenant
+
+Same shape for Kevel (different SDK), Triton, Xandr.
+
+**Ask:** this is GAM-specific so probably out of scope, but consider an
+`adcp.upstream.gam` (or community-contrib) module shipping the
+service-account-auth + cached-client pattern. The wrapper is ~30 LOC
+and identical across any salesagent-shaped GAM adopter. Could live as
+an `extras_require=["gam"]` install path.
+
+### 23. `Placement → Product` projection is generic-enough to share
+
+`core/platforms/gam.py::_placement_to_product()` projects a GAM
+`Placement` (+ resolved ad-unit sizes) into AdCP `Product` wire shape.
+The mechanical fields (format_ids from sizes, default pricing_options,
+default reporting_capabilities, default delivery_measurement) are
+identical across publisher-config-vs-product mapping.
+
+**Ask:** `adcp.upstream.gam.placement_to_product(placement, ad_unit_index, *, defaults: PlacementDefaults)`
+so adopters supply only the publisher-specific overrides (pricing
+floors, publisher_domain, etc.) and the framework owns the wire-shape
+plumbing. Same energy as the existing `proposal_response()` builder
+helpers.
+
+### 24. `build_asgi_app` not yet (Item 11 from round 1)
+
+Still tracked. The current path is `create_mcp_server() →
+mcp.streamable_http_app()` which works but isn't documented as the
+test seam. Asked in round 1; haven't seen it land yet.
+
+---
+
+## TL;DR for the team — 5 of 15 round-1 asks already shipped 🚀
+
+Tracking via `core/SDK_FEEDBACK.md` git history:
+
+| Round | Item | Status |
+|-------|------|--------|
+| 1 | #1 Dimensions/Renders public | ✅ DONE in 68699763 |
+| 1 | #2 MediaBuyFeatures/AiTool public | ✅ DONE |
+| 1 | #10 make_request_context | ✅ DONE |
+| 1 | #11 build_asgi_app | open (carried as #24) |
+| 1 | #6 codemod auto-apply for safe 78% | open |
+| 2 | #16 PgBackend for IdempotencyStore | new (real blocker for multi-worker) |
+| 2 | #18 TokenAuthMiddleware | new (will write it ourselves; happy to PR) |
+| 2 | #20 DbBackedSubdomainTenantRouter | new (we have a working example to port) |
+
+Items we'd happily PR upstream if it'd land: **#18 TokenAuthMiddleware**
+(salesagent already has the working middleware), **#20 DbBackedSubdomainTenantRouter**
+(again, working impl in `core/main.py`). Just say the word.

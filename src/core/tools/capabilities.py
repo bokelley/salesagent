@@ -9,9 +9,12 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from datetime import UTC, datetime
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
-from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
-from adcp.types import MediaChannel
+from adcp.types import (
+    GetAdcpCapabilitiesRequest,
+    GetAdcpCapabilitiesResponse,
+    MediaBuyFeatures,
+    MediaChannel,
+)
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,

@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from adcp.types import (ImageFormatAsset, VideoFormatAsset)
-from adcp.types.generated_poc.core.format import Dimensions, Renders
+from adcp.types import Dimensions, Renders
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult

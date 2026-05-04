@@ -75,7 +75,7 @@ wheels = [
 [[package]]
 name = "adcp"
 version = "4.3.0"
-source = { git = "https://github.com/adcontextprotocol/adcp-client-python.git?branch=main#fe8e5b0382324365a5b86bd4467853b6284f354a" }
+source = { git = "https://github.com/adcontextprotocol/adcp-client-python.git?branch=main#68699763e917980f6d7ad75e4a1364a2dc188715" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },

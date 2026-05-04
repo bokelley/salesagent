@@ -11,8 +11,7 @@ Each test references its upstream BDD scenario ID for traceability.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import (ImageFormatAsset, VideoFormatAsset)
-from adcp.types.generated_poc.core.format import Dimensions, Renders
+from adcp.types import Dimensions, ImageFormatAsset, Renders, VideoFormatAsset
 
 # adcp 3.9: ImageFormatAsset classes are type-discriminated by asset_type + item_type.
 # ImageFormatAsset = individual image, VideoFormatAsset = individual video

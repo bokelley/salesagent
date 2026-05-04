@@ -5,8 +5,7 @@ Issue #782: Support creative format templates with dynamic width/height/duration
 
 import pytest
 from adcp.types import FormatId
-from adcp.types.generated_poc.core.format import Dimensions, Renders
-
+from adcp.types import Dimensions, Renders
 from src.core.helpers import _extract_format_info, _extract_format_namespace
 from src.core.helpers.creative_helpers import (
     _convert_creative_to_adapter_asset,

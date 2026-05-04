@@ -35,7 +35,7 @@ from adcp.types import (
     TextFormatAsset,
     VideoFormatAsset,
 )
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # not yet on public surface
+from adcp.types import Dimensions, Renders
 
 from src.core.schemas import Format, FormatId
 

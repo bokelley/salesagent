@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from adcp.decisioning.context import RequestContext
+from adcp.testing import make_request_context
 
 from core.platforms.mock import MockSellerPlatform
 
@@ -60,7 +60,7 @@ def mock_session_with_product():
 def test_get_products_returns_tenant_scoped_products(mock_session_with_product):
     platform = MockSellerPlatform()
     account = platform.accounts.resolve(ref={"account_id": "test-tenant:demo"})
-    ctx = RequestContext(account=account, request_id="req-1")
+    ctx = make_request_context(account=account, request_id="req-1")
 
     result = platform.get_products(req={}, ctx=ctx)
 
@@ -80,7 +80,7 @@ def test_get_products_rejects_missing_tenant_metadata(mock_session_with_product)
 
     platform = MockSellerPlatform()
     bad_account = Account(id="anonymous", metadata={})
-    ctx = RequestContext(account=bad_account, request_id="req-2")
+    ctx = make_request_context(account=bad_account, request_id="req-2")
 
     with pytest.raises(AdcpError) as exc_info:
         platform.get_products(req={}, ctx=ctx)
@@ -120,7 +120,7 @@ def test_publisher_properties_uses_tags_when_present(mock_session_with_product, 
 
     platform = MockSellerPlatform()
     account = platform.accounts.resolve(ref={"account_id": "test-tenant:demo"})
-    ctx = RequestContext(account=account, request_id="req-3")
+    ctx = make_request_context(account=account, request_id="req-3")
 
     result = platform.get_products(req={}, ctx=ctx)
     pubs = result["products"][0]["publisher_properties"]
