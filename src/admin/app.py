@@ -298,7 +298,7 @@ def create_app(config=None):
     @app.context_processor
     def inject_context():
         """Make the script_name (e.g., /admin) and current tenant available in all templates."""
-        from flask import session
+        from flask import g, session
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -315,6 +315,13 @@ def create_app(config=None):
         # Inject sales agent domain for URL generation in templates
         context["sales_agent_domain"] = get_sales_agent_domain() or "example.com"
 
+        # Managed-mode chrome flag — true when this request authorized via
+        # the X-Identity-* bypass (sprint 2). Templates use this to hide
+        # the salesagent's own top nav strip; the upstream proxy (Scope3
+        # Storefront) provides chrome around the iframe instead.
+        managed_user = isinstance(getattr(g, "user", None), dict) and bool(g.user.get("managed_mode"))
+        context["managed_mode"] = managed_user
+
         # Inject fresh tenant data if user is logged in with a tenant
         tenant_id = session.get("tenant_id")
         if tenant_id:
@@ -328,6 +335,23 @@ def create_app(config=None):
                 logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
 
         return context
+
+    # Iframe embedding policy. ``MANAGED_MODE_FRAME_ANCESTORS`` is a CSP
+    # frame-ancestors directive value (e.g., ``'self' https://*.scope3.com``).
+    # Set on managed-mode deployments to allow the upstream Storefront to
+    # embed the admin UI as an iframe; legacy deployments leave it unset
+    # and the existing X-Frame-Options-less behavior persists.
+    @app.after_request
+    def apply_frame_ancestors(response):
+        ancestors = os.environ.get("MANAGED_MODE_FRAME_ANCESTORS")
+        if ancestors:
+            existing = response.headers.get("Content-Security-Policy")
+            directive = f"frame-ancestors {ancestors}"
+            if existing:
+                response.headers["Content-Security-Policy"] = f"{existing}; {directive}"
+            else:
+                response.headers["Content-Security-Policy"] = directive
+        return response
 
     # Register blueprints
     app.register_blueprint(public_bp)  # Public routes (no auth required) - MUST BE FIRST

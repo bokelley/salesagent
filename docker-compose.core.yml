@@ -115,6 +115,11 @@ services:
       # contract today.
       MANAGED_INSTANCE: "${MANAGED_INSTANCE:-true}"
       IDENTITY_TRUST_MODE: "${IDENTITY_TRUST_MODE:-network}"
+      # CSP frame-ancestors directive — populated when the salesagent
+      # admin UI is rendered inside an upstream proxy's iframe. Default
+      # empty (no CSP set, no iframe restriction). Production managed-
+      # mode deployments set this to e.g. "'self' https://*.scope3.com".
+      MANAGED_MODE_FRAME_ANCESTORS: "${MANAGED_MODE_FRAME_ANCESTORS:-}"
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"
       FLASK_ENV: development

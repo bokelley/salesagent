@@ -103,18 +103,34 @@ After `docker compose -p core -f docker-compose.core.yml up -d`:
 4. `ADCP_AUTH_TEST_MODE=true` is set in the compose file by default; the
    admin UI accepts the test login without Google OAuth in dev.
 
-### Forward-compatible managed-mode flags
+### Managed-mode environment flags
 
-The core compose also sets the contract-required env vars listed in
+The core compose sets the contract-required env vars listed in
 [`managed-mode-identity-contract.md`](./managed-mode-identity-contract.md):
 
-| Env var | Default in core compose | Effect today |
+| Env var | Default in core compose | Effect |
 |---|---|---|
-| `MANAGED_INSTANCE` | `false` | No-op until sprint 2 wires request scoping. Set to `true` once the upstream proxy is in place so the salesagent can fail closed on missing identity headers. |
-| `IDENTITY_TRUST_MODE` | `network` | No-op until sprint 2; the contract spec value Scope3 will deploy with. |
+| `MANAGED_INSTANCE` | `true` | When true + `tenant.managed_externally=true`, `/tenant/<id>/*` admin UI auth flows from `X-Identity-*` headers (sprint 2 — landed). Open-instance tenants on the same deployment continue to use Google OAuth. |
+| `IDENTITY_TRUST_MODE` | `network` | Per the identity contract — trust the headers because the salesagent is reachable only through the upstream proxy. |
+| `MANAGED_MODE_FRAME_ANCESTORS` | empty (no CSP set) | When set, every response gets a `Content-Security-Policy: frame-ancestors <value>` header so the upstream proxy can embed the admin UI as an iframe. Set to e.g. `"'self' https://*.scope3.com"` in production. |
 
-Setting these now lets Scope3 wire its edge against the final contract today
-without behavior surprises when sprint 2 hardens the request lifecycle.
+### Iframe embedding
+
+The admin UI is iframe-friendly out of the box — no `X-Frame-Options`
+header is set, so any origin can embed it. For production:
+
+1. Set `MANAGED_MODE_FRAME_ANCESTORS` to the upstream proxy's origin (CSP
+   `frame-ancestors` directive value). This restricts who can iframe the
+   UI without breaking the embed.
+2. The salesagent's own top nav strip (the dark navy "<tenant> Sales
+   Agent Dashboard" header) is automatically hidden when the request
+   authorizes via `X-Identity-*` headers — Scope3 Storefront's chrome
+   wraps the iframe instead, so the inner header is redundant. See the
+   `{% if not managed_mode %}` guard in `templates/base.html`.
+3. Cookies: managed-mode auth is stateless via headers — no session
+   cookies are set on these requests, so cross-origin iframe embedding
+   doesn't hit the `SameSite=Lax`/`SameSite=None` snag that breaks
+   classic OAuth in iframes.
 
 ### Known dev caveats
 
