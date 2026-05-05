@@ -212,6 +212,57 @@ components:
       - message
       title: ApiError
       type: object
+    BuyerAdvertiserMapping.f44f287:
+      additionalProperties: false
+      description: "Routing rule on the wire \u2014 the public face of an\n``AdvertiserRoutingRule``\
+        \ ORM row.\n\nVocabulary alignment with Scope3 Storefront UI: external surface\
+        \ uses\n\"buyer-advertiser-mapping\"; internal storage table is named\n``advertiser_routing_rules``\
+        \ because the impl IS a precedence-ordered\nrouting chain. One-line mapping\
+        \ at the API boundary."
+      properties:
+        brand_house:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        gam_advertiser_id:
+          title: Gam Advertiser Id
+          type: string
+        id:
+          title: Id
+          type: string
+        operator_domain:
+          title: Operator Domain
+          type: string
+        principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+      required:
+      - id
+      - operator_domain
+      - gam_advertiser_id
+      - created_at
+      - updated_at
+      title: BuyerAdvertiserMapping
+      type: object
     CreateAccountRequest.f44f287:
       additionalProperties: false
       description: "Pre-map a GAM advertiser to a billing key.\n\nUpserts by the same\
@@ -314,6 +365,46 @@ components:
       - domain
       title: BrandRef
       type: object
+    CreateBuyerAdvertiserMappingRequest.f44f287:
+      additionalProperties: false
+      description: '``POST /tenants/{tid}/buyer-advertiser-mappings`` body.'
+      properties:
+        brand_house:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        gam_advertiser_id:
+          maxLength: 64
+          minLength: 1
+          title: Gam Advertiser Id
+          type: string
+        operator_domain:
+          maxLength: 255
+          minLength: 1
+          title: Operator Domain
+          type: string
+        principal_id:
+          anyOf:
+          - maxLength: 50
+            type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+      required:
+      - operator_domain
+      - gam_advertiser_id
+      title: CreateBuyerAdvertiserMappingRequest
+      type: object
     ListAccountsManagedResponse.f44f287:
       additionalProperties: false
       description: Response body for ``GET /tenants/{tid}/accounts``.
@@ -397,6 +488,196 @@ components:
       - advertiser_mapped
       title: AccountSummary
       type: object
+    ListBuyerAdvertiserMappingsResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/buyer-advertiser-mappings`` response.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        mappings:
+          items:
+            $ref: '#/components/schemas/ListBuyerAdvertiserMappingsResponse.f44f287.BuyerAdvertiserMapping'
+          title: Mappings
+          type: array
+      required:
+      - mappings
+      - count
+      title: ListBuyerAdvertiserMappingsResponse
+      type: object
+    ListBuyerAdvertiserMappingsResponse.f44f287.BuyerAdvertiserMapping:
+      additionalProperties: false
+      description: "Routing rule on the wire \u2014 the public face of an\n``AdvertiserRoutingRule``\
+        \ ORM row.\n\nVocabulary alignment with Scope3 Storefront UI: external surface\
+        \ uses\n\"buyer-advertiser-mapping\"; internal storage table is named\n``advertiser_routing_rules``\
+        \ because the impl IS a precedence-ordered\nrouting chain. One-line mapping\
+        \ at the API boundary."
+      properties:
+        brand_house:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        gam_advertiser_id:
+          title: Gam Advertiser Id
+          type: string
+        id:
+          title: Id
+          type: string
+        operator_domain:
+          title: Operator Domain
+          type: string
+        principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+      required:
+      - id
+      - operator_domain
+      - gam_advertiser_id
+      - created_at
+      - updated_at
+      title: BuyerAdvertiserMapping
+      type: object
+    ListGamAdvertisersResponse.f44f287:
+      additionalProperties: false
+      description: "``GET /tenants/{tid}/gam/advertisers`` response.\n\nCursor pagination\
+        \ with opaque base64-encoded offset (same shape as\nother list endpoints \u2014\
+        \ Storefront treats it as a sealed token).\n\n``synced_at`` reports the most-recent\
+        \ ``gam_advertisers.synced_at``\nfor the tenant so the picker can show \"\
+        Last synced 5 minutes ago\".\nNULL when no advertisers have ever synced."
+      properties:
+        advertisers:
+          items:
+            $ref: '#/components/schemas/ListGamAdvertisersResponse.f44f287.GamAdvertiser'
+          title: Advertisers
+          type: array
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        synced_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Synced At
+      required:
+      - advertisers
+      title: ListGamAdvertisersResponse
+      type: object
+    ListGamAdvertisersResponse.f44f287.GamAdvertiser:
+      additionalProperties: false
+      description: 'One row from the synced ``gam_advertisers`` cache, on the wire.
+
+
+        Source of truth is GAM''s ``CompanyService.getCompaniesByStatement
+
+        WHERE type = ''ADVERTISER''``; this projection is what the Buyer
+
+        Routing UI''s picker renders.'
+      properties:
+        currency_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Currency Code
+        id:
+          title: Id
+          type: string
+        name:
+          title: Name
+          type: string
+        status:
+          title: Status
+          type: string
+      required:
+      - id
+      - name
+      - status
+      title: GamAdvertiser
+      type: object
+    ListRecentBuyersResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/recent-buyers`` response.'
+      properties:
+        buyers:
+          items:
+            $ref: '#/components/schemas/ListRecentBuyersResponse.f44f287.RecentBuyer'
+          title: Buyers
+          type: array
+      required:
+      - buyers
+      title: ListRecentBuyersResponse
+      type: object
+    ListRecentBuyersResponse.f44f287.RecentBuyer:
+      additionalProperties: false
+      description: "One distinct ``(operator, brand_house, brand_id)`` triple seen\
+        \ in\nrecent traffic, with the GAM advertiser it resolved to and how.\n\n\
+        Powers Storefront's \"buyer routing\" widget \u2014 publishers can see at\
+        \ a\nglance which buyers are landing on the default advertiser\n(``resolved_via=default``)\
+        \ and might want their own bucket, vs.\nwhich already match a specific routing\
+        \ rule."
+      properties:
+        brand_house:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        last_seen_at:
+          format: date-time
+          title: Last Seen At
+          type: string
+        operator_domain:
+          title: Operator Domain
+          type: string
+        request_count:
+          title: Request Count
+          type: integer
+        resolved_gam_advertiser_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Resolved Gam Advertiser Id
+        resolved_via:
+          title: Resolved Via
+          type: string
+      required:
+      - operator_domain
+      - last_seen_at
+      - request_count
+      - resolved_via
+      title: RecentBuyer
+      type: object
     ListTenantsResponse.f44f287:
       additionalProperties: false
       properties:
@@ -449,6 +730,9 @@ components:
           title: Is Active
           type: boolean
         is_embedded:
+          title: Is Embedded
+          type: boolean
+        managed_externally:
           title: Managed Externally
           type: boolean
         name:
@@ -467,6 +751,7 @@ components:
       - tenant_id
       - name
       - is_embedded
+      - managed_externally
       - is_active
       - billing_plan
       - adapter_configured
@@ -621,6 +906,18 @@ components:
           minLength: 3
           title: Default Currency
           type: string
+        default_gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Gam Advertiser Id
+        embed_breadcrumb_root:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.EmbedBreadcrumbRoot'
+          - type: 'null'
+          default: null
         external_org_id:
           maxLength: 255
           minLength: 1
@@ -660,6 +957,45 @@ components:
       - public_agent_url
       - adapter
       title: ProvisionTenantRequest
+      type: object
+    ProvisionTenantRequest.f44f287.EmbedBreadcrumbRoot:
+      additionalProperties: false
+      description: 'First-crumb override for embedded-mode admin pages.
+
+
+        When the upstream host renders the salesagent admin UI inside its own
+
+        chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+
+        point back to the host''s storefront homepage rather than the
+
+        salesagent''s tenant dashboard. ``label`` is the visible link text;
+
+        ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+
+        Validated at schema boundary so bad input never reaches the rendered
+
+        template; the same model also gates the per-request
+
+        ``X-Embed-Breadcrumb-Root`` header value (see
+
+        :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).'
+      properties:
+        label:
+          maxLength: 120
+          minLength: 1
+          title: Label
+          type: string
+        url:
+          maxLength: 500
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - label
+      - url
+      title: EmbedBreadcrumbRoot
       type: object
     ProvisionTenantRequest.f44f287.GAMAdapterConfig:
       additionalProperties: false
@@ -761,7 +1097,17 @@ components:
           - $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse'
           - type: 'null'
           default: null
+        initial_sync:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.InitialSyncBlock'
+          - type: 'null'
+          default: null
         is_embedded:
+          const: true
+          default: true
+          title: Is Embedded
+          type: boolean
+        managed_externally:
           const: true
           default: true
           title: Managed Externally
@@ -812,6 +1158,24 @@ components:
       - connection_test_passed
       title: AdapterStatusResponse
       type: object
+    ProvisionTenantResponse.f44f287.InitialSyncBlock:
+      additionalProperties: false
+      description: 'Sync run ids spawned at provision time.
+
+
+        Storefront polls ``/status.syncs`` for progress per sync_type. Same
+
+        shape as ``RefreshResponse.sync_run_ids`` so callers can reuse the
+
+        refresh-poller path on first provision.'
+      properties:
+        sync_run_ids:
+          additionalProperties:
+            type: string
+          title: Sync Run Ids
+          type: object
+      title: InitialSyncBlock
+      type: object
     ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse:
       additionalProperties: false
       description: "Initial principal returned from provision.\n\nNote: embedded-mode\
@@ -829,6 +1193,26 @@ components:
       - principal_id
       - name
       title: ProvisionedPrincipalResponse
+      type: object
+    RefreshResponse.f44f287:
+      additionalProperties: false
+      description: "``POST /tenants/{tid}/refresh`` response \u2014 fan-out of sync\
+        \ run ids.\n\nStorefront polls ``GET /status.syncs`` for progress per sync\
+        \ type.\nRe-POST within 60 seconds returns the SAME ids (idempotent \u2014\
+        \ avoids\nhammering GAM when a publisher mashes the button)."
+      properties:
+        started_at:
+          format: date-time
+          title: Started At
+          type: string
+        sync_run_ids:
+          additionalProperties:
+            type: string
+          title: Sync Run Ids
+          type: object
+      required:
+      - started_at
+      title: RefreshResponse
       type: object
     TenantDetail.f44f287:
       additionalProperties: false
@@ -864,6 +1248,17 @@ components:
           - type: 'null'
           default: null
           title: Default Currency
+        default_gam_advertiser_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Default Gam Advertiser Id
+        embed_breadcrumb_root:
+          anyOf:
+          - $ref: '#/components/schemas/TenantDetail.f44f287.EmbedBreadcrumbRoot'
+          - type: 'null'
+          default: null
         external_org_id:
           anyOf:
           - type: string
@@ -886,6 +1281,9 @@ components:
           title: Is Active
           type: boolean
         is_embedded:
+          title: Is Embedded
+          type: boolean
+        managed_externally:
           title: Managed Externally
           type: boolean
         name:
@@ -910,11 +1308,51 @@ components:
       - tenant_id
       - name
       - is_embedded
+      - managed_externally
       - is_active
       - billing_plan
       - adapter_configured
       - created_at
       title: TenantDetail
+      type: object
+    TenantDetail.f44f287.EmbedBreadcrumbRoot:
+      additionalProperties: false
+      description: 'First-crumb override for embedded-mode admin pages.
+
+
+        When the upstream host renders the salesagent admin UI inside its own
+
+        chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+
+        point back to the host''s storefront homepage rather than the
+
+        salesagent''s tenant dashboard. ``label`` is the visible link text;
+
+        ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+
+        Validated at schema boundary so bad input never reaches the rendered
+
+        template; the same model also gates the per-request
+
+        ``X-Embed-Breadcrumb-Root`` header value (see
+
+        :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).'
+      properties:
+        label:
+          maxLength: 120
+          minLength: 1
+          title: Label
+          type: string
+        url:
+          maxLength: 500
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - label
+      - url
+      title: EmbedBreadcrumbRoot
       type: object
     TenantStatusResponse.f44f287:
       additionalProperties: false
@@ -933,6 +1371,10 @@ components:
           $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusMediaBuysBlock'
         packages:
           $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusPackagesBlock'
+        products:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusProductsBlock'
+        setup_tasks:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.SetupTasksBlock'
         syncs:
           $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncsBlock'
         webhooks:
@@ -946,6 +1388,75 @@ components:
       - adapter
       - fetched_at
       title: TenantStatusResponse
+      type: object
+    TenantStatusResponse.f44f287.SetupTaskItem:
+      additionalProperties: false
+      description: "One configuration-completeness item in the status setup_tasks\
+        \ block.\n\nSeverity drives Storefront UI urgency; scope drives routing \u2014\
+        \ Scope3\nescalates ``platform`` items internally (it's the host's job to\n\
+        finish provisioning), while ``publisher`` items deep-link into the\niframe\
+        \ at the matching Settings tab."
+      properties:
+        configure_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Configure Path
+        description:
+          title: Description
+          type: string
+        id:
+          title: Id
+          type: string
+        is_complete:
+          title: Is Complete
+          type: boolean
+        name:
+          title: Name
+          type: string
+        scope:
+          enum:
+          - platform
+          - publisher
+          title: Scope
+          type: string
+        severity:
+          enum:
+          - blocker
+          - warning
+          - info
+          title: Severity
+          type: string
+      required:
+      - id
+      - name
+      - severity
+      - scope
+      - description
+      - is_complete
+      title: SetupTaskItem
+      type: object
+    TenantStatusResponse.f44f287.SetupTasksBlock:
+      additionalProperties: false
+      description: "Configuration-completeness rollup for ``GET /tenants/{tid}/status``.\n\
+        \nReplaces the separate ``setup_checklist`` round-trip \u2014 Storefront\n\
+        renders the homepage checklist directly off this block."
+      properties:
+        blocker_count:
+          default: 0
+          title: Blocker Count
+          type: integer
+        items:
+          items:
+            $ref: '#/components/schemas/TenantStatusResponse.f44f287.SetupTaskItem'
+          title: Items
+          type: array
+        warning_count:
+          default: 0
+          title: Warning Count
+          type: integer
+      title: SetupTasksBlock
       type: object
     TenantStatusResponse.f44f287.StatusAdapterBlock:
       additionalProperties: false
@@ -1026,6 +1537,32 @@ components:
           title: Paused Count
           type: integer
       title: StatusPackagesBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusProductsBlock:
+      additionalProperties: false
+      description: "Product-level counters.\n\nDistinct from :class:`StatusPackagesBlock`\
+        \ \u2014 one product can have\nmultiple priced packages, so package counts\
+        \ don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces\
+        \ ``active_count``\non its homepage as the primary \"what's the publisher\
+        \ doing\" signal.\n\nNote: the Product model doesn't carry an explicit ``status``\
+        \ field\ntoday. ``archived_at IS NULL`` rows count as active; non-null rows\n\
+        count as archived. ``draft_count`` is 0 until a draft state lands\n(forward-compatible\
+        \ field \u2014 Storefront can render a \"Drafts\" badge\nwithout an API shape\
+        \ change when it does)."
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        archived_count:
+          default: 0
+          title: Archived Count
+          type: integer
+        draft_count:
+          default: 0
+          title: Draft Count
+          type: integer
+      title: StatusProductsBlock
       type: object
     TenantStatusResponse.f44f287.StatusSyncRunBlock:
       additionalProperties: false
@@ -1134,6 +1671,44 @@ components:
       - tested_at
       title: TestConnectionResponse
       type: object
+    UpdateBuyerAdvertiserMappingRequest.f44f287:
+      additionalProperties: false
+      description: "``PATCH /tenants/{tid}/buyer-advertiser-mappings/{mid}`` body.\n\
+        \n``operator_domain`` is intentionally absent \u2014 changing it requires\n\
+        DELETE + POST so the natural-key uniqueness constraint can't be\nsilently\
+        \ violated by a partial-update flow."
+      properties:
+        brand_house:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Id
+        principal_id:
+          anyOf:
+          - maxLength: 50
+            type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+      title: UpdateBuyerAdvertiserMappingRequest
+      type: object
     UpdateTenantRequest.f44f287:
       additionalProperties: false
       description: "PATCH body \u2014 only platform-managed fields are exposed.\n\n\
@@ -1155,6 +1730,19 @@ components:
           - type: 'null'
           default: null
           title: Contact Email
+        default_gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Gam Advertiser Id
+        embed_breadcrumb_root:
+          anyOf:
+          - $ref: '#/components/schemas/UpdateTenantRequest.f44f287.EmbedBreadcrumbRoot'
+          - type: 'null'
+          default: null
         house_domain:
           anyOf:
           - maxLength: 255
@@ -1180,6 +1768,45 @@ components:
           default: null
           title: Public Agent Url
       title: UpdateTenantRequest
+      type: object
+    UpdateTenantRequest.f44f287.EmbedBreadcrumbRoot:
+      additionalProperties: false
+      description: 'First-crumb override for embedded-mode admin pages.
+
+
+        When the upstream host renders the salesagent admin UI inside its own
+
+        chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+
+        point back to the host''s storefront homepage rather than the
+
+        salesagent''s tenant dashboard. ``label`` is the visible link text;
+
+        ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+
+        Validated at schema boundary so bad input never reaches the rendered
+
+        template; the same model also gates the per-request
+
+        ``X-Embed-Breadcrumb-Root`` header value (see
+
+        :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).'
+      properties:
+        label:
+          maxLength: 120
+          minLength: 1
+          title: Label
+          type: string
+        url:
+          maxLength: 500
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - label
+      - url
+      title: EmbedBreadcrumbRoot
       type: object
     ValidationError.6a07bef:
       description: Model of a validation error response.
@@ -1251,8 +1878,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError.f44f287'
           description: Internal Server Error
-      summary: 'List tenants. Optional query params: ``is_embedded``, ``is_active``,
-        ``external_source``.'
+      summary: 'List tenants. Optional query params: ``is_embedded`` (or deprecated
+        ``managed_externally``), ``is_active``, ``external_source``.'
       tags: []
     post:
       description: ''
@@ -1668,6 +2295,194 @@ paths:
           description: Unprocessable Content
       summary: Probe the saved adapter config without modifying state.
       tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/buyer-advertiser-mappings:
+    get:
+      description: "Filters: ``operator_domain`` (exact match) \u2014 the per-operator\
+        \ detail pane uses this to scope the rules grid without re-pulling the full\
+        \ set."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBuyerAdvertiserMappingsResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List routing rules for a tenant. Ordered by ``created_at`` ASC so the
+        UI renders them in the same order they were authored.
+      tags: []
+    post:
+      description: "Validation: - ``brand_id`` cannot be set without ``brand_house``\
+        \ (sprint 1.8 doc \xA72:   a brand-level rule must be scoped to a parent house).\
+        \ - 409 on duplicate ``(operator_domain, brand_house, brand_id)`` tuple  \
+        \ (NULLs participate in uniqueness via COALESCE in the unique index).\n\n\
+        Validation: ``gam_advertiser_id`` must reference a row in this tenant's synced\
+        \ ``gam_advertisers`` cache (Sprint 5 piece D \u2014 the deferred Sprint 1.8\
+        \ validator finally lands here).\n\nGraceful degradation: if the cache is\
+        \ empty (sync hasn't run yet \u2014 new tenant, GAM not connected, etc.) we\
+        \ skip the check and accept the id. This avoids breaking the rule-creation\
+        \ flow during onboarding before the first sync completes."
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBuyerAdvertiserMappingRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuyerAdvertiserMapping.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Create a routing rule.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/buyer-advertiser-mappings/{mapping_id}:
+    delete:
+      description: "Idempotency: DELETE on an already-deleted id returns 404 (not\
+        \ 204) \u2014 the caller asked us to delete a specific row by id, and a 404\
+        \ is the truthful answer that the row isn't there. Callers driving a UI delete\
+        \ button should treat 404 as a benign race (someone else deleted it)."
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings_{mapping_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: mapping_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Delete a routing rule. 204 on success, 404 if not found.
+      tags: []
+    patch:
+      description: "``operator_domain`` is intentionally not patchable (see schema\
+        \ docstring \u2014 natural-key changes go DELETE+POST so collisions surface\
+        \ explicitly). Patching ``brand_house`` / ``brand_id`` can collide with another\
+        \ rule; 409 on natural-key conflict, same shape as POST."
+      operationId: patch__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings_{mapping_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: mapping_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBuyerAdvertiserMappingRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuyerAdvertiserMapping.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: PATCH a routing rule.
+      tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/deactivate:
     post:
       description: ''
@@ -1701,6 +2516,47 @@ paths:
       summary: Idempotently deactivate a tenant. Calling on an already-inactive tenant
         is a no-op.
       tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:
+    get:
+      description: "Reads from the local cache, never from live GAM (10k+ advertiser\
+        \ networks make per-keystroke round trips prohibitive). Sync is triggered\
+        \ separately via ``POST /refresh`` or the cron worker.\n\nQuery params: -\
+        \ ``q`` (str, optional) \u2014 case-insensitive substring on ``name`` OR \
+        \  exact match on ``id`` if numeric. ``q`` < 2 chars returns the   first page\
+        \ unfiltered (avoids expensive scan from typing first   character). - ``limit``\
+        \ (int, default 50, max 500) \u2014 page size. - ``cursor`` (opaque base64,\
+        \ optional) \u2014 page bookmark.\n\n``synced_at`` reports the most-recent\
+        \ ``gam_advertisers.synced_at`` for the tenant so the picker can show \"Last\
+        \ synced 5 minutes ago\"."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_gam_advertisers
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGamAdvertisersResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Searchable, paginated read over the synced ``gam_advertisers`` cache.
+      tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/reactivate:
     post:
       description: ''
@@ -1732,6 +2588,83 @@ paths:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
       summary: Idempotently reactivate a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/recent-buyers:
+    get:
+      description: "Source data: ``Account`` rows joined to ``MediaBuy`` for activity\
+        \ counts. Each Account already carries its (operator, brand) natural key +\
+        \ the resolved ``platform_mappings.google_ad_manager.advertiser_id`` + ``resolved_via``\
+        \ (sprint 1.8 stamp).\n\nQuery params: - ``days`` (int, default 30, max 365)\
+        \ \u2014 window for last_seen_at filter - ``limit`` (int, default 100, max\
+        \ 1000) \u2014 paginate by ordered last_seen_at desc\n\nReturns ``{\"buyers\"\
+        : [...]}``. Empty buyers list is the \"no recent activity\" case \u2014 never\
+        \ 404 unless the tenant itself doesn't exist."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_recent-buyers
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListRecentBuyersResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Distinct (operator, brand_house, brand_id) triples seen recently.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/refresh:
+    post:
+      description: "For each enabled sync type, either reuse the existing SyncJob\
+        \ if one started in the last 60 seconds (or is currently running), or create\
+        \ a new pending SyncJob. The actual sync work is picked up by the existing\
+        \ background sync infrastructure.\n\nReturns 202 Accepted with ``sync_run_ids``\
+        \ mapping sync_type \u2192 sync_id. Storefront polls ``GET /status.syncs``\
+        \ for per-type progress."
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_refresh
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse.f44f287'
+          description: Accepted
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: "Fan out a refresh across all sync types \u2014 collapses N per-sync\
+        \ triggers into one call."
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/status:
     get:

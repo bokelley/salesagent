@@ -1336,12 +1336,21 @@ def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:
 def validate_setup_complete(tenant_id: str) -> None:
     """Validate that tenant has completed all critical setup tasks.
 
-    Args:
-        tenant_id: Tenant ID to validate
-
-    Raises:
-        SetupIncompleteError: If critical setup tasks are incomplete
+    Embedded-mode tenants skip this gate: platform-config tasks (ad server,
+    SSO, etc.) are owned by the host product (Storefront, Manticore, ...),
+    not the publisher, and surfacing them as buyer-protocol blockers would
+    be wrong.
     """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Tenant
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if tenant and tenant.is_embedded:
+            return
+
     incomplete = get_incomplete_critical_tasks(tenant_id)
     if incomplete:
         task_names = ", ".join(task["name"] for task in incomplete)
