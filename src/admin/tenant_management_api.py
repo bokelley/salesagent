@@ -20,6 +20,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from src.admin.api_schemas.tenant_management import (
+    WEBHOOK_EVENT_TYPES,
     AccountDetail,
     AccountSummary,
     AdapterConfigResponse,
@@ -29,6 +30,7 @@ from src.admin.api_schemas.tenant_management import (
     BuyerAdvertiserMapping,
     CreateAccountRequest,
     CreateBuyerAdvertiserMappingRequest,
+    CreateWebhookSubscriptionRequest,
     GAMAdapterConfig,
     InitialSyncBlock,
     ListAccountsManagedResponse,
@@ -39,6 +41,7 @@ from src.admin.api_schemas.tenant_management import (
     ListRecentBuyersResponse,
     ListSyncHistoryResponse,
     ListTenantsResponse,
+    ListWebhooksResponse,
     ListWorkflowsResponse,
     MediaBuyDetail,
     MockAdapterConfig,
@@ -56,6 +59,10 @@ from src.admin.api_schemas.tenant_management import (
     TestConnectionResponse,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
+    WebhookSubscriptionCreatedResponse,
+    WebhookSubscriptionSummary,
+    WebhookTestDeliveryResult,
+    WebhookTestResponse,
     WorkflowDetail,
 )
 from src.admin.api_schemas.tenant_management import (
@@ -2334,6 +2341,22 @@ def _decide_workflow(
         detail = workflow_to_detail(step, principal_id, principal_name)
 
     invalidate_status_cache(tenant_id)
+
+    # Sprint 6 — fire ``workflow.decided`` to subscribed webhooks.
+    # Failures are logged but do not block the response — the buyer's
+    # decision is already persisted; webhook delivery is observability,
+    # not a critical-path commit.
+    try:
+        from src.admin.services.webhook_publisher import publish_event
+
+        publish_event(
+            tenant_id,
+            "workflow.decided",
+            {"workflow": detail.model_dump(mode="json")},
+        )
+    except Exception:  # pragma: no cover — defensive; publisher catches its own errors
+        logger.warning("publish_event(workflow.decided) failed", exc_info=True)
+
     return jsonify(detail.model_dump(mode="json"))
 
 
@@ -2586,6 +2609,273 @@ def list_sync_history(tenant_id: str):
 
     response = ListSyncHistoryResponse(runs=runs, count=len(runs), next_cursor=next_cursor)
     return jsonify(response.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
+# Sprint 6 — outbound webhook subscription endpoints
+# ---------------------------------------------------------------------------
+
+
+def _webhook_to_summary(sub) -> dict:
+    """Project a :class:`WebhookSubscription` ORM row to the summary wire shape."""
+    return WebhookSubscriptionSummary(
+        webhook_id=sub.webhook_id,
+        url=sub.url,
+        event_types=list(sub.event_types or []),
+        description=sub.description,
+        extra_headers=dict(sub.extra_headers) if sub.extra_headers else None,
+        is_active=sub.is_active,
+        consecutive_failures=sub.consecutive_failures or 0,
+        last_delivery_at=sub.last_delivery_at,
+        last_delivery_status=sub.last_delivery_status,
+        created_at=sub.created_at,
+    ).model_dump(mode="json")
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/webhooks", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListWebhooksResponse, HTTP_404=ApiError))
+def list_webhooks(tenant_id: str):
+    """List active webhook subscriptions for a tenant.
+
+    Secrets are NEVER returned — they were surfaced exactly once at create
+    time. To rotate, delete the subscription and create a new one.
+    """
+    from src.core.database.repositories import TenantConfigRepository, WebhookSubscriptionRepository
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WebhookSubscriptionRepository(session, tenant_id)
+        rows = repo.list_active()
+        webhooks = [_webhook_to_summary(s) for s in rows]
+
+    return jsonify({"webhooks": webhooks, "count": len(webhooks)})
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/webhooks", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=CreateWebhookSubscriptionRequest,
+    resp=Response(
+        HTTP_201=WebhookSubscriptionCreatedResponse,
+        HTTP_400=ApiError,
+        HTTP_404=ApiError,
+    ),
+)
+def create_webhook(tenant_id: str):
+    """Register a new outbound webhook subscription.
+
+    Returns the plaintext ``secret`` exactly once (in this response). It is
+    not retrievable later — the caller MUST persist it. Lost secrets require
+    re-registering. Receivers verify HMAC-SHA256 signatures using the secret.
+    """
+    from src.admin.services.webhook_delivery import WebhookUrlError, validate_webhook_url
+    from src.admin.services.webhook_publisher import remember_webhook_secret
+    from src.core.database.repositories import TenantConfigRepository, WebhookSubscriptionRepository
+    from src.core.database.repositories.webhook_subscription import generate_secret
+
+    req: CreateWebhookSubscriptionRequest = request.context.json  # type: ignore[attr-defined]
+
+    try:
+        validated_url = validate_webhook_url(req.url)
+    except WebhookUrlError as exc:
+        return _api_error(exc.code, str(exc), 400)
+
+    # Validate event_types against the supported taxonomy. Pydantic Literal
+    # already filters but we re-check for clearer error codes when the
+    # Literal layer admits an unknown value through schema-extra=ignore.
+    unknown = [e for e in req.event_types if e not in WEBHOOK_EVENT_TYPES]
+    if unknown:
+        return _api_error(
+            "webhook_event_types_unknown",
+            f"unknown event types: {unknown}; supported: {list(WEBHOOK_EVENT_TYPES)}",
+            400,
+            details={"unknown_event_types": unknown},
+        )
+
+    secret_plaintext = req.secret or generate_secret()
+    if len(secret_plaintext) < 32:
+        return _api_error(
+            "webhook_secret_too_short",
+            "secret must be at least 32 characters",
+            400,
+        )
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WebhookSubscriptionRepository(session, tenant_id)
+        webhook_id = f"wh_{uuid.uuid4().hex}"
+        sub = repo.create(
+            webhook_id=webhook_id,
+            url=validated_url,
+            event_types=list(req.event_types),
+            secret=secret_plaintext,
+            description=req.description,
+            extra_headers=req.extra_headers,
+        )
+        session.commit()
+        session.refresh(sub)
+        summary = _webhook_to_summary(sub)
+
+    # Cache the plaintext secret so the publisher can sign outbound deliveries.
+    # See ``webhook_publisher._SecretCache`` for the v1 limitation.
+    remember_webhook_secret(webhook_id, secret_plaintext)
+
+    payload = {**summary, "secret": secret_plaintext}
+    return jsonify(payload), 201
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/webhooks/<webhook_id>", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=WebhookSubscriptionSummary, HTTP_404=ApiError))
+def get_webhook(tenant_id: str, webhook_id: str):
+    """Return a single subscription record. Secret is omitted."""
+    from src.core.database.repositories import TenantConfigRepository, WebhookSubscriptionRepository
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WebhookSubscriptionRepository(session, tenant_id)
+        sub = repo.get_by_id(webhook_id)
+        if sub is None:
+            return _api_error(
+                "webhook_not_found",
+                f"Webhook {webhook_id!r} does not exist for tenant {tenant_id!r}",
+                404,
+            )
+        summary = _webhook_to_summary(sub)
+
+    return jsonify(summary)
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/webhooks/<webhook_id>", methods=["DELETE"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_204=None, HTTP_404=ApiError))
+def delete_webhook(tenant_id: str, webhook_id: str):
+    """Soft-delete a subscription.
+
+    Sets ``is_active=false`` so the row stays around for audit-log
+    references but the publisher stops dispatching. The plaintext secret
+    is dropped from the in-process cache so future re-registrations don't
+    accidentally reuse it.
+    """
+    from src.admin.services.webhook_publisher import forget_webhook_secret
+    from src.core.database.repositories import TenantConfigRepository, WebhookSubscriptionRepository
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WebhookSubscriptionRepository(session, tenant_id)
+        sub = repo.get_by_id(webhook_id)
+        if sub is None:
+            return _api_error(
+                "webhook_not_found",
+                f"Webhook {webhook_id!r} does not exist for tenant {tenant_id!r}",
+                404,
+            )
+        repo.deactivate(sub)
+        session.commit()
+
+    forget_webhook_secret(webhook_id)
+    return ("", 204)
+
+
+@tenant_management_api.route(
+    "/tenants/<tenant_id>/webhooks/<webhook_id>/test",
+    methods=["POST"],
+)
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=WebhookTestResponse, HTTP_404=ApiError))
+def test_webhook(tenant_id: str, webhook_id: str):
+    """Synchronously fire a synthetic event of every registered type.
+
+    Returns one delivery result per registered event type. ``delivered``
+    on the response is the AND of all per-event ``delivered`` flags.
+    Used by host products to verify the receiver is wired up correctly.
+
+    Failures here do NOT auto-disable the subscription — the consecutive-
+    failures counter is incremented just like a real delivery, so flapping
+    test runs eventually trip the disablement threshold.
+    """
+    import asyncio
+
+    from src.admin.services.webhook_delivery import build_envelope, deliver_event_sync
+    from src.admin.services.webhook_publisher import get_webhook_secret
+    from src.core.database.repositories import TenantConfigRepository, WebhookSubscriptionRepository
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WebhookSubscriptionRepository(session, tenant_id)
+        sub = repo.get_by_id(webhook_id)
+        if sub is None:
+            return _api_error(
+                "webhook_not_found",
+                f"Webhook {webhook_id!r} does not exist for tenant {tenant_id!r}",
+                404,
+            )
+        # Snapshot fields we need; the session closes after the lookup.
+        sub_url = sub.url
+        sub_event_types = list(sub.event_types or [])
+        sub_extra_headers = dict(sub.extra_headers) if sub.extra_headers else None
+        sub_webhook_id = sub.webhook_id
+        sub_tenant_id = sub.tenant_id
+
+    secret = get_webhook_secret(webhook_id)
+    if secret is None:
+        return _api_error(
+            "webhook_secret_lost",
+            "plaintext secret not in cache; delete and re-register the webhook",
+            409,
+        )
+
+    # Iterate the events the subscription cares about (or all events if it
+    # subscribed to "everything"). One delivery per event type.
+    if sub_event_types:
+        targets = [e for e in sub_event_types if e in WEBHOOK_EVENT_TYPES]
+    else:
+        targets = list(WEBHOOK_EVENT_TYPES)
+
+    results: list[dict] = []
+    overall_ok = True
+
+    # Reuse a single subscription-like object reference for bookkeeping. The
+    # delivery service refreshes its DB state each time anyway.
+    class _SubProxy:
+        webhook_id = sub_webhook_id
+        tenant_id = sub_tenant_id
+        url = sub_url
+        extra_headers = sub_extra_headers
+
+    for event_type in targets:
+        envelope = build_envelope(
+            event_type=event_type,
+            tenant_id=tenant_id,
+            data={"test": True, "subject_type": "tenant", "subject_id": tenant_id},
+        )
+        status_code, latency_ms, error = asyncio.run(deliver_event_sync(_SubProxy, secret, envelope))
+        delivered = status_code is not None and 200 <= status_code < 300
+        if not delivered:
+            overall_ok = False
+        results.append(
+            WebhookTestDeliveryResult(
+                event_type=event_type,
+                event_id=envelope["event_id"],
+                delivered=delivered,
+                response_status=status_code,
+                latency_ms=latency_ms,
+                error=error,
+            ).model_dump(mode="json")
+        )
+
+    return jsonify({"delivered": overall_ok, "results": results})
 
 
 # Register all spectree-validated routes with the OpenAPI generator.

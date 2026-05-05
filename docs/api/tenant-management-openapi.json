@@ -647,6 +647,77 @@
         "title": "CreateBuyerAdvertiserMappingRequest",
         "type": "object"
       },
+      "CreateWebhookSubscriptionRequest.f44f287": {
+        "additionalProperties": false,
+        "description": "``POST /tenants/{tid}/webhooks`` body.\n\n``event_types``: subset of :data:`WEBHOOK_EVENT_TYPES`; empty list means\n\"all events\". ``secret`` may be omitted, in which case the server\ngenerates one and returns it in the create response (exactly once).",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "event_types": {
+            "items": {
+              "enum": [
+                "workflow.created",
+                "workflow.decided",
+                "media_buy.status_changed",
+                "sync.completed",
+                "sync.failed",
+                "tenant.config_changed"
+              ],
+              "type": "string"
+            },
+            "title": "Event Types",
+            "type": "array"
+          },
+          "extra_headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Extra Headers"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Secret"
+          },
+          "url": {
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "CreateWebhookSubscriptionRequest",
+        "type": "object"
+      },
       "ListAccountsManagedResponse.f44f287": {
         "additionalProperties": false,
         "description": "Response body for ``GET /tenants/{tid}/accounts``.",
@@ -1574,6 +1645,125 @@
           "created_at"
         ],
         "title": "TenantSummary",
+        "type": "object"
+      },
+      "ListWebhooksResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "``GET /tenants/{tid}/webhooks`` response.\n\nSubscriptions are returned without secrets (use the create response if\nyou still have it; otherwise re-register).",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "webhooks": {
+            "items": {
+              "$ref": "#/components/schemas/ListWebhooksResponse.f44f287.WebhookSubscriptionSummary"
+            },
+            "title": "Webhooks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "webhooks",
+          "count"
+        ],
+        "title": "ListWebhooksResponse",
+        "type": "object"
+      },
+      "ListWebhooksResponse.f44f287.WebhookSubscriptionSummary": {
+        "additionalProperties": false,
+        "description": "Subscription record without the secret. Used for list + get + delete responses.",
+        "properties": {
+          "consecutive_failures": {
+            "default": 0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Event Types",
+            "type": "array"
+          },
+          "extra_headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Extra Headers"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "last_delivery_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Delivery At"
+          },
+          "last_delivery_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Delivery Status"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "webhook_id": {
+            "title": "Webhook Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "webhook_id",
+          "url",
+          "event_types",
+          "is_active",
+          "created_at"
+        ],
+        "title": "WebhookSubscriptionSummary",
         "type": "object"
       },
       "ListWorkflowsResponse.f44f287": {
@@ -3367,6 +3557,289 @@
         "title": "ValidationErrorElement",
         "type": "object"
       },
+      "WebhookSubscriptionCreatedResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "Create-only response carrying the plaintext secret.\n\nThe ``secret`` field is returned exactly once at create time; subsequent\nGETs omit it. Loss of the plaintext requires re-registering the webhook.",
+        "properties": {
+          "consecutive_failures": {
+            "default": 0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Event Types",
+            "type": "array"
+          },
+          "extra_headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Extra Headers"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "last_delivery_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Delivery At"
+          },
+          "last_delivery_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Delivery Status"
+          },
+          "secret": {
+            "format": "password",
+            "title": "Secret",
+            "type": "string",
+            "writeOnly": true
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "webhook_id": {
+            "title": "Webhook Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "webhook_id",
+          "url",
+          "event_types",
+          "is_active",
+          "created_at",
+          "secret"
+        ],
+        "title": "WebhookSubscriptionCreatedResponse",
+        "type": "object"
+      },
+      "WebhookSubscriptionSummary.f44f287": {
+        "additionalProperties": false,
+        "description": "Subscription record without the secret. Used for list + get + delete responses.",
+        "properties": {
+          "consecutive_failures": {
+            "default": 0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Event Types",
+            "type": "array"
+          },
+          "extra_headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Extra Headers"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "last_delivery_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Delivery At"
+          },
+          "last_delivery_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Delivery Status"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "webhook_id": {
+            "title": "Webhook Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "webhook_id",
+          "url",
+          "event_types",
+          "is_active",
+          "created_at"
+        ],
+        "title": "WebhookSubscriptionSummary",
+        "type": "object"
+      },
+      "WebhookTestResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "``POST /tenants/{tid}/webhooks/{wid}/test`` response.\n\nReturns synthetic delivery results (one per registered event type) so\noperators can verify the receiver works for every event they subscribe to.",
+        "properties": {
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookTestResponse.f44f287.WebhookTestDeliveryResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "delivered",
+          "results"
+        ],
+        "title": "WebhookTestResponse",
+        "type": "object"
+      },
+      "WebhookTestResponse.f44f287.WebhookTestDeliveryResult": {
+        "additionalProperties": false,
+        "description": "One synthetic event delivery result included in :class:`WebhookTestResponse`.",
+        "properties": {
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Latency Ms"
+          },
+          "response_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Response Status"
+          }
+        },
+        "required": [
+          "event_type",
+          "event_id",
+          "delivered"
+        ],
+        "title": "WebhookTestDeliveryResult",
+        "type": "object"
+      },
       "WorkflowDetail.f44f287": {
         "additionalProperties": false,
         "description": "Full workflow detail. Adds description, full request context, and\nthe decisions audit trail.",
@@ -5013,6 +5486,297 @@
           }
         },
         "summary": "List historical sync runs for a tenant.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/tenants/{tenant_id}/webhooks": {
+      "get": {
+        "description": "Secrets are NEVER returned \u2014 they were surfaced exactly once at create time. To rotate, delete the subscription and create a new one.",
+        "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_webhooks",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListWebhooksResponse.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "List active webhook subscriptions for a tenant.",
+        "tags": []
+      },
+      "post": {
+        "description": "Returns the plaintext ``secret`` exactly once (in this response). It is not retrievable later \u2014 the caller MUST persist it. Lost secrets require re-registering. Receivers verify HMAC-SHA256 signatures using the secret.",
+        "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_webhooks",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookSubscriptionRequest.f44f287"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionCreatedResponse.f44f287"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Register a new outbound webhook subscription.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/tenants/{tenant_id}/webhooks/{webhook_id}": {
+      "delete": {
+        "description": "Sets ``is_active=false`` so the row stays around for audit-log references but the publisher stops dispatching. The plaintext secret is dropped from the in-process cache so future re-registrations don't accidentally reuse it.",
+        "operationId": "delete__api_v1_tenant-management_tenants_{tenant_id}_webhooks_{webhook_id}",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Soft-delete a subscription.",
+        "tags": []
+      },
+      "get": {
+        "description": "",
+        "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_webhooks_{webhook_id}",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionSummary.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Return a single subscription record. Secret is omitted.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/tenants/{tenant_id}/webhooks/{webhook_id}/test": {
+      "post": {
+        "description": "Returns one delivery result per registered event type. ``delivered`` on the response is the AND of all per-event ``delivered`` flags. Used by host products to verify the receiver is wired up correctly.\n\nFailures here do NOT auto-disable the subscription \u2014 the consecutive- failures counter is incremented just like a real delivery, so flapping test runs eventually trip the disablement threshold.",
+        "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_webhooks_{webhook_id}_test",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookTestResponse.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Synchronously fire a synthetic event of every registered type.",
         "tags": []
       }
     },
