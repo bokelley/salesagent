@@ -117,6 +117,16 @@ ALLOWLIST: set[tuple[str, str]] = {
     # FIXME(embedded-mode-sprint-5-piece-B): fold into BuyerRoutingRepository
     # when workstream C lands the editor + repository.
     ("src/admin/blueprints/buyer_routing.py", "buyer_routing_page"),
+    # FIXME(embedded-mode-sprint-5-piece-C): fold into BuyerRoutingService —
+    # session-authenticated CRUD endpoints called by the page's in-page JS
+    # (the tenant-management API key is server-to-server only and must
+    # not reach the browser, so the page hits these instead).
+    ("src/admin/blueprints/buyer_routing.py", "_resolve_advertiser_names"),
+    ("src/admin/blueprints/buyer_routing.py", "search_advertisers"),
+    ("src/admin/blueprints/buyer_routing.py", "update_default_advertiser"),
+    ("src/admin/blueprints/buyer_routing.py", "create_rule"),
+    ("src/admin/blueprints/buyer_routing.py", "patch_rule"),
+    ("src/admin/blueprints/buyer_routing.py", "delete_rule"),
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),

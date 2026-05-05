@@ -37,6 +37,23 @@
         display: flex; justify-content: space-between; align-items: baseline;
         margin-bottom: 0.5rem;
     }
+    .br-btn {
+        background: #2563eb; color: #fff; cursor: pointer;
+        border: 1px solid #2563eb; padding: 0.5rem 1rem; border-radius: 6px;
+        font-size: 0.875rem;
+    }
+    .br-btn:hover { background: #1d4ed8; }
+    .br-btn-secondary {
+        background: #fff; color: #374151; border: 1px solid #d1d5db;
+        padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.875rem;
+        cursor: pointer;
+    }
+    .br-btn-danger {
+        background: #fff; color: #dc2626; border: 1px solid #fca5a5;
+        padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.8rem;
+        cursor: pointer;
+    }
+    .br-btn-danger:hover { background: #fef2f2; }
     .br-disabled-btn {
         background: #e5e7eb; color: #6b7280; cursor: not-allowed;
         border: 1px solid #d1d5db; padding: 0.5rem 1rem; border-radius: 6px;
@@ -57,6 +74,71 @@
         cursor: pointer; padding: 0.75rem 1rem; background: #f3f4f6;
         border-radius: 6px; font-weight: 500;
     }
+
+    /* Picker dropdown */
+    .br-picker { position: relative; display: inline-block; min-width: 380px; }
+    .br-picker input[type="text"] {
+        width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db;
+        border-radius: 6px; font-size: 0.9rem;
+    }
+    .br-picker-results {
+        position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+        background: #fff; border: 1px solid #d1d5db; border-radius: 6px;
+        max-height: 240px; overflow-y: auto; z-index: 50; display: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .br-picker-results.br-open { display: block; }
+    .br-picker-result {
+        padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.875rem;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    .br-picker-result:hover, .br-picker-result.br-active { background: #eff6ff; }
+    .br-picker-result-empty { padding: 0.75rem; color: #9ca3af; font-style: italic; }
+    .br-picker-selected {
+        margin-top: 0.5rem; color: #374151; font-size: 0.9rem;
+    }
+    .br-picker-selected code { background: #f3f4f6; padding: 0.1rem 0.4rem; border-radius: 3px; }
+
+    /* Modal */
+    .br-modal-backdrop {
+        position: fixed; inset: 0; background: rgba(17,24,39,0.55);
+        display: none; align-items: center; justify-content: center; z-index: 100;
+    }
+    .br-modal-backdrop.br-open { display: flex; }
+    .br-modal {
+        background: #fff; border-radius: 8px; padding: 1.5rem;
+        max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto;
+    }
+    .br-modal h3 { margin: 0 0 1rem; font-size: 1.1rem; }
+    .br-modal label {
+        display: block; font-size: 0.85rem; color: #374151;
+        margin-bottom: 0.25rem; font-weight: 500;
+    }
+    .br-modal input[type="text"] {
+        width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db;
+        border-radius: 6px; font-size: 0.9rem; margin-bottom: 1rem;
+    }
+    .br-modal input[disabled] { background: #f9fafb; color: #6b7280; }
+    .br-modal .br-helper { font-size: 0.75rem; color: #6b7280; margin-top: -0.75rem; margin-bottom: 1rem; }
+    .br-modal-actions {
+        display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem;
+    }
+    .br-modal-error {
+        background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b;
+        padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem;
+        display: none;
+    }
+    .br-modal-error.br-open { display: block; }
+    .br-toast {
+        position: fixed; bottom: 1.5rem; right: 1.5rem; padding: 0.75rem 1rem;
+        background: #16a34a; color: #fff; border-radius: 6px; font-size: 0.875rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200;
+    }
+    .br-advertiser-inactive { text-decoration: line-through; color: #92400e; }
+    .br-advertiser-inactive-chip {
+        display: inline-block; padding: 0.1rem 0.4rem; background: #fef3c7;
+        color: #92400e; border-radius: 3px; font-size: 0.7rem; margin-left: 0.4rem;
+    }
 </style>
 
 {% set crumbs = [
@@ -65,6 +147,20 @@
 ] %}
 {% set crumbs = crumbs | with_embed_root %}
 {% include "_breadcrumb.html" %}
+
+{% macro advertiser_label(adv_id) -%}
+{%- if not adv_id -%}—
+{%- elif advertiser_names.get(adv_id) -%}
+    {%- set info = advertiser_names[adv_id] -%}
+    {%- if info.status == "inactive" -%}
+        <span class="br-advertiser-inactive" title="Advertiser no longer in your GAM network — re-attach this rule.">{{ info.name }} ({{ adv_id }})</span><span class="br-advertiser-inactive-chip" title="Soft-deleted in last sync">inactive</span>
+    {%- else -%}
+        {{ info.name }} (<code>{{ adv_id }}</code>)
+    {%- endif -%}
+{%- else -%}
+    <code>{{ adv_id }}</code>
+{%- endif -%}
+{%- endmacro %}
 
 <h1 style="margin-top: 1rem;">Buyer Routing</h1>
 <p style="color: #6b7280; margin-bottom: 2rem;">
@@ -79,28 +175,47 @@
         All unmapped buys land here. Required for activation —
         <code>TENANT_NOT_ACTIVATED</code> is returned to buyers until this is set.
     </p>
-    {% if tenant.default_gam_advertiser_id %}
-        <div class="br-card">
-            <span class="br-default-value">{{ tenant.default_gam_advertiser_id }}</span>
-            <span style="color: #6b7280; margin-left: 0.5rem; font-size: 0.875rem;">
-                (advertiser name resolution lands in workstream A's cache)
-            </span>
-        </div>
-    {% else %}
+    {% if not tenant.default_gam_advertiser_id %}
         <div class="br-banner-warning" data-testid="not-activated-banner">
             <strong>⚠️ Tenant not activated</strong>
             Set a default GAM advertiser to start accepting commercial buys.
             Until this is set, buyers receive <code>TENANT_NOT_ACTIVATED</code>.
         </div>
     {% endif %}
+    <div class="br-card">
+        <div data-testid="default-advertiser-current">
+            <span style="color: #6b7280; font-size: 0.85rem; display: block; margin-bottom: 0.4rem;">Current default:</span>
+            <span class="br-default-value" data-testid="default-advertiser-current-value">
+                {% if tenant.default_gam_advertiser_id %}
+                    {{ advertiser_label(tenant.default_gam_advertiser_id) | safe }}
+                {% else %}
+                    Not set
+                {% endif %}
+            </span>
+        </div>
+        <hr style="border: none; border-top: 1px solid #f3f4f6; margin: 1rem 0;">
+        <div class="br-picker" data-picker="default-advertiser">
+            <label style="display: block; font-size: 0.85rem; color: #374151; margin-bottom: 0.25rem; font-weight: 500;">
+                Search for an advertiser by name or paste an id:
+            </label>
+            <input type="text" data-picker-input placeholder="e.g. Coca-Cola or 12345" autocomplete="off">
+            <div class="br-picker-results" data-picker-results role="listbox"></div>
+            <div class="br-picker-selected" data-picker-selected style="display: none;">
+                Selected: <span data-picker-selected-label></span>
+            </div>
+            <div class="br-modal-error" data-default-error></div>
+            <div style="margin-top: 0.75rem;">
+                <button class="br-btn" data-testid="default-advertiser-save" data-default-save disabled>Save default advertiser</button>
+            </div>
+        </div>
+    </div>
 </section>
 
 <!-- Section 2: Routing rules -->
 <section class="br-section" data-section="routing-rules">
     <div class="br-section-header">
         <h2>Routing rules</h2>
-        <button class="br-disabled-btn" disabled
-                title="Editor coming in workstream C">+ Add rule</button>
+        <button class="br-btn" data-testid="add-rule-btn" data-action="open-add-rule">+ Add rule</button>
     </div>
     <p class="br-section-help">
         Most-specific match wins. Em-dash (—) means "any" — a NULL field
@@ -114,25 +229,35 @@
                 <th>Operator</th>
                 <th>Brand house</th>
                 <th>Brand id</th>
-                <th>GAM advertiser id</th>
+                <th>GAM advertiser</th>
+                <th></th>
             </tr>
         </thead>
-        <tbody>
+        <tbody data-testid="routing-rules-tbody">
             {% if rules %}
                 {% for rule in rules %}
-                <tr>
+                <tr data-rule-id="{{ rule.id }}"
+                    data-rule-principal-id="{{ rule.principal_id or '' }}"
+                    data-rule-operator-domain="{{ rule.operator_domain }}"
+                    data-rule-brand-house="{{ rule.brand_house or '' }}"
+                    data-rule-brand-id="{{ rule.brand_id or '' }}"
+                    data-rule-gam-advertiser-id="{{ rule.gam_advertiser_id }}">
                     {% if not tenant.is_embedded %}
                     <td>{{ rule.principal_id if rule.principal_id else "—" }}</td>
                     {% endif %}
                     <td>{{ rule.operator_domain }}</td>
                     <td>{{ rule.brand_house if rule.brand_house else "—" }}</td>
                     <td>{{ rule.brand_id if rule.brand_id else "—" }}</td>
-                    <td><code>{{ rule.gam_advertiser_id }}</code></td>
+                    <td data-testid="rule-advertiser-cell">{{ advertiser_label(rule.gam_advertiser_id) | safe }}</td>
+                    <td style="white-space: nowrap;">
+                        <button class="br-btn-secondary" data-action="edit-rule">Edit</button>
+                        <button class="br-btn-danger" data-action="delete-rule">Delete</button>
+                    </td>
                 </tr>
                 {% endfor %}
             {% else %}
                 <tr>
-                    <td colspan="{{ 5 if not tenant.is_embedded else 4 }}" class="br-empty">
+                    <td colspan="{{ 6 if not tenant.is_embedded else 5 }}" class="br-empty">
                         No routing rules yet. All buys fall through to the default advertiser.
                     </td>
                 </tr>
@@ -166,7 +291,11 @@
         <tbody>
             {% if activity %}
                 {% for row in activity %}
-                <tr>
+                <tr data-activity-row
+                    data-activity-principal-id="{{ row.principal_id or '' }}"
+                    data-activity-operator-domain="{{ row.operator_domain }}"
+                    data-activity-brand-house="{{ row.brand_house or '' }}"
+                    data-activity-brand-id="{{ row.brand_id or '' }}">
                     {% if not tenant.is_embedded %}
                     <td>{{ row.principal_id if row.principal_id else "—" }}</td>
                     {% endif %}
@@ -174,14 +303,12 @@
                     <td>{{ row.brand_house if row.brand_house else "—" }}</td>
                     <td>{{ row.brand_id if row.brand_id else "—" }}</td>
                     <td>{{ row.request_count }}</td>
-                    <td><code>{{ row.resolved_gam_advertiser_id if row.resolved_gam_advertiser_id else "—" }}</code></td>
+                    <td>{{ advertiser_label(row.resolved_gam_advertiser_id) | safe }}</td>
                     <td>
                         <span class="badge {{ row.badge_class }}">{{ row.resolved_via }}</span>
                     </td>
                     <td>
-                        <button class="br-disabled-btn"
-                                disabled
-                                title="Promotion coming in workstream E">Promote</button>
+                        <button class="br-btn-secondary" data-action="promote-row" data-testid="promote-btn">Promote ↑</button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -243,5 +370,399 @@
         </div>
     </details>
 </section>
+
+<!-- Add/Edit Rule modal -->
+<div class="br-modal-backdrop" data-testid="rule-modal" data-rule-modal>
+    <div class="br-modal">
+        <h3 data-rule-modal-title>Add routing rule</h3>
+        <div class="br-modal-error" data-rule-modal-error></div>
+        <form data-rule-form onsubmit="return false;">
+            <input type="hidden" data-rule-form-id>
+            {% if not tenant.is_embedded %}
+            <label>Agent (principal_id) <span style="color: #9ca3af; font-weight: normal;">— optional, blank = any agent</span></label>
+            <input type="text" data-rule-form-principal-id placeholder="e.g. wstruck-buy">
+            {% endif %}
+
+            <label>Operator domain <span style="color: #dc2626;">*</span></label>
+            <input type="text" data-rule-form-operator-domain required placeholder="e.g. wpp.com">
+            <div class="br-helper" data-rule-form-operator-helper>
+                Operator domain is immutable on edit. Delete + re-add to change.
+            </div>
+
+            <label>Brand house <span style="color: #9ca3af; font-weight: normal;">— optional</span></label>
+            <input type="text" data-rule-form-brand-house placeholder="e.g. coca-cola.com">
+
+            <label>Brand id <span style="color: #9ca3af; font-weight: normal;">— optional, requires brand house</span></label>
+            <input type="text" data-rule-form-brand-id placeholder="e.g. sprite">
+            <div class="br-helper">
+                A brand-level rule must be scoped to a parent house. Set brand house first.
+            </div>
+
+            <label>GAM advertiser <span style="color: #dc2626;">*</span></label>
+            <div class="br-picker" data-picker="rule-advertiser" style="min-width: 100%;">
+                <input type="text" data-picker-input placeholder="Search by name or id" autocomplete="off">
+                <div class="br-picker-results" data-picker-results role="listbox"></div>
+                <div class="br-picker-selected" data-picker-selected style="display: none;">
+                    Selected: <span data-picker-selected-label></span>
+                </div>
+            </div>
+            <input type="hidden" data-rule-form-gam-advertiser-id>
+
+            <div class="br-modal-actions">
+                <button type="button" class="br-btn-secondary" data-action="close-rule-modal">Cancel</button>
+                <button type="submit" class="br-btn" data-rule-form-save>Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    // Reverse-proxy aware base URL — never hardcode "/admin/" anywhere.
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = {{ tenant.tenant_id | tojson }};
+    const isEmbedded = {{ tenant.is_embedded | tojson }};
+    const baseUrl = scriptRoot + '/tenant/' + encodeURIComponent(tenantId) + '/buyer-routing';
+
+    function showToast(message, type) {
+        const t = document.createElement('div');
+        t.className = 'br-toast';
+        if (type === 'error') {
+            t.style.background = '#dc2626';
+        }
+        t.textContent = message;
+        document.body.appendChild(t);
+        setTimeout(function () { t.remove(); }, 3500);
+    }
+
+    // ---------- Picker component ----------
+    function attachPicker(root, onSelect) {
+        const input = root.querySelector('[data-picker-input]');
+        const results = root.querySelector('[data-picker-results]');
+        const selectedLabel = root.querySelector('[data-picker-selected-label]');
+        const selectedBox = root.querySelector('[data-picker-selected]');
+        let debounceTimer = null;
+        let selected = null;
+
+        function close() {
+            results.classList.remove('br-open');
+            results.innerHTML = '';
+        }
+
+        function render(advertisers) {
+            results.innerHTML = '';
+            if (advertisers.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'br-picker-result-empty';
+                empty.textContent = 'No matches.';
+                results.appendChild(empty);
+            } else {
+                advertisers.forEach(function (a) {
+                    const item = document.createElement('div');
+                    item.className = 'br-picker-result';
+                    item.setAttribute('role', 'option');
+                    item.setAttribute('data-advertiser-id', a.id);
+                    item.textContent = a.name + ' (' + a.id + ')';
+                    item.addEventListener('click', function () {
+                        selected = a;
+                        selectedLabel.textContent = a.name + ' (' + a.id + ')';
+                        selectedBox.style.display = 'block';
+                        input.value = a.name;
+                        close();
+                        if (onSelect) { onSelect(a); }
+                    });
+                    results.appendChild(item);
+                });
+            }
+            results.classList.add('br-open');
+        }
+
+        function search(q) {
+            const url = baseUrl + '/api/advertisers?q=' + encodeURIComponent(q || '');
+            fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+                .then(function (resp) {
+                    if (!resp.ok) {
+                        results.innerHTML = '<div class="br-picker-result-empty">Search failed.</div>';
+                        results.classList.add('br-open');
+                        return;
+                    }
+                    render(resp.body.advertisers || []);
+                })
+                .catch(function () {
+                    results.innerHTML = '<div class="br-picker-result-empty">Search failed.</div>';
+                    results.classList.add('br-open');
+                });
+        }
+
+        input.addEventListener('input', function () {
+            clearTimeout(debounceTimer);
+            const q = input.value.trim();
+            debounceTimer = setTimeout(function () { search(q); }, 300);
+        });
+        input.addEventListener('focus', function () {
+            if (input.value.trim().length === 0) { search(''); }
+        });
+        document.addEventListener('click', function (e) {
+            if (!root.contains(e.target)) { close(); }
+        });
+
+        return {
+            getSelected: function () { return selected; },
+            setSelected: function (a) {
+                selected = a;
+                if (a) {
+                    selectedLabel.textContent = a.name + ' (' + a.id + ')';
+                    selectedBox.style.display = 'block';
+                    input.value = a.name;
+                } else {
+                    selected = null;
+                    selectedBox.style.display = 'none';
+                    input.value = '';
+                }
+            },
+            clear: function () {
+                selected = null;
+                selectedBox.style.display = 'none';
+                input.value = '';
+                close();
+            },
+        };
+    }
+
+    // ---------- Default advertiser save ----------
+    const defaultPickerRoot = document.querySelector('[data-picker="default-advertiser"]');
+    const defaultSaveBtn = document.querySelector('[data-default-save]');
+    const defaultErrorBox = document.querySelector('[data-default-error]');
+    const defaultPicker = attachPicker(defaultPickerRoot, function () {
+        defaultSaveBtn.disabled = false;
+    });
+
+    defaultSaveBtn.addEventListener('click', function () {
+        const sel = defaultPicker.getSelected();
+        if (!sel) { return; }
+        defaultErrorBox.classList.remove('br-open');
+
+        fetch(baseUrl + '/api/default-advertiser', {
+            method: 'PATCH',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ default_gam_advertiser_id: sel.id }),
+        })
+            .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+            .then(function (resp) {
+                if (!resp.ok) {
+                    defaultErrorBox.textContent = resp.body.message || 'Save failed.';
+                    defaultErrorBox.classList.add('br-open');
+                    return;
+                }
+                showToast('Default advertiser saved.');
+                window.location.reload();
+            })
+            .catch(function () {
+                defaultErrorBox.textContent = 'Network error — try again.';
+                defaultErrorBox.classList.add('br-open');
+            });
+    });
+
+    // ---------- Add / Edit / Delete rule modals ----------
+    const ruleModal = document.querySelector('[data-rule-modal]');
+    const ruleModalTitle = ruleModal.querySelector('[data-rule-modal-title]');
+    const ruleModalError = ruleModal.querySelector('[data-rule-modal-error]');
+    const ruleForm = ruleModal.querySelector('[data-rule-form]');
+    const ruleFormId = ruleModal.querySelector('[data-rule-form-id]');
+    const ruleFormPrincipalId = ruleModal.querySelector('[data-rule-form-principal-id]');
+    const ruleFormOperatorDomain = ruleModal.querySelector('[data-rule-form-operator-domain]');
+    const ruleFormBrandHouse = ruleModal.querySelector('[data-rule-form-brand-house]');
+    const ruleFormBrandId = ruleModal.querySelector('[data-rule-form-brand-id]');
+    const ruleFormGamAdvertiserId = ruleModal.querySelector('[data-rule-form-gam-advertiser-id]');
+    const ruleFormSave = ruleModal.querySelector('[data-rule-form-save]');
+    const ruleAdvertiserPickerRoot = ruleModal.querySelector('[data-picker="rule-advertiser"]');
+    const ruleAdvertiserPicker = attachPicker(ruleAdvertiserPickerRoot, function (a) {
+        ruleFormGamAdvertiserId.value = a.id;
+    });
+
+    function openRuleModal(mode, prefill) {
+        ruleModalError.classList.remove('br-open');
+        ruleModalError.textContent = '';
+        ruleFormId.value = '';
+        if (ruleFormPrincipalId) { ruleFormPrincipalId.value = ''; }
+        ruleFormOperatorDomain.value = '';
+        ruleFormOperatorDomain.disabled = false;
+        ruleFormBrandHouse.value = '';
+        ruleFormBrandId.value = '';
+        ruleFormGamAdvertiserId.value = '';
+        ruleAdvertiserPicker.clear();
+
+        if (mode === 'edit') {
+            ruleModalTitle.textContent = 'Edit routing rule';
+            ruleFormId.value = prefill.id || '';
+            if (ruleFormPrincipalId) { ruleFormPrincipalId.value = prefill.principal_id || ''; }
+            ruleFormOperatorDomain.value = prefill.operator_domain || '';
+            ruleFormOperatorDomain.disabled = true;
+            ruleFormBrandHouse.value = prefill.brand_house || '';
+            ruleFormBrandId.value = prefill.brand_id || '';
+            ruleFormGamAdvertiserId.value = prefill.gam_advertiser_id || '';
+            if (prefill.gam_advertiser_id) {
+                ruleAdvertiserPicker.setSelected({ id: prefill.gam_advertiser_id, name: prefill.gam_advertiser_id });
+            }
+        } else {
+            ruleModalTitle.textContent = 'Add routing rule';
+            if (prefill) {
+                if (ruleFormPrincipalId) { ruleFormPrincipalId.value = prefill.principal_id || ''; }
+                ruleFormOperatorDomain.value = prefill.operator_domain || '';
+                ruleFormBrandHouse.value = prefill.brand_house || '';
+                ruleFormBrandId.value = prefill.brand_id || '';
+            }
+        }
+        ruleModal.classList.add('br-open');
+    }
+
+    function closeRuleModal() {
+        ruleModal.classList.remove('br-open');
+    }
+
+    document.querySelector('[data-action="open-add-rule"]').addEventListener('click', function () {
+        openRuleModal('add', null);
+    });
+
+    ruleModal.querySelector('[data-action="close-rule-modal"]').addEventListener('click', closeRuleModal);
+    ruleModal.addEventListener('click', function (e) {
+        if (e.target === ruleModal) { closeRuleModal(); }
+    });
+
+    ruleFormSave.addEventListener('click', function () {
+        ruleModalError.classList.remove('br-open');
+        ruleModalError.textContent = '';
+
+        const id = ruleFormId.value;
+        const isEdit = id !== '';
+
+        const body = {};
+        if (ruleFormPrincipalId) {
+            const pid = ruleFormPrincipalId.value.trim();
+            if (pid) { body.principal_id = pid; }
+        }
+        if (!isEdit) {
+            body.operator_domain = ruleFormOperatorDomain.value.trim();
+        }
+        const bh = ruleFormBrandHouse.value.trim();
+        if (bh) { body.brand_house = bh; }
+        const bid = ruleFormBrandId.value.trim();
+        if (bid) { body.brand_id = bid; }
+        if (ruleFormGamAdvertiserId.value) {
+            body.gam_advertiser_id = ruleFormGamAdvertiserId.value;
+        }
+
+        if (!isEdit && !body.operator_domain) {
+            ruleModalError.textContent = 'Operator domain is required.';
+            ruleModalError.classList.add('br-open');
+            return;
+        }
+        if (!body.gam_advertiser_id) {
+            ruleModalError.textContent = 'GAM advertiser is required.';
+            ruleModalError.classList.add('br-open');
+            return;
+        }
+
+        const url = isEdit
+            ? baseUrl + '/api/rules/' + encodeURIComponent(id)
+            : baseUrl + '/api/rules';
+        const method = isEdit ? 'PATCH' : 'POST';
+
+        fetch(url, {
+            method: method,
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(body),
+        })
+            .then(function (r) {
+                if (r.status === 204) { return { ok: true, body: {} }; }
+                return r.json().then(function (b) { return { ok: r.ok, status: r.status, body: b }; });
+            })
+            .then(function (resp) {
+                if (!resp.ok) {
+                    let msg = resp.body.message || 'Save failed.';
+                    if (resp.body.error === 'routing_rule_duplicate') {
+                        msg = 'This (operator, brand) triple is already mapped. View existing rules above.';
+                    } else if (resp.body.error === 'invalid_advertiser_id') {
+                        msg = 'Advertiser is not in the synced list. Run /refresh and try again.';
+                    } else if (resp.body.error === 'brand_house_required') {
+                        msg = 'Brand id requires brand house — set brand house first.';
+                    } else if (resp.body.error === 'routing_rule_not_found') {
+                        msg = 'Rule was deleted by another session. Close and reopen.';
+                    }
+                    ruleModalError.textContent = msg;
+                    ruleModalError.classList.add('br-open');
+                    return;
+                }
+                showToast(isEdit ? 'Rule updated.' : 'Rule added.');
+                closeRuleModal();
+                window.location.reload();
+            })
+            .catch(function () {
+                ruleModalError.textContent = 'Network error — try again.';
+                ruleModalError.classList.add('br-open');
+            });
+    });
+
+    // Edit / Delete actions on the rules table
+    document.querySelectorAll('tr[data-rule-id]').forEach(function (tr) {
+        const editBtn = tr.querySelector('[data-action="edit-rule"]');
+        const deleteBtn = tr.querySelector('[data-action="delete-rule"]');
+        if (editBtn) {
+            editBtn.addEventListener('click', function () {
+                openRuleModal('edit', {
+                    id: tr.getAttribute('data-rule-id'),
+                    principal_id: tr.getAttribute('data-rule-principal-id'),
+                    operator_domain: tr.getAttribute('data-rule-operator-domain'),
+                    brand_house: tr.getAttribute('data-rule-brand-house'),
+                    brand_id: tr.getAttribute('data-rule-brand-id'),
+                    gam_advertiser_id: tr.getAttribute('data-rule-gam-advertiser-id'),
+                });
+            });
+        }
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', function () {
+                if (!window.confirm('Delete this routing rule? Buyers matching this triple will fall through to the next rule or default.')) {
+                    return;
+                }
+                const ruleId = tr.getAttribute('data-rule-id');
+                fetch(baseUrl + '/api/rules/' + encodeURIComponent(ruleId), {
+                    method: 'DELETE',
+                    credentials: 'same-origin',
+                })
+                    .then(function (r) {
+                        if (r.status === 204 || r.status === 404) {
+                            tr.remove();
+                            showToast('Rule deleted.');
+                        } else {
+                            showToast('Delete failed.', 'error');
+                        }
+                    })
+                    .catch(function () { showToast('Delete failed.', 'error'); });
+            });
+        }
+    });
+
+    // Promote action on activity rows
+    document.querySelectorAll('tr[data-activity-row]').forEach(function (tr) {
+        const promoteBtn = tr.querySelector('[data-action="promote-row"]');
+        if (!promoteBtn) { return; }
+        promoteBtn.addEventListener('click', function () {
+            // In embedded mode the agent column is hidden; principal_id stays null.
+            const prefill = {
+                principal_id: isEmbedded ? '' : (tr.getAttribute('data-activity-principal-id') || ''),
+                operator_domain: tr.getAttribute('data-activity-operator-domain') || '',
+                brand_house: tr.getAttribute('data-activity-brand-house') || '',
+                brand_id: tr.getAttribute('data-activity-brand-id') || '',
+            };
+            openRuleModal('add', prefill);
+        });
+    });
+})();
+</script>
 
 {% endblock %}
