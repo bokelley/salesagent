@@ -3,26 +3,26 @@
 {% block title %}Login - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card" style="max-width: 400px; margin: 4rem auto; text-align: center;">
+<div class="sa-card sa-login-card">
     {% if test_mode %}
-    <div style="background: #2563eb; color: white; padding: 1rem; margin: -2rem -2rem 1rem -2rem; border-radius: 4px 4px 0 0;">
+    <div class="sa-login-banner">
         {% if single_tenant_mode %}
-        Setup Mode - Configure authentication below
+        Setup Mode — Configure authentication below
         {% else %}
-        Setup Mode - Configure OAuth to enable production login
+        Setup Mode — Configure OAuth to enable production login
         {% endif %}
     </div>
     {% endif %}
 
     {% if tenant_context %}
         <h2>{{ tenant_name or tenant_context }} Sales Agent Dashboard</h2>
-        <p style="color: #666; margin-bottom: 2rem;">Sales agent dashboard for {{ tenant_name or tenant_context }} team</p>
+        <p class="sa-text-muted" style="margin-bottom: var(--sa-space-6);">Sales agent dashboard for {{ tenant_name or tenant_context }} team</p>
     {% elif tenant_id %}
         <h2>{{ tenant_name or tenant_id }} Sales Agent Dashboard</h2>
-        <p style="color: #666; margin-bottom: 2rem;">Sales agent dashboard for {{ tenant_name or tenant_id }} team</p>
+        <p class="sa-text-muted" style="margin-bottom: var(--sa-space-6);">Sales agent dashboard for {{ tenant_name or tenant_id }} team</p>
     {% else %}
         <h2>AdCP Sales Agent</h2>
-        <p style="color: #666; margin-bottom: 2rem;">Administrator Access</p>
+        <p class="sa-text-muted" style="margin-bottom: var(--sa-space-6);">Administrator Access</p>
     {% endif %}
 
     {% if error %}
@@ -152,9 +152,22 @@
 </div>
 
 <style>
-.btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+.sa-login-card {
+    max-width: 400px;
+    margin: var(--sa-space-7) auto;
+    text-align: center;
+    padding: var(--sa-space-6);
 }
+.sa-login-banner {
+    background: var(--sa-primary);
+    color: #fff;
+    padding: var(--sa-space-4);
+    margin: calc(-1 * var(--sa-space-6)) calc(-1 * var(--sa-space-6)) var(--sa-space-4);
+    border-radius: var(--sa-radius-xl) var(--sa-radius-xl) 0 0;
+    font-weight: 500;
+    font-size: var(--sa-text-sm);
+}
+.sa-login-card .btn { transition: box-shadow var(--sa-duration-fast) var(--sa-easing); }
+.sa-login-card .btn:hover { box-shadow: var(--sa-shadow-sm); }
 </style>
 {% endblock %}

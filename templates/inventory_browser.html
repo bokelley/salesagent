@@ -12,12 +12,12 @@
     {% set crumbs = crumbs | with_embed_root %}
     {% include "_breadcrumb.html" %}
 
-    <div class="row">
-        <div class="col-12">
-            <h2>GAM Inventory Browser</h2>
-            <p class="text-muted">Browse and manage Google Ad Manager inventory for {{ tenant.name }}</p>
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">GAM Inventory Browser</h2>
+            <p class="sa-page-header__subtitle">Browse and manage Google Ad Manager inventory for {{ tenant.name }}</p>
         </div>
-    </div>
+    </header>
 
     <!-- Sync Status -->
     <div class="row mt-3">
@@ -193,28 +193,30 @@
 
 /* Selected node highlight */
 #adUnitTree .tree-node-header.selected {
-    background-color: #e3f2fd;
-    border-left: 3px solid #1976d2;
+    background-color: var(--sa-primary-tint);
+    border-left: 3px solid var(--sa-primary);
 }
 
 .inventory-size {
     display: inline-block;
-    padding: 2px 8px;
+    padding: 2px var(--sa-space-2);
     margin: 2px;
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 3px;
+    background-color: var(--sa-gray-50);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-sm);
     font-size: 0.85em;
+    color: var(--sa-text-default);
 }
 
 .search-result-item {
-    padding: 10px;
-    border-bottom: 1px solid #dee2e6;
+    padding: var(--sa-space-3);
+    border-bottom: 1px solid var(--sa-border);
     cursor: pointer;
+    transition: background-color var(--sa-duration-fast) var(--sa-easing);
 }
 
 .search-result-item:hover {
-    background-color: #f8f9fa;
+    background-color: var(--sa-gray-50);
 }
 </style>
 

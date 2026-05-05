@@ -21,27 +21,30 @@
     /* Ensure list items are visible */
     .targeting-browser .list-group-item {
         display: block;
-        padding: 0.5rem 0.75rem;
+        padding: var(--sa-space-2) var(--sa-space-3);
         margin-bottom: -1px;
-        background-color: #fff;
-        border: 1px solid rgba(0,0,0,.125);
-        color: #212529;
+        background-color: var(--sa-bg-surface);
+        border: 1px solid var(--sa-border);
+        color: var(--sa-text-default);
         text-decoration: none;
         width: 100%;
         min-height: 40px;
+        transition: background-color var(--sa-duration-fast) var(--sa-easing);
     }
 
     /* Compact key titles */
     .targeting-browser .list-group-item h6 {
-        font-size: 0.9rem;
+        font-size: var(--sa-text-sm);
         margin-bottom: 0.15rem;
         font-weight: 600;
+        color: var(--sa-text-strong);
     }
 
     /* Compact key subtitles */
     .targeting-browser .list-group-item small {
-        font-size: 0.75rem;
+        font-size: var(--sa-text-xs);
         line-height: 1.2;
+        color: var(--sa-text-muted);
     }
 
     /* Compact badge spacing */
@@ -51,30 +54,32 @@
     }
 
     .targeting-browser .list-group-item:hover {
-        background-color: #f8f9fa;
+        background-color: var(--sa-gray-50);
         cursor: pointer;
     }
 
     .targeting-browser .list-group-item.active {
-        background-color: #007bff;
-        border-color: #007bff;
-        color: white;
+        background-color: var(--sa-primary);
+        border-color: var(--sa-primary);
+        color: #fff;
     }
+    .targeting-browser .list-group-item.active h6,
+    .targeting-browser .list-group-item.active small { color: #fff; }
 </style>
 <div class="container-fluid targeting-browser">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1>Targeting Criteria Browser</h1>
-        <div>
+    <header class="sa-page-header">
+        <h1 class="sa-page-header__title">Targeting Criteria Browser</h1>
+        <div class="sa-page-header__actions">
             {% if not tenant.is_embedded %}
             <button id="sync-targeting-btn" class="btn btn-primary" onclick="syncTargetingData()">
                 <i class="fas fa-sync"></i> <span id="sync-btn-text">Sync Targeting Data</span>
             </button>
             {% endif %}
-            <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">
+            <a href="{{ url_for('inventory.inventory_browse', tenant_id=tenant.tenant_id) }}" class="btn btn-ghost">
                 ← Back to Browse Inventory
             </a>
         </div>
-    </div>
+    </header>
 
     <!-- Sync Info Alert -->
     <div class="alert alert-info">

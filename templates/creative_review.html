@@ -3,14 +3,14 @@
 {% block title %}Creative Review - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>Creative Review - {{ tenant_name }}</h2>
-        <div style="display: flex; gap: 0.5rem;">
-            <a href="{{ url_for('creatives.list_creatives', tenant_id=tenant_id) }}" class="btn btn-secondary">View All Creatives</a>
-            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Dashboard</a>
+<div class="sa-card">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">Creative Review — {{ tenant_name }}</h2>
+        <div class="sa-page-header__actions">
+            <a href="{{ url_for('creatives.list_creatives', tenant_id=tenant_id) }}" class="btn btn-ghost">View All Creatives</a>
+            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-ghost">← Back to Dashboard</a>
         </div>
-    </div>
+    </header>
 
     <div class="alert alert-info">
         <strong>Review Queue:</strong> Review pending creatives and approve or reject them.
@@ -21,10 +21,10 @@
 
     {% if creatives|length == 0 %}
     <!-- No pending creatives -->
-    <div style="text-align: center; padding: 3rem; background: #f9f9f9; border-radius: 4px;">
-        <div style="font-size: 4rem; margin-bottom: 1rem;">✅</div>
-        <h3 style="color: #666; margin-bottom: 0.5rem;">All Caught Up!</h3>
-        <p style="color: #999;">No creatives pending review at the moment.</p>
+    <div class="sa-empty">
+        <div class="sa-empty__icon">✅</div>
+        <div class="sa-empty__title">All Caught Up!</div>
+        <p class="sa-empty__hint">No creatives pending review at the moment.</p>
     </div>
     {% else %}
     <!-- Creatives Review Grid -->
@@ -288,130 +288,127 @@
 }
 
 .review-card {
-    background: white;
-    border: 2px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 2rem;
-    transition: box-shadow 0.2s;
+    background: var(--sa-bg-surface);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-lg);
+    padding: var(--sa-space-6);
+    transition: box-shadow var(--sa-duration-base) var(--sa-easing),
+                border-color var(--sa-duration-base) var(--sa-easing);
 }
 
 .review-card:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--sa-shadow-md);
+    border-color: var(--sa-border-strong);
 }
 
 .review-header {
     display: flex;
     justify-content: space-between;
     align-items: start;
-    padding-bottom: 1.5rem;
-    border-bottom: 2px solid #f0f0f0;
-    margin-bottom: 1.5rem;
+    padding-bottom: var(--sa-space-5);
+    border-bottom: 1px solid var(--sa-border);
+    margin-bottom: var(--sa-space-5);
 }
 
 .status-badge {
-    padding: 0.35rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.75rem;
+    padding: 0.25rem var(--sa-space-3);
+    border-radius: var(--sa-radius-pill);
+    font-size: var(--sa-text-xs);
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.04em;
     white-space: nowrap;
 }
 
 .status-pending {
-    background: #fff3cd;
-    color: #856404;
+    background: var(--sa-warning-tint);
+    color: var(--sa-warning-text);
 }
 
 .format-badge {
     display: inline-block;
-    padding: 0.15rem 0.5rem;
-    background: #e3f2fd;
-    color: #1976d2;
-    border-radius: 4px;
-    font-size: 0.85rem;
+    padding: 0.125rem var(--sa-space-2);
+    background: var(--sa-primary-tint);
+    color: var(--sa-primary-strong);
+    border-radius: var(--sa-radius-sm);
+    font-size: var(--sa-text-xs);
     font-weight: 500;
 }
 
 .preview-section {
-    margin-bottom: 1.5rem;
+    margin-bottom: var(--sa-space-5);
 }
 
 .creative-preview {
-    background: #f8f9fa;
-    padding: 1.5rem;
-    border-radius: 4px;
-    border: 1px solid #e0e0e0;
+    background: var(--sa-gray-50);
+    padding: var(--sa-space-5);
+    border-radius: var(--sa-radius-md);
+    border: 1px solid var(--sa-border);
 }
 
-.display-preview {
-    text-align: center;
-}
+.display-preview { text-align: center; }
 
 .preview-dimensions {
-    margin-bottom: 0.5rem;
-    font-size: 0.9rem;
-    color: #666;
+    margin-bottom: var(--sa-space-2);
+    font-size: var(--sa-text-sm);
+    color: var(--sa-text-muted);
     font-weight: 500;
 }
 
 .native-card {
     max-width: 400px;
     margin: 0 auto;
-    background: white;
-    border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    background: var(--sa-bg-surface);
+    border-radius: var(--sa-radius-md);
+    box-shadow: var(--sa-shadow-sm);
 }
 
 .detail-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: var(--sa-space-4);
 }
 
 .detail-item {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: var(--sa-space-1);
 }
 
 .detail-label {
-    color: #666;
+    color: var(--sa-text-muted);
     font-weight: 500;
-    font-size: 0.9rem;
+    font-size: var(--sa-text-sm);
 }
 
 .detail-value {
-    color: #333;
-    font-size: 0.95rem;
+    color: var(--sa-text-default);
+    font-size: var(--sa-text-sm);
 }
 
 .detail-value a {
-    color: #007bff;
+    color: var(--sa-primary);
     text-decoration: none;
 }
 
-.detail-value a:hover {
-    text-decoration: underline;
-}
+.detail-value a:hover { text-decoration: underline; }
 
 .ai-review-section {
-    padding: 1rem;
-    background: #f0f4ff;
-    border-left: 4px solid #667eea;
-    border-radius: 4px;
-    margin-bottom: 1.5rem;
+    padding: var(--sa-space-4);
+    background: var(--sa-primary-tint);
+    border-left: 3px solid var(--sa-primary);
+    border-radius: var(--sa-radius-md);
+    margin-bottom: var(--sa-space-5);
 }
 
-.ai-result-content {
-    margin-top: 0.5rem;
-}
+.ai-result-content { margin-top: var(--sa-space-2); }
 
 .review-actions {
     display: flex;
     justify-content: flex-end;
-    gap: 0.75rem;
-    padding-top: 1.5rem;
-    border-top: 2px solid #f0f0f0;
+    gap: var(--sa-space-3);
+    padding-top: var(--sa-space-5);
+    border-top: 1px solid var(--sa-border);
 }
 
 .modal {
@@ -420,7 +417,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(17, 24, 39, 0.55);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -428,64 +425,60 @@
 }
 
 .modal-content {
-    background: white;
-    padding: 2rem;
-    border-radius: 8px;
+    background: var(--sa-bg-surface);
+    padding: var(--sa-space-6);
+    border-radius: var(--sa-radius-lg);
     max-width: 500px;
     width: 90%;
-}
-
-code {
-    background: #f4f4f4;
-    padding: 0.2rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.85rem;
+    box-shadow: var(--sa-shadow-lg);
 }
 
 /* Multi-variant preview support (AdCP PR #119) */
 .preview-variant-selector,
 .preview-render-selector {
-    margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: white;
-    border-radius: 4px;
-    border: 1px solid #e0e0e0;
+    margin-bottom: var(--sa-space-4);
+    padding: var(--sa-space-3);
+    background: var(--sa-bg-surface);
+    border-radius: var(--sa-radius-md);
+    border: 1px solid var(--sa-border);
 }
 
 .variant-btn,
 .render-btn {
-    padding: 0.5rem 1rem;
-    border: 1px solid #ddd;
-    background: white;
-    color: #666;
-    border-radius: 4px;
+    padding: var(--sa-space-2) var(--sa-space-4);
+    border: 1px solid var(--sa-border-strong);
+    background: var(--sa-bg-surface);
+    color: var(--sa-text-default);
+    border-radius: var(--sa-radius-md);
     cursor: pointer;
-    transition: all 0.2s;
-    font-size: 0.9rem;
-    margin-right: 0.5rem;
+    transition: background var(--sa-duration-fast) var(--sa-easing),
+                border-color var(--sa-duration-fast) var(--sa-easing),
+                color var(--sa-duration-fast) var(--sa-easing);
+    font-size: var(--sa-text-sm);
+    margin-right: var(--sa-space-2);
 }
 
 .variant-btn:hover,
 .render-btn:hover {
-    background: #f8f9fa;
-    border-color: #007bff;
+    background: var(--sa-gray-50);
+    border-color: var(--sa-primary);
 }
 
 .variant-btn.active,
 .render-btn.active {
-    background: #007bff;
-    color: white;
-    border-color: #007bff;
+    background: var(--sa-primary);
+    color: #fff;
+    border-color: var(--sa-primary);
 }
 
 .render-role-badge {
     display: inline-block;
-    margin-left: 0.5rem;
-    padding: 0.15rem 0.5rem;
-    background: #e3f2fd;
-    color: #1976d2;
-    border-radius: 4px;
-    font-size: 0.75rem;
+    margin-left: var(--sa-space-2);
+    padding: 0.125rem var(--sa-space-2);
+    background: var(--sa-primary-tint);
+    color: var(--sa-primary-strong);
+    border-radius: var(--sa-radius-sm);
+    font-size: var(--sa-text-xs);
     font-weight: 500;
 }
 </style>

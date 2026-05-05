@@ -569,3 +569,203 @@ body.sa-embedded > .container {
         width: 100%;
     }
 }
+
+/* ---------- Error page ---------------------------------------------------- */
+
+.sa-error-page {
+    max-width: 560px;
+    margin: var(--sa-space-7) auto;
+    text-align: center;
+}
+.sa-error-card {
+    padding: var(--sa-space-6);
+}
+.sa-error-title {
+    color: var(--sa-danger);
+    margin: 0 0 var(--sa-space-4) 0;
+    font-size: var(--sa-text-xl);
+    font-weight: 700;
+}
+.sa-error-message {
+    font-size: var(--sa-text-base);
+    color: var(--sa-text-muted);
+    margin-bottom: var(--sa-space-6);
+}
+
+/* ---------- Empty states -------------------------------------------------- */
+
+.sa-empty {
+    text-align: center;
+    padding: var(--sa-space-7) var(--sa-space-5);
+    color: var(--sa-text-muted);
+}
+.sa-empty__icon {
+    font-size: 2.5rem;
+    margin-bottom: var(--sa-space-4);
+    opacity: 0.5;
+}
+.sa-empty__title {
+    font-size: var(--sa-text-lg);
+    font-weight: 600;
+    color: var(--sa-text-default);
+    margin-bottom: var(--sa-space-2);
+}
+.sa-empty__hint {
+    font-size: var(--sa-text-sm);
+    color: var(--sa-text-muted);
+    margin-bottom: var(--sa-space-4);
+}
+
+/* ---------- Notice banners (page-scoped, not flash messages) -------------- */
+
+.sa-banner {
+    padding: var(--sa-space-4);
+    border-radius: var(--sa-radius-lg);
+    border: 1px solid transparent;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sa-space-3);
+    font-size: var(--sa-text-sm);
+    margin-bottom: var(--sa-space-4);
+}
+.sa-banner--info    { background: var(--sa-info-tint);    color: var(--sa-info-text);    border-color: var(--sa-info-border); }
+.sa-banner--success { background: var(--sa-success-tint); color: var(--sa-success-text); border-color: var(--sa-success-border); }
+.sa-banner--warning { background: var(--sa-warning-tint); color: var(--sa-warning-text); border-color: var(--sa-warning-border); }
+.sa-banner--danger  { background: var(--sa-danger-tint);  color: var(--sa-danger-text);  border-color: var(--sa-danger-border); }
+.sa-banner__icon  { font-size: 1.25rem; line-height: 1; flex-shrink: 0; }
+.sa-banner__title { font-weight: 600; margin-bottom: var(--sa-space-1); }
+
+/* ---------- Chip / pill badge --------------------------------------------- */
+
+.sa-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sa-space-1);
+    padding: 0.125rem var(--sa-space-2);
+    background: var(--sa-gray-100);
+    color: var(--sa-text-default);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-pill);
+    font-size: var(--sa-text-xs);
+    font-weight: 500;
+    line-height: 1.4;
+}
+.sa-chip--primary { background: var(--sa-primary-tint); color: var(--sa-primary-strong); border-color: transparent; }
+.sa-chip--success { background: var(--sa-success-tint); color: var(--sa-success-text);   border-color: transparent; }
+.sa-chip--warning { background: var(--sa-warning-tint); color: var(--sa-warning-text);   border-color: transparent; }
+.sa-chip--danger  { background: var(--sa-danger-tint);  color: var(--sa-danger-text);    border-color: transparent; }
+.sa-chip--neutral { background: var(--sa-gray-100);     color: var(--sa-text-default);   border-color: var(--sa-border); }
+
+/* ---------- Filter bar ---------------------------------------------------- */
+
+.sa-filter-bar {
+    display: flex;
+    gap: var(--sa-space-5);
+    align-items: flex-end;
+    flex-wrap: wrap;
+    padding: var(--sa-space-4);
+    background: var(--sa-gray-50);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-lg);
+    margin-bottom: var(--sa-space-4);
+    font-size: var(--sa-text-sm);
+}
+.sa-filter-bar__field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sa-space-1);
+}
+.sa-filter-bar__field label {
+    font-size: var(--sa-text-xs);
+    font-weight: 600;
+    color: var(--sa-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.sa-filter-bar__field select,
+.sa-filter-bar__field input {
+    padding: var(--sa-space-1) var(--sa-space-2);
+    border: 1px solid var(--sa-border-strong);
+    border-radius: var(--sa-radius-md);
+    font-size: var(--sa-text-sm);
+    background: var(--sa-bg-surface);
+}
+.sa-filter-bar__count {
+    margin-left: auto;
+    color: var(--sa-text-muted);
+    font-size: var(--sa-text-sm);
+}
+
+/* ---------- Progress bar -------------------------------------------------- */
+
+.sa-progress-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sa-space-2);
+}
+.sa-progress-track {
+    flex: 1;
+    min-width: 100px;
+    height: 8px;
+    background: var(--sa-gray-200);
+    border-radius: var(--sa-radius-pill);
+    overflow: hidden;
+}
+.sa-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    transition: width var(--sa-duration-base) var(--sa-easing);
+}
+.sa-progress-fill.is-complete { background: var(--sa-success); }
+.sa-progress-fill.is-partial  { background: var(--sa-warning); }
+.sa-progress-fill.is-low      { background: var(--sa-danger); }
+.sa-progress-meta {
+    min-width: 60px;
+    text-align: right;
+    font-size: var(--sa-text-xs);
+}
+.sa-progress-meta strong { color: var(--sa-text-strong); font-size: var(--sa-text-sm); }
+.sa-progress-meta small  { color: var(--sa-text-muted); display: block; }
+
+/* ---------- Pagination ---------------------------------------------------- */
+
+.sa-pagination {
+    margin-top: var(--sa-space-5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: var(--sa-space-2);
+}
+.sa-pagination__current {
+    padding: 0 var(--sa-space-4);
+    color: var(--sa-text-muted);
+    font-size: var(--sa-text-sm);
+}
+
+/* ---------- Text utilities ------------------------------------------------ */
+
+.sa-text-muted   { color: var(--sa-text-muted); }
+.sa-text-faint   { color: var(--sa-text-faint); }
+.sa-text-strong  { color: var(--sa-text-strong); }
+.sa-text-success { color: var(--sa-success); }
+.sa-text-warning { color: var(--sa-warning); }
+.sa-text-danger  { color: var(--sa-danger); }
+.sa-text-info    { color: var(--sa-info); }
+
+.sa-mono { font-family: var(--sa-font-mono); font-size: 0.85em; }
+
+/* ---------- Toolbar (page-action row above tables/grids) ------------------ */
+
+.sa-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--sa-space-3);
+    margin-bottom: var(--sa-space-4);
+    flex-wrap: wrap;
+}
+.sa-toolbar__actions {
+    display: flex;
+    gap: var(--sa-space-2);
+    flex-wrap: wrap;
+}

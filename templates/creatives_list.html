@@ -3,15 +3,15 @@
 {% block title %}Uploaded Creatives - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>Uploaded Creatives - {{ tenant_name }}</h2>
-        <div style="display: flex; gap: 0.5rem;">
+<div class="sa-card">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">Uploaded Creatives — {{ tenant_name }}</h2>
+        <div class="sa-page-header__actions">
             <a href="{{ url_for('creatives.review_creatives', tenant_id=tenant_id) }}" class="btn btn-primary">🎨 Review Creatives</a>
-            <a href="{{ url_for('creatives.index', tenant_id=tenant_id) }}" class="btn btn-secondary">Creative Formats</a>
-            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Dashboard</a>
+            <a href="{{ url_for('creatives.index', tenant_id=tenant_id) }}" class="btn btn-ghost">Creative Formats</a>
+            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-ghost">← Back to Dashboard</a>
         </div>
-    </div>
+    </header>
 
     <div class="alert alert-info">
         <strong>Creative Library:</strong> View all uploaded creatives and see which media buys they're assigned to. Filter by status, advertiser, or format.
@@ -22,51 +22,49 @@
     </div>
 
     <!-- Filter Controls -->
-    <div style="margin-bottom: 1.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-            <div>
-                <label for="filter-status" style="display: block; margin-bottom: 0.25rem; font-weight: 500;">Status:</label>
-                <select id="filter-status" onchange="filterCreatives()" style="width: 100%; padding: 0.5rem;">
-                    <option value="">All Statuses</option>
-                    <option value="active">Active</option>
-                    <option value="pending" selected>Pending</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                </select>
-            </div>
-            <div>
-                <label for="filter-advertiser" style="display: block; margin-bottom: 0.25rem; font-weight: 500;">Advertiser:</label>
-                <select id="filter-advertiser" onchange="filterCreatives()" style="width: 100%; padding: 0.5rem;">
-                    <option value="">All Advertisers</option>
-                    {% set principals = creatives | map(attribute='principal_name') | unique | list %}
-                    {% for principal in principals %}
-                    <option value="{{ principal }}">{{ principal }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="filter-format" style="display: block; margin-bottom: 0.25rem; font-weight: 500;">Format:</label>
-                <select id="filter-format" onchange="filterCreatives()" style="width: 100%; padding: 0.5rem;">
-                    <option value="">All Formats</option>
-                    {% set formats = creatives | map(attribute='format') | unique | list %}
-                    {% for format in formats %}
-                    <option value="{{ format }}">{{ format }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="filter-search" style="display: block; margin-bottom: 0.25rem; font-weight: 500;">Search:</label>
-                <input type="text" id="filter-search" placeholder="Creative name..." onkeyup="filterCreatives()" style="width: 100%; padding: 0.5rem;">
-            </div>
+    <div class="creatives-filter-grid">
+        <div class="sa-filter-bar__field">
+            <label for="filter-status">Status</label>
+            <select id="filter-status" onchange="filterCreatives()">
+                <option value="">All Statuses</option>
+                <option value="active">Active</option>
+                <option value="pending" selected>Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+            </select>
+        </div>
+        <div class="sa-filter-bar__field">
+            <label for="filter-advertiser">Advertiser</label>
+            <select id="filter-advertiser" onchange="filterCreatives()">
+                <option value="">All Advertisers</option>
+                {% set principals = creatives | map(attribute='principal_name') | unique | list %}
+                {% for principal in principals %}
+                <option value="{{ principal }}">{{ principal }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="sa-filter-bar__field">
+            <label for="filter-format">Format</label>
+            <select id="filter-format" onchange="filterCreatives()">
+                <option value="">All Formats</option>
+                {% set formats = creatives | map(attribute='format') | unique | list %}
+                {% for format in formats %}
+                <option value="{{ format }}">{{ format }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="sa-filter-bar__field">
+            <label for="filter-search">Search</label>
+            <input type="text" id="filter-search" placeholder="Creative name..." onkeyup="filterCreatives()">
         </div>
     </div>
 
     {% if creatives|length == 0 %}
     <!-- No creatives uploaded yet -->
-    <div style="text-align: center; padding: 3rem; background: #f9f9f9; border-radius: 4px;">
-        <div style="font-size: 4rem; margin-bottom: 1rem;">🎨</div>
-        <h3 style="color: #666; margin-bottom: 0.5rem;">No Creatives Yet</h3>
-        <p style="color: #999;">Creatives will appear here once advertisers upload them via the AdCP protocol.</p>
+    <div class="sa-empty">
+        <div class="sa-empty__icon">🎨</div>
+        <div class="sa-empty__title">No Creatives Yet</div>
+        <p class="sa-empty__hint">Creatives will appear here once advertisers upload them via the AdCP protocol.</p>
     </div>
     {% else %}
     <!-- Creatives Grid -->
@@ -188,140 +186,135 @@
 </div>
 
 <style>
+.creatives-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--sa-space-4);
+    padding: var(--sa-space-4);
+    background: var(--sa-gray-50);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-lg);
+    margin-bottom: var(--sa-space-5);
+}
+.creatives-filter-grid select,
+.creatives-filter-grid input {
+    width: 100%;
+    padding: var(--sa-space-2) var(--sa-space-3);
+    border: 1px solid var(--sa-border-strong);
+    border-radius: var(--sa-radius-md);
+    background: var(--sa-bg-surface);
+    font-size: var(--sa-text-sm);
+}
+.creatives-filter-grid select:focus,
+.creatives-filter-grid input:focus {
+    outline: none;
+    border-color: var(--sa-border-focus);
+    box-shadow: var(--sa-ring-focus);
+}
+
 .creative-card {
-    background: white;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 1.5rem;
-    transition: box-shadow 0.2s;
+    background: var(--sa-bg-surface);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-lg);
+    padding: var(--sa-space-5);
+    transition: box-shadow var(--sa-duration-base) var(--sa-easing),
+                border-color var(--sa-duration-base) var(--sa-easing);
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--sa-space-4);
 }
 
 .creative-card:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--sa-shadow-md);
+    border-color: var(--sa-border-strong);
 }
 
 .creative-header {
     display: flex;
     justify-content: space-between;
     align-items: start;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: var(--sa-space-4);
+    border-bottom: 1px solid var(--sa-border);
 }
 
 .status-badge {
-    padding: 0.35rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.75rem;
+    padding: 0.25rem var(--sa-space-3);
+    border-radius: var(--sa-radius-pill);
+    font-size: var(--sa-text-xs);
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .status-badge-small {
-    padding: 0.2rem 0.5rem;
-    border-radius: 8px;
+    padding: 0.15rem var(--sa-space-2);
+    border-radius: var(--sa-radius-pill);
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     white-space: nowrap;
 }
 
-.status-active {
-    background: #d4edda;
-    color: #155724;
-}
-
-.status-pending {
-    background: #fff3cd;
-    color: #856404;
-}
-
-.status-approved {
-    background: #d1ecf1;
-    color: #0c5460;
-}
-
-.status-rejected {
-    background: #f8d7da;
-    color: #721c24;
-}
-
-.status-draft {
-    background: #e2e3e5;
-    color: #383d41;
-}
+.status-active   { background: var(--sa-success-tint); color: var(--sa-success-text); }
+.status-pending  { background: var(--sa-warning-tint); color: var(--sa-warning-text); }
+.status-approved { background: var(--sa-info-tint);    color: var(--sa-info-text); }
+.status-rejected { background: var(--sa-danger-tint);  color: var(--sa-danger-text); }
+.status-draft    { background: var(--sa-gray-100);     color: var(--sa-text-muted); }
 
 .creative-details {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--sa-space-2);
 }
 
 .detail-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 0.9rem;
+    font-size: var(--sa-text-sm);
 }
 
-.detail-label {
-    color: #666;
-    font-weight: 500;
-}
-
-.detail-value {
-    color: #333;
-}
+.detail-label { color: var(--sa-text-muted); font-weight: 500; }
+.detail-value { color: var(--sa-text-default); }
 
 .format-badge {
     display: inline-block;
-    padding: 0.25rem 0.5rem;
-    background: #e3f2fd;
-    color: #1976d2;
-    border-radius: 4px;
-    font-size: 0.85rem;
+    padding: 0.125rem var(--sa-space-2);
+    background: var(--sa-primary-tint);
+    color: var(--sa-primary-strong);
+    border-radius: var(--sa-radius-sm);
+    font-size: var(--sa-text-xs);
     font-weight: 500;
 }
 
 .media-buy-section {
-    padding-top: 1rem;
-    border-top: 1px solid #f0f0f0;
+    padding-top: var(--sa-space-4);
+    border-top: 1px solid var(--sa-border);
 }
 
 .media-buys-list {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--sa-space-3);
 }
 
 .media-buy-item {
-    padding: 0.75rem;
-    background: #f8f9fa;
-    border-left: 3px solid #007bff;
-    border-radius: 4px;
+    padding: var(--sa-space-3);
+    background: var(--sa-gray-50);
+    border-left: 3px solid var(--sa-primary);
+    border-radius: var(--sa-radius-sm);
 }
 
-.media-buy-item a:hover {
-    text-decoration: underline;
-}
-
-code {
-    background: #f4f4f4;
-    padding: 0.2rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.85rem;
-}
+.media-buy-item a:hover { text-decoration: underline; }
 
 .pending-badge {
-    background: #fff3cd;
-    color: #856404;
-    padding: 0.25rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.85rem;
+    background: var(--sa-warning-tint);
+    color: var(--sa-warning-text);
+    padding: 0.125rem var(--sa-space-3);
+    border-radius: var(--sa-radius-pill);
+    font-size: var(--sa-text-xs);
     font-weight: 600;
-    margin-left: 0.5rem;
+    margin-left: var(--sa-space-2);
 }
 </style>
 
