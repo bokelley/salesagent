@@ -3698,6 +3698,10 @@ async def create_media_buy(
     start_date: Any | None = None,  # Legacy format conversion
     end_date: Any | None = None,  # Legacy format conversion
     total_budget: float | None = None,  # Legacy format conversion
+    idempotency_key: str | None = None,  # AdCP idempotency key for safe retry
+    plan_id: str | None = None,  # AdCP plan identifier (optional, per AdCP spec)
+    advertiser_industry: str | None = None,  # AdCP advertiser industry code
+    invoice_recipient: str | None = None,  # AdCP invoice recipient email
     targeting_overlay: TargetingOverlay | None = None,
     pacing: str = "even",
     daily_budget: float | None = None,
@@ -3710,6 +3714,8 @@ async def create_media_buy(
     context: ContextObject | None = None,  # payload-level context
     buyer_campaign_ref: str | None = None,
     ext: Any | None = None,  # AdCP ExtensionObject for custom fields
+    artifact_webhook: str | None = None,  # AdCP artifact webhook URL (optional)
+    adcp_major_version: int | None = None,  # AdCP major version for backward compatibility
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -3756,11 +3762,19 @@ async def create_media_buy(
             packages=packages,
             start_time=start_time,
             end_time=end_time,
+            total_budget=total_budget,
             po_number=po_number,
+            idempotency_key=idempotency_key,
+            plan_id=plan_id,
+            advertiser_industry=advertiser_industry,
+            invoice_recipient=invoice_recipient,
+            push_notification_config=push_notification_config,
             reporting_webhook=reporting_webhook,
             context=context,
             buyer_campaign_ref=buyer_campaign_ref,
             ext=ext,
+            artifact_webhook=artifact_webhook,
+            adcp_major_version=adcp_major_version,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -3792,6 +3806,10 @@ async def create_media_buy_raw(
     po_number: str | None = None,
     product_ids: list[str] | None = None,  # Legacy format conversion
     total_budget: float | None = None,  # Legacy format conversion
+    idempotency_key: str | None = None,  # AdCP idempotency key for safe retry (AdCP 3.6+)
+    plan_id: str | None = None,  # AdCP plan identifier (optional, per AdCP spec)
+    advertiser_industry: str | None = None,  # AdCP advertiser industry code
+    invoice_recipient: str | None = None,  # AdCP invoice recipient email
     start_date: Any | None = None,  # Legacy format conversion
     end_date: Any | None = None,  # Legacy format conversion
     targeting_overlay: dict[str, Any] | None = None,
@@ -3806,6 +3824,8 @@ async def create_media_buy_raw(
     context: dict[str, Any] | None = None,  # Application level context per adcp spec
     buyer_campaign_ref: str | None = None,
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    artifact_webhook: str | None = None,  # AdCP artifact webhook URL (optional)
+    adcp_major_version: int | None = None,  # AdCP major version for backward compatibility
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -3851,11 +3871,19 @@ async def create_media_buy_raw(
             packages=packages,
             start_time=start_time,
             end_time=end_time,
+            total_budget=total_budget,
             po_number=po_number,
+            idempotency_key=idempotency_key,
+            plan_id=plan_id,
+            advertiser_industry=advertiser_industry,
+            invoice_recipient=invoice_recipient,
+            push_notification_config=to_push_notification_config(push_notification_config),
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
             buyer_campaign_ref=buyer_campaign_ref,
             ext=ext,
+            artifact_webhook=artifact_webhook,
+            adcp_major_version=adcp_major_version,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
