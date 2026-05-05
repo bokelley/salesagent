@@ -587,63 +587,83 @@ def _verify_create_happy_path(token: str, tenant_id: str, product_id: str) -> st
     return media_buy_id
 
 
-def _verify_update_pause(token: str, media_buy_id: str) -> bool:
-    """Flow 3: update_media_buy(active=false) pauses the buy."""
-    try:
-        result = _mcp(token, "update_media_buy", {"media_buy_id": media_buy_id, "active": False})
-    except Exception as exc:  # noqa: BLE001
-        _say(False, "3. update_media_buy(active=false) pauses", f"{type(exc).__name__}: {exc}")
-        return False
-    status = _read_media_buy_status(media_buy_id)
-    ok = status in {"paused", "inactive"}
-    _say(ok, "3. update_media_buy(active=false) pauses (status check)", f"status={status!r} response={result}")
-    return ok
+def _update_media_buy_request(tenant_id: str, media_buy_id: str, **patch: Any) -> dict[str, Any]:
+    """Build an AdCP 4.4 update_media_buy request body.
 
-
-def _verify_update_resume(token: str, media_buy_id: str) -> bool:
-    """Flow 4: update_media_buy(active=true) resumes."""
-    try:
-        result = _mcp(token, "update_media_buy", {"media_buy_id": media_buy_id, "active": True})
-    except Exception as exc:  # noqa: BLE001
-        _say(False, "4. update_media_buy(active=true) resumes", f"{type(exc).__name__}: {exc}")
-        return False
-    status = _read_media_buy_status(media_buy_id)
-    ok = status in {"active", "approved", "live"}
-    _say(ok, "4. update_media_buy(active=true) resumes (status check)", f"status={status!r} response={result}")
-    return ok
-
-
-def _verify_cancel(token: str, media_buy_id: str) -> bool:
-    """Flow 5: cancel_media_buy.
-
-    There is no separate cancel_media_buy MCP tool — cancellation flows through
-    update_media_buy(active=false). We assert: pause-then-status returns a
-    cancelled-or-paused-style terminal state; subsequent update calls don't flip
-    it back to active without an explicit resume.
+    AdCP 4.4 fields: ``account`` + ``media_buy_id`` + ``idempotency_key``
+    are required; state changes are at the top level (``paused``,
+    ``canceled``, etc.) — not nested in a ``patch`` object.
     """
+    return {
+        "account": {"account_id": f"{tenant_id}:default"},
+        "media_buy_id": media_buy_id,
+        "idempotency_key": f"upd_{uuid.uuid4().hex}",
+        **patch,
+    }
+
+
+def _verify_update_pause(token: str, tenant_id: str, media_buy_id: str) -> bool:
+    """Flow 3: update_media_buy(paused=True). Asserts on the response payload
+    (mock platform is in-memory; DB lookup wouldn't see the state)."""
     try:
-        _mcp(token, "update_media_buy", {"media_buy_id": media_buy_id, "active": False})
+        result = _mcp(token, "update_media_buy", _update_media_buy_request(tenant_id, media_buy_id, paused=True))
     except Exception as exc:  # noqa: BLE001
-        _say(False, "5. cancel via update_media_buy(active=false)", f"{type(exc).__name__}: {exc}")
+        _say(False, "3. update_media_buy(paused=True)", f"{type(exc).__name__}: {exc}")
         return False
-    status = _read_media_buy_status(media_buy_id)
-    ok = status in {"paused", "inactive", "cancelled", "canceled"}
-    _say(ok, "5. cancel_media_buy (cancellation via update active=false)", f"status={status!r}")
+    status = (result or {}).get("status")
+    ok = status in {"paused", "inactive"}
+    _say(ok, "3. update_media_buy(paused=True)", f"status={status!r}")
     return ok
 
 
-def _verify_sync_creatives(token: str, _media_buy_id: str) -> bool:
+def _verify_update_resume(token: str, tenant_id: str, media_buy_id: str) -> bool:
+    """Flow 4: update_media_buy(paused=False) resumes."""
+    try:
+        result = _mcp(token, "update_media_buy", _update_media_buy_request(tenant_id, media_buy_id, paused=False))
+    except Exception as exc:  # noqa: BLE001
+        _say(False, "4. update_media_buy(paused=False)", f"{type(exc).__name__}: {exc}")
+        return False
+    status = (result or {}).get("status")
+    ok = status in {"active", "approved", "live"}
+    _say(ok, "4. update_media_buy(paused=False)", f"status={status!r}")
+    return ok
+
+
+def _verify_cancel(token: str, tenant_id: str, media_buy_id: str) -> bool:
+    """Flow 5: update_media_buy(canceled=True). AdCP terminal cancel."""
+    try:
+        result = _mcp(token, "update_media_buy", _update_media_buy_request(tenant_id, media_buy_id, canceled=True))
+    except Exception as exc:  # noqa: BLE001
+        _say(False, "5. cancel via update_media_buy(canceled=True)", f"{type(exc).__name__}: {exc}")
+        return False
+    status = (result or {}).get("status")
+    ok = status in {"cancelled", "canceled"}
+    _say(ok, "5. cancel via update_media_buy(canceled=True)", f"status={status!r}")
+    return ok
+
+
+def _verify_sync_creatives(token: str, tenant_id: str, _media_buy_id: str) -> bool:
     """Flow 6: sync_creatives → list_creatives round-trip."""
     creative_id = f"verify_creative_{uuid.uuid4().hex[:8]}"
     creative = {
         "creative_id": creative_id,
-        "format_id": "display_300x250",
+        # AdCP 4.4 expects FormatReference, not bare string
+        "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         "name": "Verify Creative",
         "content_uri": "https://example.com/verify.jpg",
-        "assets": {"primary": {"asset_type": "image", "url": "https://example.com/verify.jpg"}},
+        "assets": {
+            "primary": {
+                "asset_type": "image",
+                "url": "https://example.com/verify.jpg",
+                "width": 300,
+                "height": 250,
+            }
+        },
         "status": "processing",
     }
     sync_request = {
+        "account": {"account_id": f"{tenant_id}:default"},
+        "idempotency_key": f"sync_{uuid.uuid4().hex}",
         "creatives": [creative],
         "dry_run": False,
         "validation_mode": "strict",
@@ -661,7 +681,7 @@ def _verify_sync_creatives(token: str, _media_buy_id: str) -> bool:
     _say(True, "6a. sync_creatives returned synced creative")
 
     try:
-        list_result = _mcp(token, "list_creatives", {})
+        list_result = _mcp(token, "list_creatives", {"account": {"account_id": f"{tenant_id}:default"}})
     except Exception as exc:  # noqa: BLE001
         _say(False, "6b. list_creatives round-trip", f"{type(exc).__name__}: {exc}")
         return False
@@ -908,15 +928,15 @@ def main() -> int:
             _force_approve_media_buy(media_buy_id)
 
             # ---- Flow 3: pause ---------------------------------------
-            _verify_update_pause(token, media_buy_id)
+            _verify_update_pause(token, tenant_id, media_buy_id)
             # ---- Flow 4: resume --------------------------------------
-            _verify_update_resume(token, media_buy_id)
+            _verify_update_resume(token, tenant_id, media_buy_id)
             # ---- Flow 6: creatives round-trip ------------------------
-            _verify_sync_creatives(token, media_buy_id)
+            _verify_sync_creatives(token, tenant_id, media_buy_id)
             # ---- Flow 7: delivery ------------------------------------
             _verify_get_delivery(token, media_buy_id)
             # ---- Flow 5: cancellation (last; terminal state) ---------
-            _verify_cancel(token, media_buy_id)
+            _verify_cancel(token, tenant_id, media_buy_id)
 
         # ---- Flow 8: signals (always SKIP — surface removed) ---------
         _verify_signals()

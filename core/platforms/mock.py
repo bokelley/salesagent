@@ -243,11 +243,19 @@ class MockSellerPlatform(DecisioningPlatform):
                 record["cancellation_reason"] = reason
             record["valid_actions"] = []
 
-        # Pause / resume at the buy level.
+        # Pause / resume at the buy level. ``paused=True`` flips to
+        # ``paused`` (unless terminal); ``paused=False`` resumes back to
+        # ``active``. Resume from a non-paused state is a no-op (the
+        # storyboard's invalid_transitions phase catches double-resume
+        # via the state machine).
         elif _patch_get(patch, "paused") is True:
             if record["status"] not in {"canceled"}:
                 record["status"] = "paused"
                 record["valid_actions"] = _valid_actions_for("paused")
+        elif _patch_get(patch, "paused") is False:
+            if record["status"] == "paused":
+                record["status"] = "active"
+                record["valid_actions"] = _valid_actions_for("active")
 
         # Apply per-package patches now that package_ids are validated.
         if package_patches:

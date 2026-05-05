@@ -100,11 +100,17 @@ class AdminWSGIMount:
                         # root_path so url_for() / request.script_root
                         # generate links with the prefix re-attached.
                         new_scope = dict(scope)
-                        new_scope["path"] = path[len(prefix):] or "/"
-                        new_scope["raw_path"] = (
-                            scope.get("raw_path", path.encode())[len(prefix):]
-                            or b"/"
-                        )
+                        stripped = path[len(prefix):] or "/"
+                        new_scope["path"] = stripped
+                        # raw_path is bytes; preserve the same stripping.
+                        # Some ASGI servers omit raw_path — fall back to
+                        # encoded path if so.
+                        raw = scope.get("raw_path") or path.encode()
+                        # Match the path strip on the raw bytes: strip the
+                        # prefix's byte-length, fall back to "/" if empty.
+                        # Use the encoded prefix length, which equals the
+                        # str length for ASCII prefixes.
+                        new_scope["raw_path"] = raw[len(prefix):] or b"/"
                         new_scope["root_path"] = scope.get("root_path", "") + prefix
                         await self.wsgi_app(new_scope, receive, send)
                         return
