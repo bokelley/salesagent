@@ -6,8 +6,9 @@ table for activity data, eliminating dependencies on workflow_steps, tasks, etc.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from typing import cast as type_cast
 
 from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
@@ -409,7 +410,7 @@ class DashboardService:
         pending.sort(key=lambda b: b.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
 
         now = datetime.now(UTC)
-        rows = []
+        rows: list[dict[str, Any]] = []
         urgent_threshold = timedelta(hours=4)
         for buy in pending[:6]:
             created = (
@@ -446,9 +447,7 @@ class DashboardService:
         running_now = [b for b in active if not getattr(b, "is_paused", False)]
         running_now.sort(key=lambda b: b.approved_at or b.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
 
-        rows = []
-        for buy in running_now[:6]:
-            rows.append(self._running_row(buy, now))
+        rows: list[dict[str, Any]] = [self._running_row(buy, now) for buy in running_now[:6]]
 
         total_committed = sum(float(b.budget or 0) for b in running_now)
         return {
@@ -469,18 +468,22 @@ class DashboardService:
         delivered = float(buy.delivered_amount) if buy.delivered_amount is not None else 0.0
         delivery_pct = (delivered / budget) if budget > 0 else 0.0
 
-        # Flight progress
+        # Flight progress.
+        # Cast SQLAlchemy `Mapped[Date]` → stdlib `date` so arithmetic
+        # type-checks (existing pattern in src/core/tools/media_buy_delivery.py).
         flight_pct = 0.0
         if buy.start_date and buy.end_date:
-            total = (buy.end_date - buy.start_date).days + 1
+            buy_start = type_cast(date, buy.start_date)
+            buy_end = type_cast(date, buy.end_date)
+            total = (buy_end - buy_start).days + 1
             if total > 0:
                 today = now.date()
-                if today < buy.start_date:
+                if today < buy_start:
                     flight_pct = 0.0
-                elif today > buy.end_date:
+                elif today > buy_end:
                     flight_pct = 1.0
                 else:
-                    elapsed = (today - buy.start_date).days + 1
+                    elapsed = (today - buy_start).days + 1
                     flight_pct = elapsed / total
 
         # Pacing classification (linear)
@@ -497,7 +500,9 @@ class DashboardService:
         # Budget rate — derive a /wk number for editorial display
         weeks = 0
         if buy.start_date and buy.end_date:
-            weeks = max(1, ((buy.end_date - buy.start_date).days + 1) // 7)
+            buy_start = type_cast(date, buy.start_date)
+            buy_end = type_cast(date, buy.end_date)
+            weeks = max(1, ((buy_end - buy_start).days + 1) // 7)
         rate_per_week = budget / weeks if weeks else budget
 
         return {
@@ -618,11 +623,12 @@ class DashboardService:
                 }
             )
 
-        # Deals expiring in next 24h (live, end_date today or tomorrow)
+        # Deals expiring in next 24h (live, end_date today or tomorrow).
+        # Cast Mapped[Date] → stdlib date for the comparison (mypy strictness).
         active = repo.list_by_statuses(["active", "live"])
         today = datetime.now(UTC).date()
         tomorrow = today + timedelta(days=1)
-        expiring = [b for b in active if b.end_date and today <= b.end_date <= tomorrow]
+        expiring = [b for b in active if b.end_date and today <= type_cast(date, b.end_date) <= tomorrow]
         if expiring:
             items.append(
                 {
