@@ -925,7 +925,9 @@
                 <span class="period">YTD</span>
             </div>
         </div>
-        <canvas id="revenueLedgerChart" height="80"></canvas>
+        <div style="position: relative; height: 180px;">
+            <canvas id="revenueLedgerChart"></canvas>
+        </div>
     </div>
 
     <aside class="ld-attention-card">
@@ -1399,60 +1401,48 @@ function addActivity(activity, isNewActivity = true) {
     }
 }
 
-// Revenue Chart
-const ctx = document.getElementById('revenueChart').getContext('2d');
-const revenueChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-        labels: {{ chart_labels | tojson }},
-        datasets: [{
-            label: 'Revenue',
-            data: {{ chart_data | tojson }},
-            backgroundColor: 'rgba(59, 130, 246, 0.5)',
-            borderColor: 'rgba(59, 130, 246, 1)',
-            borderWidth: 1
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-            legend: {
-                display: false
-            }
+// Revenue Chart — Ledger-styled line chart on #revenueLedgerChart canvas.
+// Uses ink for the line, paper-deep grid, no axis colors, tabular figures.
+const revenueCanvas = document.getElementById('revenueLedgerChart');
+if (revenueCanvas) {
+    const inkColor = getComputedStyle(document.documentElement).getPropertyValue('--sa-ink').trim() || '#1a1815';
+    const ruleSoft = 'rgba(26, 24, 21, 0.08)';
+    const ctx = revenueCanvas.getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ chart_labels | tojson }},
+            datasets: [{
+                label: 'Revenue',
+                data: {{ chart_data | tojson }},
+                borderColor: inkColor,
+                backgroundColor: 'rgba(26, 24, 21, 0.06)',
+                borderWidth: 1.4,
+                fill: true,
+                tension: 0.25,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+            }]
         },
-        scales: {
-            y: {
-                beginAtZero: true,
-                ticks: {
-                    callback: function(value) {
-                        return '$' + value.toLocaleString();
-                    }
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false }, ticks: { display: false }, border: { display: false } },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: ruleSoft, drawBorder: false },
+                    ticks: {
+                        font: { family: 'JetBrains Mono, monospace', size: 10 },
+                        color: 'rgba(26, 24, 21, 0.5)',
+                        callback: v => '$' + v.toLocaleString(),
+                    },
+                    border: { display: false },
                 }
             }
         }
-    }
-});
-
-// Chart period filters
-document.querySelectorAll('.filter-button').forEach(button => {
-    button.addEventListener('click', function() {
-        document.querySelectorAll('.filter-button').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-
-        // Fetch new data based on period
-        fetchChartData(this.dataset.period);
     });
-});
-
-function fetchChartData(period) {
-    fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/revenue-chart?period=${period}`)
-        .then(response => response.json())
-        .then(data => {
-            revenueChart.data.labels = data.labels;
-            revenueChart.data.datasets[0].data = data.values;
-            revenueChart.update();
-        });
 }
 
 function refreshDashboard() {
