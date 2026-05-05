@@ -110,6 +110,11 @@ server.pid
 conductor_ports.json
 conductor_ports.lock
 
+# GCP deployment secrets (never commit)
+flywg.conf
+*.flywg.conf
+.env.gcp
+
 # AdCP Schema Cache (downloaded on demand by E2E tests)
 /schemas/
 tests/e2e/schemas/
