@@ -1099,6 +1099,130 @@ class ListSyncHistoryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 6 — outbound webhook subscription endpoints
+# ---------------------------------------------------------------------------
+
+
+# The supported event taxonomy. Receivers MAY subscribe to a subset by listing
+# specific values, or to ALL events by passing an empty list. The taxonomy
+# matches the events the salesagent publishes; rejections at create time are
+# noisier than silently accepting an unknown type.
+WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
+    "workflow.created",
+    "workflow.decided",
+    "media_buy.status_changed",
+    "sync.completed",
+    "sync.failed",
+    "tenant.config_changed",
+)
+
+WebhookEventType = Literal[
+    "workflow.created",
+    "workflow.decided",
+    "media_buy.status_changed",
+    "sync.completed",
+    "sync.failed",
+    "tenant.config_changed",
+]
+
+
+class CreateWebhookSubscriptionRequest(BaseModel):
+    """``POST /tenants/{tid}/webhooks`` body.
+
+    ``event_types``: subset of :data:`WEBHOOK_EVENT_TYPES`; empty list means
+    "all events". ``secret`` may be omitted, in which case the server
+    generates one and returns it in the create response (exactly once).
+    """
+
+    model_config = _config()
+
+    url: str = Field(..., min_length=1)
+    event_types: list[WebhookEventType] = Field(default_factory=list)
+    description: str | None = None
+    extra_headers: dict[str, str] | None = None
+    secret: str | None = Field(default=None, min_length=32)
+
+    @field_validator("url")
+    @classmethod
+    def _https_only(cls, value: str) -> str:
+        # Spec section "Security": HTTPS-only enforcement at create time.
+        # The local-dev exception lives in the route handler so this schema
+        # stays purely declarative.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("url must be non-empty")
+        return stripped
+
+
+class WebhookSubscriptionSummary(BaseModel):
+    """Subscription record without the secret. Used for list + get + delete responses."""
+
+    model_config = _config()
+
+    webhook_id: str
+    url: str
+    event_types: list[str]
+    description: str | None = None
+    extra_headers: dict[str, str] | None = None
+    is_active: bool
+    consecutive_failures: int = 0
+    last_delivery_at: datetime | None = None
+    last_delivery_status: int | None = None
+    created_at: datetime
+
+
+class WebhookSubscriptionCreatedResponse(WebhookSubscriptionSummary):
+    """Create-only response carrying the plaintext secret.
+
+    The ``secret`` field is returned exactly once at create time; subsequent
+    GETs omit it. Loss of the plaintext requires re-registering the webhook.
+    """
+
+    model_config = _config()
+
+    secret: SecretStr
+
+
+class ListWebhooksResponse(BaseModel):
+    """``GET /tenants/{tid}/webhooks`` response.
+
+    Subscriptions are returned without secrets (use the create response if
+    you still have it; otherwise re-register).
+    """
+
+    model_config = _config()
+
+    webhooks: list[WebhookSubscriptionSummary]
+    count: int
+
+
+class WebhookTestDeliveryResult(BaseModel):
+    """One synthetic event delivery result included in :class:`WebhookTestResponse`."""
+
+    model_config = _config()
+
+    event_type: str
+    event_id: str
+    delivered: bool
+    response_status: int | None = None
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class WebhookTestResponse(BaseModel):
+    """``POST /tenants/{tid}/webhooks/{wid}/test`` response.
+
+    Returns synthetic delivery results (one per registered event type) so
+    operators can verify the receiver works for every event they subscribe to.
+    """
+
+    model_config = _config()
+
+    delivered: bool
+    results: list[WebhookTestDeliveryResult]
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 

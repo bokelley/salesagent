@@ -33,7 +33,7 @@ from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
 from tests.factories.sync_job import SyncJobFactory
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
-from tests.factories.webhook import PushNotificationConfigFactory
+from tests.factories.webhook import PushNotificationConfigFactory, WebhookSubscriptionFactory
 from tests.factories.workflow import (
     ContextFactory,
     ObjectWorkflowMappingFactory,
@@ -60,6 +60,7 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    WebhookSubscriptionFactory,
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
@@ -99,5 +100,6 @@ __all__ = [
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WebhookSubscriptionFactory",
     "WorkflowStepFactory",
 ]
