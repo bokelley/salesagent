@@ -6,6 +6,49 @@ Sprint 4 (UI hardening)
 **Status:** Captured (full overhaul + deployment plan)
 **Last updated:** 2026-05-04
 
+## Vocabulary pin: agent vs operator vs brand
+
+Three distinct axes — this sprint surfaces all three; Sprint 1.8 only
+modeled two and that gap motivates the schema extension below.
+
+- **Agent (Principal)** — who's making the API call. Authenticated
+  identity. Embedded: always the host (Scope3 / Interchange).
+  Standalone: many possible agents (Wonderstruck, future buyers).
+  PSA term: ``principal_id``. AdCP-protocol term: agent / buyer.
+
+- **Operator** — the entity operating on behalf of the brand
+  (e.g. WPP running media for Coca-Cola). When the brand operates
+  directly, operator = brand domain. From AdCP
+  ``AccountReference2.operator``.
+
+- **Brand** — the advertiser brand: ``domain`` + optional
+  ``brand_id``. From AdCP ``AccountReference2.brand``.
+
+The buyer-protocol call carries operator + brand in the request
+body (``AccountReference``); the agent comes from the auth context
+(``X-Identity-Buyer-Principal-Id`` header in embedded, bearer token
+in standalone). All three together identify "who is buying what for
+whom" — and PSA decides the GAM advertiser based on the triple.
+
+### What Sprint 1.8 shipped + the gap
+
+The ``advertiser_routing_rules`` table keys on ``(tenant_id,
+operator_domain, brand_house, brand_id)`` — **agent is not in the
+natural key**. The chain reads operator + brand from the request
+body but ignores who's calling.
+
+In embedded mode this is fine: the agent never varies (the host is
+the only buyer), so agent-agnostic routing matches reality.
+
+In standalone or future multi-agent embedded: this is a real gap.
+If two agents both buy under WPP/Coke, the publisher gets one
+routing rule controlling both — can't bucket them separately.
+
+Sprint 5 closes this gap (see "Schema extension" below) before the
+UX overhaul, because the new UX needs to expose the agent column.
+Backward-compatible: existing rows get ``principal_id = NULL``
+(matches any agent — current behavior preserved).
+
 ## Why a full overhaul
 
 Today's `Settings → Advertisers` page is misleadingly named (it CRUDs
@@ -61,15 +104,21 @@ accessible only via direct URL for ops debugging.
 #### 2. Routing rules
 
 ```
-Routing rules                                       [+ Add rule]
-┌──────────────┬─────────────┬───────────┬─────────────────────┐
-│ Operator     │ Brand house │ Brand id  │ GAM advertiser      │
-├──────────────┼─────────────┼───────────┼─────────────────────┤
-│ scope3.com   │ wpp.com     │ —         │ Scope3-WPP (67890)  │
-│ scope3.com   │ publicis.com│ —         │ Scope3-Publicis     │
-│ buyer.x.com  │ —           │ —         │ Acme-Direct         │  ← operator wildcard
-└──────────────┴─────────────┴───────────┴─────────────────────┘
+Routing rules                                                  [+ Add rule]
+┌──────────────┬─────────────┬──────────────┬───────┬──────────────────────┐
+│ Agent        │ Operator    │ Brand house  │ Brand │ GAM advertiser       │
+├──────────────┼─────────────┼──────────────┼───────┼──────────────────────┤
+│ —            │ wpp.com     │ coca-cola.com│ sprite│ Scope3-WPP-Sprite    │ ← exact
+│ —            │ wpp.com     │ coca-cola.com│ —     │ Scope3-WPP-Coke      │ ← brand_id wildcard
+│ —            │ wpp.com     │ —            │ —     │ Scope3-WPP           │ ← brand wildcard
+│ wstruck-buy  │ publicis.com│ —            │ —     │ Wstruck-Publicis     │ ← agent-specific
+└──────────────┴─────────────┴──────────────┴───────┴──────────────────────┘
+                                                       em-dash = "any" / NULL
 ```
+
+In embedded mode the Agent column is hidden in the UI (always renders
+as ``—`` since the host is the only agent — no need to clutter).
+In standalone the column is visible and editable.
 
 - Lists all rows from `advertiser_routing_rules` (via `GET /buyer-advertiser-mappings`)
 - Sorted by precedence (exact > house wildcard > operator wildcard)
@@ -88,17 +137,21 @@ Routing rules                                       [+ Add rule]
 #### 3. Recent activity
 
 ```
-Recent activity (last 30 days)              [filter: all] ▼
-┌──────────────┬─────────────┬─────────┬──────┬──────────────┬─────────┐
-│ Operator     │ Brand       │ Buys    │ Last │ Advertiser   │ Route   │
-├──────────────┼─────────────┼─────────┼──────┼──────────────┼─────────┤
-│ scope3.com   │ wpp/coke    │ 142     │ 2h   │ Scope3-WPP   │ exact   │ ← green
-│ scope3.com   │ wpp/sprite  │ 38      │ 3h   │ Scope3-WPP   │ house   │ ← blue
-│ scope3.com   │ pmi.com     │ 12      │ 1d   │ Scope3-Inter │ default │ ← amber
-│ buyer.y.com  │ random.com  │ 4       │ 5d   │ Scope3-Inter │ default │ ← amber
-└──────────────┴─────────────┴─────────┴──────┴──────────────┴─────────┘
-                                                       [Promote ↑]
+Recent activity (last 30 days)                                   [filter: all] ▼
+┌───────────────┬──────────┬──────────────┬───────┬─────┬────────────────┬───────┐
+│ Agent         │ Operator │ Brand house  │ id    │ Buys│ Advertiser     │ Route │
+├───────────────┼──────────┼──────────────┼───────┼─────┼────────────────┼───────┤
+│ scope3-emb    │ wpp.com  │ coca-cola.com│ sprite│ 142 │ Scope3-WPP-Spr │ exact │ ← green
+│ scope3-emb    │ wpp.com  │ coca-cola.com│ —     │ 38  │ Scope3-WPP-Coke│ house │ ← blue
+│ scope3-emb    │ pmi.com  │ —            │ —     │ 12  │ Scope3-Inter   │default│ ← amber
+│ wstruck-buy   │ publicis │ random.com   │ —     │ 4   │ Scope3-Inter   │default│ ← amber
+└───────────────┴──────────┴──────────────┴───────┴─────┴────────────────┴───────┘
+                                                                        [Promote ↑]
 ```
+
+Agent column visible in standalone (lets publishers spot
+"Wonderstruck and Scope3 both hit us under WPP — should they
+route differently?"). Hidden in embedded since there's only one.
 
 - Source: `GET /recent-buyers?days=30` (already shipped)
 - Color-coding by `resolved_via`:
@@ -220,16 +273,116 @@ GET /api/v1/tenant-management/tenants/{id}/gam/advertisers
 - Optional: Settings → adapter-config preview (one round trip during
   onboarding gives publisher both connection-test + advertiser list)
 
+## Schema extension: agent in the routing key
+
+Sprint 1.8 keys ``advertiser_routing_rules`` on
+``(tenant_id, operator_domain, brand_house, brand_id)``. Sprint 5
+adds ``principal_id`` to that key so standalone publishers can route
+different agents to different GAM buckets.
+
+### Migration
+
+```python
+# alembic/versions/<rev>_add_principal_id_to_routing_rules.py
+
+def upgrade() -> None:
+    op.add_column(
+        "advertiser_routing_rules",
+        sa.Column("principal_id", sa.String(50), nullable=True),
+    )
+    # Drop the old COALESCE-unique index, recreate with principal_id
+    op.drop_index("uq_routing_rule_natural_key", table_name="advertiser_routing_rules")
+    op.create_index(
+        "uq_routing_rule_natural_key",
+        "advertiser_routing_rules",
+        [
+            "tenant_id",
+            sa.text("COALESCE(principal_id, '')"),
+            "operator_domain",
+            sa.text("COALESCE(brand_house, '')"),
+            sa.text("COALESCE(brand_id, '')"),
+        ],
+        unique=True,
+    )
+
+def downgrade() -> None:
+    op.drop_index("uq_routing_rule_natural_key", table_name="advertiser_routing_rules")
+    op.create_index(
+        "uq_routing_rule_natural_key",
+        "advertiser_routing_rules",
+        [
+            "tenant_id",
+            "operator_domain",
+            sa.text("COALESCE(brand_house, '')"),
+            sa.text("COALESCE(brand_id, '')"),
+        ],
+        unique=True,
+    )
+    op.drop_column("advertiser_routing_rules", "principal_id")
+```
+
+Backward-compatible: existing rules get ``principal_id = NULL``
+(matches any agent — preserves Sprint 1.8 behavior).
+
+### Resolution chain extension
+
+Most-specific-wins. Agent-specific rules beat agent-agnostic rules
+at every brand specificity tier:
+
+```
+1.  agent + operator + brand_house + brand_id     (most specific)
+2.  agent + operator + brand_house + NULL
+3.  agent + operator + NULL + NULL
+4.  NULL  + operator + brand_house + brand_id     (any agent, exact brand)
+5.  NULL  + operator + brand_house + NULL
+6.  NULL  + operator + NULL + NULL                (operator wildcard, current Sprint 1.8 behavior)
+7.  Tenant.default_gam_advertiser_id
+8.  raise TENANT_NOT_ACTIVATED                    (least specific)
+```
+
+Sandbox carve-out still short-circuits at the top (unchanged).
+
+Embedded tenants only ever populate levels 4-6 + 7 since their
+agent is fixed — same UX as Sprint 1.8.
+
+### API surface change
+
+``BuyerAdvertiserMapping`` Pydantic model gains ``principal_id:
+str | None``. ``CreateBuyerAdvertiserMappingRequest`` /
+``UpdateBuyerAdvertiserMappingRequest`` accept it. ``GET
+/buyer-advertiser-mappings`` returns it.
+
+The 409 ``routing_rule_duplicate`` error message gains
+``principal_id`` to the details block — same shape as the existing
+3-axis duplicate detail.
+
+### Account.resolved_via enum
+
+Stays as-is (``account | sandbox | exact | house | operator | default``).
+The chain resolution semantics carry through; we don't differentiate
+"agent-specific exact" from "agent-agnostic exact" in the stamp
+because the rule that matched is the source of truth — Storefront
+can read the matched rule's ``principal_id`` if it needs to surface
+the distinction in the activity view.
+
 ## Parallelization
 
-Five workstreams. Dependency graph:
+Six workstreams. Dependency graph:
 
 ```
-A. gam_advertisers cache (table + sync + endpoint)   ─┐
+A0. principal_id schema extension                    ─┐
+A.  gam_advertisers cache (table + sync + endpoint)  ─┤
                                                        ├─► C. Editor (default + rule CRUD)  ─┐
-B. UI scaffolding (new page, nav, read-only)         ─┤                                       ├─► E. Promote-to-rule
+B.  UI scaffolding (new page, nav, read-only)        ─┤                                       ├─► E. Promote-to-rule
                                                        └─► D. Activity view                  ─┘
 ```
+
+**Workstream A0 — principal_id in routing-rule natural key (~0.5 days)**
+Migration + model column + Pydantic schema field + chain resolution
+extended from 4 levels to ~6 levels. Backend-only. Backward-compatible
+(NULL = any agent — preserves current Sprint 1.8 behavior). Tests
+extend the existing routing-chain matrix to include agent-specific +
+agent-agnostic rule precedence.
 
 **Workstream A — gam_advertisers cache (~1.5 days)**
 Backend-only. Migration, model, sync_advertisers worker function,
@@ -242,22 +395,25 @@ all read-only initially (just renders existing data via existing
 endpoints). Depends on nothing — uses already-shipped APIs.
 
 **Workstream C — Editor: default + rule CRUD (~1 day)**
-Wires the picker, modals, save handlers. Depends on A (advertiser
-picker needs the cache) and B (skeleton).
+Wires the picker, modals, save handlers, agent column visibility
+gate (hidden in embedded, visible in standalone). Depends on A
+(advertiser picker needs the cache), A0 (rules carry principal_id),
+and B (skeleton).
 
 **Workstream D — Activity view (~0.5 days)**
 Renders `/recent-buyers` as a sortable table with `resolved_via`
-color-coding + filter dropdown. Pagination wired to `?days` /
-`?limit`. Depends on B (skeleton); fully parallel with C.
+color-coding + filter dropdown + agent column. Pagination wired to
+`?days` / `?limit`. Depends on B (skeleton); fully parallel with C.
 
 **Workstream E — Single-click promote (~0.5 days)**
 Adds the promote action on Activity rows that opens the rule editor
-prefilled. Depends on C (editor exists) + D (rows clickable).
+prefilled with the (agent, operator, brand) triple. Depends on C
+(editor exists) + D (rows clickable).
 
-**Total scope: ~4 days** if parallelized; ~5 days serial.
+**Total scope: ~4.5 days** if parallelized; ~5.5 days serial.
 
-A and B can start in parallel today. C waits for A; D can start with
-B and run in parallel with C. E is the final convergence.
+A0, A, and B can start in parallel today. C waits for A + A0; D can
+start with B and run in parallel with C. E is the final convergence.
 
 ## Deployment strategy
 
