@@ -15,11 +15,6 @@
   swaps the first crumb when an embed-mode breadcrumb root override
   is active for the current request (header > tenant column > none).
   See ``src/admin/utils/breadcrumbs.py``.
-
-  follow-up: convert remaining templates with hand-coded breadcrumbs to
-  this partial. Six templates still inline the markup
-  (product_inventory_config, policy_settings, policy_settings_comprehensive,
-  policy_rules, policy_review, inventory_unified).
 #}
 <div class="breadcrumb">
 {% for crumb in crumbs %}

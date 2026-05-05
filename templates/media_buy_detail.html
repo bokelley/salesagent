@@ -3,11 +3,29 @@
 {% block title %}Media Buy {{ media_buy.media_buy_id }} - {{ tenant_id }}{% endblock %}
 
 {% block content %}
+<style>
+    .breadcrumb {
+        margin-bottom: 1rem;
+    }
+    .breadcrumb a {
+        color: #6b7280;
+        text-decoration: none;
+    }
+    .breadcrumb a:hover {
+        color: #111827;
+    }
+</style>
+
+{% set crumbs = [
+    {"label": (tenant.name if tenant else tenant_id), "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
+    {"label": "Media Buys", "url": url_for('tenants.media_buys_list', tenant_id=tenant_id)},
+    {"label": media_buy.media_buy_id or "Detail"}
+] %}
+{% set crumbs = crumbs | with_embed_root %}
+{% include "_breadcrumb.html" %}
+
 <div class="dashboard-header">
     <h1>Media Buy Details</h1>
-    <div>
-        <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">← Back to Dashboard</a>
-    </div>
 </div>
 
 <!-- Approval Alert -->

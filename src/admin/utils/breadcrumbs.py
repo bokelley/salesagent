@@ -85,17 +85,26 @@ def resolve_embed_breadcrumb_root(tenant: Any | None) -> dict | None:
 
 
 def with_embed_root_filter(crumbs: list[dict[str, Any]] | None, root: dict | None) -> list[dict[str, Any]]:
-    """Replace the first crumb with the embed-mode root, if one is set.
+    """Inject the embed-mode root as the first crumb, if one is set.
 
     Used as a Jinja filter — see :func:`src.admin.app.create_app` for the
     registration. When ``root`` is ``None`` (no override active or
-    open-instance tenant), the crumbs pass through unchanged. Otherwise
-    the first crumb's label/url are replaced with the override values;
-    deeper crumbs are untouched so per-page context still shows.
+    open-instance tenant), the crumbs pass through unchanged.
+
+    With 2+ crumbs, the first crumb (typically the tenant-dashboard link)
+    is replaced with the override — the salesagent's own dashboard is
+    redundant when the host's storefront already serves that role.
+
+    With exactly 1 crumb (e.g. the tenant dashboard itself, where the
+    only crumb is the current page), the override is prepended so the
+    host link still appears upstream of the page label. Replacing would
+    erase the only context the page has.
     """
     if not crumbs:
         return []
     if root is None:
         return list(crumbs)
     head = {"label": root["label"], "url": root["url"]}
+    if len(crumbs) == 1:
+        return [head, *list(crumbs)]
     return [head, *list(crumbs[1:])]

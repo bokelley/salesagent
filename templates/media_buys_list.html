@@ -3,16 +3,31 @@
 {% block title %}Media Buys - {{ tenant.name }}{% endblock %}
 
 {% block content %}
+<style>
+    .breadcrumb {
+        margin-bottom: 1rem;
+    }
+    .breadcrumb a {
+        color: #6b7280;
+        text-decoration: none;
+    }
+    .breadcrumb a:hover {
+        color: #111827;
+    }
+</style>
+
 <div class="container">
+    {% set crumbs = [
+        {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
+        {"label": "Media Buys"}
+    ] %}
+    {% set crumbs = crumbs | with_embed_root %}
+    {% include "_breadcrumb.html" %}
+
     <div class="row mb-4">
         <div class="col">
             <h1>Media Buys</h1>
             <p class="text-muted">{{ tenant.name }}</p>
-        </div>
-        <div class="col-auto">
-            <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary">
-                ← Back to Dashboard
-            </a>
         </div>
     </div>
 

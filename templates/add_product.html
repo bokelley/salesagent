@@ -3,13 +3,28 @@
 {% block title %}Add Product - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="back-button-container">
-        <a href="{{ url_for('products.list_products', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
-            ← Back to Products
-        </a>
-    </div>
+<style>
+    .breadcrumb {
+        margin-bottom: 1rem;
+    }
+    .breadcrumb a {
+        color: #6b7280;
+        text-decoration: none;
+    }
+    .breadcrumb a:hover {
+        color: #111827;
+    }
+</style>
 
+{% set crumbs = [
+    {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
+    {"label": "Products", "url": url_for('products.list_products', tenant_id=tenant.tenant_id)},
+    {"label": "Create"}
+] %}
+{% set crumbs = crumbs | with_embed_root %}
+{% include "_breadcrumb.html" %}
+
+<div class="card">
     <h2>Add New Product</h2>
 
     {% if error %}

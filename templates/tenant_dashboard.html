@@ -481,7 +481,26 @@
             grid-template-columns: 1fr;
         }
     }
+
+    .breadcrumb {
+        margin-bottom: 1rem;
+    }
+
+    .breadcrumb a {
+        color: #6b7280;
+        text-decoration: none;
+    }
+
+    .breadcrumb a:hover {
+        color: #111827;
+    }
 </style>
+
+{% set crumbs = [
+    {"label": tenant.name}
+] %}
+{% set crumbs = crumbs | with_embed_root %}
+{% include "_breadcrumb.html" %}
 
 <!-- Header Section -->
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">

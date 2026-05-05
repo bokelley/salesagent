@@ -97,6 +97,7 @@ def media_buy_detail(tenant_id, media_buy_id):
         CreativeAssignment,
         Principal,
         Product,
+        Tenant,
         WorkflowStep,
     )
 
@@ -107,6 +108,9 @@ def media_buy_detail(tenant_id, media_buy_id):
 
             if not media_buy:
                 return "Media buy not found", 404
+
+            # Tenant is needed for breadcrumb rendering (label + URL).
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
 
             # Get principal info
             principal = None
@@ -267,6 +271,7 @@ def media_buy_detail(tenant_id, media_buy_id):
 
             return render_template(
                 "media_buy_detail.html",
+                tenant=tenant,
                 tenant_id=tenant_id,
                 media_buy=media_buy,
                 principal=principal,

@@ -3,12 +3,25 @@
 {% block title %}Products - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<!-- Back button (consistent positioning) -->
-<div class="back-button-container">
-    <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
-        ← Back to Dashboard
-    </a>
-</div>
+<style>
+    .breadcrumb {
+        margin-bottom: 1rem;
+    }
+    .breadcrumb a {
+        color: #6b7280;
+        text-decoration: none;
+    }
+    .breadcrumb a:hover {
+        color: #111827;
+    }
+</style>
+
+{% set crumbs = [
+    {"label": tenant.name, "url": url_for('tenants.dashboard', tenant_id=tenant.tenant_id)},
+    {"label": "Products"}
+] %}
+{% set crumbs = crumbs | with_embed_root %}
+{% include "_breadcrumb.html" %}
 
 <!-- Product Design Guide -->
 <div class="card" style="margin-bottom: 1rem; background: #f8f9fa; border-left: 4px solid #007bff;">

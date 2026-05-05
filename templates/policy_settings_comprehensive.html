@@ -55,16 +55,17 @@
 </style>
 
 <div class="container-fluid">
+    {% set crumbs = [
+        {"label": tenant_name, "url": url_for('tenants.dashboard', tenant_id=tenant_id)},
+        {"label": "Policy Settings"}
+    ] %}
+    {% set crumbs = crumbs | with_embed_root %}
+    {% include "_breadcrumb.html" %}
+
     <div class="row">
         <div class="col-md-12 d-flex justify-content-between align-items-center">
             <div>
                 <h1>Policy Settings - {{ tenant_name }}</h1>
-                <nav aria-label="breadcrumb">
-                    <ol class="breadcrumb">
-                        <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">Dashboard</a></li>
-                        <li class="breadcrumb-item active">Policy Settings</li>
-                    </ol>
-                </nav>
             </div>
             <div class="view-only">
                 <button type="button" class="btn btn-primary" onclick="enterEditMode()">

@@ -422,3 +422,143 @@ class TestEmbedBreadcrumbRendering:
             assert "<a " not in preceding[-50:]
         finally:
             _cleanup_render_tenant(tid)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 follow-up: breadcrumb partial coverage across tenant pages.
+# Each page must render the partial in both standalone and embedded modes,
+# preserving an unbroken host-to-leaf trail in the iframe.
+# ---------------------------------------------------------------------------
+
+
+HOST_ROOT = {"label": "Storefront", "url": "https://host.example/store"}
+
+
+def _assert_first_crumb_is_host(body: str) -> None:
+    """The override label + URL appear inside a breadcrumb container."""
+    assert 'class="breadcrumb"' in body
+    assert "Storefront" in body
+    assert 'href="https://host.example/store"' in body
+
+
+def _assert_first_crumb_is_tenant(body: str) -> None:
+    """Standalone mode: tenant name appears as the first crumb."""
+    assert 'class="breadcrumb"' in body
+    assert "Render Test" in body
+    assert "host.example" not in body
+
+
+class TestBreadcrumbsAcrossTenantPages:
+    """Each major tenant page renders the embed-aware breadcrumb partial.
+
+    Pages without DB scaffolding (products list, media buys list, etc.)
+    only need a tenant + USD currency limit — render paths that need
+    extra rows fail open with empty lists.
+    """
+
+    def test_dashboard_embedded_prepends_host(self, admin_client):
+        """Dashboard has a single tenant-name crumb. In embed mode the
+        host root is *prepended* (not replaced) so the iframe still
+        shows where the user is inside the tenant."""
+        tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            _assert_first_crumb_is_host(body)
+            # Tenant name is still the leaf — prepending preserved it.
+            assert "Render Test" in body
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_dashboard_standalone_shows_tenant_only(self, admin_client):
+        tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            _assert_first_crumb_is_tenant(body)
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_products_list_embedded_shows_host(self, admin_client):
+        tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/products/")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            _assert_first_crumb_is_host(body)
+            assert "Products" in body
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_products_list_standalone_shows_tenant(self, admin_client):
+        tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/products/")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            _assert_first_crumb_is_tenant(body)
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_media_buys_list_embedded_shows_host(self, admin_client):
+        tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/media-buys")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            _assert_first_crumb_is_host(body)
+            assert "Media Buys" in body
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_media_buys_list_standalone_shows_tenant(self, admin_client):
+        tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/media-buys")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            _assert_first_crumb_is_tenant(body)
+        finally:
+            _cleanup_render_tenant(tid)
+
+
+class TestEmbedRootFilterUnit:
+    """Direct unit coverage for the 1-crumb prepend branch.
+
+    The dashboard page emits a single crumb (the tenant name as the
+    current page). The filter must prepend the host root rather than
+    replace it — otherwise the iframe loses the only navigation cue
+    back to the upstream chrome.
+    """
+
+    def test_filter_prepends_when_one_crumb(self):
+        from src.admin.utils.breadcrumbs import with_embed_root_filter
+
+        crumbs = [{"label": "Acme News"}]
+        result = with_embed_root_filter(crumbs, HOST_ROOT)
+        assert result == [
+            {"label": "Storefront", "url": "https://host.example/store"},
+            {"label": "Acme News"},
+        ]
+
+    def test_filter_replaces_first_crumb_when_two(self):
+        from src.admin.utils.breadcrumbs import with_embed_root_filter
+
+        crumbs = [
+            {"label": "Acme News", "url": "/tenant/acme/"},
+            {"label": "Products"},
+        ]
+        result = with_embed_root_filter(crumbs, HOST_ROOT)
+        assert result == [
+            {"label": "Storefront", "url": "https://host.example/store"},
+            {"label": "Products"},
+        ]
+
+    def test_filter_passthrough_when_no_root(self):
+        from src.admin.utils.breadcrumbs import with_embed_root_filter
+
+        crumbs = [{"label": "Acme News"}, {"label": "Products"}]
+        result = with_embed_root_filter(crumbs, None)
+        assert result == crumbs

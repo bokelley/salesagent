@@ -283,10 +283,12 @@ def review_task(tenant_id, task_id):
                 return "Task not found", 404
 
             request_data = step.request_data or {}
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
 
             return render_template(
                 "policy_review.html",
                 tenant_id=tenant_id,
+                tenant_name=tenant.name if tenant else tenant_id,
                 task_id=task_id,
                 task_details=request_data,
                 created_at=step.created_at,
