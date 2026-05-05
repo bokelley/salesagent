@@ -2149,6 +2149,25 @@ Exclude any products that don't match the brand's tone.</pre>
 
             {% if tenant.is_embedded %}
             <p class="text-muted">Advertisers (buyer identities) are auto-created from request headers when buys arrive. Routing rules and the default advertiser are managed in your platform's settings.</p>
+            {% else %}
+            {# Standalone-only banner: Sprint 5 demoted (operator, brand) → GAM
+               advertiser mapping out of this page and into Buyer Routing. The
+               directory below remains for buyer-protocol Principal admin
+               (access-token-bound buyer identities calling MCP / A2A). #}
+            <div class="alert alert-info" role="status" style="margin-bottom: 1rem;">
+                <strong>📍 Advertiser mapping moved to Buyer Routing.</strong>
+                <p class="mb-0">
+                    The new <a href="{{ url_for('buyer_routing.buyer_routing_page', tenant_id=tenant.tenant_id) }}">Buyer Routing</a>
+                    page is the canonical place to manage which GAM advertiser each (operator, brand) buyer routes to —
+                    with searchable advertiser picker, per-rule editing, and a recent-activity view.
+                </p>
+                <p class="mb-0" style="margin-top: 0.5rem; font-size: 0.9em; color: #555;">
+                    This page (Settings → Advertisers) remains for managing buyer-protocol
+                    Principal records (the access-token-bound buyer identity that calls
+                    your tenant's MCP / A2A endpoints). For most workflows you want
+                    Buyer Routing instead.
+                </p>
+            </div>
             {% endif %}
 
             <div class="status-card">

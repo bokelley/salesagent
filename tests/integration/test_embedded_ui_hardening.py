@@ -457,6 +457,62 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
 
 
 # ---------------------------------------------------------------------------
+# Settings → Advertisers banner pointing standalone publishers to Buyer Routing
+# ---------------------------------------------------------------------------
+
+
+class TestAdvertisersDeprecationBannerOnStandalone:
+    """Sprint 5 demoted Settings → Advertisers as the canonical
+    advertiser-mapping surface. Standalone tenants now see an in-app
+    pointer banner explaining the change + linking to Buyer Routing.
+
+    The banner is purely additive — the directory + Create CTA still
+    render below it because Settings → Advertisers is the only place to
+    manage buyer-protocol Principal records (access-token-bound buyer
+    identities) on standalone tenants.
+
+    Embedded tenants do NOT see the banner: Buyer Routing is the
+    canonical surface for them too, but the banner copy talks about
+    "managing buyer-protocol Principal records" which is hidden from
+    embedded publishers (auto-created from headers). Hence the banner
+    sits inside the standalone-only branch.
+    """
+
+    def test_standalone_renders_buyer_routing_pointer_banner(self, client, open_tenant_id):
+        resp = client.get(f"/tenant/{open_tenant_id}/settings")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        # Headline copy locks the user-visible message.
+        assert "Advertiser mapping moved to Buyer Routing" in body
+        # The banner's primary CTA links to the canonical Buyer Routing page.
+        assert f"/tenant/{open_tenant_id}/buyer-routing" in body
+
+    def test_standalone_keeps_directory_visible(self, client, open_tenant_id):
+        """Banner complements rather than replaces the existing section —
+        the directory header, Create CTA, and table area must still render
+        alongside the new banner."""
+        resp = client.get(f"/tenant/{open_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        assert "<h2>Advertiser Management</h2>" in body
+        assert 'data-section="advertisers"' in body
+        # The /principals/create link remains the canonical Create signal.
+        assert "/principals/create" in body
+        # And the embedded read-only note must NOT appear here.
+        assert "auto-created from request headers" not in body
+
+    def test_embedded_does_not_render_banner(self, client, embedded_tenant_id):
+        """Regression guard: the banner must sit INSIDE the
+        ``{% if not tenant.is_embedded %}`` branch so it never reaches
+        embedded publishers (whose copy about "managing buyer-protocol
+        Principal records" doesn't apply — those rows are auto-created
+        from headers)."""
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_data(as_text=True)
+        assert "Advertiser mapping moved to Buyer Routing" not in body
+
+
+# ---------------------------------------------------------------------------
 # /tenant/{id}/inventory  (Sync Inventory)
 # ---------------------------------------------------------------------------
 
