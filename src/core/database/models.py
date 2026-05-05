@@ -1153,6 +1153,51 @@ class TenantManagementConfig(Base):
 SuperadminConfig = TenantManagementConfig
 
 
+class WebhookSubscription(Base):
+    """Outbound webhook subscription owned by a tenant.
+
+    Sprint 6 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-6.md)
+    publishes tenant lifecycle events (workflow.created, workflow.decided,
+    media_buy.status_changed, sync.completed, sync.failed,
+    tenant.config_changed) to URLs registered here.
+
+    The subscription secret is stored hashed (sha256 hex) — the plaintext is
+    returned to the API caller exactly once at create time. Lost secrets
+    require re-registering the webhook.
+
+    ``event_types`` is the list of event types the receiver wants. Empty list
+    means "all events" (matching the spec's documented default).
+    """
+
+    __tablename__ = "webhook_subscriptions"
+
+    webhook_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    event_types: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    extra_headers: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_delivery_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("idx_webhook_subscriptions_tenant", "tenant_id"),
+        Index(
+            "idx_webhook_subscriptions_active",
+            "tenant_id",
+            "is_active",
+        ),
+    )
+
+
 class AdapterConfig(Base):
     __tablename__ = "adapter_config"
 

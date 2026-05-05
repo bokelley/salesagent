@@ -24,6 +24,7 @@ from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.uow import AccountUoW, MediaBuyUoW, ProductUoW, TenantConfigUoW, WorkflowUoW
+from src.core.database.repositories.webhook_subscription import WebhookSubscriptionRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "SyncJobRepository",
     "TenantConfigRepository",
     "TenantConfigUoW",
+    "WebhookSubscriptionRepository",
     "WorkflowRepository",
     "WorkflowUoW",
 ]
