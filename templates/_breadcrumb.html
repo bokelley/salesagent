@@ -16,13 +16,13 @@
   is active for the current request (header > tenant column > none).
   See ``src/admin/utils/breadcrumbs.py``.
 #}
-<div class="breadcrumb">
+<nav class="breadcrumb" aria-label="Breadcrumb">
 {% for crumb in crumbs %}
   {% if crumb.url and not loop.last %}
     <a href="{{ crumb.url }}">{{ crumb.label }}</a>
-    <span style="color: #9ca3af; margin: 0 0.5rem;">/</span>
+    <span class="breadcrumb-sep" aria-hidden="true">/</span>
   {% else %}
-    <span style="color: #374151;">{{ crumb.label }}</span>
+    <span class="breadcrumb-current" aria-current="page">{{ crumb.label }}</span>
   {% endif %}
 {% endfor %}
-</div>
+</nav>

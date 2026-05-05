@@ -447,7 +447,11 @@ class TestEmbedBreadcrumbRendering:
             body = resp.get_data(as_text=True)
             # Jinja HTML-escapes ``&`` to ``&amp;``; the leaf crumb
             # ("Users & Access") renders as a styled span, not a link.
-            leaf = '<span style="color: #374151;">Users &amp; Access</span>'
+            # The breadcrumb partial marks the leaf with aria-current="page".
+            leaf = (
+                '<span class="breadcrumb-current" aria-current="page">'
+                "Users &amp; Access</span>"
+            )
             assert leaf in body
             # The crumb container ends with the leaf — no <a> tag immediately
             # before it.

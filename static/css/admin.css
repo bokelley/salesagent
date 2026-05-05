@@ -1,0 +1,571 @@
+/* ==========================================================================
+   Sales Agent Admin — Design System
+   ==========================================================================
+   A thin layer on top of Bootstrap 5 that defines design tokens and a small
+   set of utility/component classes. Per-page templates are encouraged to
+   reference these tokens (via CSS custom properties) instead of hardcoding
+   colors, spacing, and shadows.
+
+   Order of inclusion (see base.html):
+     1. Bootstrap 5
+     2. Font Awesome
+     3. validation.css
+     4. THIS FILE  (overrides above where needed)
+     5. Per-template <style> blocks
+   ========================================================================== */
+
+/* ---------- Tokens --------------------------------------------------------- */
+
+:root {
+    /* Typography */
+    --sa-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    --sa-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
+
+    --sa-text-xs: 0.75rem;     /* 12px — meta, badges, dense tables */
+    --sa-text-sm: 0.875rem;    /* 14px — body, form inputs, table cells */
+    --sa-text-base: 1rem;      /* 16px — paragraphs */
+    --sa-text-lg: 1.125rem;    /* 18px — section headings */
+    --sa-text-xl: 1.5rem;      /* 24px — page section titles */
+    --sa-text-2xl: 1.875rem;   /* 30px — page titles */
+
+    --sa-leading-tight: 1.25;
+    --sa-leading-snug: 1.4;
+    --sa-leading-normal: 1.6;
+
+    /* Neutrals (gray scale) */
+    --sa-gray-50:  #f9fafb;
+    --sa-gray-100: #f3f4f6;
+    --sa-gray-200: #e5e7eb;
+    --sa-gray-300: #d1d5db;
+    --sa-gray-400: #9ca3af;
+    --sa-gray-500: #6b7280;
+    --sa-gray-600: #4b5563;
+    --sa-gray-700: #374151;
+    --sa-gray-800: #1f2937;
+    --sa-gray-900: #111827;
+
+    /* Surface + chrome */
+    --sa-bg-page:    var(--sa-gray-50);
+    --sa-bg-surface: #ffffff;
+    --sa-bg-muted:   var(--sa-gray-100);
+    --sa-bg-code:    var(--sa-gray-100);
+
+    --sa-border:        var(--sa-gray-200);
+    --sa-border-strong: var(--sa-gray-300);
+    --sa-border-focus:  #3b82f6;
+
+    --sa-text-strong:  var(--sa-gray-900);
+    --sa-text-default: var(--sa-gray-700);
+    --sa-text-muted:   var(--sa-gray-500);
+    --sa-text-faint:   var(--sa-gray-400);
+
+    /* Brand + intent */
+    --sa-primary:        #2563eb;
+    --sa-primary-hover:  #1d4ed8;
+    --sa-primary-tint:   #eff6ff;
+    --sa-primary-strong: #1e40af;
+
+    --sa-success:        #059669;
+    --sa-success-tint:   #ecfdf5;
+    --sa-success-text:   #065f46;
+    --sa-success-border: #86efac;
+
+    --sa-warning:        #d97706;
+    --sa-warning-tint:   #fffbeb;
+    --sa-warning-text:   #92400e;
+    --sa-warning-border: #fde047;
+
+    --sa-danger:        #dc2626;
+    --sa-danger-tint:   #fef2f2;
+    --sa-danger-text:   #991b1b;
+    --sa-danger-border: #fca5a5;
+
+    --sa-info:          #0ea5e9;
+    --sa-info-tint:     #f0f9ff;
+    --sa-info-text:     #075985;
+    --sa-info-border:   #bae6fd;
+
+    /* Header chrome — restrained slate, not tropical teal */
+    --sa-header-bg:     #1e293b;
+    --sa-header-fg:     #e2e8f0;
+    --sa-header-fg-dim: #94a3b8;
+    --sa-header-accent: #60a5fa;
+
+    /* Spacing scale (8pt grid with 4px finer step) */
+    --sa-space-1: 0.25rem;   /* 4 */
+    --sa-space-2: 0.5rem;    /* 8 */
+    --sa-space-3: 0.75rem;   /* 12 */
+    --sa-space-4: 1rem;      /* 16 */
+    --sa-space-5: 1.5rem;    /* 24 */
+    --sa-space-6: 2rem;      /* 32 */
+    --sa-space-7: 3rem;      /* 48 */
+
+    /* Radii */
+    --sa-radius-sm: 4px;
+    --sa-radius-md: 6px;
+    --sa-radius-lg: 8px;
+    --sa-radius-xl: 12px;
+    --sa-radius-pill: 999px;
+
+    /* Shadows — restrained, single layer */
+    --sa-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --sa-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+    --sa-shadow-md: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --sa-shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
+    --sa-ring-focus: 0 0 0 3px rgba(59, 130, 246, 0.18);
+
+    /* Motion */
+    --sa-duration-fast: 120ms;
+    --sa-duration-base: 180ms;
+    --sa-easing: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Respect user motion preference. */
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --sa-duration-fast: 0ms;
+        --sa-duration-base: 0ms;
+    }
+    *, *::before, *::after {
+        animation-duration: 0ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0ms !important;
+    }
+}
+
+/* ---------- Page chrome ---------------------------------------------------- */
+
+body {
+    font-family: var(--sa-font-sans);
+    background: var(--sa-bg-page);
+    color: var(--sa-text-default);
+    line-height: var(--sa-leading-normal);
+    font-size: var(--sa-text-base);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--sa-text-strong);
+    line-height: var(--sa-leading-tight);
+}
+
+a {
+    color: var(--sa-primary);
+    text-decoration: none;
+    transition: color var(--sa-duration-fast) var(--sa-easing);
+}
+a:hover {
+    color: var(--sa-primary-hover);
+    text-decoration: underline;
+}
+
+code, pre, .code {
+    font-family: var(--sa-font-mono);
+}
+.code {
+    background: var(--sa-bg-code);
+    padding: 0.1rem 0.35rem;
+    border-radius: var(--sa-radius-sm);
+    font-size: 0.85em;
+    color: var(--sa-text-strong);
+}
+pre {
+    background: var(--sa-bg-code);
+    padding: var(--sa-space-4);
+    border-radius: var(--sa-radius-md);
+    overflow-x: auto;
+    font-size: var(--sa-text-sm);
+    color: var(--sa-text-strong);
+    border: 1px solid var(--sa-border);
+}
+
+/* Top header (rendered when not in embedded mode). */
+.header {
+    background: var(--sa-header-bg);
+    color: var(--sa-header-fg);
+    padding: var(--sa-space-4) 0;
+    margin-bottom: var(--sa-space-6);
+    box-shadow: var(--sa-shadow-sm);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.header h1 {
+    margin: 0;
+    color: var(--sa-header-fg);
+    font-size: var(--sa-text-xl);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+.header nav {
+    margin-top: var(--sa-space-2);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--sa-space-3);
+}
+.header a {
+    color: var(--sa-header-fg);
+    text-decoration: none;
+    font-size: var(--sa-text-sm);
+    padding: var(--sa-space-1) var(--sa-space-2);
+    border-radius: var(--sa-radius-sm);
+    transition: color var(--sa-duration-fast) var(--sa-easing),
+                background var(--sa-duration-fast) var(--sa-easing);
+}
+.header a:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.06);
+    text-decoration: none;
+}
+.header .role-tag {
+    color: var(--sa-header-fg);
+    margin-right: var(--sa-space-2);
+    font-size: var(--sa-text-sm);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sa-space-2);
+}
+
+/* ---------- Cards ---------------------------------------------------------- */
+
+.custom-card,
+.sa-card {
+    background: var(--sa-bg-surface);
+    border: 1px solid var(--sa-border);
+    border-radius: var(--sa-radius-xl);
+    padding: var(--sa-space-5);
+    margin-bottom: var(--sa-space-5);
+    box-shadow: var(--sa-shadow-sm);
+}
+.custom-card h2,
+.sa-card h2 {
+    margin: 0 0 var(--sa-space-4) 0;
+    color: var(--sa-text-strong);
+    font-size: var(--sa-text-xl);
+    font-weight: 600;
+}
+
+/* ---------- Tables --------------------------------------------------------- */
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+th, td {
+    padding: var(--sa-space-3);
+    text-align: left;
+    border-bottom: 1px solid var(--sa-border);
+    font-size: var(--sa-text-sm);
+}
+th {
+    background: var(--sa-gray-50);
+    font-weight: 600;
+    color: var(--sa-text-default);
+    text-transform: none;
+    letter-spacing: 0;
+}
+tr:hover {
+    background: var(--sa-gray-50);
+}
+
+/* ---------- Buttons -------------------------------------------------------- */
+/* Bootstrap provides .btn, .btn-primary etc. Only adjust where needed. */
+
+.btn {
+    border-radius: var(--sa-radius-md);
+    font-size: var(--sa-text-sm);
+    font-weight: 500;
+    transition: background var(--sa-duration-fast) var(--sa-easing),
+                color var(--sa-duration-fast) var(--sa-easing),
+                border-color var(--sa-duration-fast) var(--sa-easing),
+                box-shadow var(--sa-duration-fast) var(--sa-easing);
+}
+.btn:focus-visible {
+    outline: none;
+    box-shadow: var(--sa-ring-focus);
+}
+.btn-primary {
+    background: var(--sa-primary);
+    border-color: var(--sa-primary);
+}
+.btn-primary:hover,
+.btn-primary:focus {
+    background: var(--sa-primary-hover);
+    border-color: var(--sa-primary-hover);
+}
+.custom-btn-small,
+.btn-sm-x {
+    padding: var(--sa-space-1) var(--sa-space-2);
+    font-size: var(--sa-text-xs);
+}
+
+/* Ghost button — used inline on dashboards. */
+.btn-ghost {
+    background: transparent;
+    border: 1px solid var(--sa-border);
+    color: var(--sa-text-default);
+}
+.btn-ghost:hover {
+    background: var(--sa-gray-100);
+    border-color: var(--sa-border-strong);
+    color: var(--sa-text-strong);
+}
+
+/* ---------- Form controls -------------------------------------------------- */
+
+.form-group {
+    margin-bottom: var(--sa-space-4);
+}
+.form-group label {
+    display: block;
+    margin-bottom: var(--sa-space-1);
+    font-weight: 500;
+    color: var(--sa-text-default);
+    font-size: var(--sa-text-sm);
+}
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: var(--sa-space-2) var(--sa-space-3);
+    border: 1px solid var(--sa-border-strong);
+    border-radius: var(--sa-radius-md);
+    font-size: var(--sa-text-sm);
+    color: var(--sa-text-strong);
+    background: var(--sa-bg-surface);
+    transition: border-color var(--sa-duration-fast) var(--sa-easing),
+                box-shadow var(--sa-duration-fast) var(--sa-easing);
+}
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--sa-border-focus);
+    box-shadow: var(--sa-ring-focus);
+}
+.form-group textarea {
+    min-height: 200px;
+    font-family: var(--sa-font-mono);
+    font-size: var(--sa-text-xs);
+    line-height: var(--sa-leading-snug);
+}
+.form-group small {
+    display: block;
+    margin-top: var(--sa-space-1);
+    font-size: var(--sa-text-xs);
+    color: var(--sa-text-muted);
+}
+
+/* ---------- Status pill / badge ------------------------------------------- */
+
+.status {
+    display: inline-block;
+    padding: var(--sa-space-1) var(--sa-space-2);
+    border-radius: var(--sa-radius-sm);
+    font-size: var(--sa-text-xs);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.01em;
+}
+.status-active   { background: var(--sa-success); color: #fff; }
+.status-inactive { background: var(--sa-danger);  color: #fff; }
+
+/* ---------- Alerts (legacy class — Bootstrap also provides .alert-*) ------ */
+
+.alert {
+    padding: var(--sa-space-4);
+    margin-bottom: var(--sa-space-4);
+    border-radius: var(--sa-radius-md);
+    border: 1px solid transparent;
+    position: relative;
+    animation: slideInDown var(--sa-duration-base) var(--sa-easing);
+}
+.alert-error,
+.alert-danger {
+    background: var(--sa-danger-tint);
+    color: var(--sa-danger-text);
+    border-color: var(--sa-danger-border);
+}
+.alert-success {
+    background: var(--sa-success-tint);
+    color: var(--sa-success-text);
+    border-color: var(--sa-success-border);
+    font-weight: 500;
+}
+.alert-info {
+    background: var(--sa-info-tint);
+    color: var(--sa-info-text);
+    border-color: var(--sa-info-border);
+}
+.alert-warning {
+    background: var(--sa-warning-tint);
+    color: var(--sa-warning-text);
+    border-color: var(--sa-warning-border);
+}
+
+.sa-alert-close {
+    float: right;
+    background: none;
+    border: none;
+    font-size: 1.25em;
+    line-height: 1;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.6;
+    padding: 0 var(--sa-space-1);
+    margin-left: var(--sa-space-2);
+}
+.sa-alert-close:hover { opacity: 1; }
+
+@keyframes slideInDown {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ---------- Tabs (legacy custom tabs) -------------------------------------- */
+
+.tabs {
+    display: flex;
+    border-bottom: 1px solid var(--sa-border);
+    margin-bottom: var(--sa-space-4);
+    gap: var(--sa-space-1);
+}
+.tab {
+    padding: var(--sa-space-2) var(--sa-space-4);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    color: var(--sa-text-muted);
+    font-size: var(--sa-text-sm);
+    transition: color var(--sa-duration-fast) var(--sa-easing),
+                border-color var(--sa-duration-fast) var(--sa-easing);
+}
+.tab:hover {
+    color: var(--sa-text-default);
+}
+.tab.active {
+    border-bottom-color: var(--sa-primary);
+    color: var(--sa-primary);
+    font-weight: 600;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ---------- Breadcrumb (used by _breadcrumb.html) ------------------------- */
+
+.breadcrumb {
+    margin-bottom: var(--sa-space-4);
+    font-size: var(--sa-text-sm);
+    background: transparent;   /* override Bootstrap .breadcrumb */
+    padding: 0;
+}
+.breadcrumb a {
+    color: var(--sa-text-muted);
+    text-decoration: none;
+}
+.breadcrumb a:hover {
+    color: var(--sa-text-strong);
+    text-decoration: none;
+}
+.breadcrumb .breadcrumb-sep {
+    color: var(--sa-text-faint);
+    margin: 0 var(--sa-space-2);
+}
+.breadcrumb .breadcrumb-current {
+    color: var(--sa-text-default);
+    font-weight: 500;
+}
+
+/* ---------- Back button container ----------------------------------------- */
+
+.back-button-container {
+    margin-bottom: var(--sa-space-5);
+}
+.btn-back {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sa-space-2);
+    text-decoration: none;
+}
+
+/* ---------- Test-mode banner ---------------------------------------------- */
+
+.sa-test-mode-banner {
+    background: var(--sa-warning);
+    color: #fff;
+    padding: var(--sa-space-3) var(--sa-space-4);
+    text-align: center;
+    font-weight: 600;
+    font-size: var(--sa-text-sm);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    letter-spacing: 0.01em;
+}
+.sa-test-mode-spacer { height: 44px; }
+
+/* ---------- Focus ring everywhere (accessibility) ------------------------- */
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+    outline: none;
+    box-shadow: var(--sa-ring-focus);
+    border-radius: var(--sa-radius-sm);
+}
+
+/* ---------- Utilities (small, opt-in) ------------------------------------- */
+
+.sa-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--sa-space-4);
+    margin-bottom: var(--sa-space-6);
+    flex-wrap: wrap;
+}
+.sa-page-header__title {
+    margin: 0;
+    font-size: var(--sa-text-2xl);
+    font-weight: 700;
+    color: var(--sa-text-strong);
+    letter-spacing: -0.015em;
+}
+.sa-page-header__subtitle {
+    margin: var(--sa-space-1) 0 0 0;
+    color: var(--sa-text-muted);
+    font-size: var(--sa-text-sm);
+}
+.sa-page-header__actions {
+    display: flex;
+    gap: var(--sa-space-3);
+    flex-wrap: wrap;
+}
+
+.sa-stack-2 > * + * { margin-top: var(--sa-space-2); }
+.sa-stack-3 > * + * { margin-top: var(--sa-space-3); }
+.sa-stack-4 > * + * { margin-top: var(--sa-space-4); }
+
+/* Embedded mode: tighten outer container padding because the host's iframe
+   already provides chrome. */
+body.sa-embedded > .container {
+    padding-top: var(--sa-space-4);
+}
+
+/* Narrow viewport (iframe parents at ~960px) — make the page header stack. */
+@media (max-width: 960px) {
+    .sa-page-header {
+        align-items: stretch;
+    }
+    .sa-page-header__actions {
+        width: 100%;
+    }
+}
