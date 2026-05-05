@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from a2wsgi import WSGIMiddleware
 from adcp.decisioning import (
@@ -74,13 +75,36 @@ logger = logging.getLogger(__name__)
 # ---- Tenant resolution (uses adcp PR #544 CallableSubdomainTenantRouter) ----
 
 
+_BARE_DEV_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
+
+
 async def _resolve_tenant(host: str) -> Tenant | None:
     """Map a normalized host (lower-cased, port-stripped) to a Tenant.
 
-    Strips ``.localhost`` / ``.example.com`` suffix to get the subdomain,
-    then looks up the matching active row in the ``tenants`` table.
-    Production deployments add their actual base domain to this matcher.
+    Strategies in order:
+
+    1. Bare dev host (``localhost``, ``127.0.0.1``) → ``default`` tenant.
+       Lets nginx-fronted dev (no subdomain DNS) keep working without
+       requiring buyers to set ``Host: default.localhost``.
+    2. Subdomain prefix on a known suffix (``.localhost``,
+       ``.localtest.me``, ``.lvh.me``, ``.example.com``) → look up the
+       row by ``subdomain``.
+    3. Otherwise → look up by ``virtual_host`` (production custom-domain
+       path; tenants register their public hostname directly).
+
+    Embedded-mode buyers don't rely on this — they pass the tenant via
+    ``X-Identity-*`` headers and the auth chain reads it from there. This
+    resolver is for tenant-scoped subdomains and direct dev requests.
     """
+    if host in _BARE_DEV_HOSTS:
+        with get_db_session() as session:
+            row = session.scalars(
+                select(TenantRow).filter_by(tenant_id="default", is_active=True)
+            ).first()
+        if row is None:
+            return None
+        return Tenant(id=row.tenant_id, display_name=row.name)
+
     # Strip known dev/prod suffixes; whatever's left is the subdomain.
     # localtest.me / lvh.me are public-DNS aliases for 127.0.0.1 we use
     # in dev because Google OAuth rejects *.localhost ("not a public
@@ -90,14 +114,18 @@ async def _resolve_tenant(host: str) -> Tenant | None:
         if subdomain.endswith(suffix):
             subdomain = subdomain[: -len(suffix)]
             break
-    if not subdomain or subdomain == host:
-        # No recognized suffix → host has no tenant prefix
-        return None
 
     with get_db_session() as session:
-        row = session.scalars(
-            select(TenantRow).filter_by(subdomain=subdomain, is_active=True)
-        ).first()
+        if subdomain != host:
+            # Strategy 2: subdomain-on-known-suffix lookup.
+            row = session.scalars(
+                select(TenantRow).filter_by(subdomain=subdomain, is_active=True)
+            ).first()
+        else:
+            # Strategy 3: virtual_host (production custom domain).
+            row = session.scalars(
+                select(TenantRow).filter_by(virtual_host=host, is_active=True)
+            ).first()
 
     if row is None:
         return None
@@ -264,7 +292,15 @@ def _allowed_hosts() -> list[str]:
     return base
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Boot the unified salesagent server.
+
+    Runs MCP at ``/mcp``, A2A at ``/`` (host root per AdCP convention),
+    Flask admin via WSGI middleware. Single binary, one event loop.
+
+    Called by ``scripts/run_server.py`` in production. Direct invocation
+    via ``python -m core.main`` is supported for local dev.
+    """
     logging.basicConfig(level=logging.INFO)
 
     port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
@@ -288,6 +324,11 @@ if __name__ == "__main__":
         # MCP at /mcp, A2A at / on one Starlette binary. context_factory
         # and asgi_middleware are shared.
         transport="both",
+        # PSA fires buyer-protocol webhooks via
+        # ``src/services/protocol_webhook_service.py`` itself (the in-house
+        # path also covers signing for non-embedded tenants). Auto-emit on
+        # the SDK side would double-fire. See bokelley/salesagent#6 for
+        # the planned migration to ``PgWebhookDeliverySupervisor``.
         auto_emit_completion_webhooks=False,
         # ``auth=BearerTokenAuth(...)`` (PR #566 / salesagent task #33)
         # wires the bearer-token middleware on BOTH the MCP and A2A
@@ -313,4 +354,21 @@ if __name__ == "__main__":
         ],
         context_factory=auth_context_factory,
         allowed_hosts=_allowed_hosts(),
+        # CORS at the SDK level — the legacy stack used FastAPI's
+        # CORSMiddleware against ``ALLOWED_ORIGINS``. Same env, same
+        # default (``http://localhost:8000``).
+        allowed_origins=[o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:8000").split(",")],
+        # Streaming responses: the SDK can keep the HTTP connection open
+        # for long-running A2A tasks (delivery polls, async media-buy
+        # creation). Default off for backwards compat with non-streaming
+        # buyers; flip via env once we've validated buyer SDKs handle it.
+        streaming_responses=os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
+        # Debug endpoints surface internal state (route map, traffic
+        # counts, handler registry). Off by default — flip with
+        # ``ADCP_ENABLE_DEBUG_ENDPOINTS=true`` for local debugging.
+        enable_debug_endpoints=os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
     )
+
+
+if __name__ == "__main__":
+    main()

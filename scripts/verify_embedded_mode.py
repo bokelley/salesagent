@@ -259,6 +259,14 @@ with get_db_session() as s:
         delivery_type='guaranteed',
         property_tags=['all_inventory'],
         is_custom=False,
+        reporting_capabilities={{
+            'available_metrics': ['impressions', 'clicks'],
+            'available_reporting_frequencies': ['daily'],
+            'expected_delay_minutes': 60,
+            'timezone': 'UTC',
+            'supports_webhooks': True,
+            'date_range_support': 'date_range',
+        }},
     ))
     s.add(PricingOption(
         tenant_id={tenant_id!r},
@@ -450,7 +458,7 @@ def _a2a_smoke(token: str) -> tuple[bool, str]:
     both transports share the same _impl layer (transport boundary guard).
     """
     try:
-        resp = requests.get(f"{BASE}/.well-known/agent.json", timeout=5)
+        resp = requests.get(f"{BASE}/.well-known/agent-card.json", timeout=5)
         if resp.status_code != 200:
             return False, f"status={resp.status_code}"
         body = resp.json()
@@ -495,6 +503,7 @@ def _verify_get_products(token: str) -> str | None:
             {
                 "brand": {"domain": "verify.example"},
                 "brief": "display advertising verification",
+                "buying_mode": "brief",
                 "context": {"verify": "embedded_mode"},
             },
         )
@@ -519,6 +528,7 @@ def _verify_create_media_buy(
     start_time, end_time = _date_range()
     request = {
         "brand": {"domain": "verify.example"},
+        "account": {"account_id": f"{tenant_id}:default"},
         "packages": [
             {
                 "product_id": product_id,
@@ -550,13 +560,9 @@ def _verify_create_media_buy(
 
 
 def _verify_create_happy_path(token: str, tenant_id: str, product_id: str) -> str | None:
-    """Flow 2: create_media_buy happy path + Account stamping.
-
-    Idempotency replay (2c) is parked: the MCP wrapper for create_media_buy
-    drops AdCP top-level fields (idempotency_key, plan_id, account, etc.) at
-    request construction. Tracked separately as a wrapper-completeness fix.
-    """
-    media_buy_id, result = _verify_create_media_buy(token, tenant_id, product_id)
+    """Flow 2: create_media_buy happy path + Account stamping + idempotency replay."""
+    idem = f"verify_{uuid.uuid4().hex}"
+    media_buy_id, result = _verify_create_media_buy(token, tenant_id, product_id, idempotency_key=idem)
     if media_buy_id is None:
         _say(False, "2a. create_media_buy returns media_buy_id", f"result={result}")
         return None
@@ -570,7 +576,13 @@ def _verify_create_happy_path(token: str, tenant_id: str, product_id: str) -> st
         f"got resolved_via={rv!r}",
     )
 
-    _skip("2c. idempotency_key replay", "MCP wrapper drops idempotency_key (boundary completeness gap)")
+    # Idempotency replay: same key → same media_buy_id
+    media_buy_id2, _result2 = _verify_create_media_buy(token, tenant_id, product_id, idempotency_key=idem)
+    _say(
+        media_buy_id2 == media_buy_id,
+        "2c. idempotency_key replay returns same media_buy_id",
+        f"first={media_buy_id!r}, replay={media_buy_id2!r}",
+    )
 
     return media_buy_id
 
@@ -696,7 +708,7 @@ def _verify_webhook_delivery(token: str, tenant_id: str, product_id: str, port: 
     webhook_url = f"http://host.docker.internal:{port}/verify-webhook"
     with _webhook_capture(port) as server:
         media_buy_id, result = _verify_create_media_buy(
-            token, tenant_id, product_id, webhook_url=webhook_url
+            token, tenant_id, product_id, webhook_url=webhook_url, idempotency_key=f"wh_{uuid.uuid4().hex}"
         )
         if media_buy_id is None:
             _say(False, "9. webhook delivery: create_media_buy with reporting_webhook", f"result={result}")
@@ -733,7 +745,9 @@ def _verify_hitl_approval(token: str, tenant_id: str, product_id: str) -> None:
         return
 
     try:
-        media_buy_id, result = _verify_create_media_buy(token, tenant_id, product_id)
+        media_buy_id, result = _verify_create_media_buy(
+            token, tenant_id, product_id, idempotency_key=f"hitl_{uuid.uuid4().hex}"
+        )
     finally:
         _set_human_review(tenant_id, False)
 
