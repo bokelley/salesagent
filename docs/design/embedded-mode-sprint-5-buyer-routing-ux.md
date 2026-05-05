@@ -430,13 +430,26 @@ start with B and run in parallel with C. E is the final convergence.
   - `d5e6f7a8b9c0` — `embed_breadcrumb_root` (additive)
   - Sprint 5 will add: `gam_advertisers` table (additive)
 
-### The hard constraint
-The `managed_externally → is_embedded` rename means **the old
-codebase cannot share a database with the new codebase**. Old code
-issues `SELECT managed_externally FROM tenants` and gets a column-
-not-found error. This rules out:
-- Running new + old apps against the same Fly database
-- A/B testing two versions on shared state
+### Constraint check (corrected from earlier draft)
+
+Original draft of this section claimed the
+``managed_externally → is_embedded`` rename ruled out same-DB
+deployments. **That was wrong.** Verification:
+
+- ``managed_externally`` was introduced in commit ``12515ed7``
+  ("Sprint 1 of managed tenant mode") — on THIS branch, never on
+  ``prebid/salesagent:main``
+- ``is_embedded`` is the renamed form, also only on this branch
+- The OLD Fly deployment runs upstream-ish code from BEFORE Sprint 1.
+  It doesn't reference either column name — it doesn't know
+  embedded mode exists.
+
+So the deployment doesn't have a column-incompatibility problem.
+The new code (under either name) can share a database with the old
+Fly code, because the old code never reads/writes the embedded-mode
+columns regardless of what they're called.
+
+This unblocks Option 4 (cross-cloud DB) as a viable path.
 
 ### Five real options
 
@@ -462,20 +475,30 @@ not-found error. This rules out:
 - Old app + new app both writing — first migration breaks the old
 - Not viable given the rename
 
-**Option 4: Fresh GCP deployment + same Fly database via cross-cloud DB connection** ❌ not recommended
-- Latency cost (Fly DB → GCP app) is real (~50-100ms per query
-  depending on regions)
-- Doesn't solve eventual migration off Fly anyway
-- Cross-cloud DB connections are operationally fragile
+**Option 4: Fresh GCP deployment + same Fly database via cross-cloud DB connection** ✅ **recommended for validation phase**
+- New PSA on GCP Cloud Run (or GKE), pointing at the existing Fly
+  Postgres via cross-cloud connection
+- Old Fly app keeps running against the same DB — both apps can read/
+  write because the schema column-rename incompatibility doesn't
+  exist (see "Constraint check" above)
+- DNS-weighted cutover: 1% → 10% → 50% → 100% to GCP
+- **Rollback = repoint DNS to Fly app. Seconds, no data loss.**
+- Latency cost: ~50-100ms per query (Fly DB → GCP app). Fine during
+  validation; matters more under scale
+- Doesn't solve eventual migration off Fly — but defers it until
+  the GCP app is proven, at which point the cutover (Option 5) is
+  a planned activity rather than a leap of faith
 
-**Option 5: Fresh GCP deployment + GCP Cloud SQL, migrate Wonderstruck** ✅ recommended
-- New PSA on GCP Cloud Run (or GKE) + Cloud SQL Postgres
-- Frontend (Storefront, GCP) and backend now co-located → no cross-
-  cloud latency, simpler ops
-- Wonderstruck migration: `pg_dump` Fly → `pg_restore` Cloud SQL +
-  run `alembic upgrade head`. Minutes of downtime if coordinated;
-  the new alembic chain is additive on top of the existing schema
-- Decommission Fly deploy after cutover
+**Option 5: Fresh GCP deployment + GCP Cloud SQL, migrate Wonderstruck** ✅ recommended *after* Option 4 validation
+- After GCP app is proven via Option 4: `pg_dump` Fly → `pg_restore`
+  Cloud SQL → flip app config to point at Cloud SQL → minor downtime
+  for the cutover (~minutes given data volume)
+- Now everything is co-located on GCP; cross-cloud latency cost
+  goes away
+- Decommission Fly deploy
+- Sequenced after Option 4 = much less risky than Option 5
+  unilaterally — we already know the GCP app works against real
+  data when we make the DB cutover decision
 
 ### Fork question
 
@@ -489,23 +512,47 @@ Two pressures pull in different directions:
 
 **Recommended hybrid:**
 
-1. **Fork now** for deployment control. Branch `embedded-mode-v1` on
-   the fork; deploy from there.
-2. **Open the same diffs as upstream PRs** sized to be reviewable
-   (Sprint 1.8 as one PR, Sprint 4 as another, Sprint 5 as another;
-   the rename PR carries the wire-shape compatibility shim so
-   upstream merges don't break their existing adopters).
-3. When upstream merges, rebase the fork's `embedded-mode-v1` onto
-   upstream `main` to stay aligned. If they reject or stall: keep
-   shipping from the fork.
-4. After ~6-12 months of stability, propose the fork as PSA 2.0 to
-   upstream — at that point the embedded-mode work is battle-tested,
-   the design is concrete, and the upstream merge is "accept the
-   2.0 line" rather than "review 60 PRs."
+1. **Fork now** to ``agenticadvertising/salesagent`` (or wherever
+   we want the canonical embedded-mode line to live). Branch
+   ``embedded-mode-v1`` on the fork; deploy from there.
 
-Cost of the fork: keeping a `merge-from-upstream` cron and the
-discipline to actually run it. Cheap relative to the alternative
-(blocking on upstream review for production rollouts).
+2. **Open one large PR** ``agenticadvertising/salesagent:embedded-mode-v1``
+   → ``prebid/salesagent:main`` for visibility. The PR is a
+   communication artifact: "here's the embedded-mode work, here's
+   the design rationale, you can review when ready." It's not a
+   gate on our deployments.
+
+3. **Deploy directly from the fork branch.** The PR existing or not
+   has zero impact on what runs in production. Long-running PR /
+   long-running fork branch is the same operational picture either
+   way: a feature branch we control, deployed via our own CD.
+
+4. **Periodic upstream sync.** Weekly cron: rebase / merge upstream
+   ``main`` into our ``embedded-mode-v1``, run the test suite, fix
+   conflicts. If upstream is quiet, this is a no-op; if upstream
+   ships big work, we keep up incrementally rather than facing a
+   six-month diff at the end.
+
+5. **Three end-states, all handled cleanly:**
+   - Upstream merges → our fork branch matches upstream main →
+     keep deploying from upstream main, retire the fork branch
+   - Upstream rejects/never reviews → we own the canonical
+     embedded-mode line on the fork; eventually propose as PSA 2.0
+     separately, by which time the work is battle-tested in prod
+   - Upstream forks the project itself (rare) → we're already on a
+     fork, just pick which upstream to track
+
+Cost of the fork: a periodic upstream-sync cron + the discipline to
+actually run it. Cheap relative to the alternative (blocking on
+upstream review for production rollouts).
+
+**On reverting the rename:** ``managed_externally`` was net-new on
+this branch (never shipped upstream); ``is_embedded`` is the
+renamed form, also only here. Either name is purely internal
+choice. Recommend keeping ``is_embedded`` (clearer name, work is
+done, the alias fields in the Pydantic schemas cost nothing). If
+the upstream PR review pushes back on the rename, we can revert it
+in a single commit later — it doesn't change deployment posture.
 
 ## Test coverage gap
 
