@@ -2296,15 +2296,19 @@ def _decide_workflow(
         propagated_user_id = None
         propagated_org_id = None
         propagated_source = decided_by_source if decided_by_source != "management_api" else None
-        try:
-            from src.admin.middleware.identity_propagation import read_identity_from_request
+        from src.admin.middleware.identity_propagation import (
+            InvalidPropagatedIdentity,
+            read_identity_from_request,
+        )
 
+        try:
             propagated = read_identity_from_request(request)
-            if propagated is not None:
-                propagated_user_id = propagated.user_id
-                propagated_org_id = propagated.org_id
-        except Exception:
-            pass
+        except InvalidPropagatedIdentity:
+            logger.debug("propagated identity headers malformed; recording without them", exc_info=True)
+            propagated = None
+        if propagated is not None:
+            propagated_user_id = propagated.user_id
+            propagated_org_id = propagated.org_id
 
         audit_repo.record(
             operation=f"workflow.{decision}",
