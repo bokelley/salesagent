@@ -1887,7 +1887,15 @@ class TestRefresh:
         second = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers).get_json()
         assert first["sync_run_ids"] == second["sync_run_ids"]
 
-    def test_creates_pending_sync_jobs_in_db(self, client, auth_headers, tid):
+    def test_creates_pending_sync_jobs_in_db(self, client, auth_headers, tid, monkeypatch):
+        """Rows are created with the expected metadata. Workers are mocked
+        out so rows stay in 'pending' state for assertion stability —
+        with real workers, rows transition to 'running' on the spawned
+        thread, racing the test's read."""
+        import src.admin.tenant_management_api as api_mod
+
+        monkeypatch.setattr(api_mod, "_spawn_refresh_workers", lambda **kw: None)
+
         from src.core.database.database_session import get_db_session
         from src.core.database.models import SyncJob
 
@@ -1902,6 +1910,66 @@ class TestRefresh:
             assert job.status == "pending"
             assert job.triggered_by == "api"
             assert job.triggered_by_id == "tenant_management_api:refresh"
+
+    def test_spawns_inventory_and_advertisers_workers(self, client, auth_headers, tid, monkeypatch):
+        """/refresh actually kicks off background workers — pending rows
+        don't sit forever. Asserts:
+          - inventory worker called with the inventory sync_id +
+            companion targeting_sync_id (custom_targeting bundles into
+            the inventory worker, not its own thread)
+          - advertisers worker spawned in a thread with the advertisers
+            sync_id
+        Without this, /refresh creates rows that never run.
+        """
+        import src.admin.tenant_management_api as api_mod
+        import src.services.gam_advertisers_sync as gam_adv_mod
+        import src.services.background_sync_service as bg_mod
+
+        inventory_calls = []
+        advertisers_calls = []
+
+        def fake_start_inventory(tenant_id, **kwargs):
+            inventory_calls.append({"tenant_id": tenant_id, **kwargs})
+            return kwargs.get("pending_sync_id") or "fake-sync-id"
+
+        def fake_sync_advertisers(*, tenant_id, sync_id=None, **kwargs):
+            advertisers_calls.append({"tenant_id": tenant_id, "sync_id": sync_id})
+
+        monkeypatch.setattr(bg_mod, "start_inventory_sync_background", fake_start_inventory)
+        monkeypatch.setattr(gam_adv_mod, "sync_advertisers", fake_sync_advertisers)
+        # Replace threading.Thread.start with a synchronous run so the
+        # assertion can read advertisers_calls immediately. The /refresh
+        # spawner uses threading.Thread to fire-and-forget — for the
+        # test we want deterministic ordering.
+        import threading as _threading
+
+        original_thread_start = _threading.Thread.start
+
+        def sync_thread_start(self):
+            self.run()
+
+        monkeypatch.setattr(_threading.Thread, "start", sync_thread_start)
+
+        try:
+            resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+            assert resp.status_code == 202
+            sync_run_ids = resp.get_json()["sync_run_ids"]
+
+            # Inventory worker called with both inventory and targeting
+            # sync ids — the bundled-row pattern.
+            assert len(inventory_calls) == 1
+            inv_call = inventory_calls[0]
+            assert inv_call["tenant_id"] == tid
+            assert inv_call["pending_sync_id"] == sync_run_ids["inventory"]
+            assert inv_call["targeting_sync_id"] == sync_run_ids["custom_targeting"]
+
+            # Advertisers worker called separately with its own sync_id.
+            assert len(advertisers_calls) == 1
+            adv_call = advertisers_calls[0]
+            assert adv_call["tenant_id"] == tid
+            assert adv_call["sync_id"] == sync_run_ids["advertisers"]
+        finally:
+            monkeypatch.setattr(_threading.Thread, "start", original_thread_start)
 
     def test_running_sync_is_reused_in_response(self, client, auth_headers, tid, bound_factories):
         """A pre-existing running SyncJob is reused even outside the 60s

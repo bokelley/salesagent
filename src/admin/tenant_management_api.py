@@ -1676,6 +1676,101 @@ _REFRESH_SYNC_TYPES: tuple[str, ...] = ("inventory", "custom_targeting", "advert
 _REFRESH_IDEMPOTENCY_SECONDS = 60
 
 
+def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None:
+    """Spawn background workers for any pending SyncJob rows /refresh
+    just created.
+
+    Per ``_REFRESH_SYNC_TYPES``:
+    - ``inventory`` + ``custom_targeting`` are bundled. The inventory
+      worker covers targeting internally; pass the targeting sync_id
+      so the companion row's lifecycle mirrors inventory's.
+    - ``advertisers`` runs in its own thread via ``sync_advertisers``.
+
+    Rows already in 'running' state (idempotency reuse) are skipped —
+    a worker is already on it. Failures during spawn are logged but
+    don't bubble up: the row stays pending and the next /refresh call
+    (after the 60s window) will re-attempt.
+    """
+    import threading
+
+    from src.services.background_sync_service import start_inventory_sync_background
+
+    inventory_id = sync_run_ids.get("inventory")
+    targeting_id = sync_run_ids.get("custom_targeting")
+    advertisers_id = sync_run_ids.get("advertisers")
+
+    # Determine which rows are still pending (vs reused-running rows that
+    # already have a worker). Cheap single query.
+    pending_ids: set[str] = set()
+    candidate_ids = [sid for sid in (inventory_id, targeting_id, advertisers_id) if sid]
+    if candidate_ids:
+        with get_db_session() as session:
+            rows = session.scalars(
+                select(SyncJob).where(SyncJob.sync_id.in_(candidate_ids), SyncJob.status == "pending")
+            ).all()
+            pending_ids = {r.sync_id for r in rows}
+
+    # Inventory + targeting (bundled): kick off only if inventory is
+    # pending. Targeting tracks inventory's lifecycle.
+    if inventory_id and inventory_id in pending_ids:
+        try:
+            start_inventory_sync_background(
+                tenant_id=tenant_id,
+                pending_sync_id=inventory_id,
+                targeting_sync_id=targeting_id if targeting_id in pending_ids else None,
+            )
+        except Exception:
+            logger.exception(
+                "[refresh] failed to spawn inventory worker for tenant=%s sync_id=%s",
+                tenant_id,
+                inventory_id,
+            )
+    elif targeting_id and targeting_id in pending_ids:
+        # Edge case: inventory row was reused (running) but targeting is
+        # fresh-pending. Mark targeting as bundled with the live inventory
+        # run so it doesn't sit pending forever.
+        with get_db_session() as session:
+            targeting_row = session.scalars(select(SyncJob).filter_by(sync_id=targeting_id)).first()
+            if targeting_row is not None:
+                targeting_row.status = "running"
+                targeting_row.progress = {"phase": "Bundled with concurrent inventory sync"}
+                session.commit()
+
+    # Advertisers: independent thread.
+    if advertisers_id and advertisers_id in pending_ids:
+        try:
+            from src.services.gam_advertisers_sync import sync_advertisers
+
+            def _run_advertisers_in_thread(tenant_id: str = tenant_id, sync_id: str = advertisers_id) -> None:
+                """Wrap sync_advertisers so its re-raise (intentional for
+                direct callers + cron pickup) doesn't escape the daemon
+                thread. The worker has already marked the SyncJob row as
+                'failed' before re-raising — the row is the source of
+                truth, not the thread's stack."""
+                try:
+                    sync_advertisers(tenant_id=tenant_id, sync_id=sync_id)
+                except Exception:
+                    logger.exception(
+                        "[refresh] advertisers worker thread failed for tenant=%s sync_id=%s "
+                        "(SyncJob row already marked failed)",
+                        tenant_id,
+                        sync_id,
+                    )
+
+            thread = threading.Thread(
+                target=_run_advertisers_in_thread,
+                daemon=True,
+                name=f"sync-advertisers-{advertisers_id}",
+            )
+            thread.start()
+        except Exception:
+            logger.exception(
+                "[refresh] failed to spawn advertisers worker for tenant=%s sync_id=%s",
+                tenant_id,
+                advertisers_id,
+            )
+
+
 @tenant_management_api.route("/tenants/<tenant_id>/refresh", methods=["POST"])
 @require_tenant_management_api_key
 @spec.validate(resp=Response(HTTP_202=RefreshResponse, HTTP_404=ApiError))
@@ -1740,6 +1835,14 @@ def refresh_tenant(tenant_id: str):
             sync_run_ids[sync_type] = sync_id
 
         session.commit()
+
+    # Kick off the workers for any rows that are still in 'pending' state
+    # (existing reused rows skip — they're already running). Each worker
+    # transitions its row pending → running on entry and completed/failed
+    # on exit. The custom_targeting row is bundled with inventory (the
+    # inventory worker covers targeting internally, so the companion row
+    # tracks the same lifecycle).
+    _spawn_refresh_workers(tenant_id=tenant_id, sync_run_ids=sync_run_ids)
 
     response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=now)
     invalidate_status_cache(tenant_id)

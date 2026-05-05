@@ -28,6 +28,9 @@ def start_inventory_sync_background(
     sync_types: list[str] | None = None,
     custom_targeting_limit: int | None = None,
     audience_segment_limit: int | None = None,
+    *,
+    pending_sync_id: str | None = None,
+    targeting_sync_id: str | None = None,
 ) -> str:
     """
     Start an inventory sync in the background.
@@ -38,6 +41,15 @@ def start_inventory_sync_background(
         sync_types: Optional list of inventory types to sync
         custom_targeting_limit: Optional limit on custom targeting values
         audience_segment_limit: Optional limit on audience segments
+        pending_sync_id: If provided, transition that existing pending row
+            from ``pending → running`` instead of creating a new SyncJob.
+            Lets ``POST /tenants/{tid}/refresh`` own the row creation while
+            this function spawns the worker. When omitted (admin-button
+            path), creates a fresh row as before.
+        targeting_sync_id: Optional companion ``custom_targeting`` SyncJob
+            row id. Inventory sync does targeting work internally; the
+            companion row is transitioned alongside the inventory row so
+            the publisher's per-type progress UI reflects reality.
 
     Returns:
         sync_id: The sync job ID for tracking progress
@@ -60,7 +72,12 @@ def start_inventory_sync_background(
         )
         existing_sync = db.scalars(stmt).first()
 
-        if existing_sync:
+        # When the caller passed a pending_sync_id, "already running" means
+        # something OTHER than this row — the row we're about to transition
+        # is in pending state, not running, so it shouldn't trip the
+        # in-progress guard. Skip the guard if the running row matches our
+        # pending id (defensive — shouldn't happen).
+        if existing_sync and existing_sync.sync_id != pending_sync_id:
             # Check if sync is stale (running for >1 hour with no progress updates)
             from datetime import timedelta
 
@@ -92,32 +109,67 @@ def start_inventory_sync_background(
                     f"Sync already running for tenant {tenant_id}: {existing_sync.sync_id} (started {started_at_value})"
                 )
 
-        # Create new sync job
-        sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
-
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
-            adapter_type=adapter_type,
-            sync_type="inventory",
-            status="running",
-            started_at=datetime.now(UTC),
-            triggered_by="admin_ui",
-            triggered_by_id="system",
-            progress={
+        # Use the caller-supplied pending row when provided; otherwise create
+        # a fresh row (admin-button / cron path).
+        if pending_sync_id is not None:
+            pending_row = db.scalars(select(SyncJob).filter_by(sync_id=pending_sync_id)).first()
+            if pending_row is None:
+                # Caller said "use this id" but it doesn't exist — be loud,
+                # don't silently fall through to creating a new row.
+                raise ValueError(
+                    f"start_inventory_sync_background called with pending_sync_id="
+                    f"{pending_sync_id!r} but no SyncJob row matches"
+                )
+            sync_id = pending_row.sync_id
+            pending_row.status = "running"
+            pending_row.progress = {
                 "phase": "Starting",
                 "sync_types": sync_types,
                 "custom_targeting_limit": custom_targeting_limit,
                 "audience_segment_limit": audience_segment_limit,
-            },
-        )
-        db.add(sync_job)
+            }
+        else:
+            sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
+            sync_job = SyncJob(
+                sync_id=sync_id,
+                tenant_id=tenant_id,
+                adapter_type=adapter_type,
+                sync_type="inventory",
+                status="running",
+                started_at=datetime.now(UTC),
+                triggered_by="admin_ui",
+                triggered_by_id="system",
+                progress={
+                    "phase": "Starting",
+                    "sync_types": sync_types,
+                    "custom_targeting_limit": custom_targeting_limit,
+                    "audience_segment_limit": audience_segment_limit,
+                },
+            )
+            db.add(sync_job)
+
+        # Transition the companion custom_targeting row when /refresh fanned
+        # one out — inventory sync covers targeting internally, so the
+        # companion row tracks the same lifecycle.
+        if targeting_sync_id is not None:
+            targeting_row = db.scalars(select(SyncJob).filter_by(sync_id=targeting_sync_id)).first()
+            if targeting_row is not None:
+                targeting_row.status = "running"
+
         db.commit()
 
     # Start background thread
     thread = threading.Thread(
         target=_run_sync_thread,
-        args=(tenant_id, sync_id, sync_mode, sync_types, custom_targeting_limit, audience_segment_limit),
+        args=(
+            tenant_id,
+            sync_id,
+            sync_mode,
+            sync_types,
+            custom_targeting_limit,
+            audience_segment_limit,
+            targeting_sync_id,
+        ),
         daemon=True,
         name=f"sync-{sync_id}",
     )
@@ -138,6 +190,7 @@ def _run_sync_thread(
     sync_types: list[str] | None,
     custom_targeting_limit: int | None,
     audience_segment_limit: int | None,
+    targeting_sync_id: str | None = None,
 ):
     """
     Run the actual sync in a background thread with detailed phase-by-phase progress.
@@ -457,6 +510,10 @@ def _run_sync_thread(
 
         # Mark complete
         _mark_sync_complete(sync_id, result)
+        # Mirror completion onto the companion custom_targeting row when
+        # /refresh fanned one out — same lifecycle, bundled work.
+        if targeting_sync_id is not None:
+            _mark_sync_complete(targeting_sync_id, {"bundled_with": sync_id, "summary": "custom_targeting synced as part of inventory"})
         logger.info(f"[{sync_id}] Sync completed successfully")
 
         # Invalidate inventory tree cache after successful sync
@@ -475,6 +532,9 @@ def _run_sync_thread(
     except Exception as e:
         logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
         _mark_sync_failed(sync_id, str(e))
+        # Targeting companion row tracks the inventory lifecycle.
+        if targeting_sync_id is not None:
+            _mark_sync_failed(targeting_sync_id, f"Bundled inventory sync failed: {e}")
 
     finally:
         # Remove from active syncs

@@ -297,6 +297,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "delete_buyer_advertiser_mapping"),
     ("src/admin/tenant_management_api.py", "list_recent_buyers"),
     ("src/admin/tenant_management_api.py", "refresh_tenant"),
+    # FIXME(refresh-worker-spawn): selects pending SyncJobs to decide which
+    # workers to spawn. Folds into a SyncJobRepository alongside the existing
+    # /refresh endpoint debt.
+    ("src/admin/tenant_management_api.py", "_spawn_refresh_workers"),
     # FIXME(embedded-mode-sprint-5-piece-A): gam_advertisers cache list endpoint —
     # fold into GamAdvertiserRepository follow-up.
     ("src/admin/tenant_management_api.py", "list_gam_advertisers"),
