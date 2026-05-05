@@ -9,7 +9,8 @@ pattern #7).
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
@@ -859,6 +860,242 @@ class ListGamAdvertisersResponse(BaseModel):
     advertisers: list[GamAdvertiser]
     next_cursor: str | None = None
     synced_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 — workflow approve/reject + read drill-downs
+# ---------------------------------------------------------------------------
+
+
+WorkflowStatus = Literal["pending", "approved", "rejected", "cancelled", "expired"]
+WorkflowDecisionAction = Literal["approve", "reject"]
+WorkflowDecisionSource = Literal["scope3_storefront", "salesagent_ui", "management_api"]
+
+
+class WorkflowDecision(BaseModel):
+    """One approve/reject event recorded against a workflow."""
+
+    model_config = _config()
+
+    decided_at: datetime
+    decision: WorkflowDecisionAction
+    decided_by_email: str | None = None
+    decided_by_source: str
+    notes: str | None = None
+
+
+class WorkflowSummary(BaseModel):
+    """Compact workflow entry for ``GET /workflows`` listings.
+
+    ``subject_type``/``subject_id`` are the object the workflow is gating
+    (e.g. ``media_buy``/``mb_1234``). ``workflow_type`` is the human-readable
+    kind (``media_buy_approval``, ``creative_approval``, etc.) — sourced from
+    the WorkflowStep's ``tool_name`` falling back to ``step_type``.
+    """
+
+    model_config = _config()
+
+    workflow_id: str
+    workflow_type: str
+    status: WorkflowStatus
+    subject_type: str
+    subject_id: str
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime | None = None
+    requested_by_principal_id: str | None = None
+    requested_by_principal_name: str | None = None
+
+
+class WorkflowDetail(WorkflowSummary):
+    """Full workflow detail. Adds description, full request context, and
+    the decisions audit trail."""
+
+    model_config = _config()
+
+    description: str = ""
+    context: dict[str, Any] = Field(default_factory=dict)
+    decisions: list[WorkflowDecision] = Field(default_factory=list)
+
+
+class ListWorkflowsResponse(BaseModel):
+    """``GET /tenants/{tid}/workflows`` response with cursor pagination."""
+
+    model_config = _config()
+
+    workflows: list[WorkflowSummary]
+    count: int
+    next_cursor: str | None = None
+
+
+class ApproveWorkflowRequest(BaseModel):
+    """``POST /workflows/{wid}/approve`` body. Notes are optional on approve."""
+
+    model_config = _config()
+
+    notes: str | None = None
+
+
+class RejectWorkflowRequest(BaseModel):
+    """``POST /workflows/{wid}/reject`` body. Notes are required on reject —
+    every rejection has to carry a reason for the audit trail."""
+
+    model_config = _config()
+
+    notes: str = Field(..., min_length=1)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 — media-buy read endpoints (no write methods exposed)
+# ---------------------------------------------------------------------------
+
+
+MediaBuyStatus = Literal[
+    "pending_approval",
+    "active",
+    "paused",
+    "completed",
+    "cancelled",
+    "failed",
+    # Other statuses present in the database surface as-is (e.g. "draft",
+    # "approved", "live"). Keep the literal list aligned with the values
+    # the existing buyer protocol writes.
+    "draft",
+    "approved",
+    "live",
+    "running",
+    "submitted",
+    "pending",
+]
+PacingState = Literal["on_pace", "underpacing", "overpacing"]
+
+
+class MediaBuySummary(BaseModel):
+    """Compact media-buy entry for ``GET /media-buys`` listings.
+
+    ``pacing`` is computed (delivered ÷ expected-by-now); ``None`` when the
+    buy hasn't started yet or delivery data is unavailable.
+    """
+
+    model_config = _config()
+
+    media_buy_id: str
+    buyer_ref: str | None = None
+    principal_id: str
+    principal_name: str
+    status: str
+    flight_start_date: date
+    flight_end_date: date
+    total_budget: Decimal
+    currency: str
+    delivered_impressions: int | None = None
+    delivered_spend: Decimal | None = None
+    pacing: PacingState | None = None
+    created_at: datetime
+
+
+class StatusEvent(BaseModel):
+    """One status-change entry in a media buy's history."""
+
+    model_config = _config()
+
+    occurred_at: datetime
+    status: str
+    note: str | None = None
+
+
+class MediaBuyDetail(MediaBuySummary):
+    """Full media-buy detail including products, targeting, creatives, and
+    status history."""
+
+    model_config = _config()
+
+    products: list[str] = Field(default_factory=list)
+    targeting: dict[str, Any] | None = None
+    creatives: list[str] = Field(default_factory=list)
+    status_history: list[StatusEvent] = Field(default_factory=list)
+
+
+class ListMediaBuysResponse(BaseModel):
+    """``GET /tenants/{tid}/media-buys`` response with cursor pagination."""
+
+    model_config = _config()
+
+    media_buys: list[MediaBuySummary]
+    count: int
+    next_cursor: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 — audit log read endpoint
+# ---------------------------------------------------------------------------
+
+
+AuditActorType = Literal["user", "system", "management_api", "super_admin", "buyer_agent"]
+
+
+class AuditLogEntry(BaseModel):
+    """One audit-log entry on the wire."""
+
+    model_config = _config()
+
+    audit_log_id: str
+    occurred_at: datetime
+    action: str
+    subject_type: str
+    subject_id: str
+    actor_type: AuditActorType
+    actor_email: str | None = None
+    external_user_email: str | None = None
+    external_user_id: str | None = None
+    external_org_id: str | None = None
+    external_source: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ListAuditLogResponse(BaseModel):
+    """``GET /tenants/{tid}/audit-log`` response with cursor pagination."""
+
+    model_config = _config()
+
+    entries: list[AuditLogEntry]
+    count: int
+    next_cursor: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 — sync history read endpoint
+# ---------------------------------------------------------------------------
+
+
+SyncRunStatus = Literal["success", "failed", "in_progress", "cancelled"]
+SyncRunType = Literal["inventory", "custom_targeting", "advertisers"]
+
+
+class SyncRunInfo(BaseModel):
+    """One sync-run entry in the historical timeline."""
+
+    model_config = _config()
+
+    sync_id: str
+    sync_type: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    status: str
+    duration_seconds: int | None = None
+    items_processed: int = 0
+    items_failed: int = 0
+    error_summary: str | None = None
+
+
+class ListSyncHistoryResponse(BaseModel):
+    """``GET /tenants/{tid}/sync-history`` response with cursor pagination."""
+
+    model_config = _config()
+
+    runs: list[SyncRunInfo]
+    count: int
+    next_cursor: str | None = None
 
 
 # ---------------------------------------------------------------------------

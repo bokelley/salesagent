@@ -212,6 +212,19 @@ components:
       - message
       title: ApiError
       type: object
+    ApproveWorkflowRequest.f44f287:
+      additionalProperties: false
+      description: '``POST /workflows/{wid}/approve`` body. Notes are optional on
+        approve.'
+      properties:
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Notes
+      title: ApproveWorkflowRequest
+      type: object
     BuyerAdvertiserMapping.f44f287:
       additionalProperties: false
       description: "Routing rule on the wire \u2014 the public face of an\n``AdvertiserRoutingRule``\
@@ -488,6 +501,101 @@ components:
       - advertiser_mapped
       title: AccountSummary
       type: object
+    ListAuditLogResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/audit-log`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        entries:
+          items:
+            $ref: '#/components/schemas/ListAuditLogResponse.f44f287.AuditLogEntry'
+          title: Entries
+          type: array
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+      required:
+      - entries
+      - count
+      title: ListAuditLogResponse
+      type: object
+    ListAuditLogResponse.f44f287.AuditLogEntry:
+      additionalProperties: false
+      description: One audit-log entry on the wire.
+      properties:
+        action:
+          title: Action
+          type: string
+        actor_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Actor Email
+        actor_type:
+          enum:
+          - user
+          - system
+          - management_api
+          - super_admin
+          - buyer_agent
+          title: Actor Type
+          type: string
+        audit_log_id:
+          title: Audit Log Id
+          type: string
+        details:
+          additionalProperties: true
+          title: Details
+          type: object
+        external_org_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Org Id
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Source
+        external_user_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External User Email
+        external_user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External User Id
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        subject_id:
+          title: Subject Id
+          type: string
+        subject_type:
+          title: Subject Type
+          type: string
+      required:
+      - audit_log_id
+      - occurred_at
+      - action
+      - subject_type
+      - subject_id
+      - actor_type
+      title: AuditLogEntry
+      type: object
     ListBuyerAdvertiserMappingsResponse.f44f287:
       additionalProperties: false
       description: '``GET /tenants/{tid}/buyer-advertiser-mappings`` response.'
@@ -618,6 +726,107 @@ components:
       - status
       title: GamAdvertiser
       type: object
+    ListMediaBuysResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/media-buys`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        media_buys:
+          items:
+            $ref: '#/components/schemas/ListMediaBuysResponse.f44f287.MediaBuySummary'
+          title: Media Buys
+          type: array
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+      required:
+      - media_buys
+      - count
+      title: ListMediaBuysResponse
+      type: object
+    ListMediaBuysResponse.f44f287.MediaBuySummary:
+      additionalProperties: false
+      description: "Compact media-buy entry for ``GET /media-buys`` listings.\n\n\
+        ``pacing`` is computed (delivered \xF7 expected-by-now); ``None`` when the\n\
+        buy hasn't started yet or delivery data is unavailable."
+      properties:
+        buyer_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Buyer Ref
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        currency:
+          title: Currency
+          type: string
+        delivered_impressions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Delivered Impressions
+        delivered_spend:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Delivered Spend
+        flight_end_date:
+          format: date
+          title: Flight End Date
+          type: string
+        flight_start_date:
+          format: date
+          title: Flight Start Date
+          type: string
+        media_buy_id:
+          title: Media Buy Id
+          type: string
+        pacing:
+          anyOf:
+          - enum:
+            - on_pace
+            - underpacing
+            - overpacing
+            type: string
+          - type: 'null'
+          default: null
+          title: Pacing
+        principal_id:
+          title: Principal Id
+          type: string
+        principal_name:
+          title: Principal Name
+          type: string
+        status:
+          title: Status
+          type: string
+        total_budget:
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Total Budget
+          type: string
+      required:
+      - media_buy_id
+      - principal_id
+      - principal_name
+      - status
+      - flight_start_date
+      - flight_end_date
+      - total_budget
+      - currency
+      - created_at
+      title: MediaBuySummary
+      type: object
     ListRecentBuyersResponse.f44f287:
       additionalProperties: false
       description: '``GET /tenants/{tid}/recent-buyers`` response.'
@@ -677,6 +886,80 @@ components:
       - request_count
       - resolved_via
       title: RecentBuyer
+      type: object
+    ListSyncHistoryResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/sync-history`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        runs:
+          items:
+            $ref: '#/components/schemas/ListSyncHistoryResponse.f44f287.SyncRunInfo'
+          title: Runs
+          type: array
+      required:
+      - runs
+      - count
+      title: ListSyncHistoryResponse
+      type: object
+    ListSyncHistoryResponse.f44f287.SyncRunInfo:
+      additionalProperties: false
+      description: One sync-run entry in the historical timeline.
+      properties:
+        completed_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Completed At
+        duration_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Duration Seconds
+        error_summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error Summary
+        items_failed:
+          default: 0
+          title: Items Failed
+          type: integer
+        items_processed:
+          default: 0
+          title: Items Processed
+          type: integer
+        started_at:
+          format: date-time
+          title: Started At
+          type: string
+        status:
+          title: Status
+          type: string
+        sync_id:
+          title: Sync Id
+          type: string
+        sync_type:
+          title: Sync Type
+          type: string
+      required:
+      - sync_id
+      - sync_type
+      - started_at
+      - status
+      title: SyncRunInfo
       type: object
     ListTenantsResponse.f44f287:
       additionalProperties: false
@@ -757,6 +1040,218 @@ components:
       - adapter_configured
       - created_at
       title: TenantSummary
+      type: object
+    ListWorkflowsResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/workflows`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        workflows:
+          items:
+            $ref: '#/components/schemas/ListWorkflowsResponse.f44f287.WorkflowSummary'
+          title: Workflows
+          type: array
+      required:
+      - workflows
+      - count
+      title: ListWorkflowsResponse
+      type: object
+    ListWorkflowsResponse.f44f287.WorkflowSummary:
+      additionalProperties: false
+      description: "Compact workflow entry for ``GET /workflows`` listings.\n\n``subject_type``/``subject_id``\
+        \ are the object the workflow is gating\n(e.g. ``media_buy``/``mb_1234``).\
+        \ ``workflow_type`` is the human-readable\nkind (``media_buy_approval``, ``creative_approval``,\
+        \ etc.) \u2014 sourced from\nthe WorkflowStep's ``tool_name`` falling back\
+        \ to ``step_type``."
+      properties:
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        expires_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Expires At
+        requested_by_principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Id
+        requested_by_principal_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Name
+        status:
+          enum:
+          - pending
+          - approved
+          - rejected
+          - cancelled
+          - expired
+          title: Status
+          type: string
+        subject_id:
+          title: Subject Id
+          type: string
+        subject_type:
+          title: Subject Type
+          type: string
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        workflow_id:
+          title: Workflow Id
+          type: string
+        workflow_type:
+          title: Workflow Type
+          type: string
+      required:
+      - workflow_id
+      - workflow_type
+      - status
+      - subject_type
+      - subject_id
+      - created_at
+      - updated_at
+      title: WorkflowSummary
+      type: object
+    MediaBuyDetail.f44f287:
+      additionalProperties: false
+      description: 'Full media-buy detail including products, targeting, creatives,
+        and
+
+        status history.'
+      properties:
+        buyer_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Buyer Ref
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        creatives:
+          items:
+            type: string
+          title: Creatives
+          type: array
+        currency:
+          title: Currency
+          type: string
+        delivered_impressions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Delivered Impressions
+        delivered_spend:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Delivered Spend
+        flight_end_date:
+          format: date
+          title: Flight End Date
+          type: string
+        flight_start_date:
+          format: date
+          title: Flight Start Date
+          type: string
+        media_buy_id:
+          title: Media Buy Id
+          type: string
+        pacing:
+          anyOf:
+          - enum:
+            - on_pace
+            - underpacing
+            - overpacing
+            type: string
+          - type: 'null'
+          default: null
+          title: Pacing
+        principal_id:
+          title: Principal Id
+          type: string
+        principal_name:
+          title: Principal Name
+          type: string
+        products:
+          items:
+            type: string
+          title: Products
+          type: array
+        status:
+          title: Status
+          type: string
+        status_history:
+          items:
+            $ref: '#/components/schemas/MediaBuyDetail.f44f287.StatusEvent'
+          title: Status History
+          type: array
+        targeting:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Targeting
+        total_budget:
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Total Budget
+          type: string
+      required:
+      - media_buy_id
+      - principal_id
+      - principal_name
+      - status
+      - flight_start_date
+      - flight_end_date
+      - total_budget
+      - currency
+      - created_at
+      title: MediaBuyDetail
+      type: object
+    MediaBuyDetail.f44f287.StatusEvent:
+      additionalProperties: false
+      description: One status-change entry in a media buy's history.
+      properties:
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Note
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        status:
+          title: Status
+          type: string
+      required:
+      - occurred_at
+      - status
+      title: StatusEvent
       type: object
     PreviewAdapterRequest.f44f287:
       additionalProperties: false
@@ -1213,6 +1708,19 @@ components:
       required:
       - started_at
       title: RefreshResponse
+      type: object
+    RejectWorkflowRequest.f44f287:
+      additionalProperties: false
+      description: "``POST /workflows/{wid}/reject`` body. Notes are required on reject\
+        \ \u2014\nevery rejection has to carry a reason for the audit trail."
+      properties:
+        notes:
+          minLength: 1
+          title: Notes
+          type: string
+      required:
+      - notes
+      title: RejectWorkflowRequest
       type: object
     TenantDetail.f44f287:
       additionalProperties: false
@@ -1841,6 +2349,119 @@ components:
       - type
       title: ValidationErrorElement
       type: object
+    WorkflowDetail.f44f287:
+      additionalProperties: false
+      description: 'Full workflow detail. Adds description, full request context,
+        and
+
+        the decisions audit trail.'
+      properties:
+        context:
+          additionalProperties: true
+          title: Context
+          type: object
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        decisions:
+          items:
+            $ref: '#/components/schemas/WorkflowDetail.f44f287.WorkflowDecision'
+          title: Decisions
+          type: array
+        description:
+          default: ''
+          title: Description
+          type: string
+        expires_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Expires At
+        requested_by_principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Id
+        requested_by_principal_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Name
+        status:
+          enum:
+          - pending
+          - approved
+          - rejected
+          - cancelled
+          - expired
+          title: Status
+          type: string
+        subject_id:
+          title: Subject Id
+          type: string
+        subject_type:
+          title: Subject Type
+          type: string
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        workflow_id:
+          title: Workflow Id
+          type: string
+        workflow_type:
+          title: Workflow Type
+          type: string
+      required:
+      - workflow_id
+      - workflow_type
+      - status
+      - subject_type
+      - subject_id
+      - created_at
+      - updated_at
+      title: WorkflowDetail
+      type: object
+    WorkflowDetail.f44f287.WorkflowDecision:
+      additionalProperties: false
+      description: One approve/reject event recorded against a workflow.
+      properties:
+        decided_at:
+          format: date-time
+          title: Decided At
+          type: string
+        decided_by_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Decided By Email
+        decided_by_source:
+          title: Decided By Source
+          type: string
+        decision:
+          enum:
+          - approve
+          - reject
+          title: Decision
+          type: string
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Notes
+      required:
+      - decided_at
+      - decision
+      - decided_by_source
+      title: WorkflowDecision
+      type: object
 info:
   title: "Sales Agent \u2014 Tenant Management API"
   version: v1
@@ -2295,6 +2916,40 @@ paths:
           description: Unprocessable Content
       summary: Probe the saved adapter config without modifying state.
       tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/audit-log:
+    get:
+      description: 'Query params: ``action_prefix``, ``subject_type``, ``subject_id``,
+        ``actor_type``, ``external_source``, ``from_date``, ``to_date``, ``limit``,
+        ``cursor``. Default sort: ``occurred_at desc``.'
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_audit-log
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAuditLogResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List audit log entries for a tenant.
+      tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/buyer-advertiser-mappings:
     get:
       description: "Filters: ``operator_domain`` (exact match) \u2014 the per-operator\
@@ -2557,6 +3212,77 @@ paths:
           description: Unprocessable Content
       summary: Searchable, paginated read over the synced ``gam_advertisers`` cache.
       tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/media-buys:
+    get:
+      description: 'Query params: ``status``, ``principal_id``, ``from_date``, ``to_date``,
+        ``limit``, ``cursor``. Date filters apply to ``flight_start_date``.'
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_media-buys
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMediaBuysResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List media buys for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/media-buys/{media_buy_id}:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_media-buys_{media_buy_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: media_buy_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaBuyDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return :class:`MediaBuyDetail` for one media buy.
+      tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/reactivate:
     post:
       description: ''
@@ -2699,6 +3425,223 @@ paths:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
       summary: Consolidated operational snapshot for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/sync-history:
+    get:
+      description: "Query params: ``sync_type`` (``inventory`` / ``custom_targeting``\
+        \ / ``advertisers``), ``status``, ``limit`` (default 20, max 500), ``cursor``.\
+        \ Default sort: ``started_at desc``.\n\nCurrent sync state is in ``GET /tenants/{tid}/status``\
+        \ \u2014 this endpoint is the timeline drill-down."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_sync-history
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSyncHistoryResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List historical sync runs for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows:
+    get:
+      description: 'Query params: - ``status`` (repeatable): filter by wire-side status.
+        Multiple values   OR together. Defaults to all statuses. - ``workflow_type``:
+        exact match against ``tool_name`` or ``step_type``. - ``limit`` (int, default
+        50, max 500) - ``cursor`` (opaque base64): bookmark from a previous response.'
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_workflows
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowsResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List workflow steps for a tenant, sorted with pending first.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows/{workflow_id}:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_workflows_{workflow_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: workflow_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return :class:`WorkflowDetail` for one workflow.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows/{workflow_id}/approve:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_workflows_{workflow_id}_approve
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: workflow_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveWorkflowRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: 'Approve a workflow. Idempotent: re-approving returns 200 with the
+        existing state. Conflicting re-decide (approve after reject) returns 409.
+        Expired workflows can''t be approved.'
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows/{workflow_id}/reject:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_workflows_{workflow_id}_reject
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: workflow_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectWorkflowRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Reject a workflow. Notes are required. Idempotent re-rejection returns
+        200 with existing state; conflicting decision returns 409.
       tags: []
 security: []
 tags: []

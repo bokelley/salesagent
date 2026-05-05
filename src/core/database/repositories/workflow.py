@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, asc, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
@@ -204,6 +204,87 @@ class WorkflowRepository:
         for mapping in mappings:
             result[mapping.step_id].append(mapping)
         return result
+
+    def list_filtered_with_cursor(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        workflow_type: str | None = None,
+        cursor_created_at: datetime | None = None,
+        cursor_id: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkflowStep]:
+        """List workflow steps for ``GET /workflows`` drill-down.
+
+        Sort: pending-equivalent statuses first (``pending``, ``in_progress``,
+        ``requires_approval``), then by ``created_at desc, step_id desc``.
+
+        Cursor pagination uses the secondary ordering ``(created_at, step_id)``
+        within the pending-vs-decided partition; the cursor row's pending bit
+        is encoded in the cursor caller-side so we just compare on the tuple.
+
+        Args:
+            statuses: Restrict to these step statuses (raw strings as stored
+                in the DB — ``pending``, ``requires_approval``, ``completed``,
+                ``failed``, ``cancelled``, ...).
+            workflow_type: Filter on either ``tool_name`` or ``step_type``
+                matching this value.
+            cursor_created_at, cursor_id: Bookmark for the next page.
+            limit: Page size.
+        """
+        # Pending-first sort: 0 for "open" rows, 1 for everything else.
+        open_states = ("pending", "in_progress", "requires_approval")
+        pending_priority = case((WorkflowStep.status.in_(open_states), 0), else_=1)
+
+        stmt = select(WorkflowStep).join(DBContext).where(DBContext.tenant_id == self._tenant_id)
+
+        if statuses:
+            stmt = stmt.where(WorkflowStep.status.in_(statuses))
+        if workflow_type:
+            stmt = stmt.where(
+                or_(
+                    WorkflowStep.tool_name == workflow_type,
+                    WorkflowStep.step_type == workflow_type,
+                )
+            )
+
+        if cursor_created_at is not None and cursor_id is not None:
+            # Strict-less-than on the (created_at, step_id) tuple — same
+            # pattern as the audit log repo. Pending-first ordering is
+            # uniform across pages so the partition flip happens naturally
+            # when we run out of pending rows; callers don't need to encode
+            # the bit in the cursor.
+            stmt = stmt.where(
+                or_(
+                    WorkflowStep.created_at < cursor_created_at,
+                    and_(
+                        WorkflowStep.created_at == cursor_created_at,
+                        WorkflowStep.step_id < cursor_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.order_by(
+            asc(pending_priority),
+            WorkflowStep.created_at.desc(),
+            WorkflowStep.step_id.desc(),
+        ).limit(limit)
+        return list(self._session.scalars(stmt).all())
+
+    def get_context_principal(self, step: WorkflowStep) -> tuple[str | None, str | None]:
+        """Return ``(principal_id, principal_name)`` for the requesting principal of a step.
+
+        Reads the step's Context to find the principal that opened the
+        workflow. Returns ``(None, None)`` if the context is missing (legacy
+        rows) or the principal lookup fails.
+        """
+        ctx = self._session.scalars(
+            select(DBContext).filter_by(context_id=step.context_id, tenant_id=self._tenant_id)
+        ).first()
+        if ctx is None:
+            return None, None
+        name = self.get_principal_name(ctx.principal_id)
+        return ctx.principal_id, name
 
     def get_all_steps(self, *, limit: int | None = None) -> list[WorkflowStep]:
         """Get all workflow steps for this tenant, newest first."""

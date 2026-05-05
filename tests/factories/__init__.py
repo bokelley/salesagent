@@ -13,6 +13,7 @@ Usage::
 """
 
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.audit_log import AuditLogFactory
 from tests.factories.core import (
     AdapterConfigFactory,
     CurrencyLimitFactory,
@@ -30,17 +31,26 @@ from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.sync_job import SyncJobFactory
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
+from tests.factories.workflow import (
+    ContextFactory,
+    ObjectWorkflowMappingFactory,
+    WorkflowStepFactory,
+)
 
 ALL_FACTORIES = [
     TenantFactory,
     AccountFactory,
     AgentAccountAccessFactory,
     AdapterConfigFactory,
+    AuditLogFactory,
+    ContextFactory,
     CurrencyLimitFactory,
     GamAdvertiserFactory,
     GAMInventoryFactory,
+    ObjectWorkflowMappingFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     PrincipalFactory,
@@ -53,8 +63,10 @@ ALL_FACTORIES = [
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
+    SyncJobFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    WorkflowStepFactory,
 ]
 
 __all__ = [
@@ -62,6 +74,8 @@ __all__ = [
     "AccountFactory",
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
+    "AuditLogFactory",
+    "ContextFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
@@ -74,13 +88,16 @@ __all__ = [
     "FormatPerformanceMetricsFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
+    "ObjectWorkflowMappingFactory",
     "PricingOptionFactory",
     "PrincipalFactory",
     "ProductFactory",
     "PropertyTagFactory",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
+    "SyncJobFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WorkflowStepFactory",
 ]

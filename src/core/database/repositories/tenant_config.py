@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
+from src.core.database.models import AdapterConfig, Principal, PublisherPartner, Tenant
 
 
 class TenantConfigRepository:
@@ -55,3 +55,25 @@ class TenantConfigRepository:
         """Get the adapter configuration for the tenant, or None if not configured."""
         stmt = select(AdapterConfig).filter_by(tenant_id=self._tenant_id)
         return self._session.scalars(stmt).first()
+
+    def get_principal(self, principal_id: str) -> Principal | None:
+        """Get a principal by id within this tenant."""
+        return self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=principal_id)
+        ).first()
+
+    def get_principal_names(self, principal_ids: list[str]) -> dict[str, str]:
+        """Bulk-load ``principal_id → name`` for principals within this tenant.
+
+        Empty input returns an empty dict (no query). Missing ids are absent
+        from the result; callers fall back to the principal_id as display.
+        """
+        if not principal_ids:
+            return {}
+        rows = self._session.execute(
+            select(Principal.principal_id, Principal.name).where(
+                Principal.tenant_id == self._tenant_id,
+                Principal.principal_id.in_(principal_ids),
+            )
+        ).all()
+        return dict(rows)

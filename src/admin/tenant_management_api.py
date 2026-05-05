@@ -25,16 +25,22 @@ from src.admin.api_schemas.tenant_management import (
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
+    ApproveWorkflowRequest,
     BuyerAdvertiserMapping,
     CreateAccountRequest,
     CreateBuyerAdvertiserMappingRequest,
     GAMAdapterConfig,
     InitialSyncBlock,
     ListAccountsManagedResponse,
+    ListAuditLogResponse,
     ListBuyerAdvertiserMappingsResponse,
     ListGamAdvertisersResponse,
+    ListMediaBuysResponse,
     ListRecentBuyersResponse,
+    ListSyncHistoryResponse,
     ListTenantsResponse,
+    ListWorkflowsResponse,
+    MediaBuyDetail,
     MockAdapterConfig,
     PreviewAdapterRequest,
     PreviewAdapterResponse,
@@ -43,23 +49,24 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantResponse,
     RecentBuyer,
     RefreshResponse,
+    RejectWorkflowRequest,
     TenantDetail,
     TenantStatusResponse,
     TenantSummary,
     TestConnectionResponse,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
-)
-from src.admin.api_schemas.tenant_management import (
-    GamAdvertiser as GamAdvertiserSchema,
+    WorkflowDetail,
 )
 from src.admin.api_schemas.tenant_management import (
     AdapterConfig as AdapterConfigSchema,
 )
+from src.admin.api_schemas.tenant_management import (
+    GamAdvertiser as GamAdvertiserSchema,
+)
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
-from src.services.recent_buyers_service import compute_recent_buyers
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
@@ -74,6 +81,7 @@ from src.core.database.models import (
     SyncJob,
     Tenant,
 )
+from src.services.recent_buyers_service import compute_recent_buyers
 
 logger = logging.getLogger(__name__)
 
@@ -2014,6 +2022,565 @@ def list_gam_advertisers(tenant_id: str):
         next_cursor=_encode_advertisers_cursor(offset + limit) if has_more else None,
         synced_at=synced_at,
     )
+    return jsonify(response.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 — workflow approve/reject + read drill-downs
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_PAGE_LIMIT = 50
+_MAX_PAGE_LIMIT = 500
+_DEFAULT_SYNC_HISTORY_LIMIT = 20
+
+
+def _parse_limit(raw: str | None, *, default: int = _DEFAULT_PAGE_LIMIT, maximum: int = _MAX_PAGE_LIMIT) -> int:
+    """Clamp ``?limit=`` to ``[1, maximum]``; bad input falls back to the default."""
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, min(maximum, value))
+
+
+def _parse_iso_date_arg(raw: str | None) -> datetime | None:
+    """Parse an ISO-8601 date(time) query arg; return None if absent or invalid."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _identity_from_request() -> tuple[str | None, str]:
+    """Resolve ``(decided_by_email, decided_by_source)`` for a workflow decision.
+
+    When ``X-Identity-Email`` is present (UI-proxied call), use the
+    propagated identity headers — ``X-Identity-Source`` carries the host
+    product label (e.g. ``scope3_storefront``). Absent → control-plane
+    raw API call, recorded as ``management_api`` with no email.
+    """
+    from src.admin.middleware.identity_propagation import (
+        InvalidPropagatedIdentity,
+        read_identity_from_request,
+    )
+
+    try:
+        identity = read_identity_from_request(request)
+    except InvalidPropagatedIdentity:
+        # Headers were present but malformed — fail-open to management_api so
+        # the decision still gets recorded; the audit trail captures the
+        # decision regardless of the broken header.
+        return None, "management_api"
+    if identity is None:
+        return None, "management_api"
+    return identity.email, identity.source
+
+
+# ---------------------------------------------------------------------------
+# Workflow endpoints
+# ---------------------------------------------------------------------------
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/workflows", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListWorkflowsResponse, HTTP_404=ApiError))
+def list_workflows(tenant_id: str):
+    """List workflow steps for a tenant, sorted with pending first.
+
+    Query params:
+    - ``status`` (repeatable): filter by wire-side status. Multiple values
+      OR together. Defaults to all statuses.
+    - ``workflow_type``: exact match against ``tool_name`` or ``step_type``.
+    - ``limit`` (int, default 50, max 500)
+    - ``cursor`` (opaque base64): bookmark from a previous response.
+    """
+    from src.admin.services.tenant_management_sprint3 import (
+        decode_cursor,
+        encode_cursor,
+        is_workflow_decided,
+        map_workflow_status,
+        parse_cursor_datetime,
+        workflow_to_summary,
+    )
+    from src.core.database.repositories import WorkflowRepository
+
+    # Translate wire-side status filters to DB-side filters. ``pending``
+    # maps to the open WorkflowStep statuses; the others map 1:1.
+    wire_statuses = request.args.getlist("status")
+    db_statuses: list[str] | None = None
+    if wire_statuses:
+        db_statuses = []
+        for s in wire_statuses:
+            if s == "pending":
+                db_statuses.extend(["pending", "in_progress", "requires_approval"])
+            elif s == "approved":
+                db_statuses.append("completed")
+            elif s == "rejected":
+                db_statuses.append("failed")
+            else:
+                db_statuses.append(s)
+
+    workflow_type_filter = request.args.get("workflow_type")
+    limit = _parse_limit(request.args.get("limit"))
+    cursor_payload = decode_cursor(request.args.get("cursor"))
+    cursor_created_at = parse_cursor_datetime(cursor_payload.get("ts"))
+    cursor_id = cursor_payload.get("id") if isinstance(cursor_payload.get("id"), str) else None
+
+    from src.core.database.repositories import TenantConfigRepository
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WorkflowRepository(session, tenant_id)
+        # Fetch limit + 1 to determine whether next_cursor should be set
+        # without a separate count query.
+        rows = repo.list_filtered_with_cursor(
+            statuses=db_statuses,
+            workflow_type=workflow_type_filter,
+            cursor_created_at=cursor_created_at,
+            cursor_id=cursor_id,
+            limit=limit + 1,
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        summaries = []
+        for step in rows:
+            principal_id, principal_name = repo.get_context_principal(step)
+            summaries.append(workflow_to_summary(step, principal_id, principal_name))
+        # After projection: post-filter on wire-side status. Required when
+        # the caller asked for a status that maps to multiple DB states
+        # (e.g., "approved" subset of "completed") — the response_data
+        # decision determines the final mapping.
+        if wire_statuses:
+            wanted = set(wire_statuses)
+            summaries = [s for s in summaries if s.status in wanted]
+
+        next_cursor: str | None = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = encode_cursor({"ts": last.created_at, "id": last.step_id})
+
+    response = ListWorkflowsResponse(workflows=summaries, count=len(summaries), next_cursor=next_cursor)
+    # Use the unused-import shim so flake8/ruff don't complain about
+    # imports added for type-only purposes elsewhere.
+    _ = map_workflow_status, is_workflow_decided
+    return jsonify(response.model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/workflows/<workflow_id>", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=WorkflowDetail, HTTP_404=ApiError))
+def get_workflow(tenant_id: str, workflow_id: str):
+    """Return :class:`WorkflowDetail` for one workflow."""
+    from src.admin.services.tenant_management_sprint3 import workflow_to_detail
+    from src.core.database.repositories import TenantConfigRepository, WorkflowRepository
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WorkflowRepository(session, tenant_id)
+        step = repo.get_by_step_id(workflow_id)
+        if step is None:
+            return _api_error(
+                "workflow_not_found",
+                f"Workflow {workflow_id!r} does not exist for tenant {tenant_id!r}",
+                404,
+            )
+        principal_id, principal_name = repo.get_context_principal(step)
+        detail = workflow_to_detail(step, principal_id, principal_name)
+
+    return jsonify(detail.model_dump(mode="json"))
+
+
+def _decide_workflow(
+    tenant_id: str,
+    workflow_id: str,
+    *,
+    decision: str,
+    notes: str | None,
+):
+    """Shared implementation for approve and reject endpoints.
+
+    Idempotent on re-decide:
+    - Same decision a second time → 200 with existing state.
+    - Conflicting decision → 409 ``workflow_already_decided``.
+    - Decided after expiry → 409 ``workflow_expired``.
+    """
+    from src.admin.services.tenant_management_sprint3 import (
+        is_workflow_expired,
+        map_workflow_status,
+        record_workflow_decision,
+        workflow_to_detail,
+    )
+    from src.admin.services.tenant_status_service import invalidate_status_cache
+    from src.core.database.repositories import AuditLogRepository, TenantConfigRepository, WorkflowRepository
+
+    decided_by_email, decided_by_source = _identity_from_request()
+    actor_type = "user" if decided_by_email else "management_api"
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = WorkflowRepository(session, tenant_id)
+        step = repo.get_by_step_id(workflow_id)
+        if step is None:
+            return _api_error(
+                "workflow_not_found",
+                f"Workflow {workflow_id!r} does not exist for tenant {tenant_id!r}",
+                404,
+            )
+
+        current_status = map_workflow_status(step)
+        already_decided = current_status != "pending"
+
+        if already_decided:
+            # Re-decide path. Same decision → 200 idempotent. Different
+            # decision → 409 conflict. Expired → 409 (independent of the
+            # original decision; an expired workflow can't be re-decided
+            # at all).
+            if is_workflow_expired(step):
+                return _api_error(
+                    "workflow_expired",
+                    f"Workflow {workflow_id!r} expired at {(step.request_data or {}).get('expires_at')!r}",
+                    409,
+                    details={"workflow_id": workflow_id, "current_status": current_status},
+                )
+            wanted_status = "approved" if decision == "approve" else "rejected"
+            if current_status == wanted_status:
+                # Idempotent — return the existing state, no new decision row.
+                principal_id, principal_name = repo.get_context_principal(step)
+                detail = workflow_to_detail(step, principal_id, principal_name)
+                return jsonify(detail.model_dump(mode="json"))
+            return _api_error(
+                "workflow_already_decided",
+                f"Workflow {workflow_id!r} is already {current_status!r}; cannot {decision} it.",
+                409,
+                details={"workflow_id": workflow_id, "current_status": current_status},
+            )
+
+        if is_workflow_expired(step):
+            return _api_error(
+                "workflow_expired",
+                f"Workflow {workflow_id!r} expired before decision",
+                409,
+                details={"workflow_id": workflow_id},
+            )
+
+        # Apply the decision.
+        record_workflow_decision(
+            step,
+            decision=decision,
+            notes=notes,
+            decided_by_email=decided_by_email,
+            decided_by_source=decided_by_source,
+        )
+        principal_id, principal_name = repo.get_context_principal(step)
+
+        # Audit log row. Subject is the object the workflow gates (e.g.
+        # media_buy/mb_xxx); falls back to the workflow itself when the
+        # mapping is missing.
+        from src.admin.services.tenant_management_sprint3 import workflow_subject
+
+        subject_type, subject_id = workflow_subject(step)
+        audit_repo = AuditLogRepository(session, tenant_id)
+        propagated_user_id = None
+        propagated_org_id = None
+        propagated_source = decided_by_source if decided_by_source != "management_api" else None
+        try:
+            from src.admin.middleware.identity_propagation import read_identity_from_request
+
+            propagated = read_identity_from_request(request)
+            if propagated is not None:
+                propagated_user_id = propagated.user_id
+                propagated_org_id = propagated.org_id
+        except Exception:
+            pass
+
+        audit_repo.record(
+            operation=f"workflow.{decision}",
+            subject_type=subject_type,
+            subject_id=subject_id,
+            actor_type=actor_type,
+            principal_id=principal_id,
+            principal_name=principal_name,
+            external_user_email=decided_by_email,
+            external_user_id=propagated_user_id,
+            external_org_id=propagated_org_id,
+            external_source=propagated_source,
+            details={"workflow_id": workflow_id, "notes": notes, "decided_by_source": decided_by_source},
+        )
+
+        try:
+            session.commit()
+        except EmbeddedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+
+        session.refresh(step)
+        detail = workflow_to_detail(step, principal_id, principal_name)
+
+    invalidate_status_cache(tenant_id)
+    return jsonify(detail.model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/workflows/<workflow_id>/approve", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=ApproveWorkflowRequest,
+    resp=Response(HTTP_200=WorkflowDetail, HTTP_404=ApiError, HTTP_409=ApiError),
+)
+def approve_workflow(tenant_id: str, workflow_id: str):
+    """Approve a workflow. Idempotent: re-approving returns 200 with the
+    existing state. Conflicting re-decide (approve after reject) returns
+    409. Expired workflows can't be approved."""
+    req: ApproveWorkflowRequest = request.context.json  # type: ignore[attr-defined]
+    return _decide_workflow(tenant_id, workflow_id, decision="approve", notes=req.notes)
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/workflows/<workflow_id>/reject", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=RejectWorkflowRequest,
+    resp=Response(HTTP_200=WorkflowDetail, HTTP_400=ApiError, HTTP_404=ApiError, HTTP_409=ApiError),
+)
+def reject_workflow(tenant_id: str, workflow_id: str):
+    """Reject a workflow. Notes are required. Idempotent re-rejection
+    returns 200 with existing state; conflicting decision returns 409."""
+    req: RejectWorkflowRequest = request.context.json  # type: ignore[attr-defined]
+    return _decide_workflow(tenant_id, workflow_id, decision="reject", notes=req.notes)
+
+
+# ---------------------------------------------------------------------------
+# Media-buy endpoints (read-only)
+# ---------------------------------------------------------------------------
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/media-buys", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListMediaBuysResponse, HTTP_404=ApiError))
+def list_media_buys(tenant_id: str):
+    """List media buys for a tenant.
+
+    Query params: ``status``, ``principal_id``, ``from_date``, ``to_date``,
+    ``limit``, ``cursor``. Date filters apply to ``flight_start_date``.
+    """
+    from src.admin.services.tenant_management_sprint3 import (
+        decode_cursor,
+        encode_cursor,
+        media_buy_to_summary,
+        parse_cursor_datetime,
+    )
+    from src.core.database.repositories import MediaBuyRepository, TenantConfigRepository
+
+    status_filter = request.args.get("status")
+    principal_id_filter = request.args.get("principal_id")
+    from_dt = _parse_iso_date_arg(request.args.get("from_date"))
+    to_dt = _parse_iso_date_arg(request.args.get("to_date"))
+    limit = _parse_limit(request.args.get("limit"))
+    cursor_payload = decode_cursor(request.args.get("cursor"))
+    cursor_created_at = parse_cursor_datetime(cursor_payload.get("ts"))
+    cursor_id = cursor_payload.get("id") if isinstance(cursor_payload.get("id"), str) else None
+
+    with get_db_session() as session:
+        config_repo = TenantConfigRepository(session, tenant_id)
+        if config_repo.get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = MediaBuyRepository(session, tenant_id)
+        rows = repo.list_filtered_with_cursor(
+            status=status_filter,
+            principal_id=principal_id_filter,
+            from_date=from_dt.date() if from_dt else None,
+            to_date=to_dt.date() if to_dt else None,
+            cursor_created_at=cursor_created_at,
+            cursor_id=cursor_id,
+            limit=limit + 1,
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        # Bulk-load principal names so we don't N+1 the principals table.
+        principal_names = config_repo.get_principal_names(list({b.principal_id for b in rows}))
+
+        summaries = [media_buy_to_summary(b, principal_names.get(b.principal_id, b.principal_id)) for b in rows]
+
+        next_cursor: str | None = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = encode_cursor({"ts": last.created_at, "id": last.media_buy_id})
+
+    response = ListMediaBuysResponse(media_buys=summaries, count=len(summaries), next_cursor=next_cursor)
+    return jsonify(response.model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/media-buys/<media_buy_id>", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=MediaBuyDetail, HTTP_404=ApiError))
+def get_media_buy(tenant_id: str, media_buy_id: str):
+    """Return :class:`MediaBuyDetail` for one media buy."""
+    from src.admin.services.tenant_management_sprint3 import media_buy_to_detail
+    from src.core.database.repositories import MediaBuyRepository, TenantConfigRepository
+
+    with get_db_session() as session:
+        config_repo = TenantConfigRepository(session, tenant_id)
+        if config_repo.get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = MediaBuyRepository(session, tenant_id)
+        buy = repo.get_by_id(media_buy_id)
+        if buy is None:
+            return _api_error(
+                "media_buy_not_found",
+                f"Media buy {media_buy_id!r} does not exist for tenant {tenant_id!r}",
+                404,
+            )
+
+        principal = config_repo.get_principal(buy.principal_id)
+        principal_name = principal.name if principal else buy.principal_id
+
+        detail = media_buy_to_detail(buy, principal_name)
+
+    return jsonify(detail.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------------
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/audit-log", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListAuditLogResponse, HTTP_404=ApiError))
+def list_audit_log(tenant_id: str):
+    """List audit log entries for a tenant.
+
+    Query params: ``action_prefix``, ``subject_type``, ``subject_id``,
+    ``actor_type``, ``external_source``, ``from_date``, ``to_date``,
+    ``limit``, ``cursor``. Default sort: ``occurred_at desc``.
+    """
+    from src.admin.services.tenant_management_sprint3 import (
+        audit_to_entry,
+        decode_cursor,
+        encode_cursor,
+        parse_cursor_datetime,
+    )
+    from src.core.database.repositories import AuditLogRepository, TenantConfigRepository
+
+    action_prefix = request.args.get("action_prefix")
+    subject_type = request.args.get("subject_type")
+    subject_id = request.args.get("subject_id")
+    actor_type = request.args.get("actor_type")
+    external_source = request.args.get("external_source")
+    from_dt = _parse_iso_date_arg(request.args.get("from_date"))
+    to_dt = _parse_iso_date_arg(request.args.get("to_date"))
+    limit = _parse_limit(request.args.get("limit"))
+    cursor_payload = decode_cursor(request.args.get("cursor"))
+    cursor_ts = parse_cursor_datetime(cursor_payload.get("ts"))
+    cursor_id_raw = cursor_payload.get("id")
+    cursor_id: int | None = None
+    if isinstance(cursor_id_raw, int):
+        cursor_id = cursor_id_raw
+    elif isinstance(cursor_id_raw, str):
+        try:
+            cursor_id = int(cursor_id_raw)
+        except ValueError:
+            cursor_id = None
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = AuditLogRepository(session, tenant_id)
+        rows = repo.list_filtered(
+            action_prefix=action_prefix,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            actor_type=actor_type,
+            external_source=external_source,
+            from_date=from_dt,
+            to_date=to_dt,
+            cursor_timestamp=cursor_ts,
+            cursor_id=cursor_id,
+            limit=limit + 1,
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        entries = [audit_to_entry(r) for r in rows]
+        next_cursor: str | None = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = encode_cursor({"ts": last.timestamp, "id": last.log_id})
+
+    response = ListAuditLogResponse(entries=entries, count=len(entries), next_cursor=next_cursor)
+    return jsonify(response.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
+# Sync history
+# ---------------------------------------------------------------------------
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/sync-history", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListSyncHistoryResponse, HTTP_404=ApiError))
+def list_sync_history(tenant_id: str):
+    """List historical sync runs for a tenant.
+
+    Query params: ``sync_type`` (``inventory`` / ``custom_targeting`` /
+    ``advertisers``), ``status``, ``limit`` (default 20, max 500),
+    ``cursor``. Default sort: ``started_at desc``.
+
+    Current sync state is in ``GET /tenants/{tid}/status`` — this endpoint
+    is the timeline drill-down.
+    """
+    from src.admin.services.tenant_management_sprint3 import (
+        decode_cursor,
+        encode_cursor,
+        parse_cursor_datetime,
+        sync_to_run_info,
+    )
+    from src.core.database.repositories import SyncJobRepository, TenantConfigRepository
+
+    sync_type = request.args.get("sync_type")
+    status_filter = request.args.get("status")
+    limit = _parse_limit(request.args.get("limit"), default=_DEFAULT_SYNC_HISTORY_LIMIT)
+    cursor_payload = decode_cursor(request.args.get("cursor"))
+    cursor_ts = parse_cursor_datetime(cursor_payload.get("ts"))
+    cursor_id = cursor_payload.get("id") if isinstance(cursor_payload.get("id"), str) else None
+
+    with get_db_session() as session:
+        if TenantConfigRepository(session, tenant_id).get_tenant() is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        repo = SyncJobRepository(session, tenant_id)
+        rows = repo.list_history(
+            sync_type=sync_type,
+            status=status_filter,
+            cursor_started_at=cursor_ts,
+            cursor_id=cursor_id,
+            limit=limit + 1,
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        runs = [sync_to_run_info(r) for r in rows]
+        next_cursor: str | None = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = encode_cursor({"ts": last.started_at, "id": last.sync_id})
+
+    response = ListSyncHistoryResponse(runs=runs, count=len(runs), next_cursor=next_cursor)
     return jsonify(response.model_dump(mode="json"))
 
 

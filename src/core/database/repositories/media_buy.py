@@ -16,7 +16,7 @@ import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
@@ -257,6 +257,51 @@ class MediaBuyRepository:
                 select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id).order_by(MediaBuy.created_at.desc())
             ).all()
         )
+
+    def list_filtered_with_cursor(
+        self,
+        *,
+        status: str | None = None,
+        principal_id: str | None = None,
+        from_date: datetime.date | None = None,
+        to_date: datetime.date | None = None,
+        cursor_created_at: datetime.datetime | None = None,
+        cursor_id: str | None = None,
+        limit: int = 50,
+    ) -> list[MediaBuy]:
+        """List media buys for ``GET /media-buys`` drill-down.
+
+        Sort: ``created_at desc, media_buy_id desc``. Cursor pagination uses
+        the same ``(created_at, id)`` tuple pattern as audit log + sync
+        history so concurrent inserts can't skip or duplicate rows.
+
+        ``from_date``/``to_date`` filter on ``start_date`` (the flight start),
+        not ``created_at`` — buyers ask "what was running in this window".
+        """
+        stmt = select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id)
+
+        if status:
+            stmt = stmt.where(MediaBuy.status == status)
+        if principal_id:
+            stmt = stmt.where(MediaBuy.principal_id == principal_id)
+        if from_date:
+            stmt = stmt.where(MediaBuy.start_date >= from_date)
+        if to_date:
+            stmt = stmt.where(MediaBuy.start_date <= to_date)
+
+        if cursor_created_at is not None and cursor_id is not None:
+            stmt = stmt.where(
+                or_(
+                    MediaBuy.created_at < cursor_created_at,
+                    and_(
+                        MediaBuy.created_at == cursor_created_at,
+                        MediaBuy.media_buy_id < cursor_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.order_by(MediaBuy.created_at.desc(), MediaBuy.media_buy_id.desc()).limit(limit)
+        return list(self._session.scalars(stmt).all())
 
     # ------------------------------------------------------------------
     # MediaBuy writes
