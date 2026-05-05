@@ -35,7 +35,11 @@ import pytest
 
 
 @pytest.mark.parametrize("transport", ["mcp", "a2a"])
-@pytest.mark.skip(reason="Storyboard runner wiring is M2 — see core/README.md")
+@pytest.mark.xfail(
+    strict=True,
+    raises=NotImplementedError,
+    reason="Storyboard runner wiring is M2 — see core/README.md",
+)
 def test_media_buy_seller_storyboard(transport: str) -> None:
     """Drive the media_buy_seller storyboard against the core/ stack.
 
@@ -43,5 +47,12 @@ def test_media_buy_seller_storyboard(transport: str) -> None:
     legacy in-process A2A test path is gone. This test must exercise the
     same handler through both wire surfaces — failing in either mode is
     a regression.
+
+    Marked ``xfail(strict=True, raises=NotImplementedError)`` rather than
+    ``skip`` so that when the M2 implementer replaces the body with a real
+    storyboard call, the test flips to XPASS (which is a CI failure under
+    strict xfail) — forcing a deliberate decision to remove the marker.
+    A plain skip would let either transport silently start passing without
+    pulling attention to the contract.
     """
     raise NotImplementedError(f"M2: wire storyboard runner against transport={transport!r}")
