@@ -183,7 +183,7 @@ class MockSellerPlatform(DecisioningPlatform):
         self,
         media_buy_id: str,
         patch: Any,
-        ctx: RequestContext[Any],  # noqa: ARG002 — ctx unused (single-tenant scope is enforced upstream)
+        ctx: RequestContext[Any],
     ) -> dict[str, Any]:
         # Error path raises AdcpError. The framework wire-projects to
         # the AdCP error envelope. NOTE: the AdcpError raise path
@@ -193,8 +193,12 @@ class MockSellerPlatform(DecisioningPlatform):
         # #36. Returning ``{"adcp_error": ...}`` as a dict to capture
         # context echo trips FastMCP's per-tool output validator (which
         # only knows the success schema), so raise is the lesser evil.
+        tenant_id = ctx.account.metadata.get("tenant_id", "unknown")
         record = _MEDIA_BUYS.get(media_buy_id)
-        if record is None:
+        # Tenant scope: _MEDIA_BUYS is module-global. Same-tenant tools
+        # match on stored tenant_id; cross-tenant access surfaces as
+        # MEDIA_BUY_NOT_FOUND (don't leak existence to other tenants).
+        if record is None or record.get("tenant_id") != tenant_id:
             raise AdcpError(
                 "MEDIA_BUY_NOT_FOUND",
                 message=f"media_buy_id={media_buy_id!r} not found",

@@ -328,66 +328,69 @@ class SetupChecklistService:
             "optional": [task.to_dict() for task in optional_tasks],
         }
 
+    def _build_aao_tasks(self, tenant: Tenant) -> list[SetupTask]:
+        """AAO checklist items (house_domain + public_agent_url).
+
+        Single source of truth for both the live-session path
+        (:meth:`_check_critical_tasks`) and the bulk path
+        (:meth:`_build_critical_tasks`). The bulk-path duplicate was a
+        DRY violation that allowed the two checklists to drift silently.
+
+        Sprint 1.8 §6: embedded tenants with both fields set don't see
+        these items — the platform (Scope3) owns them. Embedded tenants
+        with NULL values still see them so the gap surfaces to the host
+        product via the §7 setup_tasks scope=platform annotation.
+        """
+        aao_managed_and_complete = (
+            bool(tenant.is_embedded) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
+        )
+        if aao_managed_and_complete:
+            return []
+
+        return [
+            SetupTask(
+                key="house_domain",
+                name="Publisher House Domain",
+                description=(
+                    "The domain where your brand.json lives "
+                    "(https://{house_domain}/.well-known/brand.json). "
+                    "Properties are looked up live from this file."
+                ),
+                is_complete=bool(tenant.house_domain),
+                action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                details=(
+                    f"Configured: {tenant.house_domain}"
+                    if tenant.house_domain
+                    else "Set your publisher house domain to enable property discovery."
+                ),
+            ),
+            SetupTask(
+                key="public_agent_url",
+                name="Public Agent URL",
+                description=(
+                    "The agent URL publishers list in their adagents.json to "
+                    "authorize this tenant. Embedded-mode tenants share one "
+                    "(e.g., https://interchange.io); self-hosted publishers "
+                    "use their own salesagent's URL."
+                ),
+                is_complete=bool(tenant.public_agent_url),
+                action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                details=(
+                    f"Configured: {tenant.public_agent_url}"
+                    if tenant.public_agent_url
+                    else "Set the agent URL that publishers will list in adagents.json."
+                ),
+            ),
+        ]
+
     def _check_critical_tasks(self, session, tenant: Tenant) -> list[SetupTask]:
         """Check critical tasks required before first order."""
         tasks = []
 
         # 0. AAO model: house_domain + public_agent_url (sprint 1.7).
-        # These are the FIRST items in the checklist — the salesagent can't
-        # serve list_authorized_properties or verify adagents.json without
-        # them, so a new tenant's first experience is "where does your
-        # brand.json live?" not "fill out 47 properties." Replaces the old
-        # AuthorizedProperty count gate.
-        #
-        # Sprint 1.8 §6: hide both items entirely on managed-externally
-        # tenants where both fields are set. The platform (Scope3) owns
-        # them; surfacing "incomplete AAO" tasks to the publisher would be
-        # confusing — they can't edit the values anyway (model-layer guard).
-        # Open-instance tenants and managed tenants with NULL fields still
-        # see the items (the latter signals the platform hasn't finished
-        # provisioning, which the §7 setup_tasks scope=platform annotation
-        # surfaces to Storefront).
-        aao_managed_and_complete = (
-            bool(tenant.is_embedded) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
-        )
-        if not aao_managed_and_complete:
-            tasks.append(
-                SetupTask(
-                    key="house_domain",
-                    name="Publisher House Domain",
-                    description=(
-                        "The domain where your brand.json lives "
-                        "(https://{house_domain}/.well-known/brand.json). "
-                        "Properties are looked up live from this file."
-                    ),
-                    is_complete=bool(tenant.house_domain),
-                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
-                    details=(
-                        f"Configured: {tenant.house_domain}"
-                        if tenant.house_domain
-                        else "Set your publisher house domain to enable property discovery."
-                    ),
-                )
-            )
-            tasks.append(
-                SetupTask(
-                    key="public_agent_url",
-                    name="Public Agent URL",
-                    description=(
-                        "The agent URL publishers list in their adagents.json to "
-                        "authorize this tenant. Embedded-mode tenants share one "
-                        "(e.g., https://interchange.io); self-hosted publishers "
-                        "use their own salesagent's URL."
-                    ),
-                    is_complete=bool(tenant.public_agent_url),
-                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
-                    details=(
-                        f"Configured: {tenant.public_agent_url}"
-                        if tenant.public_agent_url
-                        else "Set the agent URL that publishers will list in adagents.json."
-                    ),
-                )
-            )
+        # First items in the checklist — the salesagent can't serve
+        # list_authorized_properties or verify adagents.json without them.
+        tasks.extend(self._build_aao_tasks(tenant))
 
         # 1. Ad Server FULLY CONFIGURED - CRITICAL BLOCKER
         # This is the most important task - nothing else can be done until ad server works
@@ -855,52 +858,7 @@ class SetupChecklistService:
         must stay in sync so single-tenant and bulk callers agree on
         ``progress_percent`` and ``ready_for_orders``.
         """
-        tasks = []
-
-        # 0. AAO model — same hide-when-set logic as _check_critical_tasks.
-        # See sprint 1.8 §6: managed-externally tenants with both fields set
-        # don't see these items (they belong to the platform).
-        aao_managed_and_complete = (
-            bool(tenant.is_embedded) and bool(tenant.house_domain) and bool(tenant.public_agent_url)
-        )
-        if not aao_managed_and_complete:
-            tasks.append(
-                SetupTask(
-                    key="house_domain",
-                    name="Publisher House Domain",
-                    description=(
-                        "The domain where your brand.json lives "
-                        "(https://{house_domain}/.well-known/brand.json). "
-                        "Properties are looked up live from this file."
-                    ),
-                    is_complete=bool(tenant.house_domain),
-                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
-                    details=(
-                        f"Configured: {tenant.house_domain}"
-                        if tenant.house_domain
-                        else "Set your publisher house domain to enable property discovery."
-                    ),
-                )
-            )
-            tasks.append(
-                SetupTask(
-                    key="public_agent_url",
-                    name="Public Agent URL",
-                    description=(
-                        "The agent URL publishers list in their adagents.json to "
-                        "authorize this tenant. Embedded-mode tenants share one "
-                        "(e.g., https://interchange.io); self-hosted publishers "
-                        "use their own salesagent's URL."
-                    ),
-                    is_complete=bool(tenant.public_agent_url),
-                    action_url=f"/tenant/{self.tenant_id}/settings#aao",
-                    details=(
-                        f"Configured: {tenant.public_agent_url}"
-                        if tenant.public_agent_url
-                        else "Set the agent URL that publishers will list in adagents.json."
-                    ),
-                )
-            )
+        tasks = list(self._build_aao_tasks(tenant))
 
         # 1. Ad Server Configuration
         ad_server_selected = tenant.ad_server is not None and tenant.ad_server != ""
@@ -1341,13 +1299,11 @@ def validate_setup_complete(tenant_id: str) -> None:
     not the publisher, and surfacing them as buyer-protocol blockers would
     be wrong.
     """
-    from sqlalchemy import select
-
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import Tenant
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
 
     with get_db_session() as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
         if tenant and tenant.is_embedded:
             return
 

@@ -242,6 +242,34 @@ class TestSyncWorker:
             rows = session.scalars(select(GamAdvertiser).where(GamAdvertiser.tenant_id == tid)).all()
         assert len(rows) == 501
 
+    def test_empty_result_preserves_existing_cache(self, tenant_factory):
+        """A transient empty GAM response must NOT empty the cache.
+
+        Earlier the soft-delete sweep treated zero-row responses as "every
+        cached advertiser disappeared," silently emptying the Buyer Routing
+        picker on a single API hiccup. The worker now skips the sweep when
+        GAM reports zero advertisers.
+        """
+        tid = tenant_factory()
+        client_full = _mock_gam_client(
+            [
+                {"id": "1001", "name": "Stays"},
+                {"id": "1002", "name": "Also Stays"},
+            ]
+        )
+        sync_advertisers(tid, client_factory=_make_factory(client_full))
+
+        client_empty = _mock_gam_client([])
+        summary = sync_advertisers(tid, client_factory=_make_factory(client_empty))
+
+        assert summary["soft_deleted"] == 0
+        assert summary["upserted"] == 0
+        with get_db_session() as session:
+            rows = session.scalars(select(GamAdvertiser).filter_by(tenant_id=tid)).all()
+        # Both rows still active — the empty response did not touch them.
+        assert {r.advertiser_id for r in rows} == {"1001", "1002"}
+        assert all(r.status == "active" for r in rows)
+
 
 # ---------------------------------------------------------------------------
 # GET /gam/advertisers

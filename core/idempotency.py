@@ -26,9 +26,11 @@ single-process scope.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
+from typing import Any
 
 from adcp.server.idempotency import IdempotencyStore, MemoryBackend, PgBackend
 
@@ -94,36 +96,68 @@ def get_idempotency_store() -> IdempotencyStore:
             _STORE = IdempotencyStore(backend=MemoryBackend(), ttl_seconds=86400)
             return _STORE
 
-        # PgBackend path. Pool open + schema bootstrap happen here so the
-        # rest of the system can stay sync-style at import time.
-        import asyncio
-
+        # PgBackend path. The pool MUST open on the same event loop that
+        # later acquires connections, because AsyncConnectionPool's worker
+        # tasks are bound to whichever loop ran open(). Bootstrapping in a
+        # transient asyncio.run() loop here would leave the pool's workers
+        # tied to a closed loop once serve() takes over.
+        #
+        # Defer pool.open() + create_schema() to the first async call via
+        # _LazyBootstrapPgBackend, which runs them on whatever loop is live
+        # at that moment.
         _POOL = _build_pool()
-        backend = PgBackend(pool=_POOL)
+        backend = _LazyBootstrapPgBackend(pool=_POOL)
 
-        async def _bootstrap():
-            await _POOL.open()
-            await backend.create_schema()
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop — this is the boot-time path (sync entry,
-            # alembic, CLI). Use a fresh loop.
-            asyncio.run(_bootstrap())
-        else:
-            # Inside a running loop already (rare — e.g. lazy init from a
-            # coroutine). The caller MUST await this themselves; we can't
-            # block here without deadlocking the loop.
-            raise RuntimeError(
-                "core.idempotency.get_idempotency_store() called from inside "
-                "a running event loop. Initialize at boot before serve() "
-                "starts, or set CORE_IDEMPOTENCY_BACKEND=memory for tests."
-            )
-
-        logger.info("Idempotency: PgBackend ready (pool open, adcp_idempotency table ensured)")
+        logger.info("Idempotency: PgBackend constructed (pool will open on first async use)")
         _STORE = IdempotencyStore(backend=backend, ttl_seconds=86400)
         return _STORE
+
+
+class _LazyBootstrapPgBackend(PgBackend):
+    """PgBackend variant that opens its pool + creates the schema on the
+    first async call, on whatever event loop is running at that point.
+
+    Why: the previous bootstrap path called ``asyncio.run(_bootstrap())``
+    inside :func:`get_idempotency_store`. That spawns a one-shot loop;
+    :class:`AsyncConnectionPool` registers its worker tasks against that
+    loop and they die as soon as ``asyncio.run`` returns. The pool then
+    can't talk to the production loop that ``serve()`` later starts.
+
+    With this wrapper the pool opens lazily on the live loop and stays
+    open for the lifetime of the process.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # asyncio.Lock binds to a loop at construction; defer creation
+        # until first use so we attach to the live loop.
+        self._bootstrap_lock: asyncio.Lock | None = None
+        self._bootstrapped = False
+
+    async def _ensure_bootstrap(self) -> None:
+        if self._bootstrapped:
+            return
+        if self._bootstrap_lock is None:
+            self._bootstrap_lock = asyncio.Lock()
+        async with self._bootstrap_lock:
+            if self._bootstrapped:
+                return
+            await self._pool.open()
+            await self.create_schema()
+            self._bootstrapped = True
+            logger.info("Idempotency: PgBackend pool opened, adcp_idempotency table ensured")
+
+    async def get(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+        await self._ensure_bootstrap()
+        return await super().get(*args, **kwargs)
+
+    async def put(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+        await self._ensure_bootstrap()
+        return await super().put(*args, **kwargs)
+
+    async def delete_expired(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+        await self._ensure_bootstrap()
+        return await super().delete_expired(*args, **kwargs)
 
 
 def reset_for_tests() -> None:

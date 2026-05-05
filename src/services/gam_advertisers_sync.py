@@ -49,6 +49,12 @@ class GamClientUnavailable(RuntimeError):
     """Tenant has no working GAM auth — the worker cannot run."""
 
 
+class _EmptyAdvertiserResult(RuntimeError):
+    """GAM returned zero advertisers. Skip the soft-delete sweep so a
+    transient API hiccup doesn't silently empty the cache.
+    """
+
+
 def _build_gam_client_for_tenant(tenant_id: str) -> Any:
     """Build a real GAM ad_manager.AdManagerClient for ``tenant_id``.
 
@@ -107,18 +113,31 @@ def _iter_advertisers_from_gam(client: Any) -> Iterable[dict[str, Any]]:
 
     total = None
     fetched = 0
+    saw_any_page = False
     while True:
         result = company_service.getCompaniesByStatement(statement_builder.ToStatement())
-        if not result or not getattr(result, "results", None):
-            break
-        if total is None:
+        results = getattr(result, "results", None) if result else None
+        if total is None and result is not None:
             total = int(getattr(result, "totalResultSetSize", 0))
+        if not results:
+            # No rows on this page. If we've never seen results AND the
+            # total reported by GAM is zero, signal "intentionally empty"
+            # via raising EmptyAdvertiserResult so the caller can skip the
+            # soft-delete sweep — a transient API blip that returns
+            # zero rows must not silently empty the whole cache.
+            if not saw_any_page and (total is None or total == 0):
+                raise _EmptyAdvertiserResult("GAM returned no advertisers")
+            break
+        saw_any_page = True
         for company in result.results:
             yield {
                 "id": str(company.id),
                 "name": company.name,
                 "status": (getattr(company, "creditStatus", None) or "active"),
-                "currency_code": getattr(company, "primaryContact", None) and None or None,
+                # GAM Company has no per-advertiser currency; currency is
+                # network-level. Left None until we surface it from
+                # NetworkService or LineItem state if/when a need arises.
+                "currency_code": None,
             }
         fetched += len(result.results)
         if total is None or fetched >= total:
@@ -238,8 +257,22 @@ def sync_advertisers(
 
     try:
         client = factory(tenant_id)
-        advertisers = list(_iter_advertisers_from_gam(client))
-        upserted, soft_deleted = _upsert_advertisers(tenant_id, advertisers, sync_time)
+        try:
+            advertisers = list(_iter_advertisers_from_gam(client))
+        except _EmptyAdvertiserResult:
+            # GAM returned zero advertisers and zero totalResultSetSize.
+            # Skip the upsert (no rows) AND skip the soft-delete sweep —
+            # marking every cached row inactive on a transient empty
+            # response would silently empty the Buyer Routing picker.
+            logger.warning(
+                "[%s] GAM returned zero advertisers; preserving cache "
+                "(soft-delete sweep skipped)",
+                sync_id,
+            )
+            upserted, soft_deleted = 0, 0
+            advertisers = []
+        else:
+            upserted, soft_deleted = _upsert_advertisers(tenant_id, advertisers, sync_time)
     except Exception as exc:  # pragma: no cover - error-path tested separately
         logger.error("[%s] advertisers sync failed: %s", sync_id, exc, exc_info=True)
         with get_db_session() as session:

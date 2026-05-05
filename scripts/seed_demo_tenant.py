@@ -538,7 +538,12 @@ def _print_summary(
     agent_url: str | None,
     localhost: bool,
 ) -> None:
-    base = "http://localhost:8000" if localhost else "http://localhost:8000"
+    # Admin UI (where the Buyer Routing pages and Tenant Management API live)
+    # always points at the local dev stack — that's where this script's
+    # provisioning calls land. ``--localhost`` only swaps the *tenant-side*
+    # URLs (public_agent_url, embed_breadcrumb_root) between localhost and
+    # the demo-host; see _create_tenant().
+    base = "http://localhost:8000"
     line = "=" * 78
     print(line)
     print(f"  Demo tenant {'replaced' if replaced else 'created'}: {tenant_id}")
