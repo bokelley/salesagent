@@ -29,6 +29,7 @@ from src.admin.api_schemas.tenant_management import (
     CreateAccountRequest,
     CreateBuyerAdvertiserMappingRequest,
     GAMAdapterConfig,
+    InitialSyncBlock,
     ListAccountsManagedResponse,
     ListBuyerAdvertiserMappingsResponse,
     ListGamAdvertisersResponse,
@@ -806,6 +807,28 @@ def provision_tenant():
         session.refresh(new_tenant)
         created_at = new_tenant.created_at
 
+    # Sprint 1.8 §8: first-sync-on-provision. Same row-create + worker-spawn
+    # path as ``/refresh``, so the publisher has data the moment provisioning
+    # returns instead of waiting for the next 6h cron tick. Workers transition
+    # rows pending → running → completed/failed in the background; the
+    # response surfaces the run ids so callers can poll /status.syncs.
+    initial_sync_block: InitialSyncBlock | None = None
+    try:
+        sync_run_ids, _ = _create_and_spawn_refresh(
+            tenant_id=tenant_id,
+            triggered_by_id="tenant_management_api:provision",
+        )
+        initial_sync_block = InitialSyncBlock(sync_run_ids=sync_run_ids)
+    except Exception:
+        # First-sync is best-effort: if it fails, the tenant is still
+        # provisioned and the next /refresh or cron tick will pick up.
+        # Log so the failure is visible in observability.
+        logger.exception(
+            "[provision] first-sync-on-provision failed for tenant=%s — "
+            "tenant is still provisioned; next /refresh or cron tick will sync",
+            tenant_id,
+        )
+
     mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id)
     response = ProvisionTenantResponse(
         tenant_id=tenant_id,
@@ -830,6 +853,7 @@ def provision_tenant():
             if initial_principal_id and initial_principal_name
             else None
         ),
+        initial_sync=initial_sync_block,
     )
     return jsonify(response.model_dump(mode="json")), 201
 
@@ -1771,27 +1795,31 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
             )
 
 
-@tenant_management_api.route("/tenants/<tenant_id>/refresh", methods=["POST"])
-@require_tenant_management_api_key
-@spec.validate(resp=Response(HTTP_202=RefreshResponse, HTTP_404=ApiError))
-def refresh_tenant(tenant_id: str):
-    """Fan out a refresh across all sync types — collapses N per-sync
-    triggers into one call.
+def _create_and_spawn_refresh(
+    tenant_id: str,
+    *,
+    triggered_by_id: str,
+    now: datetime | None = None,
+) -> tuple[dict[str, str], datetime]:
+    """Create pending SyncJob rows for all enabled sync types and spawn
+    their workers. Returns ``(sync_run_ids, started_at)``.
 
-    For each enabled sync type, either reuse the existing SyncJob if one
-    started in the last 60 seconds (or is currently running), or create
-    a new pending SyncJob. The actual sync work is picked up by the
-    existing background sync infrastructure.
+    Single source of truth for the row-create-then-spawn pattern shared
+    by ``refresh_tenant`` and ``provision_tenant`` (Sprint 1.8 §8
+    first-sync-on-provision). Idempotent under rapid re-entry: an
+    existing SyncJob within the 60s window is reused instead of
+    queuing a duplicate.
 
-    Returns 202 Accepted with ``sync_run_ids`` mapping sync_type → sync_id.
-    Storefront polls ``GET /status.syncs`` for per-type progress.
+    The caller already validated the tenant exists.
     """
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
 
     with get_db_session() as session:
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+        if tenant is None:
+            # Caller is expected to validate, but guard against races where
+            # the tenant was deleted between validation and helper call.
+            raise ValueError(f"Tenant {tenant_id!r} does not exist")
 
         sync_run_ids: dict[str, str] = {}
         idempotency_cutoff = now - timedelta(seconds=_REFRESH_IDEMPOTENCY_SECONDS)
@@ -1829,22 +1857,52 @@ def refresh_tenant(tenant_id: str):
                     status="pending",
                     started_at=now,
                     triggered_by="api",
-                    triggered_by_id="tenant_management_api:refresh",
+                    triggered_by_id=triggered_by_id,
                 )
             )
             sync_run_ids[sync_type] = sync_id
 
         session.commit()
 
-    # Kick off the workers for any rows that are still in 'pending' state
-    # (existing reused rows skip — they're already running). Each worker
+    # Kick off workers for any rows that are still in 'pending' state.
+    # Existing-reused rows skip — they're already running. Each worker
     # transitions its row pending → running on entry and completed/failed
     # on exit. The custom_targeting row is bundled with inventory (the
     # inventory worker covers targeting internally, so the companion row
     # tracks the same lifecycle).
     _spawn_refresh_workers(tenant_id=tenant_id, sync_run_ids=sync_run_ids)
 
-    response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=now)
+    return sync_run_ids, now
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/refresh", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_202=RefreshResponse, HTTP_404=ApiError))
+def refresh_tenant(tenant_id: str):
+    """Fan out a refresh across all sync types — collapses N per-sync
+    triggers into one call.
+
+    For each enabled sync type, either reuse the existing SyncJob if one
+    started in the last 60 seconds (or is currently running), or create
+    a new pending SyncJob. The actual sync work is picked up by the
+    existing background sync infrastructure.
+
+    Returns 202 Accepted with ``sync_run_ids`` mapping sync_type → sync_id.
+    Storefront polls ``GET /status.syncs`` for per-type progress.
+    """
+    # Validate tenant exists before delegating to the helper. Cheap query
+    # with the same shape the helper uses internally.
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+    sync_run_ids, started_at = _create_and_spawn_refresh(
+        tenant_id=tenant_id,
+        triggered_by_id="tenant_management_api:refresh",
+    )
+
+    response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=started_at)
     invalidate_status_cache(tenant_id)
     return jsonify(response.model_dump(mode="json")), 202
 

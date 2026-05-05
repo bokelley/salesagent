@@ -18,6 +18,9 @@ import pytest
 from flask import Flask
 from sqlalchemy import select
 
+from src.admin.tenant_management_api import (
+    _spawn_refresh_workers as _LIVE_SPAWN_REFRESH_WORKERS,
+)
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
@@ -29,6 +32,7 @@ from src.core.database.models import (
     Principal,
     Product,
     PropertyTag,
+    SyncJob,
     Tenant,
 )
 from tests.factories import MediaBuyFactory, PrincipalFactory, ProductFactory, TenantFactory
@@ -78,6 +82,35 @@ def _stub_adapter_test(monkeypatch, request):
     monkeypatch.setattr(api_module, "test_adapter_connection", _stub)
 
 
+@pytest.fixture(autouse=True)
+def _stub_refresh_workers(monkeypatch):
+    """Default ``/refresh`` + first-sync-on-provision worker spawn to a no-op.
+
+    Without this, every provision test would spawn real GAM-bound worker
+    threads that fail-fast against fake creds and pollute logs. Tests that
+    need to verify worker spawning request the ``real_refresh_workers``
+    fixture which undoes this stub before the test body runs.
+    """
+    import src.admin.tenant_management_api as api_module
+
+    monkeypatch.setattr(api_module, "_spawn_refresh_workers", lambda **_kw: None)
+
+
+@pytest.fixture
+def real_refresh_workers(monkeypatch):
+    """Opt-out of the autouse worker stub for tests that exercise the
+    real worker-spawn path (after patching the leaf worker functions
+    they need to observe).
+
+    Restores ``_spawn_refresh_workers`` to the production function
+    captured at module-import time (before the autouse stub ran), so
+    leaf-function patches in the test body take effect.
+    """
+    import src.admin.tenant_management_api as api_module
+
+    monkeypatch.setattr(api_module, "_spawn_refresh_workers", _LIVE_SPAWN_REFRESH_WORKERS)
+
+
 @pytest.fixture
 def bound_factories(integration_db):
     """Bind every factory to a session so tests can call ``XFactory(...)`` and have it persist.
@@ -106,6 +139,7 @@ def cleanup_tenants():
                 Product,
                 Creative,
                 MediaBuy,
+                SyncJob,
             ):
                 session.execute(model.__table__.delete().where(model.tenant_id == tid))
             session.execute(Tenant.__table__.delete().where(Tenant.tenant_id == tid))
@@ -260,6 +294,57 @@ class TestProvision:
         body = patch_resp.get_json()
         assert body["house_domain"] == "newhouse.example"
         assert body["public_agent_url"] == "https://other.example"
+
+    # ------------------------------------------------------------------
+    # Sprint 1.8 §8: first-sync-on-provision
+    # ------------------------------------------------------------------
+
+    def test_provision_response_includes_initial_sync_run_ids(self, client, auth_headers, cleanup_tenants):
+        """Provision response surfaces the same ``sync_run_ids`` shape as
+        ``/refresh`` so Storefront can poll ``/status.syncs`` for first-
+        time progress without waiting for the next 6h cron tick.
+
+        Workers are stubbed by the autouse ``_stub_refresh_workers``
+        fixture so SyncJob rows stay pending; this test exercises the
+        wiring (rows + response), not the worker-side behavior.
+        """
+        payload = _provision_payload(external_org_id="org_initial_sync")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 201, response.get_data(as_text=True)
+        body = response.get_json()
+        cleanup_tenants.append(body["tenant_id"])
+
+        assert "initial_sync" in body and body["initial_sync"] is not None
+        sync_run_ids = body["initial_sync"]["sync_run_ids"]
+        assert set(sync_run_ids.keys()) == {"inventory", "custom_targeting", "advertisers"}
+        # Each sync_type gets a unique id (no collisions).
+        assert len(set(sync_run_ids.values())) == 3
+
+    def test_provision_creates_pending_sync_jobs(self, client, auth_headers, cleanup_tenants):
+        """Provision-time first-sync creates SyncJob rows tagged with the
+        provision triggered_by_id, matching the ids returned in the
+        response so callers can correlate."""
+        payload = _provision_payload(external_org_id="org_initial_sync_jobs")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 201, response.get_data(as_text=True)
+        body = response.get_json()
+        tid = body["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        sync_run_ids = body["initial_sync"]["sync_run_ids"]
+
+        with get_db_session() as session:
+            jobs = session.scalars(select(SyncJob).filter_by(tenant_id=tid)).all()
+
+        assert len(jobs) == 3
+        assert {j.sync_type for j in jobs} == {"inventory", "custom_targeting", "advertisers"}
+        for job in jobs:
+            assert job.status == "pending"
+            assert job.triggered_by == "api"
+            assert job.triggered_by_id == "tenant_management_api:provision"
+
+        # Response ids round-trip to DB rows.
+        assert {j.sync_id for j in jobs} == set(sync_run_ids.values())
 
 
 # ---------------------------------------------------------------------------
@@ -1902,11 +1987,16 @@ class TestRefresh:
         second = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers).get_json()
         assert first["sync_run_ids"] == second["sync_run_ids"]
 
-    def test_creates_pending_sync_jobs_in_db(self, client, auth_headers, tid, monkeypatch):
+    def test_creates_pending_sync_jobs_in_db(self, client, auth_headers, cleanup_tenants, monkeypatch):
         """Rows are created with the expected metadata. Workers are mocked
         out so rows stay in 'pending' state for assertion stability —
         with real workers, rows transition to 'running' on the spawned
-        thread, racing the test's read."""
+        thread, racing the test's read.
+
+        Builds its own tenant directly (bypasses the ``tid`` fixture's
+        provision-time first-sync) so the assertion can attribute the
+        SyncJob rows to ``/refresh`` rather than the provision call.
+        """
         import src.admin.tenant_management_api as api_mod
 
         monkeypatch.setattr(api_mod, "_spawn_refresh_workers", lambda **kw: None)
@@ -1914,19 +2004,37 @@ class TestRefresh:
         from src.core.database.database_session import get_db_session
         from src.core.database.models import SyncJob
 
+        # Provision still happens (autouse stub neutralized the spawner
+        # during provision too — no rows created there).
+        payload = _provision_payload(external_org_id="org_refresh_creates_rows")
+        prov = client.post(
+            "/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload
+        )
+        assert prov.status_code == 201
+        tid = prov.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        # First-sync-on-provision still ran via _create_and_spawn_refresh
+        # → 3 SyncJob rows already exist tagged ``:provision``. The
+        # subsequent /refresh hits the 60s idempotency window and REUSES
+        # those rows — rows count stays at 3.
         client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
 
         with get_db_session() as session:
             jobs = session.scalars(select(SyncJob).filter_by(tenant_id=tid)).all()
-        # One per sync type + status=pending + triggered_by_id stamps the source.
+        # Still 3 (one per sync_type) thanks to refresh idempotency.
         assert len(jobs) == 3
         assert {j.sync_type for j in jobs} == {"inventory", "custom_targeting", "advertisers"}
         for job in jobs:
             assert job.status == "pending"
             assert job.triggered_by == "api"
-            assert job.triggered_by_id == "tenant_management_api:refresh"
+            # Provisioned-then-refreshed: triggered_by_id reflects the
+            # original creator (provision), since refresh reused.
+            assert job.triggered_by_id == "tenant_management_api:provision"
 
-    def test_spawns_inventory_and_advertisers_workers(self, client, auth_headers, tid, monkeypatch):
+    def test_spawns_inventory_and_advertisers_workers(
+        self, client, auth_headers, tid, monkeypatch, real_refresh_workers
+    ):
         """/refresh actually kicks off background workers — pending rows
         don't sit forever. Asserts:
           - inventory worker called with the inventory sync_id +
@@ -1935,6 +2043,10 @@ class TestRefresh:
           - advertisers worker spawned in a thread with the advertisers
             sync_id
         Without this, /refresh creates rows that never run.
+
+        Uses ``real_refresh_workers`` fixture to undo the autouse stub
+        so the real ``_spawn_refresh_workers`` runs (the test patches
+        the leaf worker functions it calls).
         """
         import src.admin.tenant_management_api as api_mod
         import src.services.gam_advertisers_sync as gam_adv_mod
@@ -1988,10 +2100,21 @@ class TestRefresh:
 
     def test_running_sync_is_reused_in_response(self, client, auth_headers, tid, bound_factories):
         """A pre-existing running SyncJob is reused even outside the 60s
-        idempotency window — running > stale-but-recent."""
+        idempotency window — running > stale-but-recent.
+
+        Clears the provision-time first-sync rows first so the synthetic
+        running row is the only candidate; otherwise the just-spawned
+        provision rows (status=pending, started_at=just-now) would win
+        the most-recent ordering.
+        """
         from datetime import timedelta as _td
 
         from src.core.database.models import SyncJob
+
+        # Drop the just-created provision-time rows so the synthetic
+        # running row is unambiguously the winner.
+        bound_factories.execute(SyncJob.__table__.delete().where(SyncJob.tenant_id == tid))
+        bound_factories.commit()
 
         old_running_id = "sync_existing_running"
         bound_factories.add(

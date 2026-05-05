@@ -301,6 +301,11 @@ ALLOWLIST: set[tuple[str, str]] = {
     # workers to spawn. Folds into a SyncJobRepository alongside the existing
     # /refresh endpoint debt.
     ("src/admin/tenant_management_api.py", "_spawn_refresh_workers"),
+    # FIXME(embedded-mode-sprint-1.8-piece-G): shared /refresh helper used
+    # by both refresh_tenant and provision_tenant (first-sync-on-provision).
+    # Reads Tenant for adapter_type + SyncJob for idempotency window. Folds
+    # into a SyncJobRepository alongside the existing /refresh debt.
+    ("src/admin/tenant_management_api.py", "_create_and_spawn_refresh"),
     # FIXME(embedded-mode-sprint-5-piece-A): gam_advertisers cache list endpoint —
     # fold into GamAdvertiserRepository follow-up.
     ("src/admin/tenant_management_api.py", "list_gam_advertisers"),
