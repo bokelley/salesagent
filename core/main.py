@@ -367,6 +367,16 @@ def main() -> None:
         # counts, handler registry). Off by default — flip with
         # ``ADCP_ENABLE_DEBUG_ENDPOINTS=true`` for local debugging.
         enable_debug_endpoints=os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
+        # DNS-rebinding protection rejects requests whose Host header
+        # isn't on the allow-list. ``allowed_hosts`` already feeds the
+        # check; this flag explicitly enables/disables enforcement.
+        # Default ON (the SDK's safe default); a deployment behind a
+        # cloud LB / WAF that already validates Host can set
+        # ``ADCP_DNS_REBINDING_PROTECTION=false`` to skip the second
+        # check.
+        enable_dns_rebinding_protection=(
+            os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"
+        ),
     )
 
 
