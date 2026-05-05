@@ -102,6 +102,11 @@ HEADERS = {"X-Tenant-Management-API-Key": API_KEY, "Content-Type": "application/
 PASS = 0
 FAIL = 0
 SKIP = 0
+
+# Active tenant for buyer-protocol calls (set after provisioning).
+# Forwarded as x-adcp-tenant so the auth chain routes to the right tenant
+# instead of falling back to "default".
+ACTIVE_TENANT_ID: str | None = None
 TENANTS_TO_CLEAN: list[str] = []
 
 
@@ -380,7 +385,10 @@ async def _mcp_call(token: str, tool: str, args: dict[str, Any]) -> dict[str, An
     from fastmcp.client import Client
     from fastmcp.client.transports import StreamableHttpTransport
 
-    transport = StreamableHttpTransport(url=f"{BASE}/mcp/", headers={"x-adcp-auth": token})
+    headers = {"x-adcp-auth": token}
+    if ACTIVE_TENANT_ID:
+        headers["x-adcp-tenant"] = ACTIVE_TENANT_ID
+    transport = StreamableHttpTransport(url=f"{BASE}/mcp/", headers=headers)
     async with Client(transport=transport) as client:
         result = await client.call_tool(tool, args)
         if hasattr(result, "structured_content") and result.structured_content:
@@ -770,6 +778,7 @@ def _cleanup_tenants(keep: bool) -> None:
 
 
 def main() -> int:
+    global BASE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=BASE)
     parser.add_argument("--keep", action="store_true", help="don't delete tenants on exit")
@@ -777,7 +786,6 @@ def main() -> int:
     parser.add_argument("--webhook-port", type=int, default=0, help="webhook capture port (0 = pick free)")
     args = parser.parse_args()
 
-    global BASE
     BASE = args.base_url
     print(f"Verifying embedded-mode buyer protocol against {BASE}\n")
 
@@ -798,6 +806,8 @@ def main() -> int:
         _cleanup_tenants(args.keep)
         return 1
     tenant_id = provisioned["tenant_id"]
+    global ACTIVE_TENANT_ID
+    ACTIVE_TENANT_ID = tenant_id
     principal_payload = provisioned.get("initial_principal") or {}
     principal_id = principal_payload.get("principal_id")
 
