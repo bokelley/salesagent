@@ -374,6 +374,14 @@ def _setup_tasks_block(session: Session, tenant_id: str) -> SetupTasksBlock:
             scope = _scope_for_task(key, is_managed=is_managed)
             if scope is None:
                 continue
+            # Embedded tenants: suppress platform-scope items entirely.
+            # The host (Scope3 / etc.) already knows its own provisioning
+            # state via the management API; surfacing platform items in
+            # the publisher-facing /status response just creates noise.
+            # If a host needs visibility into platform gaps, use the
+            # Tenant Management API directly — that's the system-of-record.
+            if is_managed and scope == "platform":
+                continue
             severity = _severity_for_task(tier=tier, is_complete=task["is_complete"])
             if severity == "blocker":
                 blocker_count += 1

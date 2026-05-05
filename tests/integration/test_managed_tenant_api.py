@@ -949,6 +949,21 @@ class TestStatusSetupTasks:
         item_ids = {item["id"] for item in resp.get_json()["setup_tasks"]["items"]}
         assert "authorized_properties" not in item_ids
 
+    def test_embedded_setup_tasks_omit_platform_scope_items(self, client, auth_headers, managed_tenant):
+        """Embedded tenants don't see ``scope=platform`` items in
+        setup_tasks — the host already knows its own provisioning state
+        via the management API; surfacing platform items in the
+        publisher-facing /status response just creates noise.
+
+        Open-instance tenants still see them (publisher owns everything
+        in standalone mode).
+        """
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = resp.get_json()["setup_tasks"]["items"]
+        scopes = {item["scope"] for item in items}
+        # Only publisher-scope items should appear on an embedded tenant.
+        assert scopes <= {"publisher"}, f"Embedded tenant /status surfaced platform items: {scopes}"
+
     def test_default_advertiser_blocker_when_unset(self, client, auth_headers, managed_tenant):
         """Tenant without default_gam_advertiser_id sees the task as a publisher-scope blocker."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)

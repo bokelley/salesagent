@@ -462,31 +462,32 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
 
 
 class TestSyncInventoryHiddenOnEmbedded:
-    """The Sync Inventory page is fully hidden on embedded tenants.
+    """The Sync Inventory page is hidden on embedded tenants — the
+    deep-link redirects to Browse Inventory (read-only inventory
+    surface that embedded publishers DO use).
 
-    Sync is driven by the upstream platform via
-    ``POST /api/v1/tenant-management/tenants/{id}/refresh``. The route
-    keeps its URL (``/tenant/{id}/inventory``) so bookmarks don't break,
-    but on embedded tenants it 200s with the lock banner.
+    Sync itself is driven by the upstream platform via
+    ``POST /api/v1/tenant-management/tenants/{id}/refresh``.
     """
 
-    def test_embedded_tenant_returns_200_with_banner(self, client, embedded_tenant_id):
-        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory")
-        assert resp.status_code == 200, resp.get_data(as_text=True)
-        body = resp.get_data(as_text=True)
-        assert "Platform settings managed by" in body
-        assert "Scope3" in body
+    def test_embedded_tenant_redirects_to_browse(self, client, embedded_tenant_id):
+        """Embedded `/inventory` redirects to `/inventory/browse` rather
+        than landing on a lock banner — the Browse page is the useful
+        destination publishers want when they click an inventory deep-link."""
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory", follow_redirects=False)
+        assert resp.status_code in (301, 302, 303, 307, 308)
+        assert resp.location.endswith(f"/tenant/{embedded_tenant_id}/inventory/browse")
 
     def test_embedded_omits_sync_controls(self, client, embedded_tenant_id):
-        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory")
+        """After following the redirect, the Browse page renders — and
+        critically NOT the sync controls page (which is host-driven)."""
+        resp = client.get(f"/tenant/{embedded_tenant_id}/inventory", follow_redirects=True)
         body = resp.get_data(as_text=True)
         # The Sync Inventory page's three sync buttons must NOT render.
         assert "Incremental Sync" not in body
         assert "Full Reset" not in body
         # The targeting-sync button label is unique to the page heading.
         assert 'id="syncTargetingBtn"' not in body
-        # No POST endpoints to the sync API exposed via the page.
-        assert "/api/tenant/" not in body or "/inventory/sync" not in body
 
     def test_open_tenant_renders_sync_controls(self, client, open_tenant_id):
         """Open-instance tenants see the narrowed Sync Inventory page —

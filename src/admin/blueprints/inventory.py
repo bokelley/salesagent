@@ -3,7 +3,7 @@
 import json
 import logging
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
@@ -335,7 +335,11 @@ def inventory_browser(tenant_id):
             return "Tenant not found", 404
 
         if tenant.is_embedded:
-            return render_template("_embedded_locked_page.html", tenant=tenant), 200
+            # Embedded tenants don't get the per-tenant Sync Inventory page —
+            # the host drives sync via POST /tenants/<id>/refresh. Redirect
+            # the deep-link to Browse Inventory (the read-only inventory
+            # surface that embedded publishers DO use).
+            return redirect(url_for("inventory.inventory_browse", tenant_id=tenant.tenant_id))
 
         adapter_type = tenant.ad_server or "mock"
         is_gam = adapter_type == "google_ad_manager"

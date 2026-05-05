@@ -97,9 +97,17 @@ class EmbedBreadcrumbRoot(BaseModel):
     @classmethod
     def _check_https(cls, value: str) -> str:
         stripped = value.strip()
-        if not stripped.startswith("https://"):
-            raise ValueError(f"embed_breadcrumb_root.url must start with 'https://'; got {value!r}")
-        return stripped
+        # HTTPS in production. Localhost http:// allowed so dev / Storefront
+        # local stacks (http://localhost:3000) can wire embed_breadcrumb_root
+        # without a TLS cert. Loopback only — no broader http:// allowance.
+        if stripped.startswith("https://"):
+            return stripped
+        if stripped.startswith("http://localhost") or stripped.startswith("http://127.0.0.1"):
+            return stripped
+        raise ValueError(
+            f"embed_breadcrumb_root.url must start with 'https://' "
+            f"(or 'http://localhost' / 'http://127.0.0.1' for dev); got {value!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

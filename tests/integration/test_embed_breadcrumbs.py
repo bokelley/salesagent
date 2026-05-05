@@ -214,6 +214,39 @@ class TestEmbedBreadcrumbRootStorage:
         )
         assert patch.status_code == 422
 
+    def test_patch_accepts_localhost_http_for_dev(self, client, auth_headers, cleanup_tenants):
+        """``http://localhost`` and ``http://127.0.0.1`` are accepted so dev
+        / Storefront local stacks can wire embed_breadcrumb_root without a
+        TLS cert. Loopback only — broader http:// is still rejected."""
+        payload = _provision_payload(external_org_id="org_breadcrumb_localhost")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        # http://localhost — accepted
+        patch = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"embed_breadcrumb_root": {"label": "Storefront (dev)", "url": "http://localhost:3000/store"}},
+        )
+        assert patch.status_code == 200, patch.get_data(as_text=True)
+
+        # http://127.0.0.1 — also accepted
+        patch = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"embed_breadcrumb_root": {"label": "Storefront (dev)", "url": "http://127.0.0.1:3000/store"}},
+        )
+        assert patch.status_code == 200
+
+        # http://otherhost — still rejected (loopback exception only)
+        patch = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"embed_breadcrumb_root": {"label": "X", "url": "http://otherhost.example/store"}},
+        )
+        assert patch.status_code == 422
+
     def test_patch_rejects_extra_keys(self, client, auth_headers, cleanup_tenants):
         payload = _provision_payload(external_org_id="org_breadcrumb_extra")
         resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
