@@ -114,6 +114,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "tenant_login"),
     ("src/admin/blueprints/auth.py", "test_auth"),
     ("src/admin/blueprints/authorized_properties.py", "_construct_agent_url"),
+    # FIXME(embedded-mode-sprint-5-piece-B): fold into BuyerRoutingRepository
+    # when workstream C lands the editor + repository.
+    ("src/admin/blueprints/buyer_routing.py", "buyer_routing_page"),
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
@@ -284,6 +287,17 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "delete_buyer_advertiser_mapping"),
     ("src/admin/tenant_management_api.py", "list_recent_buyers"),
     ("src/admin/tenant_management_api.py", "refresh_tenant"),
+    # FIXME(embedded-mode-sprint-5-piece-A): gam_advertisers cache list endpoint —
+    # fold into GamAdvertiserRepository follow-up.
+    ("src/admin/tenant_management_api.py", "list_gam_advertisers"),
+    # FIXME(embedded-mode-sprint-5-piece-D): GamAdvertiserRepository TBD —
+    # the cache table is read raw from the endpoint + the routing-rule
+    # validator until the repository class lands.
+    ("src/admin/tenant_management_api.py", "list_gam_advertisers"),
+    ("src/services/gam_advertisers_sync.py", "_build_gam_client_for_tenant"),
+    ("src/services/gam_advertisers_sync.py", "_upsert_advertisers"),
+    ("src/services/gam_advertisers_sync.py", "sync_advertisers"),
+    ("src/services/gam_advertisers_sync.py", "sync_advertisers_pending_jobs"),
     # FIXME(embedded-mode-sprint-1.5): tenant_status_service aggregates 5 ORM models
     # for the /status snapshot. Fold into a StatusRepository or per-block repos.
     ("src/admin/services/tenant_status_service.py", "get_tenant_status"),
@@ -401,6 +415,15 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/order_approval_service.py", "_update_approval_progress"),
     ("src/services/order_approval_service.py", "get_approval_status"),
     ("src/services/order_approval_service.py", "start_order_approval_background"),
+    # FIXME(embedded-mode-sprint-5-piece-B): fold into BuyerRoutingRepository
+    # alongside the editor's CRUD repo in workstream C.
+    ("src/services/recent_buyers_service.py", "compute_recent_buyers"),
+    # FIXME(embedded-mode-sprint-5-piece-A): gam_advertisers cache sync —
+    # fold into GamAdvertiserRepository / SyncJobRepository follow-up.
+    ("src/services/gam_advertisers_sync.py", "_build_gam_client_for_tenant"),
+    ("src/services/gam_advertisers_sync.py", "_upsert_advertisers"),
+    ("src/services/gam_advertisers_sync.py", "sync_advertisers"),
+    ("src/services/gam_advertisers_sync.py", "sync_advertisers_pending_jobs"),
     ("src/services/policy_service.py", "_update_currencies"),
     ("src/services/policy_service.py", "get_policies"),
     ("src/services/policy_service.py", "update_policies"),

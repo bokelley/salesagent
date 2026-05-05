@@ -346,6 +346,40 @@ def test_buyer_advertiser_mapping_response_round_trip():
     }
     mapping = BuyerAdvertiserMapping.model_validate(payload)
     assert mapping.brand_id == "sprite"
+    # Sprint 5: principal_id absent in payload defaults to None
+    # (preserves Sprint 1.8 wire compat for clients pre-dating the field).
+    assert mapping.principal_id is None
+
+
+def test_buyer_advertiser_mapping_round_trips_principal_id():
+    """Sprint 5: principal_id round-trips through the wire schema."""
+    payload = {
+        "id": "rule_xyz",
+        "principal_id": "scope3-emb",
+        "operator_domain": "interchange.io",
+        "brand_house": "coca-cola.com",
+        "brand_id": "sprite",
+        "gam_advertiser_id": "12345",
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+    }
+    mapping = BuyerAdvertiserMapping.model_validate(payload)
+    assert mapping.principal_id == "scope3-emb"
+
+
+def test_create_mapping_request_accepts_principal_id():
+    req = CreateBuyerAdvertiserMappingRequest(
+        principal_id="scope3-emb",
+        operator_domain="interchange.io",
+        gam_advertiser_id="99",
+    )
+    assert req.principal_id == "scope3-emb"
+
+
+def test_create_mapping_request_principal_id_optional():
+    """Sprint 1.8 backward-compat: omitting principal_id is allowed (= any agent)."""
+    req = CreateBuyerAdvertiserMappingRequest(operator_domain="x.com", gam_advertiser_id="99")
+    assert req.principal_id is None
 
 
 def test_buyer_advertiser_mapping_allows_null_brand_house_and_brand_id():
@@ -384,14 +418,18 @@ def test_create_mapping_request_rejects_unknown_field():
 
 
 def test_update_mapping_request_does_not_expose_operator_domain():
-    """Natural-key field is intentionally not patchable — DELETE+POST only."""
+    """``operator_domain`` is intentionally not patchable — DELETE+POST only.
+    ``principal_id`` IS patchable (Sprint 5); uniqueness is enforced via
+    IntegrityError on commit, surfaced as 409 to the caller.
+    """
     fields = set(UpdateBuyerAdvertiserMappingRequest.model_fields.keys())
     assert "operator_domain" not in fields
-    assert fields == {"brand_house", "brand_id", "gam_advertiser_id"}
+    assert fields == {"principal_id", "brand_house", "brand_id", "gam_advertiser_id"}
 
 
 def test_update_mapping_request_all_optional():
     req = UpdateBuyerAdvertiserMappingRequest()
+    assert req.principal_id is None
     assert req.brand_house is None
     assert req.brand_id is None
     assert req.gam_advertiser_id is None

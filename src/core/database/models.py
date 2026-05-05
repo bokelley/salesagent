@@ -1979,6 +1979,11 @@ class AdvertiserRoutingRule(Base):
     tenant_id: Mapped[str] = mapped_column(
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
+    # Sprint 5 — buyer agent (Principal) the rule applies to. NULL = "any
+    # agent" (preserves Sprint 1.8 behavior; required for backward
+    # compatibility with rows that predate this column). Embedded tenants
+    # leave this NULL since the host is the only buyer.
+    principal_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Buyer agent's domain (e.g. interchange.io, buyer.scope3.com).
     # Validated AAO-side on POST — must publish a valid adagents.json
     # listing this tenant's public_agent_url. Always populated.
@@ -2009,6 +2014,7 @@ class AdvertiserRoutingRule(Base):
         Index(
             "uq_routing_rule_natural_key",
             "tenant_id",
+            text("COALESCE(principal_id, '')"),
             "operator_domain",
             text("COALESCE(brand_house, '')"),
             text("COALESCE(brand_id, '')"),
@@ -2016,6 +2022,60 @@ class AdvertiserRoutingRule(Base):
         ),
         Index("idx_routing_rules_tenant", "tenant_id"),
         Index("idx_routing_rules_operator", "tenant_id", "operator_domain"),
+    )
+
+
+class GamAdvertiser(Base):
+    """Sprint 5 piece D — synced cache of GAM advertisers per tenant.
+
+    Powers the searchable picker in the Buyer Routing UI (default
+    advertiser + routing-rule rows). Hydrated by the
+    ``sync_advertisers`` worker reading
+    ``CompanyService.getCompaniesByStatement WHERE type = 'ADVERTISER'``.
+    The endpoint ``GET /tenants/{id}/gam/advertisers`` reads from this
+    cache, never from live GAM (10k+ advertiser networks make a per-
+    keystroke round-trip prohibitively slow).
+
+    Soft-delete on disappearance: advertisers that drop out of GAM are
+    flagged ``status='inactive'`` rather than hard-deleted, because
+    routing rules might reference them. The picker hides inactive rows
+    by default; the routing-rule editor surfaces a warning if a rule
+    points at an inactive advertiser.
+
+    See ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``
+    "Piece D: GAM advertisers cache".
+    """
+
+    __tablename__ = "gam_advertisers"
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    advertiser_id: Mapped[str] = mapped_column(String(64), primary_key=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    # GAM company status surfaced verbatim ("active", "inactive") so
+    # the picker can render badges without a translation layer.
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    tenant = relationship("Tenant", backref="gam_advertisers")
+
+    __table_args__ = (
+        Index("idx_gam_advertisers_tenant", "tenant_id"),
+        # Compound index supports the case-insensitive name search in
+        # GET /gam/advertisers. Mirrors the migration index so
+        # Base.metadata.create_all() (used by integration tests) builds
+        # the same constraint.
+        Index("idx_gam_advertisers_name", "tenant_id", "name"),
     )
 
 

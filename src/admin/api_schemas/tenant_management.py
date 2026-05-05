@@ -694,6 +694,7 @@ class BuyerAdvertiserMapping(BaseModel):
     model_config = _config()
 
     id: str
+    principal_id: str | None = None
     operator_domain: str
     brand_house: str | None = None
     brand_id: str | None = None
@@ -707,6 +708,7 @@ class CreateBuyerAdvertiserMappingRequest(BaseModel):
 
     model_config = _config()
 
+    principal_id: str | None = Field(default=None, max_length=50)
     operator_domain: str = Field(..., min_length=1, max_length=255)
     brand_house: str | None = Field(default=None, max_length=255)
     brand_id: str | None = Field(default=None, max_length=255)
@@ -723,6 +725,7 @@ class UpdateBuyerAdvertiserMappingRequest(BaseModel):
 
     model_config = _config()
 
+    principal_id: str | None = Field(default=None, max_length=50)
     brand_house: str | None = Field(default=None, max_length=255)
     brand_id: str | None = Field(default=None, max_length=255)
     gam_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -790,6 +793,45 @@ class RefreshResponse(BaseModel):
 
     sync_run_ids: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 piece D — GAM advertisers cache
+# ---------------------------------------------------------------------------
+
+
+class GamAdvertiser(BaseModel):
+    """One row from the synced ``gam_advertisers`` cache, on the wire.
+
+    Source of truth is GAM's ``CompanyService.getCompaniesByStatement
+    WHERE type = 'ADVERTISER'``; this projection is what the Buyer
+    Routing UI's picker renders.
+    """
+
+    model_config = _config()
+
+    id: str
+    name: str
+    currency_code: str | None = None
+    status: str
+
+
+class ListGamAdvertisersResponse(BaseModel):
+    """``GET /tenants/{tid}/gam/advertisers`` response.
+
+    Cursor pagination with opaque base64-encoded offset (same shape as
+    other list endpoints — Storefront treats it as a sealed token).
+
+    ``synced_at`` reports the most-recent ``gam_advertisers.synced_at``
+    for the tenant so the picker can show "Last synced 5 minutes ago".
+    NULL when no advertisers have ever synced.
+    """
+
+    model_config = _config()
+
+    advertisers: list[GamAdvertiser]
+    next_cursor: str | None = None
+    synced_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -1,20 +1,29 @@
-"""Sprint 1.8 — buyer-advertiser routing chain.
+"""Buyer-advertiser routing chain.
 
 Resolves the GAM advertiser id for an inline ``AccountReference``
-(operator + brand + sandbox) by walking the precedence chain:
+(operator + brand + sandbox) plus the calling agent's ``principal_id``
+by walking a most-specific-wins precedence chain. Agent-tagged rules
+beat agent-agnostic rules at every brand-specificity tier:
 
     sandbox carve-out (early return)
-        -> exact (operator, brand_house, brand_id) rule
-        -> house wildcard (operator, brand_house, null) rule
-        -> operator wildcard (operator, null, null) rule
+        -> agent + operator + brand_house + brand_id    (exact, agent-specific)
+        -> agent + operator + brand_house + NULL        (house, agent-specific)
+        -> agent + operator + NULL + NULL               (operator, agent-specific)
+        -> NULL  + operator + brand_house + brand_id    (exact, any agent)
+        -> NULL  + operator + brand_house + NULL        (house, any agent)
+        -> NULL  + operator + NULL + NULL               (operator, any agent)
         -> Tenant.default_gam_advertiser_id
         -> raise TENANT_NOT_ACTIVATED
 
 The function returns a (advertiser_id, resolved_via) tuple. ``resolved_via``
 is stamped on Account rows at first-creation so /recent-buyers can color-
-code matches vs fall-throughs without re-running the chain.
+code matches vs fall-throughs without re-running the chain. The stamp
+collapses agent-specific and agent-agnostic matches into the same value
+(``exact``/``house``/``operator``) — the matched rule's ``principal_id``
+is the source of truth for callers who need to surface that distinction.
 
-See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
+See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``
+and ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``.
 """
 
 from __future__ import annotations
@@ -146,16 +155,25 @@ def _find_rule(
     operator_domain: str,
     brand_house: str | None,
     brand_id: str | None,
+    *,
+    principal_id: str | None = None,
 ) -> AdvertiserRoutingRule | None:
     """Find a routing rule matching the natural key exactly.
 
     NULL participates in the match — passing ``brand_house=None`` matches
     only rows where brand_house IS NULL (operator-wildcard rule), not rows
-    with a populated brand_house.
+    with a populated brand_house. Same for ``principal_id``: passing
+    ``None`` matches agent-agnostic rules; passing a value matches only
+    rules tagged for that specific agent.
     """
     stmt = select(AdvertiserRoutingRule).where(
         AdvertiserRoutingRule.tenant_id == tenant_id,
         AdvertiserRoutingRule.operator_domain == operator_domain,
+    )
+    stmt = (
+        stmt.where(AdvertiserRoutingRule.principal_id.is_(None))
+        if principal_id is None
+        else stmt.where(AdvertiserRoutingRule.principal_id == principal_id)
     )
     stmt = (
         stmt.where(AdvertiserRoutingRule.brand_house.is_(None))
@@ -175,6 +193,7 @@ def resolve_advertiser_for_buy(
     tenant_id: str,
     account_ref: AccountReference2,
     *,
+    principal_id: str | None = None,
     dry_run: bool = False,
 ) -> tuple[str, ResolvedVia]:
     """Resolve the GAM advertiser id for an inline AccountReference.
@@ -182,7 +201,15 @@ def resolve_advertiser_for_buy(
     Returns ``(advertiser_id, resolved_via)``. ``resolved_via`` is one of
     ``"sandbox" | "exact" | "house" | "operator" | "default"``; callers
     persist it on the Account row so /recent-buyers can render match
-    quality without re-walking the chain.
+    quality without re-walking the chain. Agent-specific and
+    agent-agnostic matches collapse to the same stamp — the matched
+    rule's ``principal_id`` is the source of truth for callers who care.
+
+    ``principal_id`` is the calling buyer agent (from auth context). When
+    set, agent-tagged rules are tried first at every brand-specificity
+    tier; agent-agnostic rules (``principal_id IS NULL``) are tried as a
+    fallback. When unset (default), only agent-agnostic rules match —
+    preserves Sprint 1.8 behavior for callers that don't pass an agent.
 
     Caller is responsible for transaction management — this function only
     reads (and mutates ``AdapterConfig.gam_sandbox_advertiser_id`` lazily
@@ -208,23 +235,29 @@ def resolve_advertiser_for_buy(
     else:
         brand_id = str(brand_id_raw)
 
-    # 1. Exact match (operator + brand_house + brand_id).
-    if brand_id is not None:
-        rule = _find_rule(session, tenant_id, operator, brand_house, brand_id)
+    # Agent-tagged tier walks first (1-3); agent-agnostic tier (4-6) is
+    # the fallback. When principal_id is None the agent-tagged tier is
+    # skipped entirely and we match Sprint 1.8 behavior exactly.
+    agent_tiers: list[str | None] = [principal_id, None] if principal_id is not None else [None]
+
+    for agent in agent_tiers:
+        # 1/4. Exact match (agent + operator + brand_house + brand_id).
+        if brand_id is not None:
+            rule = _find_rule(session, tenant_id, operator, brand_house, brand_id, principal_id=agent)
+            if rule is not None:
+                return rule.gam_advertiser_id, "exact"
+
+        # 2/5. House wildcard (agent + operator + brand_house + null).
+        rule = _find_rule(session, tenant_id, operator, brand_house, None, principal_id=agent)
         if rule is not None:
-            return rule.gam_advertiser_id, "exact"
+            return rule.gam_advertiser_id, "house"
 
-    # 2. House wildcard (operator + brand_house + null).
-    rule = _find_rule(session, tenant_id, operator, brand_house, None)
-    if rule is not None:
-        return rule.gam_advertiser_id, "house"
+        # 3/6. Operator wildcard (agent + operator + null + null).
+        rule = _find_rule(session, tenant_id, operator, None, None, principal_id=agent)
+        if rule is not None:
+            return rule.gam_advertiser_id, "operator"
 
-    # 3. Operator wildcard (operator + null + null).
-    rule = _find_rule(session, tenant_id, operator, None, None)
-    if rule is not None:
-        return rule.gam_advertiser_id, "operator"
-
-    # 4. Tenant default.
+    # 7. Tenant default.
     tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
     if tenant is None:
         raise AdCPError(
@@ -234,16 +267,17 @@ def resolve_advertiser_for_buy(
     if tenant.default_gam_advertiser_id:
         return tenant.default_gam_advertiser_id, "default"
 
-    # 5. No fallback — implicit activation gate.
+    # 8. No fallback — implicit activation gate.
     raise AdCPTenantNotActivated(
         message=(
             f"Tenant {tenant_id!r} has no default_gam_advertiser_id and no "
-            f"matching routing rule for (operator={operator!r}, "
-            f"brand_house={brand_house!r}, brand_id={brand_id!r}). "
-            f"Publisher must set a default advertiser before this tenant "
-            f"can buy media."
+            f"matching routing rule for (principal={principal_id!r}, "
+            f"operator={operator!r}, brand_house={brand_house!r}, "
+            f"brand_id={brand_id!r}). Publisher must set a default "
+            f"advertiser before this tenant can buy media."
         ),
         details={
+            "principal_id": principal_id,
             "operator": operator,
             "brand_house": brand_house,
             "brand_id": brand_id,
@@ -280,7 +314,9 @@ def create_account_from_routing(
     - ``billing="agent"`` if principal_id passed (sprint 1.6 split),
       else ``"operator"``
     """
-    advertiser_id, resolved_via = resolve_advertiser_for_buy(session, tenant_id, account_ref, dry_run=dry_run)
+    advertiser_id, resolved_via = resolve_advertiser_for_buy(
+        session, tenant_id, account_ref, principal_id=principal_id, dry_run=dry_run
+    )
 
     brand_id_raw = account_ref.brand.brand_id
     brand_id: str | None

@@ -1361,6 +1361,73 @@ class TestBuyerAdvertiserMappings:
         dup = self._post_mapping(client, auth_headers, tid, brand_house=None, brand_id=None, gam_advertiser_id="2")
         assert dup.status_code == 409
 
+    # -------------------------------------------------------------------
+    # Sprint 5 — principal_id in the natural key
+    # -------------------------------------------------------------------
+
+    def test_create_persists_principal_id(self, client, auth_headers, tid):
+        """``principal_id`` round-trips through POST and the GET projection."""
+        resp = self._post_mapping(client, auth_headers, tid, principal_id="scope3-emb")
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["principal_id"] == "scope3-emb"
+
+        list_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tid}/buyer-advertiser-mappings",
+            headers=auth_headers,
+        )
+        assert list_resp.status_code == 200
+        mappings = list_resp.get_json()["mappings"]
+        assert any(m["principal_id"] == "scope3-emb" for m in mappings)
+
+    def test_create_omits_principal_id_defaults_to_null(self, client, auth_headers, tid):
+        """Sprint 1.8 backward-compat: omitting principal_id stores NULL."""
+        resp = self._post_mapping(client, auth_headers, tid)
+        assert resp.status_code == 201
+        assert resp.get_json()["principal_id"] is None
+
+    def test_principal_id_distinguishes_otherwise_identical_rules(self, client, auth_headers, tid):
+        """Two rules with identical (operator, brand_house, brand_id) but
+        different principal_id values coexist — agent is part of the key."""
+        a = self._post_mapping(
+            client, auth_headers, tid, principal_id="scope3-emb", gam_advertiser_id="11"
+        )
+        b = self._post_mapping(
+            client, auth_headers, tid, principal_id="wstruck-buy", gam_advertiser_id="22"
+        )
+        c = self._post_mapping(client, auth_headers, tid, gam_advertiser_id="33")  # principal_id=NULL
+        assert (a.status_code, b.status_code, c.status_code) == (201, 201, 201)
+        assert len({a.get_json()["id"], b.get_json()["id"], c.get_json()["id"]}) == 3
+
+    def test_create_409_on_duplicate_with_same_principal_id(self, client, auth_headers, tid):
+        """Two rules with same (principal_id, operator, brand_house, brand_id)
+        collide via the COALESCE-unique-index — 409 with principal_id in details."""
+        first = self._post_mapping(
+            client, auth_headers, tid, principal_id="scope3-emb", gam_advertiser_id="11"
+        )
+        assert first.status_code == 201
+        dup = self._post_mapping(
+            client, auth_headers, tid, principal_id="scope3-emb", gam_advertiser_id="22"
+        )
+        assert dup.status_code == 409
+        body = dup.get_json()
+        assert body["error"] == "routing_rule_duplicate"
+        assert body["details"]["principal_id"] == "scope3-emb"
+        assert body["details"]["operator_domain"] == "interchange.io"
+        assert body["details"]["brand_house"] == "coca-cola.com"
+        assert body["details"]["brand_id"] == "sprite"
+
+    def test_create_409_details_include_null_principal_id(self, client, auth_headers, tid):
+        """When the colliding rule has principal_id=NULL the details block
+        carries that NULL through (not a missing key)."""
+        first = self._post_mapping(client, auth_headers, tid, gam_advertiser_id="11")
+        assert first.status_code == 201
+        dup = self._post_mapping(client, auth_headers, tid, gam_advertiser_id="22")
+        assert dup.status_code == 409
+        body = dup.get_json()
+        assert "principal_id" in body["details"]
+        assert body["details"]["principal_id"] is None
+
     def test_create_allows_multiple_rules_under_same_operator_when_brand_differs(self, client, auth_headers, tid):
         """Three coexisting rules under the same operator: exact, house, operator-wildcard."""
         r1 = self._post_mapping(client, auth_headers, tid, brand_house="cocacola.com", brand_id="sprite")

@@ -14,6 +14,7 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 from src.core.database.models import (
     AdapterConfig,
     CurrencyLimit,
+    GamAdvertiser,
     GAMInventory,
     PropertyTag,
     PublisherPartner,
@@ -131,3 +132,24 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+class GamAdvertiserFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """Sprint 5 piece D — synced GAM advertiser cache row.
+
+    Mirrors the Sprint 5 ``gam_advertisers`` table. Tenants get a
+    synced cache hydrated by ``sync_advertisers``; tests use this
+    factory to seed cache rows without re-running the worker.
+    """
+
+    class Meta:
+        model = GamAdvertiser
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    advertiser_id = Sequence(lambda n: str(10000 + n))
+    name = LazyAttribute(lambda o: f"Advertiser {o.advertiser_id}")
+    currency_code = "USD"
+    status = "active"

@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block title %}Buyer Routing - {{ tenant.name }}{% endblock %}
+{% block content %}
+<style>
+    .br-section { margin-bottom: 2.5rem; }
+    .br-section h2 { font-size: 1.25rem; color: #111827; margin: 0 0 0.5rem; }
+    .br-section .br-section-help { color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem; }
+    .br-card {
+        background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;
+        padding: 1.25rem; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .br-banner-warning {
+        background: #fef3c7; border: 1px solid #fcd34d; color: #92400e;
+        border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem;
+    }
+    .br-banner-warning strong { display: block; margin-bottom: 0.25rem; }
+    .br-default-value {
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        background: #f3f4f6; padding: 0.4rem 0.75rem; border-radius: 4px;
+        display: inline-block;
+    }
+    .br-table { width: 100%; border-collapse: collapse; }
+    .br-table th {
+        text-align: left; padding: 0.75rem 1rem; color: #6b7280;
+        font-size: 0.85rem; border-bottom: 2px solid #e5e7eb; font-weight: 600;
+    }
+    .br-table td {
+        padding: 0.75rem 1rem; border-bottom: 1px solid #f3f4f6;
+        font-size: 0.9rem;
+    }
+    .br-table tr:hover { background: #f9fafb; }
+    .br-table .br-empty {
+        color: #9ca3af; font-style: italic; text-align: center;
+        padding: 2rem;
+    }
+    .br-section-header {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 0.5rem;
+    }
+    .br-disabled-btn {
+        background: #e5e7eb; color: #6b7280; cursor: not-allowed;
+        border: 1px solid #d1d5db; padding: 0.5rem 1rem; border-radius: 6px;
+        font-size: 0.875rem;
+    }
+    .badge {
+        display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px;
+        font-size: 0.75rem; font-weight: 600; color: #fff;
+    }
+    .bg-success { background: #16a34a; }
+    .bg-primary { background: #2563eb; }
+    .bg-info { background: #0891b2; }
+    .bg-warning { background: #d97706; color: #fff; }
+    .bg-purple { background: #7c3aed; }
+    .bg-secondary { background: #6b7280; }
+    .bg-dark { background: #374151; }
+    .br-sandbox-summary {
+        cursor: pointer; padding: 0.75rem 1rem; background: #f3f4f6;
+        border-radius: 6px; font-weight: 500;
+    }
+</style>
+
+{% set crumbs = [
+    {"label": tenant.name, "url": url_for("tenants.dashboard", tenant_id=tenant.tenant_id)},
+    {"label": "Buyer Routing"}
+] %}
+{% set crumbs = crumbs | with_embed_root %}
+{% include "_breadcrumb.html" %}
+
+<h1 style="margin-top: 1rem;">Buyer Routing</h1>
+<p style="color: #6b7280; margin-bottom: 2rem;">
+    Decide which (operator, brand) triples land on which GAM advertiser.
+    The default catches anything no rule matches.
+</p>
+
+<!-- Section 1: Default GAM advertiser -->
+<section class="br-section" data-section="default-advertiser">
+    <h2>Default GAM advertiser</h2>
+    <p class="br-section-help">
+        All unmapped buys land here. Required for activation —
+        <code>TENANT_NOT_ACTIVATED</code> is returned to buyers until this is set.
+    </p>
+    {% if tenant.default_gam_advertiser_id %}
+        <div class="br-card">
+            <span class="br-default-value">{{ tenant.default_gam_advertiser_id }}</span>
+            <span style="color: #6b7280; margin-left: 0.5rem; font-size: 0.875rem;">
+                (advertiser name resolution lands in workstream A's cache)
+            </span>
+        </div>
+    {% else %}
+        <div class="br-banner-warning" data-testid="not-activated-banner">
+            <strong>⚠️ Tenant not activated</strong>
+            Set a default GAM advertiser to start accepting commercial buys.
+            Until this is set, buyers receive <code>TENANT_NOT_ACTIVATED</code>.
+        </div>
+    {% endif %}
+</section>
+
+<!-- Section 2: Routing rules -->
+<section class="br-section" data-section="routing-rules">
+    <div class="br-section-header">
+        <h2>Routing rules</h2>
+        <button class="br-disabled-btn" disabled
+                title="Editor coming in workstream C">+ Add rule</button>
+    </div>
+    <p class="br-section-help">
+        Most-specific match wins. Em-dash (—) means "any" — a NULL field
+        matches every value at that axis.
+    </p>
+    <div class="br-card" style="padding: 0;">
+    <table class="br-table">
+        <thead>
+            <tr>
+                {% if not tenant.is_embedded %}<th>Agent</th>{% endif %}
+                <th>Operator</th>
+                <th>Brand house</th>
+                <th>Brand id</th>
+                <th>GAM advertiser id</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if rules %}
+                {% for rule in rules %}
+                <tr>
+                    {% if not tenant.is_embedded %}
+                    <td>{{ rule.principal_id if rule.principal_id else "—" }}</td>
+                    {% endif %}
+                    <td>{{ rule.operator_domain }}</td>
+                    <td>{{ rule.brand_house if rule.brand_house else "—" }}</td>
+                    <td>{{ rule.brand_id if rule.brand_id else "—" }}</td>
+                    <td><code>{{ rule.gam_advertiser_id }}</code></td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="{{ 5 if not tenant.is_embedded else 4 }}" class="br-empty">
+                        No routing rules yet. All buys fall through to the default advertiser.
+                    </td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+    </div>
+</section>
+
+<!-- Section 3: Recent activity -->
+<section class="br-section" data-section="recent-activity">
+    <h2>Recent activity (last 30 days)</h2>
+    <p class="br-section-help">
+        Distinct (operator, brand) triples seen recently. Amber rows fall
+        through to the default — promote them to a rule for tighter routing.
+    </p>
+    <div class="br-card" style="padding: 0;">
+    <table class="br-table">
+        <thead>
+            <tr>
+                {% if not tenant.is_embedded %}<th>Agent</th>{% endif %}
+                <th>Operator</th>
+                <th>Brand house</th>
+                <th>Brand id</th>
+                <th>Buys</th>
+                <th>Advertiser</th>
+                <th>Route</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if activity %}
+                {% for row in activity %}
+                <tr>
+                    {% if not tenant.is_embedded %}
+                    <td>{{ row.principal_id if row.principal_id else "—" }}</td>
+                    {% endif %}
+                    <td>{{ row.operator_domain }}</td>
+                    <td>{{ row.brand_house if row.brand_house else "—" }}</td>
+                    <td>{{ row.brand_id if row.brand_id else "—" }}</td>
+                    <td>{{ row.request_count }}</td>
+                    <td><code>{{ row.resolved_gam_advertiser_id if row.resolved_gam_advertiser_id else "—" }}</code></td>
+                    <td>
+                        <span class="badge {{ row.badge_class }}">{{ row.resolved_via }}</span>
+                    </td>
+                    <td>
+                        <button class="br-disabled-btn"
+                                disabled
+                                title="Promotion coming in workstream E">Promote</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="{{ 8 if not tenant.is_embedded else 7 }}" class="br-empty">
+                        No buyer activity in the last 30 days.
+                    </td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+    </div>
+</section>
+
+<!-- Section 4: Sandbox accounts -->
+<section class="br-section" data-section="sandbox">
+    <details>
+        <summary class="br-sandbox-summary">
+            ▶ Sandbox accounts ({{ sandbox_rows|length }})
+        </summary>
+        <div style="margin-top: 1rem;">
+            <p class="br-section-help">
+                Auto-routed to the per-tenant sandbox advertiser. Don't bill,
+                don't count against inventory. Useful for buyer-side dry runs.
+            </p>
+            {% if sandbox_rows %}
+            <div class="br-card" style="padding: 0;">
+            <table class="br-table">
+                <thead>
+                    <tr>
+                        {% if not tenant.is_embedded %}<th>Agent</th>{% endif %}
+                        <th>Operator</th>
+                        <th>Brand house</th>
+                        <th>Brand id</th>
+                        <th>Buys</th>
+                        <th>Route</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in sandbox_rows %}
+                    <tr>
+                        {% if not tenant.is_embedded %}
+                        <td>{{ row.principal_id if row.principal_id else "—" }}</td>
+                        {% endif %}
+                        <td>{{ row.operator_domain }}</td>
+                        <td>{{ row.brand_house if row.brand_house else "—" }}</td>
+                        <td>{{ row.brand_id if row.brand_id else "—" }}</td>
+                        <td>{{ row.request_count }}</td>
+                        <td><span class="badge {{ row.badge_class }}">{{ row.resolved_via }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <p style="color: #9ca3af; font-style: italic;">No sandbox accounts.</p>
+            {% endif %}
+        </div>
+    </details>
+</section>
+
+{% endblock %}

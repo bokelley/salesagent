@@ -31,6 +31,7 @@ from src.admin.api_schemas.tenant_management import (
     GAMAdapterConfig,
     ListAccountsManagedResponse,
     ListBuyerAdvertiserMappingsResponse,
+    ListGamAdvertisersResponse,
     ListRecentBuyersResponse,
     ListTenantsResponse,
     MockAdapterConfig,
@@ -49,11 +50,15 @@ from src.admin.api_schemas.tenant_management import (
     UpdateTenantRequest,
 )
 from src.admin.api_schemas.tenant_management import (
+    GamAdvertiser as GamAdvertiserSchema,
+)
+from src.admin.api_schemas.tenant_management import (
     AdapterConfig as AdapterConfigSchema,
 )
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
+from src.services.recent_buyers_service import compute_recent_buyers
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
@@ -61,6 +66,7 @@ from src.core.database.models import (
     AdapterConfig,
     AdvertiserRoutingRule,
     CurrencyLimit,
+    GamAdvertiser,
     MediaBuy,
     Principal,
     PropertyTag,
@@ -1325,6 +1331,7 @@ def _routing_rule_to_mapping(rule: AdvertiserRoutingRule) -> BuyerAdvertiserMapp
     """Project an AdvertiserRoutingRule ORM row onto the wire schema."""
     return BuyerAdvertiserMapping(
         id=rule.id,
+        principal_id=rule.principal_id,
         operator_domain=rule.operator_domain,
         brand_house=rule.brand_house,
         brand_id=rule.brand_id,
@@ -1343,6 +1350,29 @@ def _is_routing_rule_unique_violation(exc: IntegrityError) -> bool:
     """
     s = str(exc.orig).lower() if exc.orig else str(exc).lower()
     return "uq_routing_rule_natural_key" in s or "advertiser_routing_rules" in s
+
+
+def _validate_gam_advertiser_id(session, tenant_id: str, gam_advertiser_id: str) -> bool:
+    """Sprint 5 piece D — confirm ``gam_advertiser_id`` is in the synced cache.
+
+    Graceful degradation: when the cache is empty (sync hasn't run yet) we
+    return True so rule creation isn't blocked during onboarding. This is the
+    "(a) graceful degradation" branch from the sprint spec — the alternative
+    (seed cache rows in every test fixture) would couple unrelated test
+    setup to this validator.
+    """
+    # FIXME(embedded-mode-sprint-5-piece-D): GamAdvertiserRepository TBD
+    cache_total = session.scalar(
+        select(func.count()).select_from(GamAdvertiser).where(GamAdvertiser.tenant_id == tenant_id)
+    )
+    if not cache_total:
+        return True
+    exists = session.scalar(
+        select(func.count())
+        .select_from(GamAdvertiser)
+        .where(GamAdvertiser.tenant_id == tenant_id, GamAdvertiser.advertiser_id == gam_advertiser_id)
+    )
+    return bool(exists)
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/buyer-advertiser-mappings", methods=["GET"])
@@ -1395,11 +1425,14 @@ def create_buyer_advertiser_mapping(tenant_id: str):
     - 409 on duplicate ``(operator_domain, brand_house, brand_id)`` tuple
       (NULLs participate in uniqueness via COALESCE in the unique index).
 
-    NOTE: ``gam_advertiser_id`` cache validation against the synced GAM
-    advertiser list is deferred to sprint 1.8 piece D (the GET
-    /gam/advertisers endpoint introduces the cache table the validator
-    needs). Until then we accept any well-formed id and let the routing
-    chain surface a runtime error if the advertiser doesn't exist.
+    Validation: ``gam_advertiser_id`` must reference a row in this
+    tenant's synced ``gam_advertisers`` cache (Sprint 5 piece D — the
+    deferred Sprint 1.8 validator finally lands here).
+
+    Graceful degradation: if the cache is empty (sync hasn't run yet —
+    new tenant, GAM not connected, etc.) we skip the check and accept
+    the id. This avoids breaking the rule-creation flow during
+    onboarding before the first sync completes.
     """
     req: CreateBuyerAdvertiserMappingRequest = request.context.json  # type: ignore[attr-defined]
 
@@ -1417,9 +1450,19 @@ def create_buyer_advertiser_mapping(tenant_id: str):
         if not tenant:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
+        if not _validate_gam_advertiser_id(session, tenant_id, req.gam_advertiser_id):
+            return _api_error(
+                "invalid_advertiser_id",
+                f"gam_advertiser_id {req.gam_advertiser_id!r} is not in the synced advertisers cache "
+                f"for this tenant. Refresh the GAM advertisers cache or pick an existing advertiser.",
+                400,
+                details={"gam_advertiser_id": req.gam_advertiser_id},
+            )
+
         rule = AdvertiserRoutingRule(
             id=f"rule_{uuid.uuid4().hex[:12]}",
             tenant_id=tenant_id,
+            principal_id=req.principal_id,
             operator_domain=req.operator_domain,
             brand_house=req.brand_house,
             brand_id=req.brand_id,
@@ -1433,9 +1476,10 @@ def create_buyer_advertiser_mapping(tenant_id: str):
             if _is_routing_rule_unique_violation(exc):
                 return _api_error(
                     "routing_rule_duplicate",
-                    "A routing rule with this (operator_domain, brand_house, brand_id) tuple already exists.",
+                    "A routing rule with this (principal_id, operator_domain, brand_house, brand_id) tuple already exists.",
                     409,
                     details={
+                        "principal_id": req.principal_id,
                         "operator_domain": req.operator_domain,
                         "brand_house": req.brand_house,
                         "brand_id": req.brand_id,
@@ -1482,6 +1526,8 @@ def patch_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
                 404,
             )
 
+        if req.principal_id is not None:
+            rule.principal_id = req.principal_id
         if req.brand_house is not None:
             rule.brand_house = req.brand_house
         if req.brand_id is not None:
@@ -1510,9 +1556,10 @@ def patch_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
             if _is_routing_rule_unique_violation(exc):
                 return _api_error(
                     "routing_rule_duplicate",
-                    "A routing rule with this (operator_domain, brand_house, brand_id) tuple already exists.",
+                    "A routing rule with this (principal_id, operator_domain, brand_house, brand_id) tuple already exists.",
                     409,
                     details={
+                        "principal_id": rule.principal_id,
                         "operator_domain": rule.operator_domain,
                         "brand_house": rule.brand_house,
                         "brand_id": rule.brand_id,
@@ -1591,79 +1638,24 @@ def list_recent_buyers(tenant_id: str):
     except ValueError:
         limit = 100
 
-    cutoff = datetime.now(UTC) - timedelta(days=days)
-
     with get_db_session() as session:
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-        # Aggregate MediaBuy counts + last_seen per Account, scoped to the
-        # last N days. Accounts with no recent buys are still returned —
-        # the publisher might want to see a buyer agent that's been
-        # provisioned but hasn't transacted yet.
-        request_count_subq = (
-            select(
-                MediaBuy.account_id.label("account_id"),
-                func.count().label("request_count"),
-                func.max(MediaBuy.created_at).label("last_seen_at"),
-            )
-            .where(
-                MediaBuy.tenant_id == tenant_id,
-                MediaBuy.created_at >= cutoff,
-                MediaBuy.account_id.is_not(None),
-            )
-            .group_by(MediaBuy.account_id)
-            .subquery()
+    rows = compute_recent_buyers(tenant_id, days=days, limit=limit)
+    buyers = [
+        RecentBuyer(
+            operator_domain=row.operator_domain,
+            brand_house=row.brand_house,
+            brand_id=row.brand_id,
+            last_seen_at=row.last_seen_at,
+            request_count=row.request_count,
+            resolved_gam_advertiser_id=row.resolved_gam_advertiser_id,
+            resolved_via=row.resolved_via,
         )
-
-        rows = session.execute(
-            select(
-                Account,
-                request_count_subq.c.request_count,
-                request_count_subq.c.last_seen_at,
-            )
-            .outerjoin(
-                request_count_subq,
-                Account.account_id == request_count_subq.c.account_id,
-            )
-            .where(Account.tenant_id == tenant_id)
-            .order_by(
-                # Active buyers first (with recent activity), then provisioned
-                # accounts that haven't transacted, ordered by Account.created_at desc.
-                request_count_subq.c.last_seen_at.desc().nullslast(),
-                Account.created_at.desc(),
-            )
-            .limit(limit)
-        ).all()
-
-        buyers: list[RecentBuyer] = []
-        for account, request_count, last_seen in rows:
-            brand_dict: dict | None
-            if account.brand is None:
-                brand_dict = None
-            elif isinstance(account.brand, dict):
-                brand_dict = account.brand
-            elif hasattr(account.brand, "model_dump"):
-                brand_dict = account.brand.model_dump(exclude_none=True)
-            else:
-                brand_dict = dict(account.brand)
-            brand_house = (brand_dict or {}).get("domain")
-            brand_id = (brand_dict or {}).get("brand_id")
-
-            advertiser_id = _account_advertiser_id(account)
-            buyers.append(
-                RecentBuyer(
-                    operator_domain=account.operator or "",
-                    brand_house=brand_house,
-                    brand_id=brand_id,
-                    last_seen_at=last_seen or account.created_at,
-                    request_count=int(request_count or 0),
-                    resolved_gam_advertiser_id=advertiser_id,
-                    resolved_via=account.resolved_via or "unknown",
-                )
-            )
-
+        for row in rows
+    ]
     return jsonify(ListRecentBuyersResponse(buyers=buyers).model_dump(mode="json"))
 
 
@@ -1752,6 +1744,116 @@ def refresh_tenant(tenant_id: str):
     response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=now)
     invalidate_status_cache(tenant_id)
     return jsonify(response.model_dump(mode="json")), 202
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 piece D — GAM advertisers cache lookup
+# ---------------------------------------------------------------------------
+
+
+_GAM_ADVERTISERS_DEFAULT_LIMIT = 50
+_GAM_ADVERTISERS_MAX_LIMIT = 500
+
+
+def _decode_advertisers_cursor(raw: str | None) -> int:
+    """Decode the opaque base64 ``{"offset": N}`` cursor.
+
+    Invalid / empty cursors yield offset 0 — never raise on bad client
+    input here because the cursor is supposed to be sealed but we don't
+    want one stale bookmark to break the picker.
+    """
+    if not raw:
+        return 0
+    import base64
+
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(raw.encode()).decode())
+        offset = int(payload.get("offset", 0))
+        return max(0, offset)
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return 0
+
+
+def _encode_advertisers_cursor(offset: int) -> str:
+    """Encode ``{"offset": N}`` as the opaque base64 cursor."""
+    import base64
+
+    return base64.urlsafe_b64encode(json.dumps({"offset": int(offset)}).encode()).decode()
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/gam/advertisers", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListGamAdvertisersResponse, HTTP_404=ApiError))
+def list_gam_advertisers(tenant_id: str):
+    """Searchable, paginated read over the synced ``gam_advertisers`` cache.
+
+    Reads from the local cache, never from live GAM (10k+ advertiser
+    networks make per-keystroke round trips prohibitive). Sync is
+    triggered separately via ``POST /refresh`` or the cron worker.
+
+    Query params:
+    - ``q`` (str, optional) — case-insensitive substring on ``name`` OR
+      exact match on ``id`` if numeric. ``q`` < 2 chars returns the
+      first page unfiltered (avoids expensive scan from typing first
+      character).
+    - ``limit`` (int, default 50, max 500) — page size.
+    - ``cursor`` (opaque base64, optional) — page bookmark.
+
+    ``synced_at`` reports the most-recent ``gam_advertisers.synced_at``
+    for the tenant so the picker can show "Last synced 5 minutes ago".
+    """
+    q_raw = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit", _GAM_ADVERTISERS_DEFAULT_LIMIT))
+    except ValueError:
+        limit = _GAM_ADVERTISERS_DEFAULT_LIMIT
+    limit = max(1, min(_GAM_ADVERTISERS_MAX_LIMIT, limit))
+    offset = _decode_advertisers_cursor(request.args.get("cursor"))
+
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        # FIXME(embedded-mode-sprint-5-piece-D): GamAdvertiserRepository TBD
+        base = select(GamAdvertiser).where(GamAdvertiser.tenant_id == tenant_id)
+
+        # ``q`` shape decides the filter:
+        #   numeric → exact id match (single-result path)
+        #   >= 2 chars → case-insensitive name substring
+        #   else → unfiltered (avoids the expensive scan from a
+        #   single-character keystroke; also the empty / no-input case)
+        if q_raw and q_raw.isdigit():
+            base = base.where(GamAdvertiser.advertiser_id == q_raw)
+        elif len(q_raw) >= 2:
+            base = base.where(func.lower(GamAdvertiser.name).contains(q_raw.lower()))
+
+        ordered = base.order_by(GamAdvertiser.name.asc(), GamAdvertiser.advertiser_id.asc())
+        # Fetch one extra row to know whether next_cursor should be set
+        # without a separate count query.
+        rows = list(session.scalars(ordered.limit(limit + 1).offset(offset)).all())
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        synced_at = session.scalar(
+            select(func.max(GamAdvertiser.synced_at)).where(GamAdvertiser.tenant_id == tenant_id)
+        )
+
+    advertisers = [
+        GamAdvertiserSchema(
+            id=row.advertiser_id,
+            name=row.name,
+            currency_code=row.currency_code,
+            status=row.status,
+        )
+        for row in rows
+    ]
+    response = ListGamAdvertisersResponse(
+        advertisers=advertisers,
+        next_cursor=_encode_advertisers_cursor(offset + limit) if has_more else None,
+        synced_at=synced_at,
+    )
+    return jsonify(response.model_dump(mode="json"))
 
 
 # Register all spectree-validated routes with the OpenAPI generator.

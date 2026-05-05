@@ -35,6 +35,7 @@ from src.admin.blueprints.settings import settings_bp, tenant_management_setting
 from src.admin.blueprints.signals_agents import signals_agents_bp
 
 # from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
+from src.admin.blueprints.buyer_routing import buyer_routing_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
@@ -431,6 +432,7 @@ def create_app(config=None):
     app.register_blueprint(oidc_bp)  # OIDC/OAuth routes at /auth/oidc
     app.register_blueprint(tenant_management_settings_bp)  # Tenant management settings at /settings
     app.register_blueprint(tenants_bp, url_prefix="/tenant")
+    app.register_blueprint(buyer_routing_bp)  # /tenant/<tid>/buyer-routing — Sprint 5 workstream B
     app.register_blueprint(accounts_bp, url_prefix="/tenant/<tenant_id>/accounts")
     app.register_blueprint(products_bp, url_prefix="/tenant/<tenant_id>/products")
     app.register_blueprint(principals_bp, url_prefix="/tenant/<tenant_id>")

@@ -101,15 +101,32 @@ def tenant_id_factory(integration_db):
         session.commit()
 
 
-def _add_rule(tenant_id: str, operator: str, brand_house: str | None, brand_id: str | None, advertiser_id: str) -> str:
-    """Insert a routing rule directly. Returns the rule id."""
-    rule_id = f"rule_{tenant_id[-6:]}_{advertiser_id}"
+def _add_rule(
+    tenant_id: str,
+    operator: str,
+    brand_house: str | None,
+    brand_id: str | None,
+    advertiser_id: str,
+    *,
+    principal_id: str | None = None,
+) -> str:
+    """Insert a routing rule directly. Returns the rule id.
+
+    Rule ids are bounded to ``String(40)`` in the model — we use a hash of
+    the tuple to keep length predictable across the full matrix.
+    """
+    import hashlib
+
+    parts = f"{tenant_id}|{advertiser_id}|{principal_id or ''}|{brand_house or ''}|{brand_id or ''}"
+    digest = hashlib.sha256(parts.encode()).hexdigest()[:16]
+    rule_id = f"rule_{digest}"
     with get_db_session() as session:
         session.info["management_api_caller"] = True
         session.add(
             AdvertiserRoutingRule(
                 id=rule_id,
                 tenant_id=tenant_id,
+                principal_id=principal_id,
                 operator_domain=operator,
                 brand_house=brand_house,
                 brand_id=brand_id,
@@ -246,6 +263,104 @@ class TestResolutionChain:
         # Falls through past exact (skipped) and house (no rule) to default.
         assert advertiser == "default_adv"
         assert via == "default"
+
+    # ---------------------------------------------------------------------
+    # Sprint 5 — agent in the routing key. Agent-tagged rules beat
+    # agent-agnostic rules at every brand-specificity tier.
+    # ---------------------------------------------------------------------
+
+    def test_agent_exact_beats_agnostic_exact(self, tenant_id_factory):
+        """Two exact rules under the same triple — one agent-tagged for
+        ``scope3-emb``, one agent-agnostic. The agent-tagged rule wins
+        when scope3-emb is the caller."""
+        tid = tenant_id_factory()
+        _add_rule(tid, "interchange.io", "coca-cola.com", "sprite", "agent_adv", principal_id="scope3-emb")
+        _add_rule(tid, "interchange.io", "coca-cola.com", "sprite", "agnostic_adv")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="sprite")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref, principal_id="scope3-emb")
+
+        assert advertiser == "agent_adv"
+        assert via == "exact"
+
+    def test_agent_house_beats_agent_operator(self, tenant_id_factory):
+        """Same agent, two rules — house-level beats operator-level for that agent."""
+        tid = tenant_id_factory()
+        _add_rule(tid, "interchange.io", "coca-cola.com", None, "agent_house_adv", principal_id="scope3-emb")
+        _add_rule(tid, "interchange.io", None, None, "agent_operator_adv", principal_id="scope3-emb")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="dasani")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref, principal_id="scope3-emb")
+
+        assert advertiser == "agent_house_adv"
+        assert via == "house"
+
+    def test_agent_house_beats_agnostic_exact(self, tenant_id_factory):
+        """All agent-tagged tiers (1-3) beat any agent-agnostic tier (4-6).
+        Agent-tagged house (tier 2) wins over agent-agnostic exact (tier 4)."""
+        tid = tenant_id_factory()
+        _add_rule(tid, "interchange.io", "coca-cola.com", None, "agent_house_adv", principal_id="scope3-emb")
+        _add_rule(tid, "interchange.io", "coca-cola.com", "sprite", "agnostic_exact_adv")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="sprite")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref, principal_id="scope3-emb")
+
+        assert advertiser == "agent_house_adv"
+        assert via == "house"
+
+    def test_agent_falls_through_to_agnostic_when_no_agent_rule(self, tenant_id_factory):
+        """Agent has no tagged rule for this triple — falls through to
+        the agnostic tier and matches the agent-agnostic exact rule."""
+        tid = tenant_id_factory()
+        _add_rule(tid, "interchange.io", "coca-cola.com", "sprite", "agnostic_adv")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="sprite")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref, principal_id="wstruck-buy")
+
+        assert advertiser == "agnostic_adv"
+        assert via == "exact"
+
+    def test_agent_with_no_rules_falls_through_to_default(self, tenant_id_factory):
+        """Tagged rules for a different agent must NOT match the caller."""
+        tid = tenant_id_factory(default_advertiser="default_adv")
+        _add_rule(tid, "interchange.io", "coca-cola.com", "sprite", "other_agent_adv", principal_id="other-agent")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="sprite")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref, principal_id="scope3-emb")
+
+        assert advertiser == "default_adv"
+        assert via == "default"
+
+    def test_principal_id_none_only_matches_agnostic_rules(self, tenant_id_factory):
+        """Sprint 1.8 backward-compat: caller passes no principal_id, an
+        agent-tagged rule exists — must NOT match. Falls through to default."""
+        tid = tenant_id_factory(default_advertiser="default_adv")
+        _add_rule(tid, "interchange.io", "coca-cola.com", "sprite", "agent_adv", principal_id="scope3-emb")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="sprite")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref)  # no principal_id
+
+        assert advertiser == "default_adv"
+        assert via == "default"
+
+    def test_sprint_1_8_behavior_preserved_when_principal_id_none(self, tenant_id_factory):
+        """Caller passes no principal_id, only agnostic rules exist — Sprint 1.8
+        chain matches identically to before this change."""
+        tid = tenant_id_factory()
+        _add_rule(tid, "interchange.io", "coca-cola.com", None, "agnostic_house_adv")
+        ref = _make_account_ref(brand_domain="coca-cola.com", brand_id="sprite")
+
+        with get_db_session() as session:
+            advertiser, via = resolve_advertiser_for_buy(session, tid, ref)
+
+        assert advertiser == "agnostic_house_adv"
+        assert via == "house"
 
 
 # ---------------------------------------------------------------------------
