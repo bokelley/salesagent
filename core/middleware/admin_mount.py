@@ -119,9 +119,14 @@ class AdminWSGIMount:
             # ``location = /`` block in the multi-tenant config that
             # proxied apex root → /signup. Subdomain hosts (tenant.*,
             # admin.*) are unaffected — they fall through to A2A or
-            # admin dispatch as before.
+            # admin dispatch as before. Query string is preserved so
+            # marketing attribution (utm_source, ref, etc.) survives.
             if path == "/" and self._is_apex_host(scope):
-                await self._send_redirect(send, "/signup")
+                qs = scope.get("query_string", b"") or b""
+                location = "/signup"
+                if qs:
+                    location = location + "?" + qs.decode("latin-1")
+                await self._send_redirect(send, location)
                 return
 
             for prefix in self.prefixes:
@@ -178,7 +183,9 @@ class AdminWSGIMount:
     def _is_apex_host(self, scope: dict) -> bool:
         """True if the request host is the bare SALES_AGENT_DOMAIN (no subdomain).
 
-        Strips any port suffix before comparing. Returns False when
+        Strips any port suffix before comparing. Comparison is
+        case-insensitive — Host headers are case-insensitive per RFC 3986
+        and proxies can normalize either way. Returns False when
         ``SALES_AGENT_DOMAIN`` is unset (single-tenant / dev), so localhost
         and ``localtest.me`` aliases never trigger the apex redirect.
         """
@@ -189,11 +196,17 @@ class AdminWSGIMount:
         if not host:
             return False
         host_no_port = host.split(":", 1)[0]
-        return host_no_port == sales_domain
+        return host_no_port.lower() == sales_domain.lower()
 
     @staticmethod
     async def _send_redirect(send: Any, location: str) -> None:
-        """Emit a 302 redirect through the ASGI ``send`` channel."""
+        """Emit a 302 redirect through the ASGI ``send`` channel.
+
+        Uses 302 (Found) — the apex landing target may move (today
+        ``/signup``, tomorrow a marketing page), so the redirect is
+        intentionally non-cacheable. ``cache-control: no-store`` keeps
+        intermediaries from pinning a stale target during rollout.
+        """
         await send(
             {
                 "type": "http.response.start",
@@ -201,6 +214,7 @@ class AdminWSGIMount:
                 "headers": [
                     (b"location", location.encode("latin-1")),
                     (b"content-length", b"0"),
+                    (b"cache-control", b"no-store"),
                 ],
             }
         )
