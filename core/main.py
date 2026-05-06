@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
 from a2wsgi import WSGIMiddleware
 from adcp.decisioning import (
@@ -98,9 +97,7 @@ async def _resolve_tenant(host: str) -> Tenant | None:
     """
     if host in _BARE_DEV_HOSTS:
         with get_db_session() as session:
-            row = session.scalars(
-                select(TenantRow).filter_by(tenant_id="default", is_active=True)
-            ).first()
+            row = session.scalars(select(TenantRow).filter_by(tenant_id="default", is_active=True)).first()
         if row is None:
             return None
         return Tenant(id=row.tenant_id, display_name=row.name)
@@ -124,14 +121,10 @@ async def _resolve_tenant(host: str) -> Tenant | None:
     with get_db_session() as session:
         if subdomain != host:
             # Strategy 2: subdomain-on-known-suffix lookup.
-            row = session.scalars(
-                select(TenantRow).filter_by(subdomain=subdomain, is_active=True)
-            ).first()
+            row = session.scalars(select(TenantRow).filter_by(subdomain=subdomain, is_active=True)).first()
         else:
             # Strategy 3: virtual_host (production custom domain).
-            row = session.scalars(
-                select(TenantRow).filter_by(virtual_host=host, is_active=True)
-            ).first()
+            row = session.scalars(select(TenantRow).filter_by(virtual_host=host, is_active=True)).first()
 
     if row is None:
         return None
@@ -171,9 +164,7 @@ def _validate_token(token: str) -> Principal | None:
     if not token:
         return None
     with get_db_session() as session:
-        row = session.scalars(
-            select(PrincipalRow).filter_by(access_token=token)
-        ).first()
+        row = session.scalars(select(PrincipalRow).filter_by(access_token=token)).first()
     if row is None:
         return None
     return Principal(
@@ -198,9 +189,7 @@ async def build_platform_for_tenant(tenant_id: str) -> DecisioningPlatform:
       (reads from the salesagent ``products`` table)
     """
     with get_db_session() as session:
-        row = session.scalars(
-            select(TenantRow).filter_by(tenant_id=tenant_id, is_active=True)
-        ).first()
+        row = session.scalars(select(TenantRow).filter_by(tenant_id=tenant_id, is_active=True)).first()
 
     if row is None:
         # LazyPlatformRouter callers already passed the SubdomainTenantMiddleware
@@ -265,6 +254,15 @@ def build_router() -> LazyPlatformRouter:
     return router
 
 
+DEFAULT_DEV_TENANT_SUBDOMAINS: tuple[str, ...] = (
+    "default",
+    "acme",
+    "beta",
+    "wonderstruck",
+    "test",
+)
+
+
 def _allowed_hosts() -> list[str]:
     """FastMCP DNS-rebinding allowlist for dev/prod base domains.
 
@@ -275,21 +273,30 @@ def _allowed_hosts() -> list[str]:
     Starlette's TrustedHostMiddleware further out).
 
     For local dev we enumerate the well-known tenant subdomains
-    (``default.localhost``, ``acme.localhost``, etc.). Production
-    deployments either enumerate a known closed set OR set
+    (``default.localhost``, ``acme.localhost``, etc.). The list is
+    overridable via the ``DEV_TENANT_SUBDOMAINS`` env var (comma-separated,
+    leading/trailing whitespace ignored) so contributors can register a
+    new tenant without editing this file. Empty / unset falls back to
+    :data:`DEFAULT_DEV_TENANT_SUBDOMAINS`.
+
+    Production deployments either enumerate a known closed set OR set
     ``enable_dns_rebinding_protection=False`` and rely on the cloud
     LB / WAF for Host validation.
 
     Tracked upstream: MCP framework needs subdomain wildcards or a
-    callable Host validator for multi-tenant deployments.
+    callable Host validator for multi-tenant deployments. (See #26.)
     """
     base = ["localhost", "127.0.0.1", "0.0.0.0"]
-    # Local dev tenant subdomains. Add new tenants here when they're
-    # registered (admin UI is on the kill-nginx-spike followups).
+
+    raw = os.getenv("DEV_TENANT_SUBDOMAINS")
+    if raw is not None:
+        dev_tenants = tuple(name.strip() for name in raw.split(",") if name.strip())
+    else:
+        dev_tenants = DEFAULT_DEV_TENANT_SUBDOMAINS
+
     # Both .localhost and .localtest.me — localtest.me is the alias we
     # actually use (Google OAuth accepts it as a real public TLD; .localhost
     # is rejected as not-a-public-TLD).
-    dev_tenants = ["default", "acme", "beta", "wonderstruck", "test"]
     for tenant in dev_tenants:
         base.append(f"{tenant}.localhost")
         base.append(f"{tenant}.localtest.me")
@@ -380,9 +387,7 @@ def main() -> None:
         # cloud LB / WAF that already validates Host can set
         # ``ADCP_DNS_REBINDING_PROTECTION=false`` to skip the second
         # check.
-        enable_dns_rebinding_protection=(
-            os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"
-        ),
+        enable_dns_rebinding_protection=(os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
     )
 
 
