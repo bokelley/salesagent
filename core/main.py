@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from a2wsgi import WSGIMiddleware
 from adcp.decisioning import (
@@ -263,6 +264,39 @@ DEFAULT_DEV_TENANT_SUBDOMAINS: tuple[str, ...] = (
 )
 
 
+_VALID_DEV_TENANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _parse_dev_tenant_env(raw: str | None) -> tuple[str, ...]:
+    """Parse ``DEV_TENANT_SUBDOMAINS`` into a tenant tuple, or return defaults.
+
+    Falls back to :data:`DEFAULT_DEV_TENANT_SUBDOMAINS` when:
+      * the var is unset (``raw is None``);
+      * the var is set but empty / whitespace-only — treating empty as
+        "use defaults" avoids the footgun of accidentally exporting an
+        empty value (e.g. unset shell var interpolation) and silently
+        locking out every dev tenant.
+
+    Names are validated against ``^[a-z0-9][a-z0-9-]*$`` (RFC-1123-ish
+    DNS labels). Invalid names are dropped with a warning rather than
+    raising, so a single bad entry doesn't break boot.
+    """
+    if raw is None:
+        return DEFAULT_DEV_TENANT_SUBDOMAINS
+    candidates = [name.strip() for name in raw.split(",")]
+    candidates = [name for name in candidates if name]
+    if not candidates:
+        return DEFAULT_DEV_TENANT_SUBDOMAINS
+
+    valid: list[str] = []
+    for name in candidates:
+        if _VALID_DEV_TENANT_RE.match(name):
+            valid.append(name)
+        else:
+            logger.warning("DEV_TENANT_SUBDOMAINS: dropping invalid tenant name %r", name)
+    return tuple(valid) if valid else DEFAULT_DEV_TENANT_SUBDOMAINS
+
+
 def _allowed_hosts() -> list[str]:
     """FastMCP DNS-rebinding allowlist for dev/prod base domains.
 
@@ -273,11 +307,9 @@ def _allowed_hosts() -> list[str]:
     Starlette's TrustedHostMiddleware further out).
 
     For local dev we enumerate the well-known tenant subdomains
-    (``default.localhost``, ``acme.localhost``, etc.). The list is
-    overridable via the ``DEV_TENANT_SUBDOMAINS`` env var (comma-separated,
-    leading/trailing whitespace ignored) so contributors can register a
-    new tenant without editing this file. Empty / unset falls back to
-    :data:`DEFAULT_DEV_TENANT_SUBDOMAINS`.
+    (``default.localhost``, ``acme.localhost``, etc.). Override at boot
+    via ``DEV_TENANT_SUBDOMAINS`` (comma-separated). See
+    :func:`_parse_dev_tenant_env` for the parsing contract.
 
     Production deployments either enumerate a known closed set OR set
     ``enable_dns_rebinding_protection=False`` and rely on the cloud
@@ -288,11 +320,7 @@ def _allowed_hosts() -> list[str]:
     """
     base = ["localhost", "127.0.0.1", "0.0.0.0"]
 
-    raw = os.getenv("DEV_TENANT_SUBDOMAINS")
-    if raw is not None:
-        dev_tenants = tuple(name.strip() for name in raw.split(",") if name.strip())
-    else:
-        dev_tenants = DEFAULT_DEV_TENANT_SUBDOMAINS
+    dev_tenants = _parse_dev_tenant_env(os.getenv("DEV_TENANT_SUBDOMAINS"))
 
     # Both .localhost and .localtest.me — localtest.me is the alias we
     # actually use (Google OAuth accepts it as a real public TLD; .localhost

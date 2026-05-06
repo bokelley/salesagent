@@ -53,15 +53,20 @@ class TestAllowedHostsEnvOverride:
         # Whitespace-padded names don't sneak in literally
         assert " alpha .localhost" not in hosts
 
-    def test_empty_env_override_leaves_no_tenant_subdomains(self):
-        """Explicit empty value means "no dev tenants" — only loopback survives."""
+    def test_empty_env_override_falls_back_to_defaults(self):
+        """Empty / whitespace-only value behaves like unset — avoids footgun
+        where an accidentally-empty shell var locks out every dev tenant.
+        """
         with patch.dict("os.environ", {"DEV_TENANT_SUBDOMAINS": ""}):
             hosts = _allowed_hosts()
-        assert "localhost" in hosts
-        assert "127.0.0.1" in hosts
-        # No tenant subdomains
         for tenant in DEFAULT_DEV_TENANT_SUBDOMAINS:
-            assert f"{tenant}.localhost" not in hosts
+            assert f"{tenant}.localhost" in hosts
+
+    def test_whitespace_only_env_override_falls_back_to_defaults(self):
+        with patch.dict("os.environ", {"DEV_TENANT_SUBDOMAINS": "   ,  ,"}):
+            hosts = _allowed_hosts()
+        for tenant in DEFAULT_DEV_TENANT_SUBDOMAINS:
+            assert f"{tenant}.localhost" in hosts
 
     def test_env_override_skips_blank_entries(self):
         """Trailing commas / empty pieces are ignored."""
@@ -71,3 +76,28 @@ class TestAllowedHostsEnvOverride:
         assert "bravo.localhost" in hosts
         # No empty-string entry like ``.localhost``
         assert ".localhost" not in hosts
+
+    def test_invalid_tenant_names_are_dropped_with_warning(self, caplog):
+        """Names with slashes, colons, dots, etc. are logged and dropped."""
+        with caplog.at_level("WARNING"):
+            with patch.dict(
+                "os.environ",
+                {"DEV_TENANT_SUBDOMAINS": "alpha,bad name,bra/vo,charlie,colon:host"},
+            ):
+                hosts = _allowed_hosts()
+        assert "alpha.localhost" in hosts
+        assert "charlie.localhost" in hosts
+        # Invalid names absent
+        assert "bad name.localhost" not in hosts
+        assert "bra/vo.localhost" not in hosts
+        assert "colon:host.localhost" not in hosts
+        # Each invalid name produced a warning
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 3
+
+    def test_all_invalid_names_falls_back_to_defaults(self):
+        """If every entry is invalid, fall back to defaults rather than empty."""
+        with patch.dict("os.environ", {"DEV_TENANT_SUBDOMAINS": "bad name,bra/vo"}):
+            hosts = _allowed_hosts()
+        for tenant in DEFAULT_DEV_TENANT_SUBDOMAINS:
+            assert f"{tenant}.localhost" in hosts
