@@ -152,8 +152,7 @@ def _provision_payload(**overrides):
         "external_org_id": "org_acme",
         "external_source": "scope3",
         "contact_email": "ops@example.com",
-        # Sprint 1.7: AAO model — both required for embedded-mode provision.
-        "house_domain": "acme.example",
+        # Sprint 1.7: AAO model — public_agent_url defaults to interchange.io.
         "public_agent_url": "https://interchange.io",
         "adapter": {
             "type": "google_ad_manager",
@@ -259,12 +258,11 @@ class TestProvision:
         # spectree returns 422 for Pydantic validation failures.
         assert response.status_code == 422
 
-    def test_provision_persists_aao_fields(self, client, auth_headers, cleanup_tenants):
-        """Sprint 1.7: house_domain + public_agent_url survive provision and
-        round-trip on the Tenant detail response."""
+    def test_provision_persists_public_agent_url(self, client, auth_headers, cleanup_tenants):
+        """Sprint 1.7: public_agent_url survives provision and round-trips on
+        the Tenant detail response."""
         payload = _provision_payload(
             external_org_id="org_aao",
-            house_domain="acme.example",
             public_agent_url="https://interchange.io",
         )
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
@@ -274,17 +272,22 @@ class TestProvision:
 
         detail = client.get(f"/api/v1/tenant-management/tenants/{body['tenant_id']}", headers=auth_headers)
         d = detail.get_json()
-        assert d["house_domain"] == "acme.example"
         assert d["public_agent_url"] == "https://interchange.io"
 
-    def test_provision_rejects_missing_aao_fields(self, client, auth_headers):
-        """Sprint 1.7: embedded-mode provision REQUIRES both AAO fields."""
-        payload = _provision_payload(external_org_id="org_no_aao")
-        del payload["house_domain"]
+    def test_provision_defaults_public_agent_url_when_omitted(self, client, auth_headers, cleanup_tenants):
+        """Sprint 1.7: public_agent_url is optional and defaults to
+        ``https://interchange.io`` for embedded-mode provisions."""
+        payload = _provision_payload(external_org_id="org_no_url")
+        del payload["public_agent_url"]
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
-        assert response.status_code == 422
+        assert response.status_code == 201, response.get_data(as_text=True)
+        body = response.get_json()
+        cleanup_tenants.append(body["tenant_id"])
 
-    def test_patch_updates_aao_fields(self, client, auth_headers, cleanup_tenants):
+        detail = client.get(f"/api/v1/tenant-management/tenants/{body['tenant_id']}", headers=auth_headers)
+        assert detail.get_json()["public_agent_url"] == "https://interchange.io"
+
+    def test_patch_updates_public_agent_url(self, client, auth_headers, cleanup_tenants):
         payload = _provision_payload(external_org_id="org_aao_patch")
         provision_resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         tid = provision_resp.get_json()["tenant_id"]
@@ -293,12 +296,11 @@ class TestProvision:
         patch_resp = client.patch(
             f"/api/v1/tenant-management/tenants/{tid}",
             headers=auth_headers,
-            json={"house_domain": "newhouse.example", "public_agent_url": "https://other.example"},
+            json={"public_agent_url": "https://interchange.io"},
         )
         assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
         body = patch_resp.get_json()
-        assert body["house_domain"] == "newhouse.example"
-        assert body["public_agent_url"] == "https://other.example"
+        assert body["public_agent_url"] == "https://interchange.io"
 
     # ------------------------------------------------------------------
     # Sprint 1.8 §8: first-sync-on-provision
@@ -1030,7 +1032,6 @@ class TestStatusSetupTasks:
         """Sprint 1.8 §6 hide-when-set carries through to /status setup_tasks."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         item_ids = {item["id"] for item in resp.get_json()["setup_tasks"]["items"]}
-        assert "house_domain" not in item_ids
         assert "public_agent_url" not in item_ids
 
     def test_authorized_properties_legacy_task_is_hidden(self, client, auth_headers, managed_tenant):
@@ -1113,9 +1114,7 @@ class TestStatusSetupTasks:
         resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/status", headers=auth_headers)
         assert resp.status_code == 200
         items = {i["id"]: i for i in resp.get_json()["setup_tasks"]["items"]}
-        # Open-instance tenants always show AAO items (sprint 1.7 + 1.8 §6).
-        if "house_domain" in items:
-            assert items["house_domain"]["scope"] == "publisher"
+        # Open-instance tenants always show the public_agent_url AAO item.
         if "public_agent_url" in items:
             assert items["public_agent_url"]["scope"] == "publisher"
 

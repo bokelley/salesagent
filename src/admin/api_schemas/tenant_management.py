@@ -8,7 +8,6 @@ pattern #7).
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -26,32 +25,8 @@ def _config() -> ConfigDict:
 
 
 # ---------------------------------------------------------------------------
-# Sprint 1.8 §6 — shared validators for platform-managed AAO fields
+# Sprint 1.8 §6 — shared validator for the operator's public agent URL
 # ---------------------------------------------------------------------------
-
-# Bare DNS hostname: "acme.example.com" yes; "https://acme.example.com" no;
-# "ACME.EXAMPLE.COM" no (force-lowercase before validate); "acme.example.com/foo" no.
-# Pattern matches IDN-friendly DNS labels separated by dots, total length capped
-# to 253 chars by RFC 1035.
-_HOUSE_DOMAIN_REGEX = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
-
-
-def _validate_house_domain(value: str) -> str:
-    """Force-lowercase + validate as a bare DNS hostname.
-
-    Sprint 1.8 §6: house_domain must be the publisher's bare domain
-    (where brand.json lives). Rejects schemes, paths, uppercase, and
-    label-format violations.
-    """
-    lowered = value.strip().lower()
-    if len(lowered) > 253:
-        raise ValueError(f"house_domain too long ({len(lowered)} chars; max 253 per RFC 1035)")
-    if not _HOUSE_DOMAIN_REGEX.match(lowered):
-        raise ValueError(
-            f"house_domain must be a bare DNS hostname (e.g. 'acme.example.com'); "
-            f"got {value!r}. No scheme, no path, lowercase only."
-        )
-    return lowered
 
 
 def _validate_public_agent_url(value: str) -> str:
@@ -174,11 +149,9 @@ class ProvisionTenantRequest(BaseModel):
     contact_email: EmailStr
 
     # AAO model (sprint 1.7).
-    # ``house_domain`` is where the publisher's brand.json lives — required.
     # ``public_agent_url`` is what publishers list in adagents.json to
     # authorize this tenant. Embedded-mode tenants share the platform's
     # interchange.io URL; the provision route defaults to it when omitted.
-    house_domain: str = Field(..., min_length=1, max_length=255)
     public_agent_url: str = Field(default="https://interchange.io", min_length=1, max_length=500)
 
     # Adapter config (required — a tenant without an adapter is useless)
@@ -201,13 +174,7 @@ class ProvisionTenantRequest(BaseModel):
     # tenants ignore this even if set.
     embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
 
-    # Sprint 1.8 §6: AAO field validators (force-lowercase house_domain,
-    # HTTPS-only public_agent_url).
-    @field_validator("house_domain")
-    @classmethod
-    def _check_house_domain(cls, value: str) -> str:
-        return _validate_house_domain(value)
-
+    # Sprint 1.8 §6: HTTPS-only public_agent_url.
     @field_validator("public_agent_url")
     @classmethod
     def _check_public_agent_url(cls, value: str) -> str:
@@ -319,8 +286,7 @@ class TenantDetail(TenantSummary):
     default_currency: str | None = None
     # AAO model (sprint 1.7). Nullable on detail responses because
     # legacy open-instance tenants migrated from the AuthorizedProperty
-    # path don't have these populated yet.
-    house_domain: str | None = None
+    # path don't have it populated yet.
     public_agent_url: str | None = None
     # Sprint 1.8 — fall-through advertiser. Nullable until activation.
     default_gam_advertiser_id: str | None = None
@@ -349,10 +315,8 @@ class UpdateTenantRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     contact_email: EmailStr | None = None
     billing_plan: str | None = Field(default=None, max_length=64)
-    # AAO model — patchable post-creation. Publishers updating their brand.json
-    # location or an upstream platform rotating its public_agent_url both flow
-    # through here.
-    house_domain: str | None = Field(default=None, min_length=1, max_length=255)
+    # AAO model — patchable post-creation. An upstream platform rotating
+    # its public_agent_url flows through here.
     public_agent_url: str | None = Field(default=None, min_length=1, max_length=500)
     # Sprint 1.8 — fall-through advertiser. Patchable any time. PATCH with
     # an explicit empty string is rejected by the handler (use null/omit
@@ -365,16 +329,9 @@ class UpdateTenantRequest(BaseModel):
     # semantic).
     embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
 
-    # Sprint 1.8 §6: same AAO validators as ProvisionTenantRequest.
+    # Sprint 1.8 §6: same public_agent_url validator as ProvisionTenantRequest.
     # ``mode='before'`` lets us short-circuit on None (PATCH with field
     # absent should pass through unchanged).
-    @field_validator("house_domain")
-    @classmethod
-    def _check_house_domain(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _validate_house_domain(value)
-
     @field_validator("public_agent_url")
     @classmethod
     def _check_public_agent_url(cls, value: str | None) -> str | None:

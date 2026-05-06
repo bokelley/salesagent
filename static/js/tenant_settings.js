@@ -2434,50 +2434,6 @@ function refreshPublisher(partnerId) {
     });
 }
 
-// Save the AAO identity (house_domain). public_agent_url is derived
-// server-side from virtual_host / subdomain, not user-edited.
-function saveAaoIdentity(event) {
-    event.preventDefault();
-    const houseDomain = document.getElementById('house_domain').value.trim().toLowerCase();
-    const btn = document.getElementById('save-aao-identity-btn');
-    const status = document.getElementById('aao-identity-status');
-
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
-    if (status) status.textContent = '';
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/aao-identity`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ house_domain: houseDomain })
-    })
-    .then(r => r.json().then(data => ({ ok: r.ok, data })))
-    .then(({ ok, data }) => {
-        if (btn) { btn.disabled = false; btn.textContent = 'Save house domain'; }
-        if (!ok || data.error) {
-            if (status) {
-                status.textContent = data.error || 'Save failed';
-                status.style.color = '#dc2626';
-            }
-            return;
-        }
-        if (status) {
-            status.textContent = 'Saved';
-            status.style.color = '#065f46';
-        }
-        // Update displayed agent URL if it changed.
-        const display = document.getElementById('public-agent-url-display');
-        if (display && data.public_agent_url) display.textContent = data.public_agent_url;
-    })
-    .catch(err => {
-        if (btn) { btn.disabled = false; btn.textContent = 'Save house domain'; }
-        if (status) {
-            status.textContent = 'Save failed: ' + err.message;
-            status.style.color = '#dc2626';
-        }
-    });
-}
-
 // Helper function to escape HTML
 function escapeHtml(text) {
     if (!text) return '';

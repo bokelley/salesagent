@@ -79,7 +79,6 @@ def _provision(label: str, *, default_advertiser: str | None = None) -> str | No
         "external_org_id": f"org_verify_{uuid.uuid4().hex[:6]}",
         "external_source": "verify_script",
         "contact_email": "verify@example.com",
-        "house_domain": f"verify-{label}.example.com",
         "public_agent_url": "https://agent.example.com/verify",
         "adapter": {"type": "mock"},
         "default_currency": "USD",
@@ -291,11 +290,11 @@ def main() -> int:
             "setup_tasks block has blocker_count + warning_count + items",
             f"keys={list(st.keys())}",
         )
-        # AAO items should be hidden on managed tenants with both fields set
+        # AAO public_agent_url item should be hidden on managed tenants with it set
         item_ids = {i["id"] for i in st.get("items", [])}
         _say(
-            "house_domain" not in item_ids and "public_agent_url" not in item_ids,
-            "setup_tasks hides AAO items on managed tenant with both fields set",
+            "public_agent_url" not in item_ids,
+            "setup_tasks hides public_agent_url item on managed tenant with it set",
             f"items={item_ids}",
         )
 

@@ -54,7 +54,6 @@ PROVISION_BODY=$(cat <<JSON
   "external_org_id": "$ORG_ID",
   "external_source": "smoke",
   "contact_email": "smoke@example.com",
-  "house_domain": "smoke.example",
   "public_agent_url": "https://interchange.io",
   "adapter": {"type": "mock", "dry_run": true},
   "default_currency": "USD",

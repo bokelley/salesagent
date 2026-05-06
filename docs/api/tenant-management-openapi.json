@@ -2327,12 +2327,6 @@
             "title": "External Source",
             "type": "string"
           },
-          "house_domain": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "House Domain",
-            "type": "string"
-          },
           "initial_principal": {
             "anyOf": [
               {
@@ -2363,7 +2357,6 @@
           "external_org_id",
           "external_source",
           "contact_email",
-          "house_domain",
           "adapter"
         ],
         "title": "ProvisionTenantRequest",
@@ -2793,18 +2786,6 @@
             ],
             "default": null,
             "title": "External Source"
-          },
-          "house_domain": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "House Domain"
           },
           "is_active": {
             "title": "Is Active",
@@ -3438,20 +3419,6 @@
               }
             ],
             "default": null
-          },
-          "house_domain": {
-            "anyOf": [
-              {
-                "maxLength": 255,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "House Domain"
           },
           "name": {
             "anyOf": [

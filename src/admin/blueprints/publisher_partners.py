@@ -494,88 +494,6 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": str(e)}), 500
 
 
-@publisher_partners_bp.route("/<tenant_id>/aao-identity", methods=["POST"])
-def save_aao_identity(tenant_id: str) -> Response | tuple[Response, int]:
-    """Save the AAO identity (house_domain) for a tenant.
-
-    Embedded tenants are platform-managed — the model-layer guard rejects
-    direct writes from this admin endpoint. Open-instance tenants edit
-    house_domain freely; ``public_agent_url`` is *derived* from
-    ``virtual_host`` / ``subdomain`` rather than user-edited (see
-    ``_resolve_agent_url``), so it isn't accepted here.
-    """
-    try:
-        from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
-        from src.core.domain_config import get_sales_agent_domain
-        from src.services.aao_lookup_service import (
-            PublicAgentUrlMismatch,
-            invalidate_brand_cache,
-            validate_public_agent_url_hostname,
-        )
-
-        data = request.get_json() or {}
-        house_domain = (data.get("house_domain") or "").strip().lower()
-
-        if not house_domain:
-            return jsonify({"error": "house_domain is required"}), 400
-
-        with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
-            if tenant.is_embedded:
-                return (
-                    jsonify({"error": "Embedded tenants are platform-managed; AAO identity is set by Scope3."}),
-                    403,
-                )
-
-            tenant.house_domain = house_domain
-
-            # Re-derive public_agent_url so its hostname matches the serving
-            # host. If the user set a virtual_host, prefer that; otherwise
-            # use the platform-prefixed default.
-            sales_domain = get_sales_agent_domain()
-            if tenant.virtual_host:
-                derived_url = f"https://{tenant.virtual_host}"
-            elif sales_domain and tenant.subdomain:
-                derived_url = f"https://{tenant.subdomain}.{sales_domain}"
-            else:
-                derived_url = tenant.public_agent_url or ""
-
-            if derived_url:
-                try:
-                    validate_public_agent_url_hostname(
-                        derived_url,
-                        is_embedded=False,
-                        virtual_host=tenant.virtual_host,
-                        subdomain=tenant.subdomain,
-                        sales_agent_domain=sales_domain,
-                    )
-                except PublicAgentUrlMismatch as exc:
-                    session.rollback()
-                    return jsonify({"error": str(exc)}), 422
-                tenant.public_agent_url = derived_url
-
-            try:
-                session.commit()
-            except EmbeddedTenantWriteError as exc:
-                session.rollback()
-                return jsonify({"error": str(exc)}), 403
-
-            invalidate_brand_cache(house_domain)
-
-            return jsonify(
-                {
-                    "house_domain": tenant.house_domain,
-                    "public_agent_url": tenant.public_agent_url,
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Error saving AAO identity: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/refresh", methods=["POST"])
 def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Force-refresh AAO status for a single publisher partner.
@@ -586,12 +504,14 @@ def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tup
     """
     try:
         with get_db_session() as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            # session.get() uses primary-key lookup, not select() — keeps this
+            # function out of the raw-select architecture allowlist.
+            tenant = session.get(Tenant, tenant_id)
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            partner = session.scalars(select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)).first()
-            if not partner:
+            partner = session.get(PublisherPartner, partner_id)
+            if partner is None or partner.tenant_id != tenant_id:
                 return jsonify({"error": "Publisher not found"}), 404
 
             agent_url = _resolve_agent_url(tenant)

@@ -127,7 +127,6 @@ def _delete_tenant_rows(session, tenant_ids: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-HOUSE_DOMAIN = "acme-publisher.example"
 DEFAULT_ADVERTISER_ID = "default_adv_demo"
 
 GAM_ADVERTISERS: list[dict[str, str]] = [
@@ -312,7 +311,6 @@ def _create_tenant(
         external_org_id=f"org_demo_{uuid.uuid4().hex[:8]}",
         ad_server="mock",
         billing_plan="standard",
-        house_domain=HOUSE_DOMAIN,
         public_agent_url=urls["public_agent_url"],
         embed_breadcrumb_root=urls["embed_breadcrumb_root"],
         default_gam_advertiser_id=DEFAULT_ADVERTISER_ID,

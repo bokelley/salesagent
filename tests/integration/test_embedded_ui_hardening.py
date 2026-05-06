@@ -332,24 +332,21 @@ class TestPublisherPartnershipsReadonlyOnEmbedded:
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_data(as_text=True)
-        # Section is present so the AAO identity + partner list are reachable.
+        # Section is present so the agent URL + partner list are reachable.
         assert "<h2>Publisher Partnerships</h2>" in body
         assert 'data-section="publishers"' in body
-        # AAO-identity subsection renders with a readonly house_domain input.
-        assert "Your AAO identity" in body
-        assert 'id="house_domain"' in body
-        assert "readonly" in body  # house_domain is readonly for embedded tenants
+        # Agent URL subsection renders with a readonly display.
+        assert "Your agent URL" in body
         # Platform-managed banner explains why the section is locked.
         assert "Platform-managed" in body
 
     def test_embedded_hides_edit_controls(self, client, embedded_tenant_id):
-        """Add-Publisher / Refresh-All / save-house-domain are gone on embedded."""
+        """Add-Publisher / Refresh-All controls are gone on embedded."""
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         body = resp.get_data(as_text=True)
         assert "showAddPublisherModal()" not in body
         assert 'id="add-publisher-modal"' not in body
         assert "syncAllPublishers()" not in body
-        assert 'id="save-aao-identity-btn"' not in body
 
     def test_open_tenant_renders_publisher_partnerships_with_edit_controls(self, client, open_tenant_id):
         resp = client.get(f"/tenant/{open_tenant_id}/settings")
@@ -359,7 +356,6 @@ class TestPublisherPartnershipsReadonlyOnEmbedded:
         assert 'data-section="publishers"' in body
         # Open tenants get the editable controls.
         assert "showAddPublisherModal()" in body
-        assert 'id="save-aao-identity-btn"' in body
 
 
 # ---------------------------------------------------------------------------

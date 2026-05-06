@@ -88,7 +88,6 @@ def _provision_payload(**overrides):
         "external_org_id": "org_123",
         "external_source": "scope3",
         "contact_email": "ops@acme.example.com",
-        "house_domain": "acme.example.com",
         "public_agent_url": "https://agent.scope3.com/tenant_acme",
         "adapter": _gam_payload(),
     }
@@ -441,42 +440,8 @@ def test_update_mapping_request_rejects_blank_gam_advertiser_id():
 
 
 # ---------------------------------------------------------------------------
-# Sprint 1.8 §6 — AAO field validators (house_domain regex, HTTPS-only public_agent_url)
+# Sprint 1.8 §6 — public_agent_url HTTPS-only validator
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "input_domain, expected",
-    [
-        ("acme.example.com", "acme.example.com"),
-        ("ACME.EXAMPLE.COM", "acme.example.com"),  # force-lowercase
-        ("  acme.example.com  ", "acme.example.com"),  # strip
-        ("a.b", "a.b"),  # minimal valid
-        ("sub.domain.example.co.uk", "sub.domain.example.co.uk"),
-    ],
-)
-def test_house_domain_validator_accepts_valid_lowercased_domain(input_domain, expected):
-    payload = _provision_payload(house_domain=input_domain)
-    req = ProvisionTenantRequest.model_validate(payload)
-    assert req.house_domain == expected
-
-
-@pytest.mark.parametrize(
-    "bad_domain",
-    [
-        "https://acme.example.com",  # scheme not allowed
-        "acme.example.com/foo",  # path not allowed
-        "acme.example.com:8080",  # port not allowed
-        "acme",  # no TLD
-        "acme..com",  # double dot
-        "-acme.com",  # leading hyphen on label
-        "a" * 254 + ".com",  # exceeds RFC 1035 length
-    ],
-)
-def test_house_domain_validator_rejects_invalid(bad_domain):
-    payload = _provision_payload(house_domain=bad_domain)
-    with pytest.raises(ValidationError):
-        ProvisionTenantRequest.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -511,13 +476,7 @@ def test_public_agent_url_validator_rejects_non_https(non_https):
 def test_update_request_validators_skip_when_field_omitted():
     """PATCH with field absent must not trigger validator (None is allowed)."""
     req = UpdateTenantRequest()  # no fields set
-    assert req.house_domain is None
     assert req.public_agent_url is None
-
-
-def test_update_request_validates_house_domain_when_present():
-    with pytest.raises(ValidationError):
-        UpdateTenantRequest.model_validate({"house_domain": "https://bad.example.com"})
 
 
 def test_update_request_validates_public_agent_url_when_present():

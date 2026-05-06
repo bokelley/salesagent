@@ -159,7 +159,6 @@ def _provision(label: str, *, default_advertiser: str | None = None, with_princi
         "external_org_id": f"org_verify_{uuid.uuid4().hex[:6]}",
         "external_source": "verify_script",
         "contact_email": "verify@example.com",
-        "house_domain": f"verify-{label}.example.com",
         "public_agent_url": "https://agent.example.com/verify",
         "adapter": {"type": "mock"},
         "default_currency": "USD",

@@ -10,17 +10,17 @@
         <div class="col-12">
             {# Sprint 1.7 deprecation banner — list_authorized_properties was
                removed from AdCP 3.0+; properties are now discovered via the
-               AAO model on the publisher's house_domain. #}
+               AAO model on each publisher's own domain. #}
             <div class="alert alert-warning d-flex align-items-start mb-4" role="alert">
                 <i class="fas fa-exclamation-triangle me-2 mt-1"></i>
                 <div>
                     <strong>This page is deprecated.</strong>
                     Authorized Property records are no longer used for buyer-protocol
                     discovery — AdCP 3.0+ replaces them with the AAO model
-                    (publisher's <code>brand.json</code> + <code>adagents.json</code>).
-                    Set <code>house_domain</code> + <code>public_agent_url</code> on
-                    <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id) }}#aao">Settings</a>
-                    so properties get looked up live from your <code>brand.json</code>.
+                    (each publisher's own <code>brand.json</code> + <code>adagents.json</code>).
+                    Add publisher partners on
+                    <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id) }}#publishers">Settings</a>
+                    so properties get looked up live from each publisher's own <code>brand.json</code>.
                     This screen will be removed once tenants migrate.
                 </div>
             </div>

@@ -105,7 +105,6 @@ def tenant_factory(integration_db, bound_factories):
             is_embedded=True,
             external_org_id=tid,
             external_source="test",
-            house_domain="test.example.com",
             public_agent_url="https://test.scope3.com/agent",
             authorized_emails=["test@example.com"],
             authorized_domains=[],

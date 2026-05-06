@@ -65,7 +65,6 @@ def tenant_id_factory(integration_db):
                 is_embedded=True,
                 external_org_id=tid,
                 external_source="test",
-                house_domain="test.example.com",
                 public_agent_url="https://test.scope3.com/agent",
                 default_gam_advertiser_id=default_advertiser,
                 authorized_emails=["test@example.com"],
@@ -443,7 +442,7 @@ class TestAutoAccountCreation:
             brand_id_field = brand.brand_id if hasattr(brand, "brand_id") else brand.get("brand_id")
             brand_id_str = (
                 str(brand_id_field.root)
-                if brand_id_field is not None and hasattr(brand_id_field, "root")
+                if brand_id_field is not None and hasattr(brand_id_field, "root")  # noqa: rootmodel
                 else brand_id_field
             )
             assert domain == "coca-cola.com"

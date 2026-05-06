@@ -304,19 +304,18 @@ def _webhooks_block() -> StatusWebhooksBlock | None:
 
 
 # Per the design table:
-#   house_domain / public_agent_url → platform on managed, publisher on open-instance
+#   public_agent_url → platform on managed, publisher on open-instance
 #   sso_configuration → hidden on managed (multi-tenant runtime already gates it
 #     out), publisher on open-instance
 #   authorized_properties (legacy) → hidden everywhere (deprecated)
 #   everything else → publisher
-_PLATFORM_KEYS_WHEN_MANAGED = frozenset(("house_domain", "public_agent_url"))
+_PLATFORM_KEYS_WHEN_MANAGED = frozenset(("public_agent_url",))
 _HIDDEN_KEYS = frozenset(("authorized_properties",))
 
 
 # Configure paths are relative to the tenant root so Storefront can compose
 # them against whatever iframe prefix it chooses.
 _CONFIGURE_PATHS: dict[str, str] = {
-    "house_domain": "/settings#publishers",
     "public_agent_url": "/settings#publishers",
     "default_gam_advertiser_id": "/settings#advertiser-routing",
     "ad_server_connected": "/settings#adserver",

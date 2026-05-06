@@ -94,7 +94,6 @@ def _provision_payload(**overrides):
         "external_org_id": "org_acme_breadcrumb",
         "external_source": "scope3",
         "contact_email": "ops@example.com",
-        "house_domain": "acme.example",
         "public_agent_url": "https://interchange.io",
         "adapter": {
             "type": "google_ad_manager",
@@ -153,7 +152,7 @@ class TestEmbedBreadcrumbRootStorage:
 
     def test_patch_omitted_field_preserves_value(self, client, auth_headers, cleanup_tenants):
         """Spec: PATCH with the field absent leaves the existing override
-        unchanged (matches house_domain / public_agent_url semantics)."""
+        unchanged (matches public_agent_url semantics)."""
         payload = _provision_payload(
             external_org_id="org_breadcrumb_omit",
             embed_breadcrumb_root={"label": "Original", "url": "https://host.example/orig"},

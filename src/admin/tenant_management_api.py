@@ -168,7 +168,6 @@ def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
         created_at=tenant.created_at,
         contact_email=contact_email,
         default_currency=default_currency,
-        house_domain=tenant.house_domain,
         public_agent_url=tenant.public_agent_url,
         default_gam_advertiser_id=tenant.default_gam_advertiser_id,
         embed_breadcrumb_root=tenant.embed_breadcrumb_root,
@@ -756,7 +755,6 @@ def provision_tenant():
             is_embedded=True,
             external_org_id=req.external_org_id,
             external_source=req.external_source,
-            house_domain=req.house_domain,
             public_agent_url=req.public_agent_url,
             default_gam_advertiser_id=req.default_gam_advertiser_id,
             embed_breadcrumb_root=(
@@ -840,7 +838,6 @@ def provision_tenant():
                 operator_id="embedded_host",
                 brand_json_url=embedded_host_brand_json,
                 aao_member_slug=req.external_source,
-                house_domain=req.house_domain,
                 display_name=host_display,
                 is_trusted=True,
                 is_active=True,
@@ -974,8 +971,6 @@ def patch_tenant(tenant_id: str):
             tenant.billing_contact = req.contact_email
         if req.billing_plan is not None:
             tenant.billing_plan = req.billing_plan
-        if req.house_domain is not None:
-            tenant.house_domain = req.house_domain
         if req.public_agent_url is not None:
             from src.core.domain_config import get_sales_agent_domain
             from src.services.aao_lookup_service import (

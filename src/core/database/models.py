@@ -169,19 +169,14 @@ class Tenant(Base, JSONValidatorMixin):
         nullable=False,
         server_default=text("false"),
     )
-    # AAO model (sprint 1.7 — see docs/design/replace-authorized-properties-with-aao-lookup.md):
-    # house_domain is where the publisher's brand.json lives; properties are
-    # looked up live from https://{house_domain}/.well-known/brand.json. Replaces
-    # the manually-maintained AuthorizedProperty table for new tenants.
-    house_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # public_agent_url is what publishers list in their adagents.json to
     # authorize this tenant's agent. Embedded-mode tenants share one
     # (https://interchange.io); self-hosted publishers use their own salesagent.
     public_agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    # Where THIS salesagent operator publishes its own brand.json (under
-    # ``house_domain``, typically ``/.well-known/brand.json``). Surfaced on
+    # Absolute URL of the operator's brand.json (typically
+    # ``https://{operator_domain}/.well-known/brand.json``). Surfaced on
     # ``get_adcp_capabilities → identity.brand_json_url`` so receivers verifying
-    # our outbound signatures resolve through our house_domain.
+    # our outbound signatures can fetch our operator-side keys.
     # See docs/design/signing-non-embedded.md.
     brand_json_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     # Sprint 1.8 buyer-advertiser routing — see

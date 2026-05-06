@@ -1559,11 +1559,6 @@ components:
           minLength: 1
           title: External Source
           type: string
-        house_domain:
-          maxLength: 255
-          minLength: 1
-          title: House Domain
-          type: string
         initial_principal:
           anyOf:
           - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.InitialPrincipalRequest'
@@ -1585,7 +1580,6 @@ components:
       - external_org_id
       - external_source
       - contact_email
-      - house_domain
       - adapter
       title: ProvisionTenantRequest
       type: object
@@ -1915,12 +1909,6 @@ components:
           - type: 'null'
           default: null
           title: External Source
-        house_domain:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          title: House Domain
         is_active:
           title: Is Active
           type: boolean
@@ -2387,14 +2375,6 @@ components:
           - $ref: '#/components/schemas/UpdateTenantRequest.f44f287.EmbedBreadcrumbRoot'
           - type: 'null'
           default: null
-        house_domain:
-          anyOf:
-          - maxLength: 255
-            minLength: 1
-            type: string
-          - type: 'null'
-          default: null
-          title: House Domain
         name:
           anyOf:
           - maxLength: 255
