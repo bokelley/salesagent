@@ -357,7 +357,7 @@ class SetupChecklistService:
                     "Properties are looked up live from this file."
                 ),
                 is_complete=bool(tenant.house_domain),
-                action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                action_url=f"/tenant/{self.tenant_id}/settings#publishers",
                 details=(
                     f"Configured: {tenant.house_domain}"
                     if tenant.house_domain
@@ -374,7 +374,7 @@ class SetupChecklistService:
                     "use their own salesagent's URL."
                 ),
                 is_complete=bool(tenant.public_agent_url),
-                action_url=f"/tenant/{self.tenant_id}/settings#aao",
+                action_url=f"/tenant/{self.tenant_id}/settings#publishers",
                 details=(
                     f"Configured: {tenant.public_agent_url}"
                     if tenant.public_agent_url
@@ -537,7 +537,7 @@ class SetupChecklistService:
                 name="Authorized Properties",
                 description="brand.json + adagents.json — set house_domain on Settings to use the AAO model",
                 is_complete=is_complete,
-                action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
+                action_url=f"/tenant/{self.tenant_id}/settings#publishers",
                 details=details,
             )
         )
@@ -953,7 +953,7 @@ class SetupChecklistService:
                 name="Authorized Properties",
                 description="Configure properties with adagents.json for verification",
                 is_complete=properties_is_complete,
-                action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
+                action_url=f"/tenant/{self.tenant_id}/settings#publishers",
                 details=properties_details,
             )
         )

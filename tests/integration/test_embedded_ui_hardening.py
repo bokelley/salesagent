@@ -318,36 +318,48 @@ class TestLockBanner:
 # ---------------------------------------------------------------------------
 
 
-class TestPublisherPartnershipsHiddenOnEmbedded:
-    """Publisher Partnerships section is fully hidden on embedded tenants.
+class TestPublisherPartnershipsReadonlyOnEmbedded:
+    """Publisher Partnerships section is visible on embedded tenants but
+    rendered readonly with a "Platform-managed by Scope3" banner.
 
-    AAO ``/publisher/{domain}`` is the canonical surface for partnership
-    data; embedded-mode publishers manage these via the upstream platform.
-    """
+    Embedded tenants need to *see* their AAO identity (house domain + agent
+    URL) and partner roster — they just can't *edit* them. Hiding the section
+    entirely (the previous behavior) left the user staring at a Configure
+    button that scrolled to nothing. Per Sprint 1.8 §6 the right move is
+    readonly + banner."""
 
-    def test_embedded_omits_publisher_partnerships_section(self, client, embedded_tenant_id):
+    def test_embedded_renders_publisher_partnerships_section(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_data(as_text=True)
-        # Section heading and the Add-Publisher modal markup are gone.
-        assert "<h2>Publisher Partnerships</h2>" not in body
+        # Section is present so the AAO identity + partner list are reachable.
+        assert "<h2>Publisher Partnerships</h2>" in body
+        assert 'data-section="publishers"' in body
+        # AAO-identity subsection renders with a readonly house_domain input.
+        assert "Your AAO identity" in body
+        assert 'id="house_domain"' in body
+        assert "readonly" in body  # house_domain is readonly for embedded tenants
+        # Platform-managed banner explains why the section is locked.
+        assert "Platform-managed" in body
+
+    def test_embedded_hides_edit_controls(self, client, embedded_tenant_id):
+        """Add-Publisher / Refresh-All / save-house-domain are gone on embedded."""
+        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
         assert "showAddPublisherModal()" not in body
         assert 'id="add-publisher-modal"' not in body
         assert "syncAllPublishers()" not in body
+        assert 'id="save-aao-identity-btn"' not in body
 
-    def test_embedded_drops_publishers_nav_tab(self, client, embedded_tenant_id):
-        resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
-        body = resp.get_data(as_text=True)
-        # The data-section="publishers" anchor is the nav-rail link.
-        assert 'data-section="publishers"' not in body
-
-    def test_open_tenant_renders_publisher_partnerships(self, client, open_tenant_id):
+    def test_open_tenant_renders_publisher_partnerships_with_edit_controls(self, client, open_tenant_id):
         resp = client.get(f"/tenant/{open_tenant_id}/settings")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
         assert "<h2>Publisher Partnerships</h2>" in body
         assert 'data-section="publishers"' in body
+        # Open tenants get the editable controls.
         assert "showAddPublisherModal()" in body
+        assert 'id="save-aao-identity-btn"' in body
 
 
 # ---------------------------------------------------------------------------

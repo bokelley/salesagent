@@ -1081,8 +1081,8 @@ class TestStatusSetupTasks:
         assert body["warning_count"] == actual_warnings
 
     def test_configure_paths_are_relative_to_tenant_root(self, client, auth_headers, managed_tenant):
-        """``configure_path`` must be relative (``/settings#aao``) so Storefront
-        can compose with its iframe prefix."""
+        """``configure_path`` must be relative (``/settings#publishers``) so
+        Storefront can compose with its iframe prefix."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         items = resp.get_json()["setup_tasks"]["items"]
         for item in items:

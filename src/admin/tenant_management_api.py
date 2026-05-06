@@ -977,6 +977,23 @@ def patch_tenant(tenant_id: str):
         if req.house_domain is not None:
             tenant.house_domain = req.house_domain
         if req.public_agent_url is not None:
+            from src.core.domain_config import get_sales_agent_domain
+            from src.services.aao_lookup_service import (
+                PublicAgentUrlMismatch,
+                validate_public_agent_url_hostname,
+            )
+
+            try:
+                validate_public_agent_url_hostname(
+                    req.public_agent_url,
+                    is_embedded=bool(tenant.is_embedded),
+                    virtual_host=tenant.virtual_host,
+                    subdomain=tenant.subdomain,
+                    sales_agent_domain=get_sales_agent_domain(),
+                )
+            except PublicAgentUrlMismatch as exc:
+                session.rollback()
+                return _api_error("public_agent_url_mismatch", str(exc), 422)
             tenant.public_agent_url = req.public_agent_url
         if req.default_gam_advertiser_id is not None:
             tenant.default_gam_advertiser_id = req.default_gam_advertiser_id

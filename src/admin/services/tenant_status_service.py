@@ -316,8 +316,8 @@ _HIDDEN_KEYS = frozenset(("authorized_properties",))
 # Configure paths are relative to the tenant root so Storefront can compose
 # them against whatever iframe prefix it chooses.
 _CONFIGURE_PATHS: dict[str, str] = {
-    "house_domain": "/settings#aao",
-    "public_agent_url": "/settings#aao",
+    "house_domain": "/settings#publishers",
+    "public_agent_url": "/settings#publishers",
     "default_gam_advertiser_id": "/settings#advertiser-routing",
     "ad_server_connected": "/settings#adserver",
     "currency_limits": "/settings#business-rules",

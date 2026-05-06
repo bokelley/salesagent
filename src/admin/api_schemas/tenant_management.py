@@ -173,12 +173,13 @@ class ProvisionTenantRequest(BaseModel):
     external_source: str = Field(..., min_length=1, max_length=64)
     contact_email: EmailStr
 
-    # AAO model (sprint 1.7) — both required for embedded-mode tenants.
-    # ``house_domain`` is where the publisher's brand.json lives;
+    # AAO model (sprint 1.7).
+    # ``house_domain`` is where the publisher's brand.json lives — required.
     # ``public_agent_url`` is what publishers list in adagents.json to
-    # authorize this tenant. Replaces the old AuthorizedProperty table.
+    # authorize this tenant. Embedded-mode tenants share the platform's
+    # interchange.io URL; the provision route defaults to it when omitted.
     house_domain: str = Field(..., min_length=1, max_length=255)
-    public_agent_url: str = Field(..., min_length=1, max_length=500)
+    public_agent_url: str = Field(default="https://interchange.io", min_length=1, max_length=500)
 
     # Adapter config (required — a tenant without an adapter is useless)
     adapter: AdapterConfig

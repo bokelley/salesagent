@@ -27,6 +27,7 @@ const config = (function() {
         a2aPort: configEl.dataset.a2aPort || '8091',
         mcpPort: configEl.dataset.mcpPort || '8080',
         isProduction: configEl.dataset.isProduction === 'true',
+        isEmbedded: configEl.dataset.isEmbedded === 'true',
         virtualHost: configEl.dataset.virtualHost || '',
         subdomain: configEl.dataset.subdomain || '',
         salesAgentDomain: configEl.dataset.salesAgentDomain || 'sales-agent.example.com'
@@ -2112,9 +2113,35 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// AAO status chip styles, keyed by aao_status. Rendered inline in the
+// publisher row + the summary header. "stale" is a transitional UI-only
+// state for rows that pre-date the AAO counts columns.
+const AAO_STATUS_STYLES = {
+    authorized: { bg: '#d1fae5', fg: '#065f46', label: 'Authorized' },
+    pending:    { bg: '#fef3c7', fg: '#92400e', label: 'Pending' },
+    unreachable:{ bg: '#fee2e2', fg: '#991b1b', label: 'Unreachable' },
+    stale:      { bg: '#e0e7ff', fg: '#3730a3', label: 'Refresh needed' },
+};
+
+function aaoStatusChip(kind) {
+    const s = AAO_STATUS_STYLES[kind] || AAO_STATUS_STYLES.stale;
+    return `<span style="display: inline-block; padding: 0.25rem 0.5rem; background: ${s.bg}; color: ${s.fg}; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">${s.label}</span>`;
+}
+
+function relativeTime(iso) {
+    if (!iso) return 'Never';
+    const then = new Date(iso).getTime();
+    const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 // Load and display publishers
 function loadPublishers() {
     const container = document.getElementById('publishers-list');
+    const summary = document.getElementById('publishers-summary');
     if (!container) return;
 
     container.innerHTML = `
@@ -2136,7 +2163,22 @@ function loadPublishers() {
                     <p>Error: ${escapeHtml(data.error)}</p>
                 </div>
             `;
+            if (summary) summary.innerHTML = '';
             return;
+        }
+
+        if (summary) {
+            if (!data.partners || data.partners.length === 0) {
+                summary.innerHTML = '';
+            } else {
+                summary.innerHTML = `
+                    <div style="padding: 0.75rem 1rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; color: #065f46;">
+                        <strong>${data.partners.length} publisher partner${data.partners.length === 1 ? '' : 's'}</strong>
+                        · <strong>${data.authorized_properties || 0}</strong> propert${data.authorized_properties === 1 ? 'y' : 'ies'} authorized to your agent
+                        (of <strong>${data.total_properties || 0}</strong> listed)
+                    </div>
+                `;
+            }
         }
 
         if (!data.partners || data.partners.length === 0) {
@@ -2152,17 +2194,16 @@ function loadPublishers() {
         }
 
         // Render publishers table
+        const isEmbedded = (config.isEmbedded === 'true' || config.isEmbedded === true);
+
         let html = `
-            <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;">
-                <strong>${data.verified}</strong> verified, <strong>${data.pending}</strong> pending verification
-            </div>
             <table style="width: 100%; border-collapse: collapse;">
                 <thead>
                     <tr style="border-bottom: 2px solid #e5e7eb;">
                         <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Publisher</th>
                         <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Status</th>
-                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Properties</th>
-                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Last Synced</th>
+                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Authorized / listed</th>
+                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Last refreshed</th>
                         <th style="text-align: right; padding: 0.75rem; font-weight: 600; color: #374151;">Actions</th>
                     </tr>
                 </thead>
@@ -2170,33 +2211,47 @@ function loadPublishers() {
         `;
 
         data.partners.forEach(partner => {
-            const statusBadge = partner.is_verified
-                ? '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #d1fae5; color: #065f46; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Verified</span>'
-                : partner.sync_status === 'error'
-                    ? '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #fee2e2; color: #991b1b; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Error</span>'
-                    : '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #fef3c7; color: #92400e; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Pending</span>';
+            const statusKind = partner.aao_status || (partner.is_verified ? 'authorized' : 'pending');
+            const chip = aaoStatusChip(statusKind);
+            const errorMsg = partner.last_fetch_error || partner.sync_error;
+            const counts = `<strong>${partner.authorized_properties || 0}</strong> / ${partner.total_properties || 0}`;
+            const refreshed = relativeTime(partner.last_refreshed_at || partner.last_synced_at);
+            const onboardingHint = (statusKind === 'pending' || statusKind === 'unreachable')
+                ? `<div style="margin-top: 0.5rem; font-size: 0.75rem;">
+                       <a href="${escapeHtml(partner.aao_onboarding_url)}" target="_blank" rel="noopener" style="color: #2563eb;">
+                           Send AAO link to publisher →
+                       </a>
+                   </div>`
+                : '';
 
-            const lastSynced = partner.last_synced_at
-                ? new Date(partner.last_synced_at).toLocaleDateString()
-                : 'Never';
+            const actionButtons = isEmbedded
+                ? '<span style="color: #9ca3af; font-size: 0.75rem;">Platform-managed</span>'
+                : `
+                    <button onclick="refreshPublisher(${partner.id})"
+                            class="btn btn-sm" style="background: #eff6ff; color: #1e40af; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; margin-right: 0.25rem;">
+                        Refresh
+                    </button>
+                    <button onclick="deletePublisher(${partner.id}, '${escapeHtml(partner.publisher_domain)}')"
+                            class="btn btn-sm" style="background: #fee2e2; color: #991b1b; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">
+                        Delete
+                    </button>
+                `;
 
             html += `
-                <tr style="border-bottom: 1px solid #f3f4f6;">
+                <tr style="border-bottom: 1px solid #f3f4f6;" data-partner-id="${partner.id}">
                     <td style="padding: 0.75rem;">
-                        <div style="font-weight: 600;">${escapeHtml(partner.display_name)}</div>
+                        <div style="font-weight: 600;">${escapeHtml(partner.display_name || partner.publisher_domain)}</div>
                         <div style="font-size: 0.875rem; color: #6b7280;">${escapeHtml(partner.publisher_domain)}</div>
                     </td>
                     <td style="padding: 0.75rem;">
-                        ${statusBadge}
-                        ${partner.sync_error ? `<div style="font-size: 0.75rem; color: #dc2626; margin-top: 0.25rem;">${escapeHtml(partner.sync_error)}</div>` : ''}
+                        ${chip}
+                        ${errorMsg ? `<div style="font-size: 0.75rem; color: #dc2626; margin-top: 0.25rem;">${escapeHtml(errorMsg)}</div>` : ''}
+                        ${onboardingHint}
                     </td>
-                    <td style="padding: 0.75rem; color: #6b7280;">${partner.property_count || 0}</td>
-                    <td style="padding: 0.75rem; color: #6b7280;">${lastSynced}</td>
-                    <td style="padding: 0.75rem; text-align: right;">
-                        <button onclick="deletePublisher(${partner.id}, '${escapeHtml(partner.publisher_domain)}')"
-                                class="btn btn-sm" style="background: #fee2e2; color: #991b1b; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">
-                            Delete
-                        </button>
+                    <td style="padding: 0.75rem; color: #374151;">${counts}</td>
+                    <td style="padding: 0.75rem; color: #6b7280;">${refreshed}</td>
+                    <td style="padding: 0.75rem; text-align: right; white-space: nowrap;">
+                        ${actionButtons}
                     </td>
                 </tr>
             `;
@@ -2352,6 +2407,74 @@ function syncAllPublishers() {
         btn.disabled = false;
         icon.style.animation = '';
         alert('Error: ' + error.message);
+    });
+}
+
+// Refresh a single publisher (forces fresh AAO fetch).
+function refreshPublisher(partnerId) {
+    const row = document.querySelector(`tr[data-partner-id="${partnerId}"]`);
+    if (row) row.style.opacity = '0.5';
+
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners/${partnerId}/refresh`, {
+        method: 'POST',
+        credentials: 'same-origin'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            alert('Refresh failed: ' + data.error);
+            if (row) row.style.opacity = '1';
+            return;
+        }
+        loadPublishers();
+    })
+    .catch(err => {
+        alert('Refresh failed: ' + err.message);
+        if (row) row.style.opacity = '1';
+    });
+}
+
+// Save the AAO identity (house_domain). public_agent_url is derived
+// server-side from virtual_host / subdomain, not user-edited.
+function saveAaoIdentity(event) {
+    event.preventDefault();
+    const houseDomain = document.getElementById('house_domain').value.trim().toLowerCase();
+    const btn = document.getElementById('save-aao-identity-btn');
+    const status = document.getElementById('aao-identity-status');
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+    if (status) status.textContent = '';
+
+    fetch(`${config.scriptName}/tenant/${config.tenantId}/aao-identity`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ house_domain: houseDomain })
+    })
+    .then(r => r.json().then(data => ({ ok: r.ok, data })))
+    .then(({ ok, data }) => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save house domain'; }
+        if (!ok || data.error) {
+            if (status) {
+                status.textContent = data.error || 'Save failed';
+                status.style.color = '#dc2626';
+            }
+            return;
+        }
+        if (status) {
+            status.textContent = 'Saved';
+            status.style.color = '#065f46';
+        }
+        // Update displayed agent URL if it changed.
+        const display = document.getElementById('public-agent-url-display');
+        if (display && data.public_agent_url) display.textContent = data.public_agent_url;
+    })
+    .catch(err => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save house domain'; }
+        if (status) {
+            status.textContent = 'Save failed: ' + err.message;
+            status.style.color = '#dc2626';
+        }
     });
 }
 

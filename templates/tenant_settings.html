@@ -388,14 +388,13 @@
 
         <div class="settings-nav-separator"></div>
 
-        {% if not embedded_view %}
-        {# AAO `/publisher/{domain}` is the canonical surface for partnership data;
-           embedded-mode publishers manage these via the upstream platform. #}
+        {# Publishers nav is visible for both open + embedded tenants —
+           embedded sees a readonly view of their AAO identity + partner roster
+           rather than a missing tab. #}
         <a class="settings-nav-item" data-section="publishers">
             <span class="settings-nav-icon">🌐</span>
             <span>Publishers</span>
         </a>
-        {% endif %}
 
         <a class="settings-nav-item" data-section="products">
             <span class="settings-nav-icon">📦</span>
@@ -1902,32 +1901,116 @@ Exclude any products that don't match the brand's tone.</pre>
         </div>
 
         <!-- Publishers Settings -->
-        {# AAO `/publisher/{domain}` is the canonical surface for partnership data;
-           embedded-mode publishers manage these via the upstream platform. #}
-        {% if not embedded_view %}
+        {# AAO identity (house_domain + public_agent_url) and partnership graph
+           live here together — they're a single conceptual unit. Embedded
+           tenants see the same section but the platform manages it. #}
+        {%- set _computed_public_agent_url -%}
+            {%- if embedded_view -%}
+                {{ tenant.public_agent_url or 'https://interchange.io' }}
+            {%- elif tenant.virtual_host -%}
+                https://{{ tenant.virtual_host }}
+            {%- elif sales_agent_domain and tenant.subdomain -%}
+                https://{{ tenant.subdomain }}.{{ sales_agent_domain }}
+            {%- else -%}
+                {{ tenant.public_agent_url or '' }}
+            {%- endif -%}
+        {%- endset %}
         <div id="publishers" class="settings-section">
             <div class="settings-header">
                 <h2>Publisher Partnerships</h2>
-                <p>Manage the publishers you represent and sell inventory for</p>
+                <p>Your AAO identity and the publishers you represent.</p>
             </div>
 
+            {% if embedded_view %}
+            <div class="alert alert-info" style="margin-bottom: 1.5rem; padding: 0.75rem 1rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; color: #1e40af;">
+                <strong>Platform-managed.</strong> Your house domain and agent URL are configured by Scope3.
+                Publisher partners are also managed centrally — contact your Scope3 representative to add or remove partners.
+            </div>
+            {% endif %}
+
+            <!-- AAO Identity Subsection -->
             <div class="form-section">
+                <h3>Your AAO identity</h3>
+                <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                    These two values define your tenant in the AAO trust graph. The house domain is where
+                    your <code>brand.json</code> lives. The agent URL is what publishers list in their
+                    <code>adagents.json</code> to authorize you.
+                </p>
+
+                <form id="aao-identity-form" onsubmit="saveAaoIdentity(event)">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="house_domain">House domain</label>
+                            <input type="text" id="house_domain" name="house_domain"
+                                   value="{{ tenant.house_domain or '' }}"
+                                   placeholder="e.g. wonderstruck.org"
+                                   {% if embedded_view %}readonly{% endif %}
+                                   style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;{% if embedded_view %} background: #f9fafb;{% endif %}">
+                            <small style="color: #6b7280;">
+                                We fetch <code>https://{house_domain}/.well-known/brand.json</code> on demand.
+                                Bare domain only — no scheme, no path.
+                            </small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Public agent URL</label>
+                            {% if _computed_public_agent_url %}
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <code id="public-agent-url-display" style="flex: 1; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.9rem;">{{ _computed_public_agent_url }}</code>
+                                <button type="button" class="btn btn-sm" onclick="copyToClipboard(document.getElementById('public-agent-url-display'))" style="padding: 0.4rem 0.75rem;">Copy</button>
+                            </div>
+                            <small style="color: #6b7280;">
+                                {% if embedded_view -%}
+                                    Shared platform URL. Publishers list this exact value in their adagents.json.
+                                {%- elif tenant.virtual_host -%}
+                                    Derived from your custom domain. Make sure the same URL appears in every publisher's adagents.json.
+                                {%- else -%}
+                                    Default platform-prefixed URL. Set a Custom Domain on the Account screen if you want a vanity URL.
+                                {%- endif %}
+                            </small>
+                            {% else %}
+                            <div id="public-agent-url-empty" style="padding: 0.6rem 0.75rem; background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px; color: #92400e; font-size: 0.875rem;">
+                                <strong>Not configured yet.</strong>
+                                Set a <a href="#general" style="color: #92400e; text-decoration: underline;">Custom Domain</a>
+                                on the Account screen — your agent URL is derived from it. Until then,
+                                publishers can't authorize this tenant via adagents.json.
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {% if not embedded_view %}
+                    <div style="margin-top: 1rem;">
+                        <button type="submit" class="btn btn-primary" id="save-aao-identity-btn">Save house domain</button>
+                        <span id="aao-identity-status" style="margin-left: 0.75rem; color: #6b7280; font-size: 0.875rem;"></span>
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+
+            <!-- Publisher Partners Subsection -->
+            <div class="form-section" style="margin-top: 2rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h3>Publisher Partners</h3>
+                    <h3>Publisher partners</h3>
+                    {% if not embedded_view %}
                     <div style="display: flex; gap: 0.5rem;">
                         <button onclick="syncAllPublishers()" class="btn btn-secondary" id="sync-publishers-btn">
-                            <span id="sync-publishers-icon">🔄</span> Verify All
+                            <span id="sync-publishers-icon">🔄</span> Refresh all
                         </button>
                         <button onclick="showAddPublisherModal()" class="btn btn-primary">
                             + Add Publisher
                         </button>
                     </div>
+                    {% endif %}
                 </div>
 
                 <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
-                    Publishers must authorize your sales agent in their <code>/.well-known/adagents.json</code> file.
-                    Once authorized, you can sell their inventory to advertisers.
+                    Add publishers by domain. We fetch <code>/.well-known/adagents.json</code> from each one
+                    and show how many properties they list, plus how many authorize your agent URL above.
                 </p>
+
+                <!-- Aggregate summary -->
+                <div id="publishers-summary" style="margin-bottom: 1rem;"></div>
 
                 <!-- Publishers List -->
                 <div id="publishers-list" style="margin-top: 1rem;">
@@ -1938,12 +2021,15 @@ Exclude any products that don't match the brand's tone.</pre>
                 </div>
             </div>
 
+            {% if not embedded_view %}
             <!-- Add Publisher Modal -->
             <div id="add-publisher-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
                 <div style="background: white; border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto;">
                     <h3 style="margin: 0 0 1rem 0;">Add Publisher Partner</h3>
                     <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1.5rem;">
-                        Enter the domain of the publisher you want to represent. They must have authorized your sales agent in their adagents.json file.
+                        Enter the publisher's root domain (e.g. <code>wonderstruck.org</code>). You don't need to list
+                        individual properties — we'll fetch their full inventory from <code>/.well-known/adagents.json</code>
+                        and show which ones authorize your agent.
                     </p>
 
                     <form id="add-publisher-form" onsubmit="addPublisher(event)">
@@ -1952,7 +2038,7 @@ Exclude any products that don't match the brand's tone.</pre>
                             <input type="text" id="publisher-domain" name="publisher_domain"
                                    placeholder="example.com" required
                                    style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
-                            <small style="color: #6b7280;">Enter the domain without http:// or https://</small>
+                            <small style="color: #6b7280;">Bare domain only — no scheme, no path.</small>
                         </div>
 
                         <div class="form-group">
@@ -1970,8 +2056,8 @@ Exclude any products that don't match the brand's tone.</pre>
                     </form>
                 </div>
             </div>
+            {% endif %}
         </div>
-        {% endif %}
 
         <!-- Products Settings -->
         <div id="products" class="settings-section">
@@ -2759,6 +2845,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
      data-a2a-port="{{ mcp_port }}"
      data-mcp-port="{{ mcp_port }}"
      data-is-production="{% if is_production %}true{% else %}false{% endif %}"
+     data-is-embedded="{% if embedded_view %}true{% else %}false{% endif %}"
      data-virtual-host="{{ tenant.virtual_host if tenant.virtual_host else '' }}"
      data-subdomain="{{ tenant.subdomain if tenant.subdomain else '' }}"
      data-tenant-ad-server="{{ tenant.ad_server if tenant.ad_server else '' }}"

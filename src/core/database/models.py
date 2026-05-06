@@ -2227,6 +2227,13 @@ class PublisherPartner(Base, JSONValidatorMixin):
         String(20), nullable=False, default="pending", comment="pending, success, error"
     )
     sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AAO status counts — populated by sync_publisher_partners + the per-row
+    # refresh endpoint. Drive the "47 / 200 authorized" UI without re-hitting
+    # AAO on every page render.
+    total_properties: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    authorized_properties: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_fetch_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

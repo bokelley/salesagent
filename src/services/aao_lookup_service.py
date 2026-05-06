@@ -20,11 +20,49 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from adcp import fetch_adagents, get_properties_by_agent
 
 logger = logging.getLogger(__name__)
+
+
+_AAO_PUBLISHER_DIRECTORY = "https://agenticadvertising.org/publisher"
+
+
+PublisherPartnerStatusKind = Literal["authorized", "pending", "unreachable"]
+
+
+@dataclass(frozen=True)
+class PublisherPartnerStatus:
+    """Live AAO snapshot for a single publisher partner.
+
+    Returned by :func:`get_publisher_partner_status` and consumed by:
+
+    - The Publisher Partnerships UI (renders ``"47 / 200 authorized"`` and the
+      status chip).
+    - The ``sync_publisher_partners`` cron / Verify-All endpoint (persists the
+      counts on :class:`PublisherPartner` so the UI doesn't re-hit AAO on
+      every page load).
+
+    ``status``:
+
+    - ``authorized`` — at least one property is authorized to ``public_agent_url``.
+    - ``pending``    — the publisher's adagents.json fetched cleanly and lists
+                       at least one property, but none authorize this agent.
+                       The user should send the publisher the AAO onboarding
+                       link (:attr:`aao_onboarding_url`).
+    - ``unreachable`` — the adagents.json fetch failed (DNS, 404, parse error,
+                        timeout). :attr:`error` carries the message.
+    """
+
+    publisher_domain: str
+    total_properties: int
+    authorized_properties: int
+    status: PublisherPartnerStatusKind
+    aao_onboarding_url: str
+    error: str | None
 
 
 # In-memory caches. Single-process is fine for sprint 1.7 — the existing
@@ -146,3 +184,141 @@ async def is_agent_authorized_by_publisher(
     if not properties:
         return False, f"agent_url {public_agent_url!r} not listed in adagents.json"
     return True, None
+
+
+_PLATFORM_AGENT_HOSTS = frozenset({"interchange.io"})
+
+
+class PublicAgentUrlMismatch(ValueError):
+    """Raised when a saved ``public_agent_url`` doesn't match the tenant's
+    serving hostname. Without this check, publishers' adagents.json would
+    point at a host this salesagent never answers on, and every authorized
+    buy would fail signature verification at admission time."""
+
+
+def validate_public_agent_url_hostname(
+    public_agent_url: str,
+    *,
+    is_embedded: bool,
+    virtual_host: str | None,
+    subdomain: str | None,
+    sales_agent_domain: str | None,
+) -> None:
+    """Enforce ``urlparse(public_agent_url).hostname ∈ acceptable_hosts``.
+
+    Acceptable hosts:
+
+    - Embedded tenants: any host in :data:`_PLATFORM_AGENT_HOSTS` (today, just
+      ``interchange.io`` — extend when we add more shared agent hosts).
+    - Self-hosted tenants: ``virtual_host`` (custom DNS) or
+      ``{subdomain}.{sales_agent_domain}`` (platform-prefixed default).
+
+    Raises :class:`PublicAgentUrlMismatch` when the URL points somewhere this
+    salesagent doesn't serve from. Callers translate to a 422 / form error.
+    """
+    from urllib.parse import urlparse
+
+    hostname = (urlparse(public_agent_url).hostname or "").lower()
+    if not hostname:
+        raise PublicAgentUrlMismatch(f"public_agent_url {public_agent_url!r} has no hostname")
+
+    def _strip_port(host: str) -> str:
+        # virtual_host may carry a ``:port`` in dev (``localhost:8001``).
+        # urlparse strips ports from URLs already; mirror that on the
+        # comparison side so dev tenants don't false-positive.
+        return host.split(":", 1)[0].lower()
+
+    acceptable: set[str] = set()
+    if is_embedded:
+        acceptable.update(_PLATFORM_AGENT_HOSTS)
+    if virtual_host:
+        acceptable.add(_strip_port(virtual_host))
+    if subdomain and sales_agent_domain:
+        acceptable.add(f"{subdomain.lower()}.{_strip_port(sales_agent_domain)}")
+
+    if hostname not in acceptable:
+        raise PublicAgentUrlMismatch(
+            f"public_agent_url hostname {hostname!r} doesn't match any of this "
+            f"tenant's serving hosts ({sorted(acceptable) or 'none configured'}). "
+            "Publishers listing this URL in adagents.json wouldn't be able to "
+            "reach this agent — fix virtual_host first, or use the platform "
+            "default (https://interchange.io) for embedded tenants."
+        )
+
+
+def _aao_onboarding_url(publisher_domain: str) -> str:
+    """Deep link to the AAO publisher page — sent to publishers who list
+    properties but haven't yet authorized this tenant's agent."""
+    return f"{_AAO_PUBLISHER_DIRECTORY}/{publisher_domain}"
+
+
+def _count_total_properties(adagents: dict[str, Any]) -> int:
+    """Total properties listed across every authorized_agents[*] entry, deduped
+    by ``property_id``. Matches the denominator the user expects in the UI
+    ("we list 200 properties")."""
+    seen: set[str] = set()
+    fallback_count = 0
+    for entry in adagents.get("authorized_agents", []) or []:
+        for prop in entry.get("inline_properties", []) or []:
+            pid = prop.get("property_id") or prop.get("id")
+            if pid:
+                seen.add(pid)
+            else:
+                fallback_count += 1
+    return len(seen) + fallback_count
+
+
+async def get_publisher_partner_status(
+    publisher_domain: str,
+    public_agent_url: str,
+    *,
+    force_refresh: bool = False,
+) -> PublisherPartnerStatus:
+    """Fetch the publisher's adagents.json once and return both counts.
+
+    A single HTTP fetch yields ``total_properties`` (full inline_properties
+    list) and ``authorized_properties`` (the subset authorized to
+    ``public_agent_url`` — the SDK's ``get_properties_by_agent`` does the
+    matching). On fetch failure, returns ``status="unreachable"`` with the
+    error message rather than raising — callers persist this directly on
+    :class:`PublisherPartner.last_fetch_error`.
+    """
+    now = time.monotonic()
+    adagents: dict[str, Any] | None = None
+    if not force_refresh:
+        cached = _ADAGENTS_CACHE.get(publisher_domain)
+        if cached is not None and now - cached[0] < _ADAGENTS_TTL_SECONDS:
+            adagents = cached[1]
+
+    if adagents is None:
+        try:
+            adagents = await fetch_adagents(publisher_domain)
+        except Exception as exc:
+            logger.info("AAO: adagents.json fetch failed for %s: %s", publisher_domain, exc)
+            return PublisherPartnerStatus(
+                publisher_domain=publisher_domain,
+                total_properties=0,
+                authorized_properties=0,
+                status="unreachable",
+                aao_onboarding_url=_aao_onboarding_url(publisher_domain),
+                error=f"adagents.json fetch failed: {exc}",
+            )
+        _ADAGENTS_CACHE[publisher_domain] = (now, adagents)
+
+    total = _count_total_properties(adagents)
+    authorized_props = get_properties_by_agent(adagents, public_agent_url) or []
+    authorized = len(authorized_props)
+
+    if authorized > 0:
+        kind: PublisherPartnerStatusKind = "authorized"
+    else:
+        kind = "pending"
+
+    return PublisherPartnerStatus(
+        publisher_domain=publisher_domain,
+        total_properties=total,
+        authorized_properties=authorized,
+        status=kind,
+        aao_onboarding_url=_aao_onboarding_url(publisher_domain),
+        error=None,
+    )

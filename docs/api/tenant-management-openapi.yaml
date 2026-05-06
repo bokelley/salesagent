@@ -1575,6 +1575,7 @@ components:
           title: Name
           type: string
         public_agent_url:
+          default: https://interchange.io
           maxLength: 500
           minLength: 1
           title: Public Agent Url
@@ -1585,7 +1586,6 @@ components:
       - external_source
       - contact_email
       - house_domain
-      - public_agent_url
       - adapter
       title: ProvisionTenantRequest
       type: object
