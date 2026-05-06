@@ -10,6 +10,10 @@ Routing decision (in order):
   ``admin.${SALES_AGENT_DOMAIN}`` → entire request goes to Flask with
   ``root_path=/admin`` (replaces the nginx ``server_name admin.*``
   block that injected ``X-Forwarded-Prefix: /admin``)
+* ``Host`` equals ``SALES_AGENT_DOMAIN`` exactly (apex, no subdomain)
+  and path is ``/`` → 302 redirect to ``/signup`` (replaces the nginx
+  ``server_name ${SALES_AGENT_DOMAIN}; location = /`` block that
+  proxied apex root to /signup)
 * ``/mcp/*`` → MCP (claimed by ``serve(transport="both")``'s inner
   dispatcher before this middleware decides anything)
 * ``/admin/*``, ``/static/*``, ``/auth/*``, ``/login``, ``/logout``,
@@ -28,7 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.domain_config import is_admin_domain
+from src.core.domain_config import get_sales_agent_domain, is_admin_domain
 
 # Path prefixes the Flask admin claims. Anything under one of these
 # segments dispatches to Flask; everything else falls through to A2A
@@ -109,6 +113,17 @@ class AdminWSGIMount:
                 return
 
             path = scope.get("path", "")
+
+            # Apex redirect: bare ``sales-agent.example.com/`` (no
+            # subdomain) goes to /signup. Replaces the nginx
+            # ``location = /`` block in the multi-tenant config that
+            # proxied apex root → /signup. Subdomain hosts (tenant.*,
+            # admin.*) are unaffected — they fall through to A2A or
+            # admin dispatch as before.
+            if path == "/" and self._is_apex_host(scope):
+                await self._send_redirect(send, "/signup")
+                return
+
             for prefix in self.prefixes:
                 if path == prefix or path.startswith(prefix + "/"):
                     if prefix in self.strip_prefixes:
@@ -159,3 +174,34 @@ class AdminWSGIMount:
         if not host:
             return False
         return is_admin_domain(host)
+
+    def _is_apex_host(self, scope: dict) -> bool:
+        """True if the request host is the bare SALES_AGENT_DOMAIN (no subdomain).
+
+        Strips any port suffix before comparing. Returns False when
+        ``SALES_AGENT_DOMAIN`` is unset (single-tenant / dev), so localhost
+        and ``localtest.me`` aliases never trigger the apex redirect.
+        """
+        sales_domain = get_sales_agent_domain()
+        if not sales_domain:
+            return False
+        host = self._resolve_host(scope)
+        if not host:
+            return False
+        host_no_port = host.split(":", 1)[0]
+        return host_no_port == sales_domain
+
+    @staticmethod
+    async def _send_redirect(send: Any, location: str) -> None:
+        """Emit a 302 redirect through the ASGI ``send`` channel."""
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 302,
+                "headers": [
+                    (b"location", location.encode("latin-1")),
+                    (b"content-length", b"0"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
