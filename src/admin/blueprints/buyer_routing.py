@@ -46,6 +46,8 @@ from src.core.database.models import (
     Principal,
     Tenant,
 )
+from src.core.database.repositories.gam_sync import GAMSyncRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.recent_buyers_service import compute_recent_buyers
 
 logger = logging.getLogger(__name__)
@@ -524,26 +526,14 @@ def list_advertiser_assignments(tenant_id: str):
     buyer-routing page.
     """
     with get_db_session() as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if tenant is None:
+        tenant_repo = TenantConfigRepository(session, tenant_id)
+        if tenant_repo.get_tenant() is None:
             return _api_error_json("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-        rows = session.scalars(
-            select(GamAdvertiser)
-            .where(GamAdvertiser.tenant_id == tenant_id)
-            .order_by(GamAdvertiser.name.asc(), GamAdvertiser.advertiser_id.asc())
-        ).all()
+        rows = GAMSyncRepository(session, tenant_id).list_advertisers()
 
-        principal_ids = {r.principal_id for r in rows if r.principal_id}
-        principals_by_id: dict[str, str] = {}
-        if principal_ids:
-            principal_rows = session.scalars(
-                select(Principal).where(
-                    Principal.tenant_id == tenant_id,
-                    Principal.principal_id.in_(principal_ids),
-                )
-            ).all()
-            principals_by_id = {p.principal_id: p.name for p in principal_rows}
+        principal_ids = [r.principal_id for r in rows if r.principal_id]
+        principals_by_id = tenant_repo.get_principal_names(principal_ids)
 
         advertisers = [
             {
@@ -591,9 +581,9 @@ def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
 
     with get_db_session() as session:
         session.info["management_api_caller"] = True
-        advertiser = session.scalars(
-            select(GamAdvertiser).filter_by(tenant_id=tenant_id, advertiser_id=advertiser_id)
-        ).first()
+        gam_repo = GAMSyncRepository(session, tenant_id)
+        tenant_repo = TenantConfigRepository(session, tenant_id)
+        advertiser = gam_repo.get_advertiser(advertiser_id)
         if advertiser is None:
             return _api_error_json(
                 "advertiser_not_found",
@@ -602,9 +592,7 @@ def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
             )
 
         if new_principal_id is not None:
-            principal = session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=new_principal_id)
-            ).first()
+            principal = tenant_repo.get_principal(new_principal_id)
             if principal is None:
                 return _api_error_json(
                     "principal_not_found",
@@ -640,14 +628,10 @@ def list_principals(tenant_id: str):
     Used to populate the agent dropdown in the assignment UI.
     """
     with get_db_session() as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if tenant is None:
+        tenant_repo = TenantConfigRepository(session, tenant_id)
+        if tenant_repo.get_tenant() is None:
             return _api_error_json("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-        rows = session.scalars(
-            select(Principal)
-            .where(Principal.tenant_id == tenant_id)
-            .order_by(Principal.name.asc(), Principal.principal_id.asc())
-        ).all()
+        rows = tenant_repo.list_principals()
         principals = [{"principal_id": p.principal_id, "name": p.name} for p in rows]
     return jsonify({"principals": principals})
