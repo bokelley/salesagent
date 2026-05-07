@@ -136,12 +136,12 @@ def init_db_ci():
                     is_active=True,  # Explicitly set for auth lookup
                     authorized_emails=["ci-test@example.com"],  # Required by setup checklist
                     authorized_domains=None,  # Optional when emails are set
-                    # AAO setup-checklist prerequisites — without these,
-                    # ``validate_setup_complete`` raises in
-                    # ``_create_media_buy_impl``. Set to stub values so e2e
-                    # tests creating media buys against the mock platform
-                    # (now DB-backed via delegation) pass the gate.
-                    house_domain="ci-test.example.com",
+                    # AAO setup-checklist prerequisite (post-#78: only
+                    # public_agent_url; house_domain was dropped). Without
+                    # this, ``validate_setup_complete`` raises in
+                    # ``_create_media_buy_impl`` and e2e tests creating
+                    # media buys against the mock platform (now DB-backed
+                    # via delegation) hit the gate.
                     public_agent_url="https://ci-test.example.com/agent",
                     policy_settings=None,  # SQL NULL
                     signals_agent_config=None,  # SQL NULL
@@ -519,8 +519,7 @@ def init_db_ci():
                     is_active=True,
                     authorized_emails=["iso-test@example.com"],
                     authorized_domains=None,
-                    # Setup-checklist prerequisites — see ci-test tenant block.
-                    house_domain="iso-test.example.com",
+                    # Setup-checklist prerequisite — see ci-test tenant block.
                     public_agent_url="https://iso-test.example.com/agent",
                     policy_settings=None,
                     signals_agent_config=None,
