@@ -260,7 +260,7 @@ class TestMCPToolRoundtripValidation:
         # Test the problematic roundtrip conversion that was failing in production
         for product in schema_products:
             # Step 1: Convert to internal dict (as get_products does)
-            product_dict = product.model_dump_internal()
+            product_dict = product.model_dump()
 
             # Step 2: Apply testing hooks (returns metadata, does not modify data)
             testing_ctx = TestingContext(dry_run=True, test_session_id="test", auto_advance=False)
@@ -408,7 +408,7 @@ class TestMCPToolRoundtripValidation:
             # Test the problematic roundtrip conversion with testing hooks
             for product in schema_products:
                 # Step 1: Convert to internal dict (as get_products does)
-                product_dict = product.model_dump_internal()
+                product_dict = product.model_dump()
 
                 # Step 2: Apply testing hooks (returns metadata, does not modify data)
                 hooks_result = apply_testing_hooks(testing_ctx, "get_products")
@@ -467,7 +467,7 @@ class TestMCPToolRoundtripValidation:
         )
 
         # Step 1: Convert to dict (what the tool does before testing hooks)
-        product_dict = original_product.model_dump_internal()
+        product_dict = original_product.model_dump()
 
         # Verify the dict has the correct field name
         assert "format_ids" in product_dict
@@ -533,7 +533,7 @@ class TestMCPToolRoundtripValidation:
         )
 
         # Roundtrip through internal format
-        internal_dict = product.model_dump_internal()
+        internal_dict = product.model_dump()
         reconstructed_product = ProductSchema(**internal_dict)
 
         # Get AdCP-compliant output
@@ -744,7 +744,7 @@ class TestMCPToolRoundtripPatterns:
                 original = ProductSchema(**test_case["data"])
 
                 # Step 2: Convert to internal dict
-                internal_dict = original.model_dump_internal()
+                internal_dict = original.model_dump()
 
                 # Step 3: Simulate testing hooks or other processing
                 processed_dict = internal_dict.copy()
@@ -816,7 +816,7 @@ class TestMCPToolRoundtripPatterns:
         product = ProductSchema(**complete_product_data)
 
         # Test internal representation
-        internal_dict = product.model_dump_internal()
+        internal_dict = product.model_dump()
         assert "format_ids" in internal_dict  # Field name (no separate internal/external anymore)
 
         # Test external (AdCP) representation

@@ -106,86 +106,16 @@ class Product(LibraryProduct):
         exclude=True,  # Exclude from serialization by default
     )
 
-    @model_validator(mode="after")
-    def validate_pricing_fields(self) -> "Product":
-        """Validate pricing_options per AdCP spec.
+    # Pricing rules (AdCP V3): ``fixed_price`` present = fixed pricing,
+    # ``floor_price`` present = auction with floor. The consolidated
+    # CpmPricingOption/VcpmPricingOption types enforce this.
+    #
+    # ``publisher_properties`` non-emptiness is enforced by the library
+    # ``Product`` itself via ``MinLen(1)`` — no local validator needed.
 
-        Per AdCP PR #88: All products must use pricing_options in the database.
-        However, pricing_options may be empty in API responses for anonymous/unauthenticated
-        users to hide pricing information.
-        """
-        # pricing_options defaults to empty list if not provided
-        # This allows filtering pricing info for anonymous users
-        return self
-
-    @model_validator(mode="after")
-    def validate_publisher_properties(self) -> "Product":
-        """Validate publisher_properties per AdCP spec.
-
-        Per AdCP spec, products must have at least one publisher property.
-        """
-        if not self.publisher_properties or len(self.publisher_properties) == 0:
-            raise ValueError(
-                "Product must have at least one publisher_property per AdCP spec. "
-                "Properties identify the inventory covered by this product."
-            )
-
-        return self
-
-    # Note: In AdCP V3, pricing is determined by field presence:
-    # - fixed_price present = fixed pricing
-    # - floor_price present = auction pricing with floor
-    # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
-
-    def model_dump(self, **kwargs):
-        """Return AdCP-compliant model dump with proper field names, excluding internal fields and null values."""
-        # Exclude internal/non-spec fields
-        kwargs["exclude"] = kwargs.get("exclude", set())
-        if isinstance(kwargs["exclude"], set):
-            kwargs["exclude"].update({"implementation_config", "expires_at"})
-
-        data = super().model_dump(**kwargs)
-
-        # Convert formats to format_ids per AdCP spec
-        if "formats" in data:
-            data["format_ids"] = data.pop("formats")
-
-        # Remove null fields per AdCP spec
-        # Only truly required fields should always be present
-        core_fields = {
-            "product_id",
-            "name",
-            "description",
-            "format_ids",
-            "delivery_type",
-            "delivery_measurement",
-            "is_custom",
-        }
-
-        adcp_data = {}
-        for key, value in data.items():
-            # Include core fields always, and non-null optional fields
-            # Note: pricing_options=[] is valid for anonymous users (no pricing shown)
-            # Per AdCP spec, pricing_options is required but can be empty array
-            if key in core_fields or value is not None:
-                adcp_data[key] = value
-            # Include empty pricing_options explicitly (required per AdCP schema)
-            elif key == "pricing_options" and value == []:
-                adcp_data[key] = []
-
-        return adcp_data
-
-    def model_dump_internal(self, **kwargs):
-        """Return internal model dump including all fields for database operations."""
-        return super().model_dump(**kwargs)
-
-    def model_dump_adcp_compliant(self, **kwargs):
-        """Return model dump for AdCP schema compliance."""
-        return self.model_dump(**kwargs)
-
-    def dict(self, **kwargs):
-        """Override dict to maintain backward compatibility."""
-        return self.model_dump(**kwargs)
+    # No model_dump override: internal-only fields are marked ``exclude=True`` on
+    # the field declaration (Pydantic strips them automatically), and the
+    # library Product is the source of truth for what's on the wire.
 
 
 class ProductFilters(LibraryFilters):

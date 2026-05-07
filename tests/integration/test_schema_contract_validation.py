@@ -231,7 +231,9 @@ class TestProductSchemaContract:
         }
 
         # Internal-only fields that should not appear in AdCP output
-        internal_only_fields = {"expires_at", "implementation_config", "targeting_template"}
+        # ``expires_at`` was promoted from internal-only to AdCP spec field
+        # somewhere in adcp 3.x → 4.x; it's now emitted on the wire.
+        internal_only_fields = {"implementation_config", "targeting_template"}
 
         validator.validate_schema_contract(Product, test_data, adcp_spec_fields, internal_only_fields)
 

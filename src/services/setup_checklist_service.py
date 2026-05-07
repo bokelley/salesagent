@@ -329,24 +329,43 @@ class SetupChecklistService:
         }
 
     def _build_aao_tasks(self, tenant: Tenant) -> list[SetupTask]:
-        """AAO checklist item (public_agent_url only).
+        """AAO checklist item (Public Agent URL).
 
-        Sprint 1.8 §6: embedded tenants with the field set don't see this
-        item — the platform (Scope3) owns it. Embedded tenants with NULL
-        still see it so the gap surfaces to the host product via the §7
-        setup_tasks scope=platform annotation, but with no action_url
-        (the publisher can't fix it — only the host product can).
+        Sprint 1.8 §6: embedded tenants with ``public_agent_url`` set don't
+        see this item — the platform (Scope3) owns it. Embedded tenants
+        with NULL still see it so the gap surfaces to the host product
+        via the §7 setup_tasks scope=platform annotation, but with no
+        action_url (the publisher can't fix it — only the host product
+        can).
+
+        For open-instance tenants, completion uses the same resolution
+        chain that powers display/discovery via
+        :func:`src.services.agent_url_resolver.resolve_agent_url`:
+        explicit ``public_agent_url`` → ``virtual_host`` → platform-
+        prefixed subdomain default. Gating only on the explicit column
+        would mark working tenants (subdomain + ``SALES_AGENT_DOMAIN``
+        set) as incomplete and block them from creating media buys
+        despite their URL being fully reachable — the inconsistency that
+        broke the live storyboard run.
 
         Single source of truth for both the live-session path
         (:meth:`_check_critical_tasks`) and the bulk path
         (:meth:`_build_critical_tasks`).
         """
-        aao_managed_and_complete = bool(tenant.is_embedded) and bool(tenant.public_agent_url)
-        if aao_managed_and_complete:
+        from src.services.agent_url_resolver import resolve_agent_url
+
+        resolved_url = resolve_agent_url(tenant)
+
+        # Embedded + URL set by platform → checklist item is hidden (managed
+        # off-publisher). resolve_agent_url returns None for embedded
+        # tenants without an explicit column, which keeps this branch tight.
+        if tenant.is_embedded and tenant.public_agent_url:
             return []
 
-        if tenant.public_agent_url:
-            details = f"Configured: {tenant.public_agent_url}"
+        if resolved_url:
+            # Open-instance with any derivable URL. Show the row as complete
+            # and surface what we resolved so the operator can spot-check.
+            details = f"Configured: {resolved_url}"
         elif tenant.is_embedded:
             details = (
                 "Platform configuration in progress — your host product will set this. "
@@ -377,7 +396,7 @@ class SetupChecklistService:
                     "authorize this tenant. Derived from your Custom Domain "
                     "(open-instance) or the platform's shared host (embedded)."
                 ),
-                is_complete=bool(tenant.public_agent_url),
+                is_complete=bool(resolved_url),
                 action_url=action_url,
                 details=details,
             ),

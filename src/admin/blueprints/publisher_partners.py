@@ -26,21 +26,11 @@ from src.services.aao_lookup_service import (
     PublisherPartnerStatus,
     get_publisher_partner_status,
 )
+from src.services.agent_url_resolver import resolve_agent_url as _resolve_agent_url
 
 logger = logging.getLogger(__name__)
 
 publisher_partners_bp = Blueprint("publisher_partners", __name__)
-
-
-def _resolve_agent_url(tenant: Tenant) -> str | None:
-    """Pick the URL we'll match against publisher adagents.json. Prefers the
-    explicit ``public_agent_url`` (post-Sprint 1.7), falls back to
-    ``virtual_host``, then to the platform-prefixed default."""
-    if tenant.public_agent_url:
-        return tenant.public_agent_url
-    if tenant.virtual_host:
-        return f"https://{tenant.virtual_host}"
-    return get_tenant_url(tenant.subdomain)
 
 
 def _reject_if_embedded(tenant: Tenant) -> tuple[Response, int] | None:
