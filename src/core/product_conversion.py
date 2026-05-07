@@ -339,19 +339,37 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
             f"Create a PricingOption record for this product."
         )
 
-    # Optional fields
-    if product_model.measurement:
-        product_data["measurement"] = product_model.measurement
-    if product_model.creative_policy:
-        product_data["creative_policy"] = product_model.creative_policy
-    # Note: price_guidance is database metadata, not in AdCP Product schema - omit it
-    # Pricing information should be in pricing_options per AdCP spec
+    # AdCP 4.4 made reporting_capabilities required. The ORM column is NOT NULL
+    # with a server_default (migration c8404b483cf3), so this is always populated.
+    product_data["reporting_capabilities"] = product_model.reporting_capabilities
 
-    # Filter-related internal fields
-    if hasattr(product_model, "countries") and product_model.countries:
-        product_data["countries"] = product_model.countries
-    # channels: DB stores strings, schema uses MediaChannel enum
-    if hasattr(product_model, "channels") and product_model.channels:
+    # is_custom: column is Mapped[bool] non-null with default False on the ORM.
+    product_data["is_custom"] = product_model.is_custom
+
+    # Optional fields — emit only when set, so Pydantic field defaults apply
+    # for the rest. ``price_guidance`` is DB-only metadata; pricing lives on
+    # ``pricing_options`` per AdCP spec.
+    _OPTIONAL_PASSTHROUGH = (
+        "measurement",
+        "creative_policy",
+        "product_card",
+        "product_card_detailed",
+        "placements",
+        "property_targeting_allowed",
+        "signal_targeting_allowed",
+        "catalog_match",
+        "catalog_types",
+        "conversion_tracking",
+        "data_provider_signals",
+        "forecast",
+    )
+    for field_name in _OPTIONAL_PASSTHROUGH:
+        value = getattr(product_model, field_name, None)
+        if value is not None:
+            product_data[field_name] = value
+
+    # channels: DB stores strings, schema uses MediaChannel enum.
+    if product_model.channels:
         converted_channels = []
         for ch in product_model.channels:
             try:
@@ -361,50 +379,22 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         if converted_channels:
             product_data["channels"] = converted_channels
 
-    if product_model.product_card:
-        product_data["product_card"] = product_model.product_card
-    if product_model.product_card_detailed:
-        product_data["product_card_detailed"] = product_model.product_card_detailed
-    if product_model.placements:
-        product_data["placements"] = product_model.placements
-    # AdCP 4.4 made reporting_capabilities required. The ORM column is NOT NULL
-    # with a server_default (migration c8404b483cf3), so this is always populated.
-    product_data["reporting_capabilities"] = product_model.reporting_capabilities
+    # countries: filter-related, kept on the schema with ``exclude=True`` so it
+    # doesn't reach the wire.
+    if product_model.countries:
+        product_data["countries"] = product_model.countries
 
-    # Default is_custom to False if not set
-    product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
+    # implementation_config: prefer the inventory-profile-resolved value
+    # (``effective_implementation_config`` is defined on the ORM model and
+    # falls back to the row's own column when no profile is attached).
+    product_data["implementation_config"] = product_model.effective_implementation_config
 
-    # AdCP 3.6.0 fields — direct attribute access on typed Mapped[] columns
-    if product_model.property_targeting_allowed is not None:
-        product_data["property_targeting_allowed"] = product_model.property_targeting_allowed
-    if product_model.signal_targeting_allowed is not None:
-        product_data["signal_targeting_allowed"] = product_model.signal_targeting_allowed
-    if product_model.catalog_match is not None:
-        product_data["catalog_match"] = product_model.catalog_match
-    if product_model.catalog_types is not None:
-        product_data["catalog_types"] = product_model.catalog_types
-    if product_model.conversion_tracking is not None:
-        product_data["conversion_tracking"] = product_model.conversion_tracking
-    if product_model.data_provider_signals is not None:
-        product_data["data_provider_signals"] = product_model.data_provider_signals
-    if product_model.forecast is not None:
-        product_data["forecast"] = product_model.forecast
+    # Principal access control (internal field, ``exclude=True`` on schema).
+    product_data["allowed_principal_ids"] = product_model.allowed_principal_ids
 
-    # Internal fields (not in AdCP spec, but in our extended Product schema)
-    # Use effective_implementation_config to auto-resolve from inventory profile if set
-    if hasattr(product_model, "effective_implementation_config"):
-        product_data["implementation_config"] = product_model.effective_implementation_config
-    elif hasattr(product_model, "implementation_config"):
-        product_data["implementation_config"] = product_model.implementation_config
-    else:
-        product_data["implementation_config"] = None
-
-    # Principal access control (internal field)
-    product_data["allowed_principal_ids"] = getattr(product_model, "allowed_principal_ids", None)
-
-    # Device type targeting (from targeting_template.device_targets)
-    targeting_template = getattr(product_model, "targeting_template", None)
-    if targeting_template and isinstance(targeting_template, dict):
+    # Device type targeting (from targeting_template.device_targets).
+    targeting_template = product_model.targeting_template
+    if isinstance(targeting_template, dict):
         device_targets = targeting_template.get("device_targets")
         if isinstance(device_targets, list):
             product_data["device_types"] = device_targets
