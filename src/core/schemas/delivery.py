@@ -19,7 +19,7 @@ from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDelivery
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_serializer
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
@@ -209,6 +209,19 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
         default_factory=dict,
         description="AdCP extension object for adapter-specific data",
     )
+
+    @field_serializer("status")
+    def _serialize_status(self, value: str) -> str:
+        """Map salesagent's internal vocab to the AdCP wire enum.
+
+        The schema's ``status`` Literal carries the internal vocab so every
+        in-process consumer (filters, scheduler ``non_active_status_strs``,
+        per-buy comparisons) can keep its existing ``"ready"`` checks. The
+        AdCP wire ``MediaBuyStatus`` enum uses ``"pending_start"`` for the
+        same state, so we translate at serialisation time only. Every other
+        internal value coincides with its wire name.
+        """
+        return "pending_start" if value == "ready" else value
 
 
 class ReportingPeriod(LibraryReportingPeriod):
