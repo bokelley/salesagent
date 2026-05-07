@@ -70,9 +70,9 @@ class TestPublisherPartnersAuth:
             resp = client.open(url, method=method)
         else:
             resp = client.open(url, method=method, json=body)
-        assert (
-            resp.status_code == 401
-        ), f"{method} {url} should require auth (got {resp.status_code}): {resp.get_data(as_text=True)[:200]}"
+        assert resp.status_code == 401, (
+            f"{method} {url} should require auth (got {resp.status_code}): {resp.get_data(as_text=True)[:200]}"
+        )
         body_json = resp.get_json()
         assert body_json is not None, "expected JSON envelope, not HTML"
         assert "Authentication required" in body_json.get("error", ""), body_json

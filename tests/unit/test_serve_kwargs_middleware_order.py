@@ -54,9 +54,9 @@ def middleware_classes() -> list[type]:
 def test_admin_wsgi_mount_runs_first(middleware_classes):
     """Admin paths must short-circuit to Flask before any buyer-protocol
     middleware sees them."""
-    assert (
-        middleware_classes[0] is AdminWSGIMount
-    ), f"AdminWSGIMount must be first in asgi_middleware; got order: {[c.__name__ for c in middleware_classes]}"
+    assert middleware_classes[0] is AdminWSGIMount, (
+        f"AdminWSGIMount must be first in asgi_middleware; got order: {[c.__name__ for c in middleware_classes]}"
+    )
 
 
 def test_bearer_translation_runs_before_spec_defaults(middleware_classes):

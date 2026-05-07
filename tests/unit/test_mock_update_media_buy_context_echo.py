@@ -30,7 +30,7 @@ async def test_update_media_buy_response_omits_stored_context_so_sdk_can_inject(
     """
     from unittest.mock import MagicMock
 
-    from core.platforms.mock import MockSellerPlatform, _MEDIA_BUYS
+    from core.platforms.mock import _MEDIA_BUYS, MockSellerPlatform
 
     # Seed a media buy with a CREATE-time context cached on the record.
     media_buy_id = "mb_test_ctx_echo"

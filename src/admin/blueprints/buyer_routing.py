@@ -116,7 +116,8 @@ def buyer_routing_page(tenant_id: str):
             abort(404, description=f"Tenant {tenant_id!r} not found")
 
         rules = session.scalars(
-            select(AdvertiserRoutingRule).filter_by(tenant_id=tenant_id)
+            select(AdvertiserRoutingRule)
+            .filter_by(tenant_id=tenant_id)
             # Most-specific first matches the resolution chain ordering
             # in src/services/buyer_advertiser_routing.py — exact wins
             # over house wildcard wins over operator wildcard.
