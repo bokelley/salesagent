@@ -486,10 +486,13 @@ class SetupChecklistService:
                 )
             )
 
-        # 4. Authorized Properties → at least one verified publisher partner.
-        # Each PublisherPartner.publisher_domain IS that publisher's house;
-        # the salesagent fetches their brand.json + adagents.json via the AAO
-        # at request time. Green state = ≥1 verified partner.
+        # 4. Authorized Properties → green when EITHER:
+        #    - ≥1 verified PublisherPartner (new AAO model — each
+        #      partner's brand.json + adagents.json is the source of truth)
+        #    - ≥1 AuthorizedProperty row (legacy model — pre-AAO tenants
+        #      and existing fixtures still seed this table directly)
+        # The OR keeps existing tenants out of the regression even before
+        # they migrate to the AAO model.
         stmt_publishers = (
             select(func.count())
             .select_from(PublisherPartner)
@@ -499,12 +502,20 @@ class SetupChecklistService:
             )
         )
         verified_publisher_count = session.scalar(stmt_publishers) or 0
-        is_complete = verified_publisher_count > 0
-        details = (
-            f"{verified_publisher_count} verified publisher partners"
-            if is_complete
-            else "Add a publisher partner — their adagents.json must authorize this tenant's agent URL."
+        stmt_props = (
+            select(func.count()).select_from(AuthorizedProperty).where(AuthorizedProperty.tenant_id == self.tenant_id)
         )
+        legacy_property_count = session.scalar(stmt_props) or 0
+        is_complete = verified_publisher_count > 0 or legacy_property_count > 0
+        if verified_publisher_count > 0:
+            details = f"{verified_publisher_count} verified publisher partners"
+        elif legacy_property_count > 0:
+            details = (
+                f"{legacy_property_count} authorized properties (legacy mode — "
+                "add a publisher partner to migrate to the AAO model)"
+            )
+        else:
+            details = "Add a publisher partner — their adagents.json must authorize this tenant's agent URL."
 
         tasks.append(
             SetupTask(
