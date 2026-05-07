@@ -105,8 +105,10 @@ def test_correct_product_construction():
     for fmt in adcp_response["format_ids"]:
         assert "agent_url" in fmt
 
-    # Verify internal fields are NOT in the response
-    internal_fields = ["targeting_template", "price_guidance", "implementation_config", "countries", "expires_at"]
+    # Verify internal fields are NOT in the response.
+    # ``expires_at`` was promoted to an AdCP spec field in adcp 4.x; it's no
+    # longer treated as internal-only.
+    internal_fields = ["targeting_template", "price_guidance", "implementation_config", "countries"]
     for field in internal_fields:
         assert field not in adcp_response, f"Internal field '{field}' should not be in AdCP response"
 
