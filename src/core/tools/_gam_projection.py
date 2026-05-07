@@ -21,8 +21,9 @@ from adcp.types import MediaBuyStatus
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import GAMLineItem, GAMOrder, MediaBuy
+from src.core.database.models import GAMLineItem, GAMOrder, MediaBuy, MediaPackage
 from src.core.database.repositories.gam_sync import GAMSyncRepository
+from src.core.exceptions import AdCPAuthorizationError, AdCPNotFoundError
 
 # Order-level status. Date logic decides between pending_start / active /
 # completed for non-terminal states; PAUSED / CANCELED / DELETED short-
@@ -162,3 +163,120 @@ def line_item_to_package_fields(line_item: GAMLineItem) -> dict:
         "budget": None,
         "bid_price": bid_price,
     }
+
+
+def is_projected_media_buy_id(media_buy_id: str) -> bool:
+    """True if ``media_buy_id`` follows the projected GAM order convention."""
+    return media_buy_id.startswith("gam_") and not media_buy_id.startswith("gam_li_")
+
+
+def order_id_from_projected(media_buy_id: str) -> str:
+    """Extract the GAM order id from a projected media_buy_id."""
+    if not is_projected_media_buy_id(media_buy_id):
+        raise ValueError(f"{media_buy_id!r} is not a projected GAM media_buy_id")
+    return media_buy_id[len("gam_") :]
+
+
+def materialize_projected_buy(
+    session: Session,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_id: str,
+) -> MediaBuy:
+    """Materialize a projected GAM order as a real MediaBuy + MediaPackages.
+
+    Called the first time a buyer mutates an imported buy (update_media_buy
+    on a ``gam_<order_id>`` ID). Creates real rows so packages, push
+    configs, and audit logs have somewhere to attach. Subsequent reads
+    of the same projected ID return the materialized row directly (the
+    projection skips materialized order ids).
+
+    Raises:
+        AdCPNotFoundError: order_id is not in gam_orders for this tenant.
+        AdCPAuthorizationError: caller is not the assigned principal for
+            the order's advertiser.
+    """
+    if not is_projected_media_buy_id(media_buy_id):
+        raise ValueError(f"{media_buy_id!r} is not a projected GAM media_buy_id")
+
+    order_id = order_id_from_projected(media_buy_id)
+
+    repo = GAMSyncRepository(session, tenant_id)
+    orders = repo.list_orders_for_advertisers(repo.list_advertiser_ids_assigned_to(principal_id))
+    order = next((o for o in orders if o.order_id == order_id), None)
+    if order is None:
+        raise AdCPAuthorizationError(
+            f"Order {order_id!r} is not assigned to principal {principal_id!r} (or does not exist)."
+        )
+
+    fields = order_to_media_buy_fields(order)
+    advertiser = repo.get_advertiser(order.advertiser_id) if order.advertiser_id else None
+    advertiser_name = (
+        (advertiser.name if advertiser else None) or order.advertiser_name or order.advertiser_id or "Unknown"
+    )
+
+    today = date.today()
+    media_buy = MediaBuy(
+        media_buy_id=media_buy_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        order_name=order.name,
+        advertiser_name=advertiser_name,
+        budget=fields["budget"],
+        currency=fields["currency"] or "USD",
+        start_date=fields["start_date"] or today,
+        end_date=fields["end_date"] or today,
+        start_time=fields["start_time"],
+        end_time=fields["end_time"],
+        status=project_gam_status(order.status, fields["start_date"], fields["end_date"], today).value,
+        raw_request=fields["raw_request"],
+        source="gam_import",
+        external_id=order.order_id,
+    )
+    session.add(media_buy)
+
+    line_items = repo.list_line_items_for_orders([order.order_id])
+    for li in line_items:
+        pkg_fields = line_item_to_package_fields(li)
+        session.add(
+            MediaPackage(
+                media_buy_id=media_buy_id,
+                package_id=pkg_fields["package_id"],
+                package_config=pkg_fields["package_config"],
+                budget=pkg_fields["budget"],
+                bid_price=pkg_fields["bid_price"],
+            )
+        )
+
+    session.flush()
+    return media_buy
+
+
+def get_or_materialize_media_buy(
+    session: Session,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_id: str,
+) -> MediaBuy:
+    """Return a real MediaBuy row, materializing on demand for projected IDs.
+
+    For non-projected ids this is a plain ``get_by_id_or_external_id``
+    against ``MediaBuyRepository``. For projected (``gam_<order_id>``)
+    ids it materializes if no row exists yet.
+
+    Raises:
+        AdCPNotFoundError: id is unknown to this tenant.
+        AdCPAuthorizationError: caller is not assigned to the advertiser
+            (projected materialization path only).
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    repo = MediaBuyRepository(session, tenant_id)
+    existing = repo.get_by_id_or_external_id(media_buy_id)
+    if existing is not None:
+        return existing
+
+    if is_projected_media_buy_id(media_buy_id):
+        return materialize_projected_buy(session, tenant_id, principal_id, media_buy_id)
+
+    raise AdCPNotFoundError(f"Media buy {media_buy_id!r} not found.")

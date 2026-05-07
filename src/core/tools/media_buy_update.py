@@ -50,6 +50,10 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._gam_projection import (
+    get_or_materialize_media_buy,
+    is_projected_media_buy_id,
+)
 from src.core.tools.financial_validation import (
     validate_max_campaign_budget,
     validate_max_daily_package_spend,
@@ -86,10 +90,13 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 
-    # Query database for media buy by ID. The repository is tenant-scoped, so
-    # rows that belong to a different tenant come back as ``None`` — surface
-    # that as MEDIA_BUY_NOT_FOUND so we don't leak cross-tenant existence.
-    media_buy = repo.get_by_id(media_buy_id)
+    # Query database for media buy by ID — accepts canonical media_buy_id
+    # or adapter-side external_id (e.g. the GAM order ID for an imported
+    # buy that's already been materialized). The repository is tenant-scoped,
+    # so rows that belong to a different tenant come back as ``None`` —
+    # surfaced as MEDIA_BUY_NOT_FOUND below to avoid leaking cross-tenant
+    # existence.
+    media_buy = repo.get_by_id_or_external_id(media_buy_id)
 
     if not media_buy:
         raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
@@ -159,6 +166,21 @@ def _update_media_buy_impl(
 
         if not media_buy_id_to_use:
             raise ValueError("media_buy_id is required")
+
+        # Materialize projected GAM orders on first write. The buyer
+        # received this id from get_media_buys' projection (gam_<order_id>);
+        # we now create a real media_buys row so packages, push configs,
+        # and audit logs have a stable PK to attach to. Authorization
+        # check happens inside materialize_projected_buy via the
+        # GamAdvertiser.principal_id assignment.
+        if is_projected_media_buy_id(media_buy_id_to_use):
+            if uow.media_buys.get_by_id(media_buy_id_to_use) is None:
+                get_or_materialize_media_buy(
+                    session=session,
+                    tenant_id=tenant["tenant_id"],
+                    principal_id=principal_id,
+                    media_buy_id=media_buy_id_to_use,
+                )
 
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
