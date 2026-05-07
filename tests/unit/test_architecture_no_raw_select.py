@@ -73,7 +73,7 @@ ORM_MODEL_NAMES = _discover_orm_model_names()
 # FIXME(salesagent-xw7): migrate each of these to repository calls
 ALLOWLIST: set[tuple[str, str]] = {
     # ── Signing middleware (PR #39 — needs TenantRepository.get_for_signing) ──
-    ("src/core/signing/middleware.py", "_resolve_policy_context_sync"),
+    ("src/core/signing/middleware.py", "_resolve_principal_context_sync"),
     # ── Adapters ──
     # create_line_items removed — uses pre-loaded template param (salesagent-zj9)
     ("src/adapters/gam/managers/sync.py", "_get_recent_sync"),

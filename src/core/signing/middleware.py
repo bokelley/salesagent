@@ -1,29 +1,29 @@
 """Starlette ASGI middleware for inbound RFC 9421 signature verification.
 
-PR 2B + PR 2C of [signing-non-embedded](../../../../docs/design/signing-non-embedded.md).
+Per-buyer-agent trust model. Each :class:`Principal` optionally carries a
+``brand_domain`` (operator-typed buyer domain — the trust anchor) plus a
+``signing_required`` flag. When the verifier sees a signature, it walks
+``https://<brand_domain>/.well-known/brand.json`` via
+:class:`adcp.signing.BrandJsonJwksResolver`, which auto-refreshes on
+cooldown + unknown-kid cascade so JWKS rotation propagates without
+operator action.
 
-Runs before MCP and A2A buyer-protocol handlers. Buffers the request body up
-front (so the verifier can read it AND downstream handlers still see the same
-bytes via a replay-receive callable), extracts the AdCP operation name, then:
+Enforcement is per-principal — there is no tenant-wide kill switch and no
+per-operation gating list. An operator marks an individual buyer agent as
+"must sign" by setting ``signing_required=True`` on their principal row.
 
-* Verifies the RFC 9421 signature when present (against the buyer's brand.json
-  JWKS resolved through ``adcp.signing.BrandJsonJwksResolver``).
-* Enforces ``TenantSigningPolicy.required_for``: if the operation is in the
-  list, an unsigned request is rejected with 401 ``request_signature_required``.
-* Trusted operators (embedded host's interchange) bypass verification and
-  enforcement entirely — network/header trust is the embedded-mode boundary.
+Buffers the request body up front (so the verifier reads digest-covered body
+AND downstream handlers see the same bytes via a replay-receive callable),
+extracts the AdCP operation name, then:
 
-Failure mapping:
+* Signed request → verify against ``brand.json`` (walked per-request,
+  library-cached) or 401.
+* Unsigned request from principal with ``signing_required=True`` → 401
+  ``request_signature_required``.
+* Anything else → pass through (bearer auth handles the principal lookup).
 
-* Operation in ``required_for`` + no signature → 401
-  ``request_signature_required``
-* Signature parse / window / replay / unknown-key → 401 with the spec error code
-* Bearer maps to a principal with no ``bound_operator_id`` and the operation
-  is in ``required_for`` → 401 ``request_signature_required`` (we can't verify
-  without a registered operator; treat like missing signature)
-* Verifier crash / DB unreachable → fail-closed when policy demands signing
-  for the operation; fail-open otherwise (legacy bearer-only paths must keep
-  working through transient signing-side outages)
+Verifier tuning (skew window, replay window, content-digest policy) is
+deployment-level, read from ``ADCP_SIGNING_*`` env vars on construction.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 
 from adcp.signing import (
     SignatureVerificationError,
@@ -233,12 +233,31 @@ class SigningVerifyMiddleware:
         self,
         app: Any,
         *,
-        max_skew_seconds: int = 60,
-        max_window_seconds: int = 300,
+        max_skew_seconds: int | None = None,
+        max_window_seconds: int | None = None,
+        covers_digest: Literal["required", "forbidden", "either"] | None = None,
     ) -> None:
+        import os
+
         self.app = app
-        self._max_skew = max_skew_seconds
-        self._max_window = max_window_seconds
+        self._max_skew = (
+            max_skew_seconds
+            if max_skew_seconds is not None
+            else int(os.environ.get("ADCP_SIGNING_MAX_SKEW_SECONDS", "60"))
+        )
+        self._max_window = (
+            max_window_seconds
+            if max_window_seconds is not None
+            else int(os.environ.get("ADCP_SIGNING_MAX_WINDOW_SECONDS", "300"))
+        )
+        # Narrow the env-var read to VerifierCapability's Literal so mypy is
+        # happy at the call site. Reject anything outside the spec set.
+        env_digest = covers_digest or os.environ.get("ADCP_SIGNING_COVERS_DIGEST", "either")
+        if env_digest not in ("required", "forbidden", "either"):
+            raise ValueError(
+                f"ADCP_SIGNING_COVERS_DIGEST must be one of 'required'/'forbidden'/'either' " f"(got {env_digest!r})"
+            )
+        self._covers_digest: Literal["required", "forbidden", "either"] = env_digest  # type: ignore[assignment]
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -277,90 +296,60 @@ class SigningVerifyMiddleware:
         operation = _extract_operation(path, body)
         signed = _has_signature_headers(scope)
 
-        # Resolve policy + operator binding. The function never raises — DB
-        # crashes return ``None`` for both. Crucially, policy and binding are
-        # separate: an unbound principal still has a tenant policy that may
-        # demand signing, and we must enforce against it.
+        # Resolve per-principal signing config. Returns ``None`` if we can't
+        # even identify a tenant.
         try:
-            ctx = await asyncio.to_thread(self._resolve_policy_context_sync, scope)
+            ctx = await asyncio.to_thread(self._resolve_principal_context_sync, scope)
         except Exception:
-            logger.exception("signing policy lookup crashed")
+            logger.exception("signing principal lookup crashed")
             ctx = None
 
-        # Pull policy/binding out of ctx defensively. ``ctx is None`` means we
-        # couldn't even look up the tenant — treat as "no policy known" (no
-        # required_for, no enforcement).
-        policy_enabled = bool(ctx and ctx.get("policy_enabled"))
-        required_for: frozenset[str] = ctx.get("required_for") if ctx else frozenset()  # type: ignore[assignment]
-        is_embedded = bool(ctx and ctx.get("is_embedded"))
-        binding = ctx.get("binding") if ctx else None
-        is_trusted = bool(binding and binding.get("is_trusted"))
+        tenant_id = ctx.get("tenant_id") if ctx else None
+        principal_id = ctx.get("principal_id") if ctx else None
+        agent_url = ctx.get("agent_url") if ctx else None
+        brand_domain = ctx.get("brand_domain") if ctx else None
+        signing_required = bool(ctx and ctx.get("signing_required"))
 
-        # Trusted-operator bypass — ONLY on embedded tenants. is_trusted on a
-        # non-embedded tenant is misconfiguration (the embedded-mode write
-        # guard prevents it from happening through the API; defense-in-depth
-        # against direct DB writes).
-        if is_trusted and is_embedded:
-            await self.app(scope, replayed, send)
-            return
-
-        if is_trusted and not is_embedded:
-            logger.error(
-                "is_trusted=True operator on non-embedded tenant — refusing bypass; tenant=%s operator=%s",
-                ctx.get("tenant_id") if ctx else None,
-                binding.get("operator_id") if binding else None,
-            )
-            # Fall through and enforce normally.
-
-        # required_for enforcement runs INDEPENDENT of operator binding. An
-        # unbound principal MUST NOT be able to call a required-for operation
-        # by skipping signature — that's H2.
-        operation_requires_signing = policy_enabled and operation is not None and operation in required_for
-
-        # Spec / code-reviewer H4+5b: when policy demands signing for SOMETHING
-        # and we couldn't extract the operation from the body, fail closed
-        # rather than letting an attacker craft an unparseable body to skip
-        # the gate.
-        operation_extraction_blind = policy_enabled and required_for and operation is None and not signed
-
-        if (operation_requires_signing or operation_extraction_blind) and not signed:
+        # Per-principal enforcement: if the principal is marked must-sign,
+        # an unsigned request is rejected. signing_required without
+        # brand_domain is a misconfiguration — also reject (fail closed).
+        if signing_required and not signed:
             await self._send_401(
                 send,
                 SignatureVerificationError(
                     REQUEST_SIGNATURE_REQUIRED,
                     step=0,
                     message=(
-                        f"operation {operation!r} requires a signature"
-                        if operation
-                        else "policy requires signing but operation could not be extracted"
+                        "principal requires signed requests"
+                        if brand_domain
+                        else "principal marked signing_required but has no brand_domain"
                     ),
                 ),
             )
             return
 
         if not signed:
-            # No signature, no enforcement triggered — pass through. Bearer-only
-            # legacy path.
+            # No signature on the wire and no enforcement triggered — pass
+            # through. Bearer auth (downstream) handles principal identification.
             await self.app(scope, replayed, send)
             return
 
-        # Signature is present. We MUST verify it now — there is no fail-open
-        # path from this point. If we can't construct a verifier (no operator
-        # binding), reject; if the verifier crashes, reject. The caller sent
-        # a signature; we honor it or refuse.
-        if binding is None:
+        # Signature is present. Must verify or reject — no silent-drop path.
+        # If we have no brand_domain (bearer-only principal sent a signature,
+        # or tenant lookup failed), we have no trust root: reject.
+        if brand_domain is None or tenant_id is None or principal_id is None:
             await self._send_401(
                 send,
                 SignatureVerificationError(
                     REQUEST_SIGNATURE_REQUIRED,
                     step=0,
-                    message="signed request received but principal has no operator binding",
+                    message="signed request received but principal has no brand_domain",
                 ),
             )
             return
 
         try:
-            verified = await self._verify(scope, body, binding, operation)
+            verified = await self._verify(scope, body, tenant_id, principal_id, brand_domain, agent_url, operation)
         except SignatureVerificationError as exc:
             await self._send_401(send, exc)
             return
@@ -377,49 +366,167 @@ class SigningVerifyMiddleware:
             return
 
         if verified is not None:
+            # Defense against in-flight brand_domain rotation: re-read the
+            # principal's brand_domain from the DB and reject if it diverged
+            # from the value we verified against. Closes a race where the
+            # operator switches trust root mid-verify (after we've already
+            # walked brand.json against the old domain). Without this, a
+            # concurrent operator edit pointing at a legit domain would let
+            # the in-flight verify complete with verified_state set against
+            # attacker-controlled keys from the OLD domain. The conditional
+            # UPDATE in _record_verified_timestamp_sync only protects the
+            # cache column; the request itself needs this gate.
+            try:
+                live_brand_domain = await asyncio.to_thread(
+                    self._read_principal_brand_domain_sync, tenant_id, principal_id
+                )
+            except Exception:
+                logger.exception("brand_domain re-read crashed; rejecting signed request")
+                await self._send_401(
+                    send,
+                    SignatureVerificationError(
+                        REQUEST_SIGNATURE_REQUIRED,
+                        step=0,
+                        message="brand_domain re-check crashed; refusing signed request",
+                    ),
+                )
+                return
+            if live_brand_domain != brand_domain:
+                logger.info(
+                    "brand_domain changed mid-verify (%s -> %s); rejecting",
+                    brand_domain,
+                    live_brand_domain,
+                )
+                await self._send_401(
+                    send,
+                    SignatureVerificationError(
+                        REQUEST_SIGNATURE_REQUIRED,
+                        step=0,
+                        message="brand_domain changed during verify; rejecting signed request",
+                    ),
+                )
+                return
+
             from src.core.signing.verified_state import (
                 VerifiedRequestState,
                 set_verified_state,
             )
 
             state = scope.setdefault("state", {})
-            state["verified_operator_id"] = verified["operator_id"]
+            state["verified_principal_id"] = verified["principal_id"]
             state["verified_agent_url"] = verified["agent_url"]
             state["verified_key_id"] = verified["key_id"]
 
             set_verified_state(
                 VerifiedRequestState(
-                    operator_id=verified["operator_id"],
+                    principal_id=verified["principal_id"],
                     agent_url=verified["agent_url"],
                     key_id=verified["key_id"],
                 )
             )
 
+            # Cache the verification timestamp on the principal row so the
+            # admin UI's strict-admit guard can read a single column. Three
+            # belt-and-suspenders properties on this write:
+            #
+            # 1. Race-safe: the UPDATE is conditional on
+            #    ``brand_domain == :verified_brand_domain`` — if the operator
+            #    changed brand_domain mid-flight, the WHERE filters out and
+            #    we don't stamp evidence against the new (un-verified) trust
+            #    root.
+            # 2. Write-amplification-safe: we only stamp when the existing
+            #    timestamp is older than ~60s. A buyer doing 100 req/sec
+            #    triggers 1 UPDATE/min/principal instead of 100/sec.
+            # 3. Best-effort: a failed update here must never block the
+            #    verified request from proceeding.
+            if tenant_id and principal_id and brand_domain:
+                try:
+                    await asyncio.to_thread(
+                        self._record_verified_timestamp_sync,
+                        tenant_id,
+                        principal_id,
+                        brand_domain,
+                    )
+                except Exception:
+                    logger.exception("failed to cache last_signed_verified_at")
+
         await self.app(scope, replayed, send)
 
-    def _resolve_policy_context_sync(self, scope: dict) -> dict[str, Any] | None:
-        """Sync DB lookup of tenant/policy/binding. Run inside ``asyncio.to_thread``.
+    # Don't UPDATE the cache column on every signed request — collapses
+    # write amplification under high-traffic verifies. Cache-skew of up to
+    # this window is fine for the strict-admit guard (it's UX, not auth).
+    _CACHE_REFRESH_WINDOW_SECONDS = 60
 
-        Returns a context dict with policy-level fields populated whenever the
-        tenant resolves; the operator/link binding lives in ``binding`` and is
-        ``None`` when the principal isn't bound or the link is inactive.
+    def _record_verified_timestamp_sync(self, tenant_id: str, principal_id: str, verified_brand_domain: str) -> None:
+        """Stamp ``principals.last_signed_verified_at = now()`` for this caller.
 
-        Splitting policy from binding lets the caller enforce ``required_for``
-        even on unbound principals — closes H2 in the rev-1 review.
+        Run inside ``asyncio.to_thread`` after a successful verify. The UPDATE
+        is conditional on ``brand_domain == :verified_brand_domain`` so a
+        concurrent operator brand_domain change doesn't get stamped with
+        stale evidence (race fix). Skipped entirely when an existing stamp
+        is younger than ``_CACHE_REFRESH_WINDOW_SECONDS`` (write-storm fix).
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import select, update
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Principal
+
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=self._CACHE_REFRESH_WINDOW_SECONDS)
+
+        with get_db_session() as session:
+            current_ts = session.scalars(
+                select(Principal.last_signed_verified_at).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+            ).first()
+            # Skip the UPDATE entirely if a recent stamp already covers us.
+            if current_ts is not None and current_ts >= cutoff:
+                return
+            session.execute(
+                update(Principal)
+                .where(Principal.tenant_id == tenant_id)
+                .where(Principal.principal_id == principal_id)
+                .where(Principal.brand_domain == verified_brand_domain)
+                .values(last_signed_verified_at=now)
+            )
+            session.commit()
+
+    def _read_principal_brand_domain_sync(self, tenant_id: str, principal_id: str) -> str | None:
+        """Re-read ``principals.brand_domain`` post-verify.
+
+        Run inside ``asyncio.to_thread`` after the verifier succeeds. Returns
+        the current value so the caller can compare against the value used
+        for verification — if it changed mid-flight, the verify is treated
+        as failed and the request is rejected. Closes the operator-rotates-
+        brand-domain-mid-verify race where attacker-controlled keys from
+        the old domain would otherwise produce a verified-state for the
+        new (legit) trust root.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Principal
+
+        with get_db_session() as session:
+            return session.scalars(
+                select(Principal.brand_domain).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+            ).first()
+
+    def _resolve_principal_context_sync(self, scope: dict) -> dict[str, Any] | None:
+        """Sync DB lookup of the calling principal's signing config.
+
+        Run inside ``asyncio.to_thread``. Returns a context dict whenever the
+        tenant resolves; ``agent_url`` / ``signing_required`` / ``principal_id``
+        are populated only when the bearer maps to a known principal.
 
         Shape::
 
             {
               "tenant_id": str,
-              "is_embedded": bool,
-              "policy_enabled": bool,
-              "required_for": frozenset[str],
-              "covers_digest": str,
-              "binding": {
-                "operator_id": str,
-                "is_trusted": bool,
-                "brand_json_url": str,
-              } | None,
+              "principal_id": str | None,
+              "agent_url": str | None,
+              "signing_required": bool,
             }
 
         Returns ``None`` only when we couldn't even identify a tenant.
@@ -428,11 +535,6 @@ class SigningVerifyMiddleware:
 
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Principal, Tenant
-        from src.core.database.repositories import (
-            AdmittedOperatorRepository,
-            OperatorAdvertiserLinkRepository,
-            TenantSigningPolicyRepository,
-        )
         from src.core.resolved_identity import _detect_tenant, _extract_auth_token
 
         headers: dict[str, str] = {}
@@ -455,14 +557,12 @@ class SigningVerifyMiddleware:
             if tenant_row is None:
                 return None
 
-            policy = TenantSigningPolicyRepository(session, tenant_id).get_or_default()
             ctx: dict[str, Any] = {
                 "tenant_id": tenant_id,
-                "is_embedded": bool(tenant_row.is_embedded),
-                "policy_enabled": bool(policy.enabled),
-                "required_for": frozenset(policy.required_for or []),
-                "covers_digest": str(policy.covers_digest_policy),
-                "binding": None,
+                "principal_id": principal_id,
+                "agent_url": None,
+                "brand_domain": None,
+                "signing_required": False,
             }
 
             if not principal_id:
@@ -471,45 +571,37 @@ class SigningVerifyMiddleware:
             principal = session.scalars(
                 select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
             ).first()
-            if principal is None or principal.bound_operator_id is None:
+            if principal is None:
                 return ctx
-            operator_id = principal.bound_operator_id
-
-            operator = AdmittedOperatorRepository(session, tenant_id).get_by_id(operator_id)
-            if operator is None or not operator.is_active:
-                return ctx
-
-            # H1: operator_advertiser_link MUST be active too. Without this
-            # check, deactivating a link is a no-op for the verifier.
-            link = OperatorAdvertiserLinkRepository(session, tenant_id).get(operator_id, principal_id)
-            if link is None or not link.is_active or link.billing_mode == "disabled":
-                return ctx
-
-            ctx["binding"] = {
-                "operator_id": operator_id,
-                "is_trusted": bool(operator.is_trusted),
-                "brand_json_url": operator.brand_json_url,
-                # Forward policy fields so _verify doesn't need to re-load.
-                "covers_digest": ctx["covers_digest"],
-                "required_for": ctx["required_for"],
-            }
+            ctx["agent_url"] = principal.agent_url
+            ctx["brand_domain"] = principal.brand_domain
+            ctx["signing_required"] = bool(principal.signing_required)
             return ctx
 
     async def _verify(
         self,
         scope: dict,
         body: bytes,
-        binding: dict[str, Any],
+        tenant_id: str,
+        principal_id: str,
+        brand_domain: str,
+        agent_url: str | None,
         operation: str | None,
     ) -> dict[str, str] | None:
-        """Run the verifier checklist. Return verified state or raise."""
-        from src.core.signing import get_operator_brand_json_cache, get_replay_store
+        """Run the verifier checklist. Return verified state or raise.
+
+        Walks the buyer's brand.json via :class:`BrandJsonJwksResolver` —
+        the library handles cooldown re-walks + unknown-kid cascade, so
+        rotation of ``agent_url`` or ``jwks_uri`` in brand.json propagates
+        without operator action. ``agent_url`` here is informational only
+        (audit-log stamping); the trust root is ``brand_domain``.
+        """
+        from src.core.signing import get_buyer_agent_jwks_cache, get_replay_store
 
         headers = _decode_scope_headers(scope)
 
-        brand_json_url = binding["brand_json_url"]
-        cache = get_operator_brand_json_cache()
-        async_resolver = await cache.resolver_for(brand_json_url, agent_type="buying")
+        cache = get_buyer_agent_jwks_cache()
+        async_brand_resolver = cache.resolver_for(tenant_id, principal_id, brand_domain)
         replay_store = get_replay_store()
 
         kid = _peek_kid_from_signature_input(headers)
@@ -519,23 +611,23 @@ class SigningVerifyMiddleware:
                 step=1,
                 message="could not parse keyid from Signature-Input",
             )
-        jwk = await async_resolver(kid)
+        # BrandJsonJwksResolver is async + handles cooldown + unknown-kid
+        # cascade internally. ``await resolver(kid)`` triggers a brand.json
+        # re-walk if the kid hasn't been seen, so JWKS rotation propagates
+        # without operator action.
+        jwk = await async_brand_resolver(kid)
         if jwk is None:
             raise SignatureVerificationError(
                 REQUEST_SIGNATURE_KEY_UNKNOWN,
                 step=7,
-                message=f"kid {kid!r} not found in operator's brand.json JWKS",
+                message=f"kid {kid!r} not found in JWKS resolved from {brand_domain}/.well-known/brand.json",
             )
         sync_resolver = StaticJwksResolver({"keys": [jwk]})
 
-        # Capability with operation-aware required_for. The lib's verifier
-        # also checks required_for against ``options.operation``; we already
-        # gated unsigned requests in _dispatch, but pass the same set here
-        # so a signed-but-wrong-tag request still matches the spec checklist.
         capability = VerifierCapability(
             supported=True,
-            covers_content_digest=binding.get("covers_digest", "either"),
-            required_for=binding.get("required_for", frozenset()),
+            covers_content_digest=self._covers_digest,
+            required_for=frozenset(),
             supported_for=frozenset(),
         )
 
@@ -556,11 +648,14 @@ class SigningVerifyMiddleware:
 
         signer = await verify_starlette_request(request, options=options)
 
-        agent_url = getattr(async_resolver, "agent_url", None) or brand_json_url
-
+        # Prefer the resolver's live agent_url (last known good from
+        # brand.json) over the cached column — the column is informational
+        # and may lag rotation. Falls back to the column when the resolver
+        # hasn't snapshotted yet (cold start / failure).
+        live_agent_url = async_brand_resolver.agent_url or agent_url or ""
         return {
-            "operator_id": binding["operator_id"],
-            "agent_url": str(agent_url),
+            "principal_id": principal_id,
+            "agent_url": live_agent_url,
             "key_id": signer.key_id,
         }
 

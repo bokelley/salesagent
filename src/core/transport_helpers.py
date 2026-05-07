@@ -103,16 +103,14 @@ def resolve_identity_from_context(
     )
 
     # If the SigningVerifyMiddleware verified an inbound signature on this
-    # request, fold the verified operator/agent/key state into the identity
-    # so downstream _impl functions and audit-log writers can record it.
-    # See docs/design/signing-non-embedded.md (PR 2B).
+    # request, fold the verified agent_url/key into the identity so downstream
+    # _impl functions and audit-log writers can record it.
     from src.core.signing.verified_state import get_verified_state
 
     verified = get_verified_state()
     if verified is not None:
         identity = identity.model_copy(
             update={
-                "verified_operator_id": verified.operator_id,
                 "verified_agent_url": verified.agent_url,
                 "verified_key_id": verified.key_id,
             }

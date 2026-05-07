@@ -295,7 +295,16 @@ class MockSellerPlatform(DecisioningPlatform):
                 record["valid_actions"] = _valid_actions_for("pending_start")
 
         record["updated_at"] = datetime.now(UTC).isoformat()
-        return _project_media_buy(record)
+        # AdCP spec: response.context echoes THIS request's context, not
+        # the record's stored (create-time) context. ``_project_media_buy``
+        # carries ``record["context"]`` through for ``get_media_buys`` /
+        # ``create_media_buy`` returns; for ``update_media_buy`` we drop
+        # it so the SDK's :func:`adcp.server.helpers.inject_context` fills
+        # the buyer's update-call context from ``raw_params`` instead.
+        # Without this, every update echoes the create's context — see #95.
+        projected = _project_media_buy(record)
+        projected.pop("context", None)
+        return projected
 
     # ─────────────────────────── sync_creatives ──────────────────────
 

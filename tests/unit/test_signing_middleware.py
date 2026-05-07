@@ -102,19 +102,19 @@ class TestVerifiedStateContextvar:
 
     def test_roundtrip(self):
         state = VerifiedRequestState(
-            operator_id="op_123",
+            principal_id="op_123",
             agent_url="https://buyer.example.com/.well-known/agent.json",
             key_id="kid-2026-q2",
         )
         set_verified_state(state)
         roundtrip = get_verified_state()
         assert roundtrip is not None
-        assert roundtrip.operator_id == "op_123"
+        assert roundtrip.principal_id == "op_123"
         assert roundtrip.agent_url == "https://buyer.example.com/.well-known/agent.json"
         assert roundtrip.key_id == "kid-2026-q2"
 
     def test_clear(self):
-        set_verified_state(VerifiedRequestState(operator_id="o", agent_url="u", key_id="k"))
+        set_verified_state(VerifiedRequestState(principal_id="o", agent_url="u", key_id="k"))
         assert get_verified_state() is not None
         clear_verified_state()
         assert get_verified_state() is None
@@ -122,9 +122,9 @@ class TestVerifiedStateContextvar:
     def test_frozen(self):
         import dataclasses
 
-        state = VerifiedRequestState(operator_id="o", agent_url="u", key_id="k")
+        state = VerifiedRequestState(principal_id="o", agent_url="u", key_id="k")
         try:
-            state.operator_id = "o2"  # type: ignore[misc]
+            state.principal_id = "o2"  # type: ignore[misc]
         except dataclasses.FrozenInstanceError:
             return
         raise AssertionError("VerifiedRequestState must be frozen")

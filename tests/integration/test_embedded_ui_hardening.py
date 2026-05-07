@@ -421,7 +421,7 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_data(as_text=True)
         # The directory section heading and nav tab remain.
-        assert "<h2>Advertiser Management</h2>" in body
+        assert "<h2>Buyer Agent Management</h2>" in body
         assert 'data-section="advertisers"' in body
         # Read-only note is visible — surfaces the auto-create-from-headers
         # rationale so publishers know why there's no Create button.
@@ -430,9 +430,9 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
     def test_embedded_hides_advertiser_create_button(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         body = resp.get_data(as_text=True)
-        # No "Add Advertiser" / "Create First Advertiser" CTAs, no link to /principals/create.
-        assert "Add Advertiser" not in body
-        assert "Create First Advertiser" not in body
+        # No "Add Buyer Agent" / "Create First Buyer Agent" CTAs, no link to /principals/create.
+        assert "Add Buyer Agent" not in body
+        assert "Create First Buyer Agent" not in body
         assert "/principals/create" not in body
 
     def test_embedded_hides_per_row_edit_and_delete_controls(self, client, embedded_tenant_id):
@@ -440,21 +440,21 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         body = resp.get_data(as_text=True)
         # Per-row Edit link and Delete button are gone.
         assert "deletePrincipal(" not in body
-        assert 'title="Edit Advertiser"' not in body
-        assert 'title="Delete Advertiser"' not in body
+        assert 'title="Edit Buyer Agent"' not in body
+        assert 'title="Delete Buyer Agent"' not in body
 
     def test_open_tenant_shows_full_advertiser_write_ui(self, client, open_tenant_id):
         resp = client.get(f"/tenant/{open_tenant_id}/settings")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
         # Section + nav tab are present (regression guard).
-        assert "<h2>Advertiser Management</h2>" in body
+        assert "<h2>Buyer Agent Management</h2>" in body
         assert 'data-section="advertisers"' in body
         # Read-only note is NOT shown on open-instance tenants.
         assert "auto-created from request headers" not in body
         # Create CTA is present.
-        # When there are 0 advertisers, "Create First Advertiser" renders;
-        # otherwise the header "Add Advertiser" renders. Either is fine —
+        # When there are 0 advertisers, "Create First Buyer Agent" renders;
+        # otherwise the header "Add Buyer Agent" renders. Either is fine —
         # the /principals/create route link is the single canonical signal.
         assert "/principals/create" in body
 
@@ -496,7 +496,7 @@ class TestAdvertisersDeprecationBannerOnStandalone:
         alongside the new banner."""
         resp = client.get(f"/tenant/{open_tenant_id}/settings")
         body = resp.get_data(as_text=True)
-        assert "<h2>Advertiser Management</h2>" in body
+        assert "<h2>Buyer Agent Management</h2>" in body
         assert 'data-section="advertisers"' in body
         # The /principals/create link remains the canonical Create signal.
         assert "/principals/create" in body

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ 'Edit' if edit_mode else 'Add' }} Advertiser - Sales Agent Admin{% endblock %}
+{% block title %}{{ 'Edit' if edit_mode else 'Add' }} Buyer Agent - Sales Agent Admin{% endblock %}
 
 {% block content %}
 <div class="sa-card" style="max-width: 600px; margin: 0 auto;">
@@ -11,7 +11,7 @@
     </div>
 
     <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
-        <h2 class="sa-page-header__title">{{ 'Edit Advertiser' if edit_mode else 'Add New Advertiser' }}</h2>
+        <h2 class="sa-page-header__title">{{ 'Edit Buyer Agent' if edit_mode else 'Add New Buyer Agent' }}</h2>
     </header>
 
     {% if error %}
@@ -24,9 +24,39 @@
         {% endfor %}
     {% endif %}
 
+    {% if not edit_mode %}
+    {# Domain-driven discovery: operator types one domain, we fetch their
+       /.well-known/adcp-agents.json + JWKS and pre-fill the rest. Manual
+       entry stays available as a fallback for buyers without a manifest. #}
+    <div id="domain-resolve" class="form-group" style="margin-top: 2rem;">
+        <label for="domain">Buyer domain</label>
+        <div style="display: flex; gap: var(--sa-space-2);">
+            <input type="text" id="domain" placeholder="e.g., interchange.io" style="flex: 1;">
+            <button type="button" id="resolve-btn" class="btn btn-secondary">Resolve</button>
+        </div>
+        <small>We'll fetch <code>https://&lt;domain&gt;/.well-known/adcp-agents.json</code> and verify their signing keys, if published.</small>
+        <div id="resolve-error" class="alert alert-error" style="display: none; margin-top: var(--sa-space-3);"></div>
+
+        <div id="resolve-preview" style="display: none; margin-top: var(--sa-space-4); padding: var(--sa-space-4); background: var(--sa-gray-50); border-radius: var(--sa-radius-lg);">
+            <h4 style="margin-top: 0;">Preview</h4>
+            <dl style="margin: 0;">
+                <dt>Name</dt><dd id="preview-name">—</dd>
+                <dt>ID</dt><dd><code id="preview-id">—</code></dd>
+                <dt>Agent URL</dt><dd><code id="preview-agent-url">—</code></dd>
+                <dt>Signing keys</dt><dd id="preview-keys">—</dd>
+            </dl>
+            <div id="preview-checks" style="margin-top: var(--sa-space-3); font-size: 0.9em;"></div>
+        </div>
+    </div>
+
+    <details id="manual-entry" style="margin-top: var(--sa-space-3);">
+        <summary style="cursor: pointer; color: var(--sa-text-muted);">Buyer doesn't publish a manifest? Enter manually</summary>
+        <div style="margin-top: var(--sa-space-3); padding: var(--sa-space-4); background: var(--sa-gray-50); border-radius: var(--sa-radius-lg);">
+    {% endif %}
+
     <form method="POST" style="margin-top: 2rem;">
         <div class="form-group">
-            <label for="principal_id">Advertiser ID</label>
+            <label for="principal_id">Buyer Agent ID</label>
             <input type="text" id="principal_id" name="principal_id" required
                    pattern="[a-zA-Z0-9_-]+"
                    placeholder="e.g., nike, coca_cola, ford_motors"
@@ -38,7 +68,7 @@
         </div>
 
         <div class="form-group">
-            <label for="name">Advertiser Name</label>
+            <label for="name">Buyer Agent Name</label>
             <input type="text" id="name" name="name" required
                    placeholder="e.g., Nike Corporation"
                    value="{{ principal.name if edit_mode else (form_data.name if form_data else '') }}"
@@ -46,9 +76,63 @@
             <small>The advertiser's company name as it will appear in reports.</small>
         </div>
 
+        {% if edit_mode and verification_status %}
+        <div class="form-group" style="margin-top: var(--sa-space-4);">
+            {% if verification_status.has_verification %}
+            <div class="alert alert-success" style="margin-bottom: 0;">
+                <strong>🟢 Verified signed request received</strong><br>
+                <small>
+                    Last seen: <code>{{ verification_status.timestamp.strftime('%Y-%m-%d %H:%M:%S %Z') if verification_status.timestamp else '—' }}</code>
+                    &middot; kid <code>{{ verification_status.key_id or '—' }}</code>
+                    &middot; agent_url <code>{{ verification_status.agent_url or '—' }}</code>
+                </small>
+            </div>
+            {% elif principal.agent_url %}
+            <div class="alert alert-info" style="margin-bottom: 0;">
+                <strong>🟡 Awaiting first signed request</strong><br>
+                <small>Agent URL is set but no signed request from this buyer has been verified yet. Ask them to send any signed AdCP request — once it verifies, this banner turns green and you can require signing.</small>
+            </div>
+            {% else %}
+            <div class="alert alert-info" style="margin-bottom: 0;">
+                <strong>Bearer-only auth</strong><br>
+                <small>This buyer authenticates with a bearer token. To enable RFC 9421 signing, set their agent URL below.</small>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <fieldset class="form-group" style="border: 1px solid var(--sa-gray-200); border-radius: var(--sa-radius-lg); padding: var(--sa-space-4); margin-bottom: var(--sa-space-5);">
+            <legend style="padding: 0 var(--sa-space-2); font-weight: 600;">Request signing</legend>
+
+            <div class="form-group">
+                <label for="brand_domain">Buyer domain</label>
+                <input type="text" id="brand_domain" name="brand_domain"
+                       placeholder="e.g., interchange.io"
+                       value="{{ principal.brand_domain if edit_mode and principal.brand_domain else '' }}">
+                <small>The trust anchor. The verifier walks <code>https://&lt;buyer-domain&gt;/.well-known/brand.json</code> to discover keys + agent URL on every signed request, so rotation propagates without operator action. Leave blank for bearer-token auth (legacy).</small>
+            </div>
+
+            <div class="form-group" style="margin-top: var(--sa-space-3);">
+                <label for="agent_url">Agent URL <span style="color: var(--sa-text-muted); font-weight: normal;">(informational)</span></label>
+                <input type="url" id="agent_url" name="agent_url"
+                       placeholder="auto-filled from brand.json"
+                       value="{{ principal.agent_url if edit_mode and principal.agent_url else '' }}">
+                <small>Display-only — captured at admit time for audit logs. The verifier doesn't depend on this; brand.json rotation handles agent URL changes automatically.</small>
+            </div>
+
+            <div class="form-group" style="margin-top: var(--sa-space-3);">
+                <label style="display: inline-flex; align-items: center; gap: var(--sa-space-2); font-weight: normal;">
+                    <input type="checkbox" id="signing_required" name="signing_required" value="1"
+                           {{ 'checked' if edit_mode and principal.signing_required else '' }}>
+                    <span>Require signed requests (reject unsigned requests from this agent)</span>
+                </label>
+                <small style="display: block; margin-top: var(--sa-space-1);">Only enforced when Buyer Domain is set. Cannot be enabled until the buyer's first signed request has been verified under the current domain.</small>
+            </div>
+        </fieldset>
+
         {% if has_gam %}
         <div class="form-group">
-            <label for="gam_advertiser_id">GAM Advertiser <span style="color: red;">*</span></label>
+            <label for="gam_advertiser_id">GAM Buyer Agent <span style="color: red;">*</span></label>
             <select id="gam_advertiser_id" name="gam_advertiser_id" required
                     class="{{ 'error' if errors and 'gam_advertiser_id' in errors else '' }}">
                 <option value="">Loading advertisers...</option>
@@ -79,16 +163,119 @@
         </div>
 
         <div style="display: flex; gap: var(--sa-space-4);">
-            <button type="submit" class="btn btn-primary">{{ 'Update Advertiser' if edit_mode else 'Add Advertiser' }}</button>
+            <button type="submit" class="btn btn-primary">{{ 'Update Buyer Agent' if edit_mode else 'Add Buyer Agent' }}</button>
             <a href="{{ url_for('tenants.dashboard', tenant_id=tenant_id) }}" class="btn btn-ghost">Cancel</a>
         </div>
     </form>
+    {% if not edit_mode %}
+        </div>
+    </details>
+    {% endif %}
 </div>
 
 <style>
 /* Page-specific: invalid input shows danger border. */
 input:invalid { border-color: var(--sa-danger); }
+#resolve-preview dt { font-weight: 600; margin-top: var(--sa-space-2); color: var(--sa-text-muted); font-size: 0.85em; }
+#resolve-preview dd { margin: 0 0 var(--sa-space-1) 0; }
+#preview-checks .check-row { padding: 2px 0; }
+#preview-checks .check-ok { color: #1a7f37; }
+#preview-checks .check-fail { color: var(--sa-danger); }
 </style>
+
+{% if not edit_mode %}
+<script>
+(function() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const resolveUrl = scriptRoot + '/tenant/{{ tenant_id }}/principals/resolve-domain';
+    const btn = document.getElementById('resolve-btn');
+    const domainInput = document.getElementById('domain');
+    const errorBox = document.getElementById('resolve-error');
+    const preview = document.getElementById('resolve-preview');
+    const previewName = document.getElementById('preview-name');
+    const previewId = document.getElementById('preview-id');
+    const previewAgentUrl = document.getElementById('preview-agent-url');
+    const previewKeys = document.getElementById('preview-keys');
+    const previewChecks = document.getElementById('preview-checks');
+    const manualDetails = document.getElementById('manual-entry');
+    const principalIdInput = document.getElementById('principal_id');
+    const nameInput = document.getElementById('name');
+    const agentUrlInput = document.getElementById('agent_url');
+    const brandDomainInput = document.getElementById('brand_domain');
+    const signingRequiredInput = document.getElementById('signing_required');
+
+    function showError(msg) {
+        errorBox.textContent = msg;
+        errorBox.style.display = 'block';
+        preview.style.display = 'none';
+        // Reveal manual fallback
+        if (manualDetails) manualDetails.open = true;
+    }
+
+    function fillForm(data) {
+        principalIdInput.value = data.principal_id || '';
+        nameInput.value = data.name || '';
+        if (agentUrlInput) agentUrlInput.value = data.agent_url || '';
+        // brand_domain is the operator-typed value (the trust anchor).
+        if (brandDomainInput) brandDomainInput.value = data.domain || '';
+        // signing_required cannot be enabled at create time (strict-admit
+        // guard: the buyer must send a verified signed request first). Leave
+        // unchecked; operator flips it on the edit page once 🟢 lights up.
+        if (signingRequiredInput) signingRequiredInput.checked = false;
+    }
+
+    function renderChecks(checks) {
+        previewChecks.innerHTML = '';
+        (checks || []).forEach(c => {
+            const row = document.createElement('div');
+            row.className = 'check-row ' + (c.ok ? 'check-ok' : 'check-fail');
+            row.textContent = (c.ok ? '✓ ' : '✗ ') + c.name + (c.detail ? ' — ' + c.detail : '');
+            previewChecks.appendChild(row);
+        });
+    }
+
+    btn.addEventListener('click', async function() {
+        errorBox.style.display = 'none';
+        preview.style.display = 'none';
+        const domain = (domainInput.value || '').trim();
+        if (!domain) { showError('Enter a domain first.'); return; }
+        btn.disabled = true;
+        btn.textContent = 'Resolving…';
+        try {
+            const resp = await fetch(resolveUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ domain: domain })
+            });
+            const data = await resp.json();
+            if (data.collision) {
+                showError('Already added: ' + data.collision.name + ' (id: ' + data.collision.principal_id + ')');
+                return;
+            }
+            if (!data.ok) {
+                showError(data.error || 'Resolve failed.');
+                return;
+            }
+            previewName.textContent = data.name || '—';
+            previewId.textContent = data.principal_id || '—';
+            previewAgentUrl.textContent = data.agent_url || '—';
+            previewKeys.textContent = (data.signing_keys || []).length
+                ? data.signing_keys.map(k => k.kid + ' (' + k.alg + ')').join(', ')
+                : 'none — bearer-only admit';
+            renderChecks(data.checks);
+            preview.style.display = 'block';
+            fillForm(data);
+        } catch (e) {
+            showError('Resolve request failed: ' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Resolve';
+        }
+    });
+})();
+</script>
+{% endif %}
 
 {% if has_gam %}
 <!-- Select2 CSS -->
@@ -104,7 +291,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const errorDiv = document.getElementById('advertiser-loading-error');
 
     selectElement.select2({
-        placeholder: 'Search for a GAM Advertiser...',
+        placeholder: 'Search for a GAM Buyer Agent...',
         allowClear: true,
         minimumInputLength: 0, // Start searching from first character
         ajax: {
@@ -195,7 +382,7 @@ document.addEventListener('DOMContentLoaded', function() {
         },
         templateSelection: function(advertiser) {
             // Format selected value
-            return advertiser.text || 'Select a GAM Advertiser...';
+            return advertiser.text || 'Select a GAM Buyer Agent...';
         }
     });
 
@@ -225,9 +412,9 @@ document.addEventListener('DOMContentLoaded', function() {
     .then(response => response.json())
     .then(data => {
         // Compare as strings to handle type mismatches (DB stores strings, API might return numbers)
-        const previousAdvertiser = data.advertisers.find(a => String(a.id) === String(advertiserId));
-        if (previousAdvertiser) {
-            const option = new Option(previousAdvertiser.name, previousAdvertiser.id, true, true);
+        const previousBuyer Agent = data.advertisers.find(a => String(a.id) === String(advertiserId));
+        if (previousBuyer Agent) {
+            const option = new Option(previousBuyer Agent.name, previousBuyer Agent.id, true, true);
             selectElement.append(option).trigger('change');
         } else {
             console.warn('Could not find advertiser with ID:', advertiserId, 'in', data.advertisers.length, 'results');

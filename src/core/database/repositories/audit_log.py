@@ -103,6 +103,25 @@ class AuditLogRepository:
         stmt = stmt.order_by(AuditLog.timestamp.desc(), AuditLog.log_id.desc()).limit(limit)
         return list(self._session.scalars(stmt).all())
 
+    def last_signed_verification_for_principal(self, principal_id: str) -> AuditLog | None:
+        """Most recent audit row for ``principal_id`` that recorded a
+        successful RFC 9421 verification (``verified_agent_url`` is set).
+
+        Used by the buyer-agent admin page to surface "🟢 verified <Nm ago>"
+        status before the operator flips ``signing_required=true``. Returns
+        ``None`` if no signed request from this principal has been verified
+        yet.
+        """
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.tenant_id == self._tenant_id)
+            .where(AuditLog.principal_id == principal_id)
+            .where(AuditLog.verified_agent_url.is_not(None))
+            .order_by(AuditLog.timestamp.desc(), AuditLog.log_id.desc())
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first()
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
@@ -123,7 +142,6 @@ class AuditLogRepository:
         external_source: str | None = None,
         error_message: str | None = None,
         details: dict[str, Any] | None = None,
-        verified_operator_id: str | None = None,
         verified_agent_url: str | None = None,
         verified_key_id: str | None = None,
     ) -> AuditLog:
@@ -153,7 +171,6 @@ class AuditLogRepository:
             external_user_id=external_user_id,
             external_org_id=external_org_id,
             external_source=external_source,
-            verified_operator_id=verified_operator_id,
             verified_agent_url=verified_agent_url,
             verified_key_id=verified_key_id,
         )

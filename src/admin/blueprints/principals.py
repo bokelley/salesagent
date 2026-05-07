@@ -109,6 +109,69 @@ def list_principals(tenant_id):
         return redirect(url_for("core.index"))
 
 
+# Resolve-domain rate limit: per (tenant_id, user_email) sliding window.
+# Each call triggers up to ~5 outbound HTTPS fetches (brand.json + JWKS), so
+# we cap admit-time discovery at 10 calls per minute per operator. In-memory
+# is fine for single-worker dev; multi-worker prod should swap for Redis.
+_RESOLVE_DOMAIN_RATE: dict[tuple[str, str], list[float]] = {}
+_RESOLVE_DOMAIN_WINDOW_SECONDS = 60.0
+_RESOLVE_DOMAIN_LIMIT = 10
+
+
+def _check_resolve_domain_rate(tenant_id: str, user_key: str) -> bool:
+    """Return True if the caller may proceed; False if rate-limited."""
+    import time as _time
+
+    now = _time.monotonic()
+    key = (tenant_id, user_key)
+    entries = _RESOLVE_DOMAIN_RATE.setdefault(key, [])
+    # Drop entries outside the window
+    cutoff = now - _RESOLVE_DOMAIN_WINDOW_SECONDS
+    while entries and entries[0] < cutoff:
+        entries.pop(0)
+    if len(entries) >= _RESOLVE_DOMAIN_LIMIT:
+        return False
+    entries.append(now)
+    return True
+
+
+@principals_bp.route("/principals/resolve-domain", methods=["POST"])
+@require_tenant_access()
+def resolve_domain(tenant_id):
+    """Look up a buyer's published agent metadata from their domain.
+
+    Body: ``{"domain": "interchange.io"}``. Returns a preview the create
+    form can render before the operator confirms admission. Never raises —
+    a failed lookup returns ``{"ok": false, "error": "..."}``.
+    """
+    from flask import session as flask_session
+
+    from src.admin.services.buyer_agent_resolve import resolve_domain as _resolve
+
+    raw_user = flask_session.get("user")
+    if isinstance(raw_user, dict):
+        user_key = raw_user.get("email") or "unknown"
+    elif isinstance(raw_user, str):
+        user_key = raw_user
+    else:
+        user_key = flask_session.get("user_email") or "unknown"
+    if not _check_resolve_domain_rate(tenant_id, user_key):
+        return jsonify({"ok": False, "error": "rate-limited; try again in a minute"}), 429
+
+    payload = request.get_json(silent=True) or {}
+    raw = (payload.get("domain") or "").strip()
+    if not raw:
+        return jsonify({"ok": False, "error": "missing 'domain'"}), 400
+
+    result = _resolve(raw)
+    # The create handler enforces uniqueness on submit (existing
+    # duplicate-name check + unique index). The preview is read-only —
+    # showing "already added" here would be a UX nicety only, and adding
+    # a Principal repo just for that lookup is over-engineering when the
+    # submit-side check already covers the failure mode.
+    return jsonify(result.to_dict())
+
+
 @principals_bp.route("/principals/create", methods=["GET", "POST"])
 @require_tenant_access()
 @log_admin_action(
@@ -182,6 +245,33 @@ def create_principal(tenant_id):
                 flash(f"An advertiser named '{principal_name}' already exists", "error")
                 return redirect(request.url)
 
+            # Optional signing config. brand_domain is the trust anchor
+            # (operator-typed buyer domain); the verifier walks
+            # https://<brand_domain>/.well-known/brand.json on every signed
+            # request via BrandJsonJwksResolver. agent_url is informational
+            # (audit-log stamping); rotation in brand.json propagates without
+            # operator action.
+            brand_domain = (request.form.get("brand_domain", "") or "").strip() or None
+            agent_url = (request.form.get("agent_url", "") or "").strip() or None
+            signing_required = bool(request.form.get("signing_required"))
+            if signing_required and not brand_domain:
+                flash("Cannot require signed requests without a buyer domain", "error")
+                return redirect(request.url)
+
+            # Strict-admit guard: a brand-new principal cannot start with
+            # signing_required=true because no signed request from them has
+            # been verified yet. Redirect to edit page after admit so the
+            # operator can flip the switch once the buyer's first signed
+            # request lands.
+            if signing_required:
+                flash(
+                    "Created without 'require signed requests' — the buyer must send "
+                    "a signed request before that switch can be enabled. The buyer-agent "
+                    "edit page will show 🟢 once verification lands.",
+                    "warning",
+                )
+                signing_required = False
+
             # Create the principal
             principal = Principal(
                 tenant_id=tenant_id,
@@ -189,6 +279,9 @@ def create_principal(tenant_id):
                 name=principal_name,
                 access_token=access_token,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
+                agent_url=agent_url,
+                brand_domain=brand_domain,
+                signing_required=signing_required,
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -237,6 +330,25 @@ def edit_principal(tenant_id, principal_id):
                 gam_mapping = mappings.get("google_ad_manager", {})
                 existing_gam_id = gam_mapping.get("advertiser_id")
 
+            # Verification status block. Reads ``principals.last_signed_verified_at``
+            # (cached on the row by the verifier middleware) — independent of
+            # audit-log retention. The audit row lookup is a fallback for
+            # the kid display, since the column doesn't carry it.
+            verification_status = {
+                "has_verification": principal.last_signed_verified_at is not None,
+                "timestamp": principal.last_signed_verified_at,
+                "key_id": None,
+                "agent_url": principal.agent_url,
+            }
+            if principal.last_signed_verified_at is not None:
+                from src.core.database.repositories.audit_log import AuditLogRepository
+
+                last_verified = AuditLogRepository(db_session, tenant_id).last_signed_verification_for_principal(
+                    principal_id
+                )
+                if last_verified is not None:
+                    verification_status["key_id"] = last_verified.verified_key_id
+
             return render_template(
                 "create_principal.html",
                 tenant_id=tenant_id,
@@ -245,6 +357,7 @@ def edit_principal(tenant_id, principal_id):
                 edit_mode=True,
                 principal=principal,
                 existing_gam_id=existing_gam_id,
+                verification_status=verification_status,
             )
 
     # POST - Update the principal
@@ -257,15 +370,52 @@ def edit_principal(tenant_id, principal_id):
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
-            # Update name if provided
-            principal_name = request.form.get("name", "").strip()
-            if principal_name:
-                principal.name = principal_name
+            # Validate inputs and run admit-time guards BEFORE mutating the
+            # principal — a downstream validation failure must not partially
+            # save a strict-admit flip.
 
-            # Build platform mappings from scratch (don't preserve old mappings)
-            platform_mappings = {}
+            # Signing config. brand_domain is the trust anchor; agent_url is
+            # informational. The verifier walks brand.json on every request,
+            # so agent_url rotation in brand.json doesn't need operator
+            # action — only brand_domain change resets evidence.
+            brand_domain = (request.form.get("brand_domain", "") or "").strip() or None
+            agent_url = (request.form.get("agent_url", "") or "").strip() or None
+            signing_required = bool(request.form.get("signing_required"))
+            if signing_required and not brand_domain:
+                flash("Cannot require signed requests without a buyer domain", "error")
+                return redirect(request.url)
 
-            # GAM advertiser mapping
+            # Reset the verification snapshot when brand_domain changes —
+            # past verifications were against a different trust root and
+            # must not satisfy the strict-admit guard for the new config.
+            # agent_url change does NOT reset; the verifier walks brand.json
+            # so agent_url rotation is handled automatically by the library.
+            brand_changed = brand_domain != principal.brand_domain
+            if brand_changed:
+                principal.last_signed_verified_at = None
+                # Drop the cached BrandJsonJwksResolver so the next verify
+                # walks the new trust root rather than the stale snapshot.
+                from src.core.signing import get_buyer_agent_jwks_cache
+
+                get_buyer_agent_jwks_cache().invalidate(tenant_id, principal_id)
+
+            # Strict-admit guard: refuse to flip signing_required=true unless
+            # a signed request from THIS principal under the CURRENT
+            # brand_domain has been verified. The cached column is reset
+            # above on brand_domain change, so stale evidence can't satisfy
+            # the guard for a new trust root.
+            if signing_required and not principal.signing_required:
+                if principal.last_signed_verified_at is None:
+                    flash(
+                        "Refusing to require signed requests: no signed request from "
+                        "this buyer has been verified under the current brand domain "
+                        "yet. Ask the buyer to send a signed request first; this page "
+                        "will show 🟢 once it lands.",
+                        "error",
+                    )
+                    return redirect(request.url)
+
+            # GAM advertiser mapping (validated before assignment)
             gam_advertiser_id = request.form.get("gam_advertiser_id", "").strip()
             if gam_advertiser_id:
                 try:
@@ -274,12 +424,27 @@ def edit_principal(tenant_id, principal_id):
                     flash("GAM Advertiser ID must be numeric", "error")
                     return redirect(request.url)
 
-                platform_mappings["google_ad_manager"] = {
+            # Update name if provided
+            principal_name = request.form.get("name", "").strip()
+            if principal_name:
+                principal.name = principal_name
+
+            # Preserve non-GAM mappings (e.g. mock adapter for tests) so edit
+            # doesn't accidentally drop them. Replace google_ad_manager only
+            # when a new advertiser_id is submitted.
+            existing_mappings = principal.platform_mappings if isinstance(principal.platform_mappings, dict) else {}
+            new_mappings = dict(existing_mappings)
+            if gam_advertiser_id:
+                new_mappings["google_ad_manager"] = {
                     "advertiser_id": gam_advertiser_id,
                     "enabled": True,
                 }
+            principal.platform_mappings = new_mappings
 
-            principal.platform_mappings = platform_mappings
+            principal.agent_url = agent_url
+            principal.brand_domain = brand_domain
+            principal.signing_required = signing_required
+
             principal.updated_at = datetime.now(UTC)
             db_session.commit()
 

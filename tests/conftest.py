@@ -196,6 +196,7 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "review_agent",
         "task_management",
         "signals_agent",
+        "buyer_agent",
     ],
     "infra": [
         "tox_config",

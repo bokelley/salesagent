@@ -33,8 +33,6 @@ from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
 from tests.factories.signing import (
-    AdmittedOperatorFactory,
-    OperatorAdvertiserLinkFactory,
     TenantSigningCredentialFactory,
     TenantSigningPolicyFactory,
 )
@@ -52,14 +50,12 @@ ALL_FACTORIES = [
     AccountFactory,
     AgentAccountAccessFactory,
     AdapterConfigFactory,
-    AdmittedOperatorFactory,
     AuditLogFactory,
     ContextFactory,
     CurrencyLimitFactory,
     GamAdvertiserFactory,
     GAMInventoryFactory,
     ObjectWorkflowMappingFactory,
-    OperatorAdvertiserLinkFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     PrincipalFactory,
@@ -86,7 +82,6 @@ __all__ = [
     "ALL_FACTORIES",
     "AccountFactory",
     "AdapterConfigFactory",
-    "AdmittedOperatorFactory",
     "AgentAccountAccessFactory",
     "AuditLogFactory",
     "ContextFactory",
@@ -103,7 +98,6 @@ __all__ = [
     "MediaBuyFactory",
     "MediaPackageFactory",
     "ObjectWorkflowMappingFactory",
-    "OperatorAdvertiserLinkFactory",
     "PricingOptionFactory",
     "PrincipalFactory",
     "ProductFactory",

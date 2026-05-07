@@ -36,8 +36,6 @@ from sqlalchemy.orm.attributes import get_history
 
 from src.core.database.models import (
     AdapterConfig,
-    AdmittedOperator,
-    OperatorAdvertiserLink,
     Tenant,
     TenantSigningCredential,
     TenantSigningPolicy,
@@ -173,12 +171,10 @@ def _block_adapter_config_insert(mapper, connection, target):
 
 
 # Signing infrastructure (signing-non-embedded design) is platform-managed —
-# admitted operators, their links to advertisers, per-tenant signing policy,
-# and the salesagent's own outbound signing credentials. All four are
-# infrastructure surfaces; publisher UI never writes them on embedded tenants.
+# per-tenant signing policy and the salesagent's own outbound signing
+# credentials. Both are infrastructure surfaces; publisher UI never writes
+# them on embedded tenants.
 for _signing_model in (
-    AdmittedOperator,
-    OperatorAdvertiserLink,
     TenantSigningPolicy,
     TenantSigningCredential,
 ):

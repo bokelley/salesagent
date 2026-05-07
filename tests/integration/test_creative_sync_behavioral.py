@@ -1418,3 +1418,62 @@ class TestSyncFlowVerification:
             # The guard logic is inside the (mocked) function — we verify it's called
             # but can't test the guard through the harness
             assert env.mock["send_notifications"].called
+
+
+# ---------------------------------------------------------------------------
+# Sync→List visibility — narrows #88 (e2e symptom only; impl is correct)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncedCreativeVisibleInList:
+    """A successfully-synced creative MUST appear in ``list_creatives`` for
+    the same principal/tenant.
+
+    The e2e ``test_creative_sync_with_assignment_in_single_call`` fails at
+    "Creative <id> should be in list" — sync claims action=created but
+    list doesn't return it. This class proves the impl + DB layer is
+    correct (narrows the bug to e2e/Docker-specific layers above the
+    impl). When someone roots the e2e symptom, this passing test is the
+    baseline reference for layer-by-layer narrowing.
+
+    Covers: #88 (impl boundary).
+    """
+
+    def test_synced_creative_appears_in_subsequent_list(self, integration_db):
+        """Sync a creative, then list — the creative must be in the list.
+
+        Both calls run inside a single ``CreativeSyncEnv`` so the DB
+        session and identity are shared (matching what the e2e flow gets
+        through one HTTP client). ``_list_creatives_impl`` is invoked
+        directly with the env's identity rather than spinning a separate
+        ``CreativeListEnv`` — that would split the session and exercise
+        a transaction-boundary path the e2e test doesn't.
+        """
+        from src.core.tools.creatives.listing import _list_creatives_impl
+
+        creative_id = "synced_001"
+        creative = _make_creative_asset(creative_id=creative_id, name="Sync→List Visibility")
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            sync_response = env.call_impl(creatives=[creative])
+
+            # Sanity: distinguish "sync didn't actually create" from
+            # "list filtered it out". If sync silently failed, the test
+            # below would mask the failure.
+            assert len(sync_response.creatives) == 1
+            result = sync_response.creatives[0]
+            assert result.action == CreativeAction.created, (
+                f"Sync did not create the creative — action={result.action}, "
+                f"errors={getattr(result, 'errors', None)}"
+            )
+            assert result.creative_id == creative_id
+
+            # Now list under the same identity. Same session, same
+            # principal/tenant scope. The new row must be visible.
+            list_response = _list_creatives_impl(identity=env.identity)
+            returned_ids = {c.creative_id for c in list_response.creatives}
+            assert creative_id in returned_ids, (
+                f"Synced creative {creative_id!r} not in list response. "
+                f"Got {returned_ids}. Impl-layer regression — see #88."
+            )

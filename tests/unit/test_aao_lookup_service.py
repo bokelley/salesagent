@@ -19,11 +19,9 @@ import pytest
 
 from src.services.aao_lookup_service import (
     PublicAgentUrlMismatch,
-    UnsafePublisherDomain,
     get_publisher_partner_status,
     invalidate_adagents_cache,
     validate_public_agent_url_hostname,
-    validate_publisher_domain_safe,
 )
 
 
@@ -210,30 +208,7 @@ class TestValidatePublicAgentUrlHostname:
         )
 
 
-class TestValidatePublisherDomainSafe:
-    """SSRF guard for caller-supplied publisher_domain values."""
-
-    def test_ipv4_literal_rejected(self):
-        with pytest.raises(UnsafePublisherDomain):
-            validate_publisher_domain_safe("192.0.2.1")
-
-    def test_ipv6_literal_rejected(self):
-        with pytest.raises(UnsafePublisherDomain):
-            validate_publisher_domain_safe("::1")
-
-    def test_metadata_ip_literal_rejected(self):
-        """The smoking-gun SSRF target — AWS/GCP cloud metadata service."""
-        with pytest.raises(UnsafePublisherDomain) as exc:
-            validate_publisher_domain_safe("169.254.169.254")
-        assert "IP literal" in str(exc.value)
-
-    def test_loopback_resolution_rejected(self):
-        """``localhost`` resolves to 127.0.0.1 / ::1 — both private. Reject."""
-        with pytest.raises(UnsafePublisherDomain):
-            validate_publisher_domain_safe("localhost")
-
-    def test_dns_resolution_failure_does_not_raise(self):
-        """Unresolvable hostnames pass through validation — let the actual
-        fetch surface a clean unreachable status, don't pre-reject."""
-        # Reserved TLD per RFC 2606; guaranteed not to resolve in production.
-        validate_publisher_domain_safe("nonexistent.invalid")
+# SSRF guard for publisher_domain lives in src.core.security.url_validator
+# (introduced by main's PR #98); see tests/unit/test_publisher_domain_ssrf.py
+# for that coverage. Removed validate_publisher_domain_safe here in favor
+# of the shared helper.

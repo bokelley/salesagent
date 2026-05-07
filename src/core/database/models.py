@@ -120,9 +120,7 @@ class Tenant(Base, JSONValidatorMixin):
     # for buys in pending_start (warm-up window) and paused — not just active
     # and completed. Lets buyers stop polling for "did my flight start yet?"
     # and "is the pause still in effect?". Default True. See issue #48.
-    report_pre_start_buys: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
-    )
+    report_pre_start_buys: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     # Measurement providers configuration
     # Structure: {"providers": ["Provider 1", "Provider 2"], "default": "Provider 1"}
@@ -617,12 +615,29 @@ class Principal(Base, JSONValidatorMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
     access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    # Operator the bearer token attests to. NULL for legacy unsigned principals;
-    # required when the tenant signing policy is enabled. The
-    # (tenant_id, bound_operator_id, principal_id) tuple must exist + be active in
-    # operator_advertiser_link or the verifier rejects with operator_link_disabled.
+    # Buyer-agent URL — informational; populated from brand.json at admit
+    # time so it shows up in audit logs and the admin UI. NOT used by the
+    # verifier hot path; rotation of agent_url in brand.json doesn't need
+    # operator action because the verifier walks brand.json itself.
+    agent_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # Operator-typed buyer domain. The TRUST ANCHOR — verifier constructs
+    # ``https://<brand_domain>/.well-known/brand.json`` and walks it via
+    # adcp.signing.BrandJsonJwksResolver, which auto-refreshes on cooldown
+    # + unknown-kid cascade. NULL means bearer-only auth (legacy path).
     # See docs/design/signing-non-embedded.md.
-    bound_operator_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    brand_domain: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    # When True, unsigned requests from this principal are rejected. When False
+    # and agent_url is set, the verifier accepts signed requests but does not
+    # require them (mixed mode for migration). Ignored when agent_url is NULL
+    # (bearer-only principals can't sign). Replaces tenant-wide required_for.
+    signing_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # Most-recent successful signed-request verification. Updated by the
+    # verifier middleware; reset to NULL when the operator changes
+    # ``brand_domain`` so the strict-admit guard doesn't carry stale
+    # evidence forward across trust-root changes. ``agent_url`` change
+    # does NOT reset — the verifier walks brand.json and the library
+    # handles agent_url rotation automatically.
+    last_signed_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -641,7 +656,12 @@ class Principal(Base, JSONValidatorMixin):
     __table_args__ = (
         Index("idx_principals_tenant", "tenant_id"),
         Index("idx_principals_token", "access_token"),
-        Index("idx_principals_bound_operator", "tenant_id", "bound_operator_id"),
+        Index(
+            "idx_principals_agent_url",
+            "tenant_id",
+            "agent_url",
+            postgresql_where=text("agent_url IS NOT NULL"),
+        ),
     )
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
@@ -1158,10 +1178,11 @@ class AuditLog(Base):
     external_org_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # RFC 9421 signed-request verification trail (PR 2 of signing-non-embedded).
-    # All NULL on rows for unsigned requests and on legacy rows. Populated by
-    # SigningVerifyMiddleware when the verifier accepts a signature.
-    verified_operator_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # RFC 9421 signed-request verification trail. NULL on rows for unsigned
+    # requests and on legacy rows. Populated by SigningVerifyMiddleware when
+    # the verifier accepts a signature. The (verified_agent_url, verified_key_id)
+    # pair stamps "this row was signed with kid X published at agent_url Y."
+    # Calling principal is identified via principal_id (already on the row).
     verified_agent_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     verified_key_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
@@ -1177,12 +1198,6 @@ class AuditLog(Base):
         Index("idx_audit_logs_tenant", "tenant_id"),
         Index("idx_audit_logs_timestamp", "timestamp"),
         Index("idx_audit_logs_strategy", "strategy_id"),
-        Index(
-            "idx_audit_logs_verified_operator",
-            "tenant_id",
-            "verified_operator_id",
-            postgresql_where=text("verified_operator_id IS NOT NULL"),
-        ),
     )
 
 
@@ -2411,94 +2426,15 @@ class WebhookDeliveryLog(Base):
 
 
 # ---------------------------------------------------------------------------
-# Signing (non-embedded mode) — operator-trust model
+# Signing (non-embedded mode) — per-buyer-agent trust model
 # ---------------------------------------------------------------------------
-# See docs/design/signing-non-embedded.md. Operators (brand.json publishers) are
-# admitted per tenant; their brand.json + JWKS live at the operator's own
-# house_domain. Cryptographic trust roots through brand.json. Agents speak under
-# the operator's authority and are inherited transitively from brand.json's
-# agents[] list — we don't admit individual agents.
-
-
-class AdmittedOperator(Base):
-    """Operator (brand.json publisher) admitted to a tenant.
-
-    AAO is consulted at admission time for display metadata; brand.json is
-    fetched at verify-time from the operator's own house_domain. AAO is never
-    on the hot verification path.
-    """
-
-    __tablename__ = "admitted_operators"
-
-    tenant_id: Mapped[str] = mapped_column(
-        String(50),
-        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    operator_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    brand_json_url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    aao_member_slug: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    house_domain: Mapped[str | None] = mapped_column(String(253), nullable=True)
-    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    # True for embedded host's interchange — verifier bypasses signature checks.
-    is_trusted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    last_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_resolution_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "brand_json_url", name="uq_admitted_operators_brand_json"),
-        Index(
-            "idx_admitted_operators_active",
-            "tenant_id",
-            "is_active",
-            postgresql_where=text("is_active"),
-        ),
-    )
-
-
-class OperatorAdvertiserLink(Base):
-    """(tenant, operator, advertiser) authorization with billing-mode policy."""
-
-    __tablename__ = "operator_advertiser_link"
-
-    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    operator_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    principal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    # operator_bills | agent_billed | disabled
-    billing_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="operator_bills")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["tenant_id", "operator_id"],
-            ["admitted_operators.tenant_id", "admitted_operators.operator_id"],
-            ondelete="CASCADE",
-        ),
-        ForeignKeyConstraint(
-            ["tenant_id", "principal_id"],
-            ["principals.tenant_id", "principals.principal_id"],
-            ondelete="CASCADE",
-        ),
-        CheckConstraint(
-            "billing_mode IN ('operator_bills', 'agent_billed', 'disabled')",
-            name="chk_operator_advertiser_link_billing_mode",
-        ),
-    )
+# See docs/design/signing-non-embedded.md (rev 5). Each buyer-protocol
+# Principal optionally carries an ``agent_url``. When set, the verifier
+# fetches JWKS from ``<agent_url>/.well-known/jwks.json`` and verifies inbound
+# signatures. The salesagent trusts the buyer agent for its operator
+# identity — no brand.json chain walk, no operator-attestation step. Operators
+# and brands are orthogonal dimensions of Accounts (Account.{operator, brand,
+# billing}), NOT auth subjects.
 
 
 class TenantSigningPolicy(Base):

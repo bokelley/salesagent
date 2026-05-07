@@ -1,7 +1,9 @@
 """Blueprint for managing publisher partnerships."""
 
 import asyncio
+import ipaddress
 import logging
+import re
 from datetime import UTC, datetime
 
 from adcp.adagents import (
@@ -19,6 +21,7 @@ from src.core.config import get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
 from src.core.domain_config import get_tenant_url
+from src.core.security.url_validator import BLOCKED_HOSTNAMES, check_url_ssrf
 from src.services.aao_lookup_service import (
     PublisherPartnerStatus,
     get_publisher_partner_status,
@@ -124,6 +127,39 @@ def _partner_to_dict(partner: PublisherPartner, *, fallback_property_count: int 
     }
 
 
+# RFC 1035-ish — each label up to 63 chars, total up to 253. Conservative
+# subset of the spec (ASCII, no underscores, no leading/trailing hyphens).
+# Real publisher domains all match this; the regex doubles as an SSRF gate
+# by rejecting non-hostname strings before they reach any outbound call.
+_DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def _validate_publisher_domain(domain: str) -> tuple[bool, str]:
+    """Format-only validation for publisher_domain at create time.
+
+    Rejects IP literals, localhost-likes, Docker-internal hostnames, and
+    structurally-malformed strings. Does NOT do DNS resolution — a brand-
+    new publisher domain may not resolve yet but should still be acceptable
+    to register; the DNS-time SSRF check fires inside ``check_publisher``
+    before the actual outbound HTTP call.
+
+    Returns ``(is_safe, error_message)``.
+    """
+    if not domain or len(domain) > 253:
+        return False, "Publisher domain must be 1-253 characters"
+    if domain in BLOCKED_HOSTNAMES:
+        return False, f"Publisher domain '{domain}' is blocked (internal/private)"
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        pass
+    else:
+        return False, "Publisher domain must be a hostname, not an IP address"
+    if not _DOMAIN_RE.match(domain):
+        return False, "Publisher domain has invalid format"
+    return True, ""
+
+
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
 @require_tenant_access(api_mode=True)
 def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
@@ -199,19 +235,12 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         # Remove trailing slash
         publisher_domain = publisher_domain.rstrip("/")
 
-        # SSRF guard — tenant-controlled string flows directly into
-        # ``fetch_adagents()``'s GET. Reject IP literals + names that resolve
-        # to private/loopback/link-local/metadata addresses before we touch
-        # any network. Dev environments (which use fake localhost-shaped
-        # domains) skip the resolve-time check via auto-verify below.
-        from src.core.config import get_config as _get_config
-        from src.services.aao_lookup_service import UnsafePublisherDomain, validate_publisher_domain_safe
-
-        if _get_config().environment != "development":
-            try:
-                validate_publisher_domain_safe(publisher_domain)
-            except UnsafePublisherDomain as exc:
-                return jsonify({"error": str(exc)}), 400
+        # SSRF gate at the boundary — IP literals, localhost-likes, malformed
+        # strings can't be persisted, so downstream callers (sync, property
+        # discovery) never see them. See ``_validate_publisher_domain``.
+        ok, err = _validate_publisher_domain(publisher_domain)
+        if not ok:
+            return jsonify({"error": err}), 400
 
         with get_db_session() as session:
             # Check tenant adapter type
@@ -487,11 +516,32 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
             logger.info(f"Fetching AAO status for {len(partners)} publishers (agent_url={agent_url})")
 
+            # DNS-time SSRF check — defense in depth on top of the create-time
+            # format gate (_validate_publisher_domain at row insert). Catches
+            # a domain whose resolution flips to a private/loopback/metadata
+            # IP after it was registered. Failed partners are persisted as
+            # errors and skipped from the AAO fetch batch.
+            now = datetime.now(UTC)
+            safe_partners: list[PublisherPartner] = []
+            ssrf_errors = 0
+            for partner in partners:
+                ssrf_ok, ssrf_err = check_url_ssrf(f"https://{partner.publisher_domain}")
+                if not ssrf_ok:
+                    partner.sync_status = "error"
+                    partner.sync_error = f"Refused: {ssrf_err}"
+                    partner.last_fetch_error = ssrf_err
+                    partner.last_refreshed_at = now
+                    partner.is_verified = False
+                    ssrf_errors += 1
+                    continue
+                safe_partners.append(partner)
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 tasks = [
-                    get_publisher_partner_status(p.publisher_domain, agent_url, force_refresh=True) for p in partners
+                    get_publisher_partner_status(p.publisher_domain, agent_url, force_refresh=True)
+                    for p in safe_partners
                 ]
                 statuses = loop.run_until_complete(asyncio.wait_for(asyncio.gather(*tasks), timeout=30.0))
             finally:
@@ -502,8 +552,8 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             verified_domains = []
             synced = 0
             verified = 0
-            errors = 0
-            for partner in partners:
+            errors = ssrf_errors
+            for partner in safe_partners:
                 status = statuses_by_domain.get(partner.publisher_domain)
                 if status is None:
                     continue

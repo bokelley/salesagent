@@ -394,6 +394,14 @@ def tenant_settings(tenant_id, section=None):
 
             script_name = request.script_root or request.environ.get("SCRIPT_NAME", "")
 
+            # Outbound signing credentials (read-only summary; rotation lands in PR 3C)
+            from src.core.database.repositories import TenantSigningCredentialRepository
+
+            cred_repo = TenantSigningCredentialRepository(db_session, tenant_id)
+            signing_credentials = []
+            for purpose in ("webhook-signing", "request-signing-as-buyer"):
+                signing_credentials.extend(cred_repo.list_for_purpose(purpose, include_inactive=True))
+
             # Get available currencies from Babel
             available_currencies = get_available_currencies()
 
@@ -435,6 +443,7 @@ def tenant_settings(tenant_id, section=None):
                 setup_status=setup_status,
                 available_currencies=available_currencies,  # Currency list from Babel
                 single_tenant_mode=is_single_tenant_mode(),
+                signing_credentials=signing_credentials,
             )
 
     except Exception as e:

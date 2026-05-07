@@ -7,11 +7,23 @@ and caused errors.
 Focus: Test parameter-to-schema mapping, not business logic.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
+
+# adcp 4.4 wire-required envelope on mutation tools — buyers must supply
+# both. Match the pattern used by tests/e2e/adcp_request_builder.py so test
+# inputs reflect real-buyer wire shape rather than the schema we'd prefer.
+_WIRE_BRAND = {"domain": "testbrand.com"}
+_WIRE_ACCOUNT = {"brand": _WIRE_BRAND, "operator": "testbrand.com"}
+
+
+def _wire_envelope(prefix: str) -> dict:
+    """Return ``account`` + ``idempotency_key`` for inclusion in mutation requests."""
+    return {"account": _WIRE_ACCOUNT, "idempotency_key": f"{prefix}-{uuid.uuid4()}"}
 
 
 @pytest.mark.integration
@@ -120,6 +132,7 @@ class TestMCPToolRoundtripMinimal:
                     {
                         "media_buy_id": create_content["media_buy_id"],
                         "paused": True,  # adcp 2.12.0+: paused=True means pause, paused=False means resume
+                        **_wire_envelope("roundtrip-update"),
                     },
                 )
 

@@ -8,7 +8,10 @@ verified publishers but no properties, causing the product creation UI
 to show empty property/tag lists.
 """
 
+from contextlib import contextmanager
+
 import pytest
+from flask import session
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -19,6 +22,24 @@ from src.core.database.models import (
     PublisherPartner,
     Tenant,
 )
+
+
+@contextmanager
+def _authorized_request_context(app):
+    """Yield a Flask test request context that satisfies @require_tenant_access.
+
+    The decorator's test-mode bypass at src/admin/utils/helpers.py:475-482
+    activates when ``test_user`` is in session AND either
+    ``ADCP_AUTH_TEST_MODE`` is set OR the tenant has
+    ``auth_setup_mode=True``. The fixture in this module sets
+    ``auth_setup_mode=True``, so the test-mode session keys alone are
+    enough — no env-var mutation needed (avoids cross-test leakage).
+    """
+    with app.test_request_context():
+        session["test_user"] = "test@example.com"
+        session["test_user_role"] = "super_admin"
+        session["test_user_name"] = "Test Admin"
+        yield
 
 
 @pytest.mark.requires_db
@@ -38,6 +59,10 @@ class TestMockAdapterPublisherSync:
                 subdomain="test-mock-sync",
                 ad_server="mock",
                 authorized_emails=["test@example.com"],
+                # Per-tenant test-mode flag — lets _authorized_request_context()
+                # satisfy @require_tenant_access without mutating the global
+                # ADCP_AUTH_TEST_MODE env var (which would leak across tests).
+                auth_setup_mode=True,
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -104,7 +129,7 @@ class TestMockAdapterPublisherSync:
 
         app = create_app()
 
-        with app.test_request_context():
+        with _authorized_request_context(app):
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
@@ -138,7 +163,7 @@ class TestMockAdapterPublisherSync:
 
         app = create_app()
 
-        with app.test_request_context():
+        with _authorized_request_context(app):
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
@@ -180,7 +205,7 @@ class TestMockAdapterPublisherSync:
 
         app = create_app()
 
-        with app.test_request_context():
+        with _authorized_request_context(app):
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",
@@ -212,7 +237,7 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         # Run sync twice
-        with app.test_request_context():
+        with _authorized_request_context(app):
             with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
                 with patch(
                     "src.admin.blueprints.publisher_partners.get_tenant_url",

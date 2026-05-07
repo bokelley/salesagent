@@ -29,7 +29,7 @@ class VerifiedRequestState:
     no signature was verified on this request.
     """
 
-    operator_id: str
+    principal_id: str
     agent_url: str
     key_id: str
 

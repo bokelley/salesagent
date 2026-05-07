@@ -38,13 +38,11 @@ class ResolvedIdentity(BaseModel, frozen=True):
     # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
     # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
 
-    # RFC 9421 signed-request verification state (PR 2 of signing-non-embedded).
-    # Populated by SigningVerifyMiddleware before resolve_identity is called when
-    # the verifier accepts a signature. All None when:
-    #   * the tenant signing policy has enabled=False, or
-    #   * the operation is not in policy.required_for AND no signature was sent, or
-    #   * the operator is is_trusted (embedded host bypass).
-    verified_operator_id: str | None = None
+    # RFC 9421 signed-request verification state. Populated by
+    # SigningVerifyMiddleware before resolve_identity is called when the
+    # verifier accepts a signature. Both None for unsigned (bearer-only)
+    # requests. ``principal_id`` (above) identifies the caller regardless
+    # of auth method.
     verified_agent_url: str | None = None
     verified_key_id: str | None = None
 

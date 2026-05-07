@@ -1,7 +1,7 @@
 """publisher_partner_aao_status_columns
 
 Revision ID: n5o6p7q8r9s0
-Revises: bcd40819d318
+Revises: e9f8a7ce4e46
 Create Date: 2026-05-06 06:30:00.000000
 
 Adds AAO status counts to ``publisher_partners`` so the Publisher Partnerships
@@ -31,7 +31,7 @@ import sqlalchemy as sa
 
 
 revision: str = "n5o6p7q8r9s0"
-down_revision: Union[str, Sequence[str], None] = "bcd40819d318"
+down_revision: Union[str, Sequence[str], None] = "e9f8a7ce4e46"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

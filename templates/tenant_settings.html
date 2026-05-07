@@ -410,7 +410,12 @@
 
         <a class="settings-nav-item" data-section="advertisers">
             <span class="settings-nav-icon">👥</span>
-            <span>Advertisers</span>
+            <span>Buyer Agents</span>
+        </a>
+
+        <a class="settings-nav-item{% if default_section == 'signing-keys' %} active{% endif %}" data-section="signing-keys">
+            <span class="settings-nav-icon">🔑</span>
+            <span>Signing keys</span>
         </a>
 
         {% if not single_tenant_mode and not embedded_view %}
@@ -2096,12 +2101,12 @@ Exclude any products that don't match the brand's tone.</pre>
            redundant in embedded mode, not dangerous. #}
         <div id="advertisers" class="settings-section">
             <div class="settings-header">
-                <h2>Advertiser Management</h2>
-                <p>Manage advertisers who can access your inventory</p>
+                <h2>Buyer Agent Management</h2>
+                <p>Manage buyer agents who can call your tenant's buyer protocol</p>
             </div>
 
             {% if embedded_view %}
-            <p class="text-muted">Advertisers (buyer identities) are auto-created from request headers when buys arrive. Routing rules and the default advertiser are managed in your platform's settings.</p>
+            <p class="text-muted">Buyer agents are auto-created from request headers when buys arrive. Routing rules and the default agent are managed in your platform's settings.</p>
             {% else %}
             {# Standalone-only banner: Sprint 5 demoted (operator, brand) → GAM
                advertiser mapping out of this page and into Buyer Routing. The
@@ -2115,9 +2120,9 @@ Exclude any products that don't match the brand's tone.</pre>
                     with searchable advertiser picker, per-rule editing, and a recent-activity view.
                 </p>
                 <p class="mb-0" style="margin-top: 0.5rem; font-size: 0.9em; color: #555;">
-                    This page (Settings → Advertisers) remains for managing buyer-protocol
-                    Principal records (the access-token-bound buyer identity that calls
-                    your tenant's MCP / A2A endpoints). For most workflows you want
+                    This page (Settings → Buyer Agents) remains for managing the
+                    access-token- or signature-authenticated buyer agents that call
+                    your tenant's MCP / A2A endpoints. For most workflows you want
                     Buyer Routing instead.
                 </p>
             </div>
@@ -2126,24 +2131,24 @@ Exclude any products that don't match the brand's tone.</pre>
             <div class="status-card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <strong>{{ advertiser_count }} Advertisers Registered</strong>
+                        <strong>{{ advertiser_count }} Buyer Agents Registered</strong>
                         <p style="margin: 0.25rem 0 0 0; font-size: 0.75rem;">
                             {{ active_advertisers }} active this month
                         </p>
                     </div>
                     {% if not embedded_view %}
                     <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary btn-small">
-                        Add Advertiser
+                        Add Buyer Agent
                     </a>
                     {% endif %}
                 </div>
             </div>
 
-            <!-- Advertisers List -->
+            <!-- Buyer Agents List -->
             {% if principals %}
             <div class="card" style="margin-top: 1rem;">
                 <div class="card-body">
-                    <h5 class="card-title">Current Advertisers</h5>
+                    <h5 class="card-title">Current Buyer Agents</h5>
                     <div class="table-responsive">
                         <table class="table table-sm">
                             <thead>
@@ -2244,10 +2249,10 @@ Exclude any products that don't match the brand's tone.</pre>
             {% else %}
             <div class="card" style="margin-top: 1rem;">
                 <div class="card-body text-center text-muted">
-                    <p>No advertisers registered yet.</p>
+                    <p>No buyer agents registered yet.</p>
                     {% if not embedded_view %}
                     <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary">
-                        Create First Advertiser
+                        Create First Buyer Agent
                     </a>
                     {% endif %}
                 </div>
@@ -2750,6 +2755,62 @@ result = await client.tools.get_products(brief="video ads")</pre>
                     </div>
                 </form>
             </div>
+        </div>
+
+        <!-- Outbound signing keys (RFC 9421) -->
+        <div id="signing-keys" class="settings-section{% if default_section == 'signing-keys' %} active{% endif %}">
+            <div class="settings-header">
+                <h2>🔑 Signing keys</h2>
+                <p>Salesagent's outbound signing keys (RFC 9421). Buyers verify our webhook signatures against the public JWK published at <code>{{ tenant.brand_json_url or '<your brand.json URL>' }}</code>.</p>
+            </div>
+
+            {% if not signing_credentials %}
+            <div class="status-card">
+                <strong>No outbound signing credentials configured.</strong>
+                <p>Webhooks fall back to HMAC. Rotation / upload UI lands in PR 3C.</p>
+            </div>
+            {% else %}
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Purpose</th>
+                            <th>Backend</th>
+                            <th>Key ID</th>
+                            <th>Public JWK</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for cred in signing_credentials %}
+                        <tr>
+                            <td><code>{{ cred.purpose }}</code></td>
+                            <td>
+                                <code>{{ cred.backend }}</code><br>
+                                <small class="text-muted">{{ cred.backend_ref }}</small>
+                            </td>
+                            <td><code style="font-size: 0.85em;">{{ cred.key_id }}</code></td>
+                            <td>
+                                <details>
+                                    <summary class="text-muted small" style="cursor: pointer;">show JWK</summary>
+                                    <pre class="mb-0" style="font-size: 0.75em;">{{ cred.public_jwk | tojson(indent=2) }}</pre>
+                                </details>
+                            </td>
+                            <td>
+                                {% if cred.is_active %}
+                                <span class="badge bg-success">active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">inactive</span>
+                                {% endif %}
+                            </td>
+                            <td><small>{{ cred.created_at.strftime('%Y-%m-%d') if cred.created_at else '—' }}</small></td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
         </div>
 
         {# Scope3 owns tenant lifecycle (provision / deactivate / reactivate via

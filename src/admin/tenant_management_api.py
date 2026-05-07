@@ -79,12 +79,10 @@ from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
     Account,
     AdapterConfig,
-    AdmittedOperator,
     AdvertiserRoutingRule,
     CurrencyLimit,
     GamAdvertiser,
     MediaBuy,
-    OperatorAdvertiserLink,
     Principal,
     PropertyTag,
     SyncJob,
@@ -835,43 +833,6 @@ def provision_tenant():
                     name=initial_principal_name,
                     platform_mappings=platform_mappings,
                     access_token=f"embedded-mode-no-token:{secrets.token_urlsafe(8)}",
-                    bound_operator_id="embedded_host",
-                )
-            )
-            # Flush so the principal row exists in the DB before the
-            # OperatorAdvertiserLink FK reference below. SQLAlchemy 2.0 doesn't
-            # always order inserts by FK dependency when the linking table
-            # references a composite key — without this flush, the
-            # ``operator_advertiser_link_tenant_id_principal_id_fkey`` insert
-            # races the principal insert.
-            session.flush()
-
-        # Auto-install the host product as a single trusted operator. The
-        # cryptographic verifier bypasses these rows entirely (network/header
-        # trust is the embedded-mode boundary); the row exists for audit-trail
-        # consistency with non-embedded tenants. See
-        # docs/design/signing-non-embedded.md "Conceptual model".
-        host_display = req.external_source or "embedded host"
-        embedded_host_brand_json = f"embedded://{tenant_id}/embedded_host"
-        session.add(
-            AdmittedOperator(
-                tenant_id=tenant_id,
-                operator_id="embedded_host",
-                brand_json_url=embedded_host_brand_json,
-                aao_member_slug=req.external_source,
-                display_name=host_display,
-                is_trusted=True,
-                is_active=True,
-            )
-        )
-        if initial_principal_id is not None:
-            session.add(
-                OperatorAdvertiserLink(
-                    tenant_id=tenant_id,
-                    operator_id="embedded_host",
-                    principal_id=initial_principal_id,
-                    billing_mode="operator_bills",
-                    is_active=True,
                 )
             )
 
@@ -1862,7 +1823,14 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
         try:
             from src.services.gam_advertisers_sync import sync_advertisers
 
-            def _run_advertisers_in_thread(tenant_id: str = tenant_id, sync_id: str = advertisers_id) -> None:  # type: ignore[assignment]
+            # ``advertisers_id`` is narrowed to ``str`` by the
+            # ``if advertisers_id`` guard above, but mypy doesn't propagate the
+            # narrow into the closure default. ``str`` here matches the
+            # narrowed-truthy type at the call site.
+            def _run_advertisers_in_thread(
+                tenant_id: str = tenant_id,
+                sync_id: str = advertisers_id,  # type: ignore[assignment]
+            ) -> None:
                 """Wrap sync_advertisers so its re-raise (intentional for
                 direct callers + cron pickup) doesn't escape the daemon
                 thread. The worker has already marked the SyncJob row as
@@ -2942,7 +2910,12 @@ def test_webhook(tenant_id: str, webhook_id: str):
             tenant_id=tenant_id,
             data={"test": True, "subject_type": "tenant", "subject_id": tenant_id},
         )
-        status_code, latency_ms, error = asyncio.run(deliver_event_sync(_SubProxy, secret, envelope))  # type: ignore[arg-type]
+        # _SubProxy is a duck-typed stand-in for WebhookSubscription that
+        # carries just the fields deliver_event_sync reads. Real subscription
+        # row would be overkill for a connectivity test.
+        status_code, latency_ms, error = asyncio.run(
+            deliver_event_sync(_SubProxy, secret, envelope)  # type: ignore[arg-type]
+        )
         delivered = status_code is not None and 200 <= status_code < 300
         if not delivered:
             overall_ok = False

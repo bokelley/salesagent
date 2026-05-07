@@ -11,10 +11,8 @@ See ``docs/design/replace-authorized-properties-with-aao-lookup.md``.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
-import socket
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -192,71 +190,6 @@ def _aao_onboarding_url(publisher_domain: str) -> str:
     """Deep link to the AAO publisher page — sent to publishers who list
     properties but haven't yet authorized this tenant's agent."""
     return f"{_AAO_PUBLISHER_DIRECTORY}/{publisher_domain}"
-
-
-class UnsafePublisherDomain(ValueError):
-    """Raised when a publisher_domain resolves to a private/loopback/link-local
-    address, an IP literal, or otherwise looks like an SSRF target. Callers
-    translate to a 400 — never reach the HTTP client."""
-
-
-def validate_publisher_domain_safe(domain: str) -> None:
-    """SSRF guard for caller-supplied ``publisher_domain`` values.
-
-    Tenant admins control this string and it flows directly into
-    ``fetch_adagents()``'s ``GET https://{domain}/.well-known/adagents.json``.
-    Without a guard, a malicious admin could pivot the salesagent's egress
-    toward cloud metadata services (169.254.169.254, fd00:ec2::254),
-    loopback, or private VPC endpoints.
-
-    Rejects:
-    - IP literals (v4 or v6) — publishers serve adagents.json from named
-      domains, not raw IPs.
-    - Hostnames that DNS-resolve to private/loopback/link-local/multicast/
-      reserved addresses.
-
-    Raises :class:`UnsafePublisherDomain` on rejection.
-    """
-    stripped = domain.strip().rstrip(".")
-
-    # Reject IP literals outright.
-    try:
-        ip = ipaddress.ip_address(stripped)
-    except ValueError:
-        ip = None
-    if ip is not None:
-        raise UnsafePublisherDomain(
-            f"publisher_domain {domain!r} is an IP literal — adagents.json must be served "
-            "from a named publisher domain."
-        )
-
-    # Resolve and inspect each address. ``getaddrinfo`` covers v4 + v6.
-    try:
-        infos = socket.getaddrinfo(stripped, None)
-    except socket.gaierror as exc:
-        # DNS resolution failure — let the actual fetch surface a clean
-        # "unreachable" status. Don't pre-emptively reject.
-        logger.info("publisher_domain %r DNS resolution failed at validate-time: %s", domain, exc)
-        return
-
-    for family, _, _, _, sockaddr in infos:
-        addr = sockaddr[0]
-        try:
-            parsed = ipaddress.ip_address(addr)
-        except ValueError:
-            continue
-        if (
-            parsed.is_private
-            or parsed.is_loopback
-            or parsed.is_link_local
-            or parsed.is_multicast
-            or parsed.is_reserved
-            or parsed.is_unspecified
-        ):
-            raise UnsafePublisherDomain(
-                f"publisher_domain {domain!r} resolves to a non-public address "
-                f"({addr}, family {family}). adagents.json fetches must hit public hosts only."
-            )
 
 
 def _count_total_properties(adagents: dict[str, Any]) -> int:
