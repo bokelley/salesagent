@@ -31,53 +31,58 @@ def _identity_with_tenantcontext(**fields):
 
 
 class TestCheckBillingPolicy:
-    """BR-RULE-059: seller billing policy enforcement."""
+    """BR-RULE-059: seller billing policy enforcement.
+
+    All cases here pass ``principal_billing_enabled=True`` so the BR-RULE-061
+    principal-level gate doesn't fire — these tests are about the tenant
+    ``supported_billing`` gate only. BR-RULE-061-specific cases are below.
+    """
 
     def test_no_policy_configured_accepts_all(self):
         identity = _identity_with()  # no supported_billing key
-        assert _check_billing_policy("operator", identity) is None
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("operator", identity, principal_billing_enabled=True) is None
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
 
     def test_supported_value_accepted(self):
         identity = _identity_with(supported_billing=["agent"])
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
 
     def test_unsupported_value_rejected(self):
         identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
+        errors = _check_billing_policy("operator", identity, principal_billing_enabled=True)
         assert errors is not None
         assert len(errors) == 1
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
     def test_error_message_includes_supported_list(self):
         identity = _identity_with(supported_billing=["agent", "operator"])
-        errors = _check_billing_policy("prepaid", identity)
+        errors = _check_billing_policy("prepaid", identity, principal_billing_enabled=True)
         assert errors is not None
         assert "agent" in errors[0].message
         assert "operator" in errors[0].message
 
     def test_error_includes_suggestion_field(self):
         identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
+        errors = _check_billing_policy("operator", identity, principal_billing_enabled=True)
         assert errors is not None
         assert errors[0].suggestion is not None
         assert "agent" in errors[0].suggestion
 
     def test_empty_supported_list_rejects_all(self):
         identity = _identity_with(supported_billing=[])
-        errors = _check_billing_policy("agent", identity)
+        errors = _check_billing_policy("agent", identity, principal_billing_enabled=True)
         assert errors is not None
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
     def test_tenant_none_accepts(self):
         identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
-        assert _check_billing_policy("operator", identity) is None
+        assert _check_billing_policy("operator", identity, principal_billing_enabled=True) is None
 
     def test_tenantcontext_access_works(self):
         """When identity.tenant is a TenantContext object, the same .get() contract applies."""
         identity = _identity_with_tenantcontext(supported_billing=["agent"])
-        assert _check_billing_policy("agent", identity) is None
-        errors = _check_billing_policy("operator", identity)
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
+        errors = _check_billing_policy("operator", identity, principal_billing_enabled=True)
         assert errors is not None
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
@@ -85,7 +90,37 @@ class TestCheckBillingPolicy:
         """When identity.tenant is a raw dict (IMPL transport), same behavior."""
         identity = _identity_with(supported_billing=["agent"])
         assert isinstance(identity.tenant, dict)
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("agent", identity, principal_billing_enabled=True) is None
+
+
+class TestCheckBillingPolicyPrincipalGate:
+    """BR-RULE-061: principal-level agent-billing capability gate.
+
+    When ``billing='agent'``, the calling principal's ``billing_enabled``
+    flag must be True. Operator-flagged principals (free-tier, test, etc.)
+    can't be the billing party.
+    """
+
+    def test_agent_billing_rejected_when_principal_disabled(self):
+        identity = _identity_with(supported_billing=["agent", "operator"])
+        errors = _check_billing_policy("agent", identity, principal_billing_enabled=False)
+        assert errors is not None
+        assert errors[0].code == "BILLING_NOT_PERMITTED_FOR_AGENT"
+        # ``recovery`` is the adcp Recovery enum; compare against its value.
+        assert errors[0].recovery.value == "correctable"
+        assert errors[0].field == "billing"
+
+    def test_operator_billing_accepted_when_principal_disabled(self):
+        """billing='operator' bypasses the principal gate — only agent billing checks the flag."""
+        identity = _identity_with(supported_billing=["agent", "operator"])
+        assert _check_billing_policy("operator", identity, principal_billing_enabled=False) is None
+
+    def test_tenant_gate_fires_before_principal_gate(self):
+        """Unsupported billing value rejected with BILLING_NOT_SUPPORTED, not the principal-gate code."""
+        identity = _identity_with(supported_billing=["operator"])
+        errors = _check_billing_policy("agent", identity, principal_billing_enabled=False)
+        assert errors is not None
+        assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
 
 class TestBuildSetupForApproval:
