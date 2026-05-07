@@ -376,3 +376,50 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
             product_data["device_types"] = device_targets
 
     return Product(**product_data)
+
+
+def convert_product_model_to_resolved(product_model, adapter_type: str | None = None):
+    """Convert ORM Product → :class:`ResolvedProduct`.
+
+    Sibling of :func:`convert_product_model_to_schema`. Returns a
+    ``ResolvedProduct`` (wire-shape ``LibraryProduct`` + internal fields)
+    instead of the local ``Product`` schema extension. The filter pipeline
+    is being migrated from the latter to the former; both functions exist
+    side-by-side until the migration completes.
+
+    The wire-shape projection reuses the existing converter — same field
+    population, same defaults, same validation. Internal fields are
+    pulled directly off the ORM model.
+    """
+    from src.core.resolved_product import ResolvedProduct
+
+    schema_product = convert_product_model_to_schema(product_model, adapter_type=adapter_type)
+
+    # Project to library Product (drops the four internal fields, which
+    # have ``exclude=True`` on the local Product extension; the resulting
+    # dict is spec-clean).
+    wire_dict = schema_product.model_dump(mode="python")
+    from adcp.types import Product as LibraryProduct
+
+    wire = LibraryProduct.model_validate(wire_dict)
+
+    # Internal fields — pull directly from ORM where source-of-truth lives.
+    countries = product_model.countries if product_model.countries else None
+    allowed_principal_ids = product_model.allowed_principal_ids
+    implementation_config = product_model.effective_implementation_config
+
+    # device_types is derived from targeting_template.device_targets.
+    device_types: list[str] | None = None
+    targeting_template = product_model.targeting_template
+    if isinstance(targeting_template, dict):
+        device_targets = targeting_template.get("device_targets")
+        if isinstance(device_targets, list):
+            device_types = device_targets
+
+    return ResolvedProduct(
+        wire=wire,
+        implementation_config=implementation_config,
+        countries=countries,
+        device_types=device_types,
+        allowed_principal_ids=allowed_principal_ids,
+    )
