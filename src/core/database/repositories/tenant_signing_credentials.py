@@ -81,6 +81,14 @@ class TenantSigningCredentialRepository:
             is_active=True,
         )
         self._session.add(row)
+        # Invalidate the webhook-signing snapshot cache so the next
+        # delivery picks up the freshly-created kid immediately rather
+        # than waiting for the 5-min TTL window. Mirrors rotate_out's
+        # invalidation contract.
+        if purpose == "webhook-signing":
+            from src.services.webhook_signing import invalidate_credential_cache
+
+            invalidate_credential_cache(self._tenant_id)
         return row
 
     def rotate_out(self, purpose: str, key_id: str, *, now: datetime | None = None) -> bool:
@@ -89,4 +97,13 @@ class TenantSigningCredentialRepository:
             return False
         row.is_active = False
         row.rotated_out_at = now or datetime.now(UTC)
+        # Webhook-signing snapshots are cached per-tenant in
+        # WebhookDeliveryService for 5 min — without explicit invalidation,
+        # the salesagent keeps signing with the rotated-out kid for up to
+        # the TTL window. Invalidating here couples DB rotation to cache
+        # state so operators don't have to remember a second step.
+        if purpose == "webhook-signing":
+            from src.services.webhook_signing import invalidate_credential_cache
+
+            invalidate_credential_cache(self._tenant_id)
         return True
