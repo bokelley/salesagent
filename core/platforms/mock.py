@@ -31,7 +31,6 @@ the existing salesagent ``MediaBuy`` ORM.
 from __future__ import annotations
 
 import secrets
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -58,6 +57,7 @@ from core.platforms._delegate import (
     _delegate_list_creative_formats,
     _delegate_list_creatives,
     _delegate_provide_performance_feedback,
+    _delegate_sync_creatives,
 )
 from core.stores.accounts import SalesagentAccountStore
 
@@ -312,25 +312,9 @@ class MockSellerPlatform(DecisioningPlatform):
     async def sync_creatives(
         self,
         req: Any,
-        ctx: RequestContext[Any],  # noqa: ARG002 — ctx unused in stub
+        ctx: RequestContext[Any],
     ) -> dict[str, Any]:
-        creatives = getattr(req, "creatives", None) or []
-        # Per sync-creatives-response.json each entry needs ``action``
-        # (created | updated | unchanged) plus ``status`` from the
-        # creative-status enum (processing, pending_review, approved,
-        # rejected, archived).
-        return {
-            "creatives": [
-                {
-                    "creative_id": (
-                        c.creative_id if hasattr(c, "creative_id") else c.get("creative_id") or _new_creative_id()
-                    ),
-                    "action": "created",
-                    "status": "approved",
-                }
-                for c in creatives
-            ],
-        }
+        return await _delegate_sync_creatives(req, ctx)
 
     # ─────────────────────────── get_media_buys ──────────────────────
 
@@ -534,10 +518,6 @@ def _project_package(p: dict[str, Any]) -> dict[str, Any]:
     if p.get("targeting_overlay") is not None:
         out["targeting_overlay"] = p["targeting_overlay"]
     return out
-
-
-def _new_creative_id() -> str:
-    return f"creative_{uuid.uuid4().hex[:12]}"
 
 
 def _adcp_error(

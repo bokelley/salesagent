@@ -130,6 +130,18 @@
             </div>
         </fieldset>
 
+        <fieldset class="form-group" style="border: 1px solid var(--sa-gray-200); border-radius: var(--sa-radius-lg); padding: var(--sa-space-4); margin-bottom: var(--sa-space-5);">
+            <legend style="padding: 0 var(--sa-space-2); font-weight: 600;">Billing</legend>
+            <div class="form-group">
+                <label style="display: inline-flex; align-items: center; gap: var(--sa-space-2); font-weight: normal;">
+                    <input type="checkbox" id="billing_enabled" name="billing_enabled" value="1"
+                           {{ 'checked' if (not edit_mode or principal.billing_enabled) else '' }}>
+                    <span>This buyer agent can be billed</span>
+                </label>
+                <small style="display: block; margin-top: var(--sa-space-1);">When unchecked, requests that try to set <code>Account.billing="agent"</code> for this buyer are rejected. Billing through the operator (or unbilled) is always allowed. Default: enabled.</small>
+            </div>
+        </fieldset>
+
         {% if has_gam %}
         <div class="form-group">
             <label for="gam_advertiser_id">GAM Buyer Agent <span style="color: red;">*</span></label>

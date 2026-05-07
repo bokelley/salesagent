@@ -254,6 +254,9 @@ def create_principal(tenant_id):
             brand_domain = (request.form.get("brand_domain", "") or "").strip() or None
             agent_url = (request.form.get("agent_url", "") or "").strip() or None
             signing_required = bool(request.form.get("signing_required"))
+            # Default checked in the create form; explicit unchecked means
+            # the operator wants this agent to be exempt from billing.
+            billing_enabled = bool(request.form.get("billing_enabled"))
             if signing_required and not brand_domain:
                 flash("Cannot require signed requests without a buyer domain", "error")
                 return redirect(request.url)
@@ -282,6 +285,7 @@ def create_principal(tenant_id):
                 agent_url=agent_url,
                 brand_domain=brand_domain,
                 signing_required=signing_required,
+                billing_enabled=billing_enabled,
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -444,6 +448,10 @@ def edit_principal(tenant_id, principal_id):
             principal.agent_url = agent_url
             principal.brand_domain = brand_domain
             principal.signing_required = signing_required
+            # billing_enabled toggle (BR-RULE-061): unchecked = exempt from
+            # being the billing party on Accounts. Read here so the value
+            # always round-trips (not just on first save).
+            principal.billing_enabled = bool(request.form.get("billing_enabled"))
 
             principal.updated_at = datetime.now(UTC)
             db_session.commit()

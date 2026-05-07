@@ -327,14 +327,58 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
     return None
 
 
+def _read_principal_billing_enabled_sync(tenant_id: str, principal_id: str) -> bool:
+    """Read ``principals.billing_enabled`` once per sync_accounts call.
+
+    Pulled out of the per-entry hot path so a 1000-account sync doesn't
+    open 1000 sessions, and so a concurrent operator flip can only land
+    before or after the entire batch — not mid-batch (BR-RULE-061
+    consistency). ``None`` (principal vanished post-auth) is treated as
+    disabled — fail closed.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Principal
+
+    with get_db_session() as session:
+        value = session.scalars(
+            select(Principal.billing_enabled).filter_by(
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
+        ).first()
+    return bool(value)
+
+
 def _check_billing_policy(
     billing_val: str | None,
     identity: ResolvedIdentity,
+    *,
+    principal_billing_enabled: bool,
 ) -> list[Any] | None:
-    """Check if the billing model is supported by the seller.
+    """Check if the billing model is supported by the seller AND the calling
+    principal is allowed to be billed under that model.
+
+    Two gates:
+
+    * **BR-RULE-059** (tenant-level) — billing must be in the tenant's
+      ``supported_billing`` list. Reject with ``BILLING_NOT_SUPPORTED``.
+    * **BR-RULE-061** (principal-level, slice 4) — when ``billing="agent"``,
+      the calling principal must have ``billing_enabled=True``. Operators
+      mark internal/free-tier/test agents as ``billing_enabled=False`` so
+      they can't be set as the billing party for any Account.
+      Reject with ``BILLING_NOT_PERMITTED_FOR_AGENT`` (recovery="correctable":
+      buyer can retry with ``billing="operator"``).
+
+    ``principal_billing_enabled`` is read once at the top of
+    ``_sync_accounts_impl`` and passed in explicitly; we don't re-read per
+    entry to avoid (a) write race against operator flip mid-batch and (b)
+    N+1 sessions on a large batch. No default — every caller must reason
+    about which value to pass so a future call site can't silently get the
+    permissive path.
 
     Returns a list of Error objects if rejected, None if accepted.
-    Per BR-RULE-059: unsupported billing → BILLING_NOT_SUPPORTED.
     """
     from adcp.types import Error
 
@@ -342,10 +386,7 @@ def _check_billing_policy(
     # Both dict and TenantContext expose .get() identically, so no branching needed.
     tenant = identity.tenant if identity else None
     supported = tenant.get("supported_billing") if tenant else None
-    if supported is None:
-        return None  # No policy configured → accept all
-
-    if billing_val not in supported:
+    if supported is not None and billing_val not in supported:
         return [
             Error(
                 code="BILLING_NOT_SUPPORTED",
@@ -354,6 +395,19 @@ def _check_billing_policy(
                 suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
             )
         ]
+
+    # Per-principal billing-capability gate (BR-RULE-061).
+    if billing_val == "agent" and not principal_billing_enabled:
+        return [
+            Error(
+                code="BILLING_NOT_PERMITTED_FOR_AGENT",
+                message="This buyer agent is not permitted to be the billing party on this seller.",
+                suggestion="Use billing='operator'.",
+                recovery="correctable",
+                field="billing",
+            )
+        ]
+
     return None
 
 
@@ -412,6 +466,13 @@ async def _sync_accounts_impl(
     dry_run = bool(req.dry_run)
     delete_missing = bool(req.delete_missing)
 
+    # Read the principal's billing_enabled flag once for the whole batch
+    # (BR-RULE-061). Holding the value constant for the duration of the
+    # sync prevents an operator flip mid-batch from producing a partial
+    # result where some entries land billable and others reject. Auth
+    # guard above already proved tenant_id + principal_id are non-None.
+    principal_billing_enabled = _read_principal_billing_enabled_sync(tenant_id, principal_id)
+
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
     seen_account_ids: set[str] = set()
@@ -440,8 +501,12 @@ async def _sync_accounts_impl(
                 )
                 continue
 
-            # BR-RULE-059: check billing policy before processing
-            billing_errors = _check_billing_policy(billing_val, identity)
+            # BR-RULE-059 + BR-RULE-061: check tenant + per-principal billing
+            billing_errors = _check_billing_policy(
+                billing_val,
+                identity,
+                principal_billing_enabled=principal_billing_enabled,
+            )
             if billing_errors is not None:
                 results.append(
                     _build_sync_result(

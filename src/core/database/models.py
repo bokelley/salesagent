@@ -638,6 +638,12 @@ class Principal(Base, JSONValidatorMixin):
     # does NOT reset — the verifier walks brand.json and the library
     # handles agent_url rotation automatically.
     last_signed_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Whether this buyer agent is allowed to be billed (i.e. accept Accounts
+    # with billing="agent"). Default True keeps existing principals billable.
+    # When False, the account-create / account-update path rejects requests
+    # that try to set billing="agent" for any account owned by this principal.
+    # billing="operator" / NULL is always allowed regardless. See BR-RULE-061.
+    billing_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
