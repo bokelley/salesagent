@@ -2,7 +2,11 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1.6](./sync-accounts-advertiser-mapping.md), [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md)
-**Status:** Shipped (see [Addendum](#addendum-auto_provision_advertisers-retained-flag-not-dropped) re: `auto_provision_advertisers` flag retention)
+**Status:** Shipped (see [Addendum](#addendum-auto_provision_advertisers-retained-flag-not-dropped) re: `auto_provision_advertisers` flag retention).
+**Update (PR #78, May 2026):** §6 references to `Tenant.house_domain` are obsolete —
+the column was dropped. Per-publisher `PublisherPartner.publisher_domain` rows are
+the only "house" concept now. The `public_agent_url` validation + embedded-tenant
+write guards in §6 still apply.
 **Last updated:** 2026-05-04
 
 > **Note on item 6 below.** Sprint 1.8 originally planned to drop `auto_provision_advertisers` as redundant (item 6 in the Migrations section). That decision has been **reversed** — see [Addendum](#addendum-auto_provision_advertisers-retained-flag-not-dropped). The flag stays.

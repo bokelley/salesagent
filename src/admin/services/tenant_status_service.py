@@ -316,7 +316,10 @@ _HIDDEN_KEYS = frozenset(("authorized_properties",))
 # Configure paths are relative to the tenant root so Storefront can compose
 # them against whatever iframe prefix it chooses.
 _CONFIGURE_PATHS: dict[str, str] = {
-    "public_agent_url": "/settings#publishers",
+    # public_agent_url is derived from Custom Domain on the Account screen,
+    # so we send users there rather than the Publishers section (where the
+    # URL is shown but not editable).
+    "public_agent_url": "/settings#account",
     "default_gam_advertiser_id": "/settings#advertiser-routing",
     "ad_server_connected": "/settings#adserver",
     "currency_limits": "/settings#business-rules",

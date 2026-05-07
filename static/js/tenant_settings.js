@@ -2194,7 +2194,7 @@ function loadPublishers() {
         }
 
         // Render publishers table
-        const isEmbedded = (config.isEmbedded === 'true' || config.isEmbedded === true);
+        const isEmbedded = config.isEmbedded;  // already coerced to bool in config init
 
         let html = `
             <table style="width: 100%; border-collapse: collapse;">
@@ -2211,10 +2211,18 @@ function loadPublishers() {
         `;
 
         data.partners.forEach(partner => {
-            const statusKind = partner.aao_status || (partner.is_verified ? 'authorized' : 'pending');
+            // Server is source of truth for aao_status — never been refreshed
+            // → 'stale'. The legacy is_verified fallback misled new partners
+            // ('pending' suggests publisher rejected us when really we just
+            // haven't asked yet).
+            const statusKind = partner.aao_status || 'stale';
             const chip = aaoStatusChip(statusKind);
             const errorMsg = partner.last_fetch_error || partner.sync_error;
-            const counts = `<strong>${partner.authorized_properties || 0}</strong> / ${partner.total_properties || 0}`;
+            // For never-refreshed rows, render '—' instead of '0 / 0' which
+            // reads as "publisher has nothing" rather than "we haven't checked".
+            const counts = (statusKind === 'stale' && !partner.last_refreshed_at)
+                ? '<span style="color: #9ca3af;">— / —</span>'
+                : `<strong>${partner.authorized_properties || 0}</strong> / ${partner.total_properties || 0}`;
             const refreshed = relativeTime(partner.last_refreshed_at || partner.last_synced_at);
             const onboardingHint = (statusKind === 'pending' || statusKind === 'unreachable')
                 ? `<div style="margin-top: 0.5rem; font-size: 0.75rem;">

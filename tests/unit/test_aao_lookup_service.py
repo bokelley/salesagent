@@ -19,9 +19,11 @@ import pytest
 
 from src.services.aao_lookup_service import (
     PublicAgentUrlMismatch,
+    UnsafePublisherDomain,
     get_publisher_partner_status,
     invalidate_adagents_cache,
     validate_public_agent_url_hostname,
+    validate_publisher_domain_safe,
 )
 
 
@@ -60,6 +62,10 @@ class TestGetPublisherPartnerStatusAuthorized:
                 AsyncMock(return_value=adagents),
             ),
             patch(
+                "src.services.aao_lookup_service.get_all_properties",
+                return_value=[{"property_id": "p1"}, {"property_id": "p2"}, {"property_id": "p3"}],
+            ),
+            patch(
                 "src.services.aao_lookup_service.get_properties_by_agent",
                 return_value=[{"property_id": "p1"}, {"property_id": "p2"}],
             ),
@@ -93,6 +99,10 @@ class TestGetPublisherPartnerStatusPending:
             patch(
                 "src.services.aao_lookup_service.fetch_adagents",
                 AsyncMock(return_value=adagents),
+            ),
+            patch(
+                "src.services.aao_lookup_service.get_all_properties",
+                return_value=[{"property_id": "p1"}, {"property_id": "p2"}],
             ),
             patch(
                 "src.services.aao_lookup_service.get_properties_by_agent",
@@ -186,3 +196,44 @@ class TestValidatePublicAgentUrlHostname:
                 subdomain=None,
                 sales_agent_domain=None,
             )
+
+    def test_trailing_dot_fqdn_normalized(self):
+        """``urlparse("https://example.com.").hostname`` returns
+        ``"example.com."`` — the validator strips the trailing dot before
+        compare so legitimate FQDN-form URLs validate."""
+        validate_public_agent_url_hostname(
+            "https://sales-agent.wonderstruck.org.",
+            is_embedded=False,
+            virtual_host="sales-agent.wonderstruck.org",
+            subdomain=None,
+            sales_agent_domain=None,
+        )
+
+
+class TestValidatePublisherDomainSafe:
+    """SSRF guard for caller-supplied publisher_domain values."""
+
+    def test_ipv4_literal_rejected(self):
+        with pytest.raises(UnsafePublisherDomain):
+            validate_publisher_domain_safe("192.0.2.1")
+
+    def test_ipv6_literal_rejected(self):
+        with pytest.raises(UnsafePublisherDomain):
+            validate_publisher_domain_safe("::1")
+
+    def test_metadata_ip_literal_rejected(self):
+        """The smoking-gun SSRF target — AWS/GCP cloud metadata service."""
+        with pytest.raises(UnsafePublisherDomain) as exc:
+            validate_publisher_domain_safe("169.254.169.254")
+        assert "IP literal" in str(exc.value)
+
+    def test_loopback_resolution_rejected(self):
+        """``localhost`` resolves to 127.0.0.1 / ::1 — both private. Reject."""
+        with pytest.raises(UnsafePublisherDomain):
+            validate_publisher_domain_safe("localhost")
+
+    def test_dns_resolution_failure_does_not_raise(self):
+        """Unresolvable hostnames pass through validation — let the actual
+        fetch surface a clean unreachable status, don't pre-reject."""
+        # Reserved TLD per RFC 2606; guaranteed not to resolve in production.
+        validate_publisher_domain_safe("nonexistent.invalid")

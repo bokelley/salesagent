@@ -11,17 +11,28 @@ See ``docs/design/replace-authorized-properties-with-aao-lookup.md``.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import os
+import socket
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from adcp import fetch_adagents, get_properties_by_agent
+from adcp import fetch_adagents, get_all_properties, get_properties_by_agent
 
 logger = logging.getLogger(__name__)
 
 
-_AAO_PUBLISHER_DIRECTORY = "https://agenticadvertising.org/publisher"
+# Configurable so the open-source codebase isn't coupled to one operator's
+# deployment. Override via env to point at your own AAO directory + extend
+# the platform-host allowlist.
+_AAO_PUBLISHER_DIRECTORY = os.environ.get(
+    "AAO_PUBLISHER_DIRECTORY_URL",
+    "https://agenticadvertising.org/publisher",
+).rstrip("/")
+_PLATFORM_AGENT_HOSTS_ENV = os.environ.get("EMBEDDED_PLATFORM_AGENT_HOSTS", "interchange.io")
+_PLATFORM_AGENT_HOSTS = frozenset(h.strip().lower() for h in _PLATFORM_AGENT_HOSTS_ENV.split(",") if h.strip())
 
 
 PublisherPartnerStatusKind = Literal["authorized", "pending", "unreachable"]
@@ -115,14 +126,20 @@ async def is_agent_authorized_by_publisher(
     return True, None
 
 
-_PLATFORM_AGENT_HOSTS = frozenset({"interchange.io"})
-
-
 class PublicAgentUrlMismatch(ValueError):
     """Raised when a saved ``public_agent_url`` doesn't match the tenant's
     serving hostname. Without this check, publishers' adagents.json would
     point at a host this salesagent never answers on, and every authorized
     buy would fail signature verification at admission time."""
+
+
+def _normalize_hostname_for_compare(host: str) -> str:
+    """Lowercase, strip trailing FQDN dot, strip ``:port`` suffix.
+
+    ``virtual_host`` may carry a ``:port`` in dev (``localhost:8001``);
+    ``urlparse`` already strips ports from URLs but a trailing FQDN dot
+    (``example.com.``) sticks around. Normalize both sides identically."""
+    return host.split(":", 1)[0].rstrip(".").lower()
 
 
 def validate_public_agent_url_hostname(
@@ -137,8 +154,9 @@ def validate_public_agent_url_hostname(
 
     Acceptable hosts:
 
-    - Embedded tenants: any host in :data:`_PLATFORM_AGENT_HOSTS` (today, just
-      ``interchange.io`` — extend when we add more shared agent hosts).
+    - Embedded tenants: any host in :data:`_PLATFORM_AGENT_HOSTS`
+      (configured via ``EMBEDDED_PLATFORM_AGENT_HOSTS`` env, default
+      ``interchange.io``).
     - Self-hosted tenants: ``virtual_host`` (custom DNS) or
       ``{subdomain}.{sales_agent_domain}`` (platform-prefixed default).
 
@@ -147,23 +165,18 @@ def validate_public_agent_url_hostname(
     """
     from urllib.parse import urlparse
 
-    hostname = (urlparse(public_agent_url).hostname or "").lower()
-    if not hostname:
+    raw = (urlparse(public_agent_url).hostname or "").lower()
+    if not raw:
         raise PublicAgentUrlMismatch(f"public_agent_url {public_agent_url!r} has no hostname")
-
-    def _strip_port(host: str) -> str:
-        # virtual_host may carry a ``:port`` in dev (``localhost:8001``).
-        # urlparse strips ports from URLs already; mirror that on the
-        # comparison side so dev tenants don't false-positive.
-        return host.split(":", 1)[0].lower()
+    hostname = _normalize_hostname_for_compare(raw)
 
     acceptable: set[str] = set()
     if is_embedded:
         acceptable.update(_PLATFORM_AGENT_HOSTS)
     if virtual_host:
-        acceptable.add(_strip_port(virtual_host))
+        acceptable.add(_normalize_hostname_for_compare(virtual_host))
     if subdomain and sales_agent_domain:
-        acceptable.add(f"{subdomain.lower()}.{_strip_port(sales_agent_domain)}")
+        acceptable.add(f"{subdomain.lower()}.{_normalize_hostname_for_compare(sales_agent_domain)}")
 
     if hostname not in acceptable:
         raise PublicAgentUrlMismatch(
@@ -171,7 +184,7 @@ def validate_public_agent_url_hostname(
             f"tenant's serving hosts ({sorted(acceptable) or 'none configured'}). "
             "Publishers listing this URL in adagents.json wouldn't be able to "
             "reach this agent — fix virtual_host first, or use the platform "
-            "default (https://interchange.io) for embedded tenants."
+            f"default (one of {sorted(_PLATFORM_AGENT_HOSTS)}) for embedded tenants."
         )
 
 
@@ -181,20 +194,81 @@ def _aao_onboarding_url(publisher_domain: str) -> str:
     return f"{_AAO_PUBLISHER_DIRECTORY}/{publisher_domain}"
 
 
+class UnsafePublisherDomain(ValueError):
+    """Raised when a publisher_domain resolves to a private/loopback/link-local
+    address, an IP literal, or otherwise looks like an SSRF target. Callers
+    translate to a 400 — never reach the HTTP client."""
+
+
+def validate_publisher_domain_safe(domain: str) -> None:
+    """SSRF guard for caller-supplied ``publisher_domain`` values.
+
+    Tenant admins control this string and it flows directly into
+    ``fetch_adagents()``'s ``GET https://{domain}/.well-known/adagents.json``.
+    Without a guard, a malicious admin could pivot the salesagent's egress
+    toward cloud metadata services (169.254.169.254, fd00:ec2::254),
+    loopback, or private VPC endpoints.
+
+    Rejects:
+    - IP literals (v4 or v6) — publishers serve adagents.json from named
+      domains, not raw IPs.
+    - Hostnames that DNS-resolve to private/loopback/link-local/multicast/
+      reserved addresses.
+
+    Raises :class:`UnsafePublisherDomain` on rejection.
+    """
+    stripped = domain.strip().rstrip(".")
+
+    # Reject IP literals outright.
+    try:
+        ip = ipaddress.ip_address(stripped)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        raise UnsafePublisherDomain(
+            f"publisher_domain {domain!r} is an IP literal — adagents.json must be served "
+            "from a named publisher domain."
+        )
+
+    # Resolve and inspect each address. ``getaddrinfo`` covers v4 + v6.
+    try:
+        infos = socket.getaddrinfo(stripped, None)
+    except socket.gaierror as exc:
+        # DNS resolution failure — let the actual fetch surface a clean
+        # "unreachable" status. Don't pre-emptively reject.
+        logger.info("publisher_domain %r DNS resolution failed at validate-time: %s", domain, exc)
+        return
+
+    for family, _, _, _, sockaddr in infos:
+        addr = sockaddr[0]
+        try:
+            parsed = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            parsed.is_private
+            or parsed.is_loopback
+            or parsed.is_link_local
+            or parsed.is_multicast
+            or parsed.is_reserved
+            or parsed.is_unspecified
+        ):
+            raise UnsafePublisherDomain(
+                f"publisher_domain {domain!r} resolves to a non-public address "
+                f"({addr}, family {family}). adagents.json fetches must hit public hosts only."
+            )
+
+
 def _count_total_properties(adagents: dict[str, Any]) -> int:
-    """Total properties listed across every authorized_agents[*] entry, deduped
-    by ``property_id``. Matches the denominator the user expects in the UI
-    ("we list 200 properties")."""
-    seen: set[str] = set()
-    fallback_count = 0
-    for entry in adagents.get("authorized_agents", []) or []:
-        for prop in entry.get("inline_properties", []) or []:
-            pid = prop.get("property_id") or prop.get("id")
-            if pid:
-                seen.add(pid)
-            else:
-                fallback_count += 1
-    return len(seen) + fallback_count
+    """Total properties this publisher exposes across all reference forms.
+
+    Defers to the SDK's ``get_all_properties()``, which resolves
+    ``inline_properties``, ``property_ids``, ``property_tags``, and
+    ``property_signals`` against the adagents document. Counting only
+    ``inline_properties`` (the previous implementation) under-reported
+    publishers using the recommended brand.json + by-id pattern, producing
+    nonsense ratios like "0 listed / 47 authorized"."""
+    return len(get_all_properties(adagents) or [])
 
 
 async def get_publisher_partner_status(

@@ -42,9 +42,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Re-add ``tenants.house_domain`` as nullable. Existing rows stay NULL —
-    the operator/publisher mapping that previously lived here is now derived
-    from ``PublisherPartner`` rows + ``Tenant.brand_json_url``."""
+    """Re-add ``tenants.house_domain`` as nullable.
+
+    **Data is gone.** Upgrade dropped the column; downgrade restores the
+    column shape only — original values cannot be recovered. Acceptable
+    because the column was dead by design (the per-publisher
+    ``PublisherPartner.publisher_domain`` rows + the operator-side
+    ``Tenant.brand_json_url`` cover what it tracked). If you need values
+    back, restore from a pre-upgrade backup.
+    """
     op.add_column(
         "tenants",
         sa.Column("house_domain", sa.String(length=255), nullable=True),

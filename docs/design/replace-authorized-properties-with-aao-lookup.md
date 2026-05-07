@@ -1,6 +1,9 @@
 # Replace Authorized Properties with AAO Lookup
 
-**Status:** Draft
+**Status:** Partially superseded — `Tenant.house_domain` was dropped in PR #78
+(May 2026). Per-publisher houses (`PublisherPartner.publisher_domain`) are now
+the only "house" concept. References below to `Tenant.house_domain` are
+historical.
 **Owner:** Sales Agent
 **Last updated:** 2026-05-04
 **Related:** [embedded-mode](./embedded-mode.md), [sync-accounts-advertiser-mapping.md](./sync-accounts-advertiser-mapping.md)

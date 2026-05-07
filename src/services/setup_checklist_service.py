@@ -334,13 +334,39 @@ class SetupChecklistService:
         Sprint 1.8 §6: embedded tenants with the field set don't see this
         item — the platform (Scope3) owns it. Embedded tenants with NULL
         still see it so the gap surfaces to the host product via the §7
-        setup_tasks scope=platform annotation. Single source of truth for
-        both the live-session path (:meth:`_check_critical_tasks`) and the
-        bulk path (:meth:`_build_critical_tasks`).
+        setup_tasks scope=platform annotation, but with no action_url
+        (the publisher can't fix it — only the host product can).
+
+        Single source of truth for both the live-session path
+        (:meth:`_check_critical_tasks`) and the bulk path
+        (:meth:`_build_critical_tasks`).
         """
         aao_managed_and_complete = bool(tenant.is_embedded) and bool(tenant.public_agent_url)
         if aao_managed_and_complete:
             return []
+
+        if tenant.public_agent_url:
+            details = f"Configured: {tenant.public_agent_url}"
+        elif tenant.is_embedded:
+            details = (
+                "Platform configuration in progress — your host product will set this. "
+                "Contact your host's support team if it stays empty."
+            )
+        else:
+            details = (
+                "Set a Custom Domain on the Account screen — your agent URL is derived "
+                "from it and is what publishers list in their adagents.json."
+            )
+
+        # Embedded tenants with NULL can't fix this themselves — drop the
+        # action_url so the UI doesn't surface a clickable button leading to
+        # a screen where the field is readonly.
+        if tenant.is_embedded and not tenant.public_agent_url:
+            action_url: str | None = None
+        else:
+            # Self-hosted: send users to the Account screen where Custom
+            # Domain (the source of the derived URL) lives.
+            action_url = f"/tenant/{self.tenant_id}/settings#account"
 
         return [
             SetupTask(
@@ -348,17 +374,12 @@ class SetupChecklistService:
                 name="Public Agent URL",
                 description=(
                     "The agent URL publishers list in their adagents.json to "
-                    "authorize this tenant. Embedded-mode tenants share one "
-                    "(e.g., https://interchange.io); self-hosted publishers "
-                    "use their own salesagent's URL."
+                    "authorize this tenant. Derived from your Custom Domain "
+                    "(open-instance) or the platform's shared host (embedded)."
                 ),
                 is_complete=bool(tenant.public_agent_url),
-                action_url=f"/tenant/{self.tenant_id}/settings#publishers",
-                details=(
-                    f"Configured: {tenant.public_agent_url}"
-                    if tenant.public_agent_url
-                    else "Set the agent URL that publishers will list in adagents.json."
-                ),
+                action_url=action_url,
+                details=details,
             ),
         ]
 

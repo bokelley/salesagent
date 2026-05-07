@@ -40,6 +40,18 @@ def _resolve_agent_url(tenant: Tenant) -> str | None:
     return get_tenant_url(tenant.subdomain)
 
 
+def _reject_if_embedded(tenant: Tenant) -> tuple[Response, int] | None:
+    """Mutating publisher-partner endpoints reject embedded tenants —
+    Scope3 owns the partner roster on managed-mode tenants. The UI hides
+    the buttons; this guard catches direct API hits."""
+    if tenant.is_embedded:
+        return (
+            jsonify({"error": "Embedded tenants are platform-managed; publisher partners are configured by Scope3."}),
+            403,
+        )
+    return None
+
+
 def _persist_status(partner: PublisherPartner, status: PublisherPartnerStatus) -> None:
     """Copy a fresh AAO status snapshot onto a PublisherPartner row.
 
@@ -187,12 +199,30 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         # Remove trailing slash
         publisher_domain = publisher_domain.rstrip("/")
 
+        # SSRF guard — tenant-controlled string flows directly into
+        # ``fetch_adagents()``'s GET. Reject IP literals + names that resolve
+        # to private/loopback/link-local/metadata addresses before we touch
+        # any network. Dev environments (which use fake localhost-shaped
+        # domains) skip the resolve-time check via auto-verify below.
+        from src.core.config import get_config as _get_config
+        from src.services.aao_lookup_service import UnsafePublisherDomain, validate_publisher_domain_safe
+
+        if _get_config().environment != "development":
+            try:
+                validate_publisher_domain_safe(publisher_domain)
+            except UnsafePublisherDomain as exc:
+                return jsonify({"error": str(exc)}), 400
+
         with get_db_session() as session:
             # Check tenant adapter type
             stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant = session.scalars(stmt_tenant).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
+
+            embedded_reject = _reject_if_embedded(tenant)
+            if embedded_reject is not None:
+                return embedded_reject
 
             # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
             # Development: Local dev servers won't be in any publisher's adagents.json
@@ -208,15 +238,22 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             if existing:
                 return jsonify({"error": "Publisher already exists"}), 409
 
-            # Create new partner
-            # Auto-verify for dev environment or mock adapters (no real adagents.json to check)
+            # Create new partner. Auto-verify for dev environment or mock
+            # adapters (no real adagents.json to check). For auto-verified
+            # rows we also stamp ``last_refreshed_at`` so the UI renders
+            # them as "authorized" instead of the "refresh needed" placeholder
+            # — mock tenants never round-trip through the real AAO path.
+            now = datetime.now(UTC)
             partner = PublisherPartner(
                 tenant_id=tenant_id,
                 publisher_domain=publisher_domain,
                 display_name=display_name or publisher_domain,
                 sync_status="success" if should_auto_verify else "pending",
                 is_verified=should_auto_verify,
-                last_synced_at=datetime.now(UTC) if should_auto_verify else None,
+                last_synced_at=now if should_auto_verify else None,
+                last_refreshed_at=now if should_auto_verify else None,
+                total_properties=0 if should_auto_verify else None,
+                authorized_properties=0 if should_auto_verify else None,
             )
             session.add(partner)
             session.commit()
@@ -256,6 +293,13 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
     """Delete a publisher partner."""
     try:
         with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if not tenant:
+                return jsonify({"error": "Tenant not found"}), 404
+            embedded_reject = _reject_if_embedded(tenant)
+            if embedded_reject is not None:
+                return embedded_reject
+
             stmt = select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)
             partner = session.scalars(stmt).first()
 
@@ -283,6 +327,9 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             tenant = session.scalars(stmt_tenant).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
+            embedded_reject = _reject_if_embedded(tenant)
+            if embedded_reject is not None:
+                return embedded_reject
 
             # Get all publisher partners
             stmt_partners = select(PublisherPartner).filter_by(tenant_id=tenant_id)
@@ -309,11 +356,21 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                 logger.info(f"{reason_str} detected - auto-verifying {len(partners)} publishers")
                 verified_domains = []
+                now = datetime.now(UTC)
                 for partner in partners:
                     partner.sync_status = "success"
                     partner.sync_error = None
                     partner.is_verified = True
-                    partner.last_synced_at = datetime.now(UTC)
+                    partner.last_synced_at = now
+                    # Stamp the AAO columns so _partner_to_dict renders these
+                    # as authorized rather than perpetual "refresh needed".
+                    # Mock/dev partners can't be probed against a real AAO.
+                    partner.last_refreshed_at = now
+                    partner.last_fetch_error = None
+                    if partner.total_properties is None:
+                        partner.total_properties = 0
+                    if partner.authorized_properties is None:
+                        partner.authorized_properties = 0
                     verified_domains.append(partner.publisher_domain)
 
                 session.commit()
@@ -504,14 +561,15 @@ def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tup
     """
     try:
         with get_db_session() as session:
-            # session.get() uses primary-key lookup, not select() — keeps this
-            # function out of the raw-select architecture allowlist.
-            tenant = session.get(Tenant, tenant_id)
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
+            embedded_reject = _reject_if_embedded(tenant)
+            if embedded_reject is not None:
+                return embedded_reject
 
-            partner = session.get(PublisherPartner, partner_id)
-            if partner is None or partner.tenant_id != tenant_id:
+            partner = session.scalars(select(PublisherPartner).filter_by(id=partner_id, tenant_id=tenant_id)).first()
+            if not partner:
                 return jsonify({"error": "Publisher not found"}), 404
 
             agent_url = _resolve_agent_url(tenant)

@@ -216,6 +216,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/publisher_partners.py", "delete_publisher_partner"),
     ("src/admin/blueprints/publisher_partners.py", "get_publisher_properties"),
     ("src/admin/blueprints/publisher_partners.py", "list_publisher_partners"),
+    ("src/admin/blueprints/publisher_partners.py", "refresh_publisher_partner"),
     ("src/admin/blueprints/publisher_partners.py", "sync_publisher_partners"),
     ("src/admin/blueprints/settings.py", "get_approximated_token"),
     ("src/admin/blueprints/settings.py", "register_approximated_domain"),
