@@ -276,7 +276,10 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     # Required fields per AdCP spec
     product_data["product_id"] = product_model.product_id
     product_data["name"] = product_model.name
-    product_data["description"] = product_model.description
+    # AdCP Product.description is a required non-null string. The ORM column
+    # is nullable for legacy rows, so coalesce to empty string to keep the
+    # wire shape valid (mirrors the reporting_capabilities default for #71).
+    product_data["description"] = product_model.description or ""
     product_data["delivery_type"] = product_model.delivery_type
 
     # format_ids: Use effective_format_ids which auto-resolves from profile if set
