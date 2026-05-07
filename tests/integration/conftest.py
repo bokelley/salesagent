@@ -290,12 +290,11 @@ def sample_tenant(integration_db):
             auto_approve_format_ids=["display_300x250"],
             human_review_required=False,
             admin_token="test_admin_token",
-            # AAO setup-checklist prerequisites — without these,
+            # AAO setup-checklist prerequisite — without it,
             # ``validate_setup_complete`` raises in ``_create_media_buy_impl``
             # and tests have to set ``test_session_id`` to short-circuit it.
             # Seeding here lets the production validator path run end-to-end
             # against the fixture (closes #43).
-            house_domain="example.com",
             public_agent_url="https://test.example.com/agent",
             created_at=now,
             updated_at=now,
@@ -592,8 +591,8 @@ main()
     # production seed, so without this every MCP call lands on the
     # bare-host fallback and gets 404.
     #
-    # Stub field values: house_domain / public_agent_url / authorized_emails
-    # are placeholders, not asserted on by any test that uses this fixture.
+    # Stub field values: public_agent_url / authorized_emails are
+    # placeholders, not asserted on by any test that uses this fixture.
     # If a future test reads them, override at the test-fixture layer.
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -614,7 +613,6 @@ main()
                     ad_server="mock",
                     authorized_emails=[],
                     authorized_domains=[],
-                    house_domain="default.example.com",
                     public_agent_url="https://default.example.com/agent",
                     created_at=_now,
                     updated_at=_now,

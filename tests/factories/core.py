@@ -35,11 +35,10 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
-    # AAO setup-checklist prerequisites — seeded by default so tests
-    # don't have to short-circuit ``validate_setup_complete`` via
+    # AAO setup-checklist prerequisite — seeded by default so tests don't
+    # have to short-circuit ``validate_setup_complete`` via
     # ``test_session_id`` (closes #43). Tests asserting the validator
-    # itself can override these to None.
-    house_domain = LazyAttribute(lambda o: f"{o.subdomain}.example.com")
+    # itself can override to None.
     public_agent_url = LazyAttribute(lambda o: f"https://{o.subdomain}.example.com/agent")
     authorized_emails = factory.LazyFunction(lambda: ["test@example.com"])
     authorized_domains = factory.LazyFunction(lambda: ["example.com"])

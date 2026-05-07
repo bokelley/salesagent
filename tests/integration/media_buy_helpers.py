@@ -35,9 +35,7 @@ def set_tenant_human_review_required(tenant_id: str, required: bool) -> None:
         uow.tenant_config.set_human_review_required(required)
 
 
-def admin_mark_creative_approved(
-    tenant_id: str, creative_id: str, *, approved_by: str = "test_admin"
-) -> None:
+def admin_mark_creative_approved(tenant_id: str, creative_id: str, *, approved_by: str = "test_admin") -> None:
     """Test helper — mark a creative approved through CreativeRepository.
 
     Mirrors what the admin Flask route does without going through Flask. See #42.
@@ -63,9 +61,7 @@ def force_media_buy_status(tenant_id: str, media_buy_id: str, status: str) -> No
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
         result = uow.media_buys.update_status(media_buy_id, status)
-        assert result is not None, (
-            f"media_buy {media_buy_id} not found in tenant {tenant_id}"
-        )
+        assert result is not None, f"media_buy {media_buy_id} not found in tenant {tenant_id}"
 
 
 def make_lifecycle_identity(
@@ -78,8 +74,8 @@ def make_lifecycle_identity(
 
     By default ``test_session_id`` is ``None`` — ``_create_media_buy_impl``
     runs the production ``validate_setup_complete()`` path against the
-    ``sample_tenant`` fixture's seeded house_domain + public_agent_url
-    (closes #43). Tests that intentionally exercise unseeded tenants can
+    ``sample_tenant`` fixture's seeded public_agent_url (closes #43).
+    Tests that intentionally exercise unseeded tenants can
     pass an explicit ``test_session_id`` to short-circuit the validator,
     but doing so for routine lifecycle coverage is the test-integrity
     anti-pattern flagged in #43.
