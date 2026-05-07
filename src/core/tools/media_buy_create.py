@@ -3071,11 +3071,23 @@ async def _create_media_buy_impl(
         # MediaPackage rows are stored under. Without this injection, the
         # delivery read path (media_buy_delivery.py:388) falls back to
         # ``f"pkg_{product_id}_{idx}"`` which doesn't match the DB row, and
-        # the pricing_info lookup (line 392) fails — yielding a delivery
-        # response with ``pricing_model=None`` that the AdCP wire validator
-        # rejects on the package-level ``ByPackageItem`` schema.
+        # the pricing_info lookup fails — yielding a delivery response with
+        # ``pricing_model=None`` that the AdCP wire validator rejects on
+        # the package-level ``ByPackageItem`` schema.
+        #
+        # Adapter contract: ``response.packages`` is positionally aligned
+        # with ``req.packages``. We assert the lengths match to fail loud
+        # if a future adapter ever reorders / drops / dedupes — silently
+        # mapping by adapter-response index when the request has a
+        # different shape would corrupt every downstream pricing lookup.
         auto_package_id_map: dict[int, str] = {}
         if response.packages:
+            req_pkg_count = len(req.packages) if req.packages else 0
+            assert len(response.packages) == req_pkg_count, (
+                f"Adapter contract violation: response.packages has "
+                f"{len(response.packages)} items, request had {req_pkg_count}. "
+                "package_id_map injection assumes 1:1 positional alignment."
+            )
             for idx, resp_pkg in enumerate(response.packages):
                 pkg_id = getattr(resp_pkg, "package_id", None)
                 if pkg_id:

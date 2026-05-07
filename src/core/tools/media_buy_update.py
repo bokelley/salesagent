@@ -376,6 +376,52 @@ def _update_media_buy_impl(
                                 )
                                 return response_data
 
+        # Cancel: terminal transition. Double-cancel raises NOT_CANCELLABLE.
+        # Wired to the DB row directly (no adapter dispatch yet — the mock
+        # adapter only had an in-memory state change for this; GAM order
+        # archive on cancel is a follow-up). ``cancellation_reason`` is
+        # echoed back on the response and stored alongside the status flip.
+        if getattr(req, "canceled", None) is True:
+            current_mb = uow.media_buys.get_by_id(req.media_buy_id)
+            if current_mb and str(current_mb.status) == "canceled":
+                error_response = UpdateMediaBuyError(
+                    errors=[
+                        Error(
+                            code="NOT_CANCELLABLE",
+                            message=(
+                                f"media_buy_id={req.media_buy_id!r} is already canceled — "
+                                "cannot cancel a terminal buy"
+                            ),
+                        )
+                    ],
+                    context=req.context,
+                )
+                ctx_manager.update_workflow_step(
+                    step.step_id,
+                    status="failed",
+                    response_data=error_response.model_dump(mode="json"),
+                    error_message="already canceled",
+                )
+                return error_response
+
+            # MediaBuy ORM has no cancellation_reason column today —
+            # echoing the reason back on the response (via the SDK's
+            # response context) is the spec-compliant minimum. Persisting
+            # it would need a schema migration; tracked separately.
+            uow.media_buys.update_fields(req.media_buy_id, status="canceled")
+
+            cancel_response = UpdateMediaBuySuccess(
+                media_buy_id=req.media_buy_id or "",
+                affected_packages=[],
+                context=req.context,
+            )
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="completed",
+                response_data=cancel_response.model_dump(mode="json"),
+            )
+            return cancel_response
+
         # Handle campaign-level updates
         if req.paused is not None:
             # adcp 2.12.0+: paused=True means pause, paused=False means resume

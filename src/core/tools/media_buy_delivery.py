@@ -477,22 +477,22 @@ def _get_media_buy_delivery_impl(
 
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
-                # Cast status to match Literal type requirement.
-                # ``status`` is computed in *internal* vocab (line 250-255):
-                # the date-based "ready" / "active" / "completed" / "paused"
-                # plus "reporting_delayed" / "failed" overrides. The AdCP
-                # wire enum uses "pending_start" instead of "ready" — map
-                # back here so the response validates against the library
-                # schema (which the mcp_tools output validator enforces).
+                # ``status`` is computed in *internal* vocab (line 250-255 +
+                # the "reporting_delayed" / "failed" overrides). The AdCP
+                # wire enum uses "pending_start" instead of "ready"; every
+                # other internal value happens to coincide with its wire
+                # name. Funnel through ``_internal_to_wire_delivery_status``
+                # so any future internal-only value fails loud at this
+                # boundary instead of being smuggled through a permissive
+                # cast.
                 from typing import Literal as LiteralType
                 from typing import cast
 
-                wire_status = "pending_start" if status == "ready" else status
                 status_typed = cast(
                     LiteralType[
                         "pending_start", "active", "paused", "completed", "failed", "reporting_delayed"
                     ],
-                    wire_status,
+                    _internal_to_wire_delivery_status(status),
                 )
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
@@ -612,6 +612,36 @@ def _get_media_buy_delivery_impl(
             )
 
     return response
+
+
+_INTERNAL_TO_WIRE_DELIVERY_STATUS: dict[str, str] = {
+    # Internal vocab uses ``ready`` for date-based "scheduled, not started"
+    # buys. AdCP wire vocab calls that ``pending_start``. Every other
+    # internal value coincides with its wire name.
+    "ready": "pending_start",
+    "active": "active",
+    "paused": "paused",
+    "completed": "completed",
+    "failed": "failed",
+    "reporting_delayed": "reporting_delayed",
+}
+
+
+def _internal_to_wire_delivery_status(internal: str) -> str:
+    """Map an internal delivery status to its AdCP wire enum value.
+
+    Centralised so unknown internal values raise rather than slipping
+    through the typed cast at the response-construction site. The
+    AdCP wire ``MediaBuyStatus`` enum doesn't include ``ready``; every
+    other internal vocab name happens to be a valid wire value.
+    """
+    try:
+        return _INTERNAL_TO_WIRE_DELIVERY_STATUS[internal]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown internal delivery status {internal!r}; expected one of "
+            f"{sorted(_INTERNAL_TO_WIRE_DELIVERY_STATUS)}"
+        ) from exc
 
 
 def _resolve_delivery_status_filter(
