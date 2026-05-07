@@ -3065,7 +3065,22 @@ async def _create_media_buy_impl(
         )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
-        # Repository handles raw_request serialization at the DB boundary
+        # Repository handles raw_request serialization at the DB boundary.
+        # Build package_id_map from the adapter's response so the serialised
+        # raw_request.packages entries carry the same package_id the
+        # MediaPackage rows are stored under. Without this injection, the
+        # delivery read path (media_buy_delivery.py:388) falls back to
+        # ``f"pkg_{product_id}_{idx}"`` which doesn't match the DB row, and
+        # the pricing_info lookup (line 392) fails — yielding a delivery
+        # response with ``pricing_model=None`` that the AdCP wire validator
+        # rejects on the package-level ``ByPackageItem`` schema.
+        auto_package_id_map: dict[int, str] = {}
+        if response.packages:
+            for idx, resp_pkg in enumerate(response.packages):
+                pkg_id = getattr(resp_pkg, "package_id", None)
+                if pkg_id:
+                    auto_package_id_map[idx] = pkg_id
+
         try:
             with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
                 assert create_uow.media_buys is not None
@@ -3081,6 +3096,7 @@ async def _create_media_buy_impl(
                     status=media_buy_status,
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
+                    package_id_map=auto_package_id_map or None,
                     account_id=identity.account_id if identity else None,
                 )
                 # UoW auto-commits on clean exit

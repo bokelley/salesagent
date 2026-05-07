@@ -477,12 +477,22 @@ def _get_media_buy_delivery_impl(
 
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
-                # Cast status to match Literal type requirement
+                # Cast status to match Literal type requirement.
+                # ``status`` is computed in *internal* vocab (line 250-255):
+                # the date-based "ready" / "active" / "completed" / "paused"
+                # plus "reporting_delayed" / "failed" overrides. The AdCP
+                # wire enum uses "pending_start" instead of "ready" — map
+                # back here so the response validates against the library
+                # schema (which the mcp_tools output validator enforces).
                 from typing import Literal as LiteralType
                 from typing import cast
 
+                wire_status = "pending_start" if status == "ready" else status
                 status_typed = cast(
-                    LiteralType["ready", "active", "paused", "completed", "failed", "reporting_delayed"], status
+                    LiteralType[
+                        "pending_start", "active", "paused", "completed", "failed", "reporting_delayed"
+                    ],
+                    wire_status,
                 )
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
