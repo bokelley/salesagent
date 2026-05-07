@@ -23,36 +23,12 @@ from adcp import (
     VcpmPricingOption,
 )
 from adcp.types._generated import MediaChannel
-from packaging.version import InvalidVersion, Version
 
 # Import our extended Product (includes implementation_config)
 # Not the library Product - we need the internal fields
 from src.core.schemas import Product
 
 logger = logging.getLogger(__name__)
-
-V3_VERSION = Version("3.0.0")
-
-
-def needs_v2_compat(adcp_version: str | None) -> bool:
-    """Check if a client needs v2 backward-compat fields in responses.
-
-    V2 compat fields (is_fixed, rate, price_guidance.floor) are only needed
-    for pre-3.0 clients. V3+ clients get clean responses per AdCP v3 spec.
-
-    Args:
-        adcp_version: Client-declared AdCP version string, or None if unknown.
-
-    Returns:
-        True if v2 compat fields should be added (version is None, < 3.0, or unparseable).
-    """
-    if adcp_version is None:
-        return True
-    try:
-        return Version(adcp_version) < V3_VERSION
-    except InvalidVersion:
-        logger.warning(f"Unparseable adcp_version '{adcp_version}', defaulting to v2 compat")
-        return True
 
 
 def convert_pricing_option_to_adcp(
@@ -339,19 +315,37 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
             f"Create a PricingOption record for this product."
         )
 
-    # Optional fields
-    if product_model.measurement:
-        product_data["measurement"] = product_model.measurement
-    if product_model.creative_policy:
-        product_data["creative_policy"] = product_model.creative_policy
-    # Note: price_guidance is database metadata, not in AdCP Product schema - omit it
-    # Pricing information should be in pricing_options per AdCP spec
+    # AdCP 4.4 made reporting_capabilities required. The ORM column is NOT NULL
+    # with a server_default (migration c8404b483cf3), so this is always populated.
+    product_data["reporting_capabilities"] = product_model.reporting_capabilities
 
-    # Filter-related internal fields
-    if hasattr(product_model, "countries") and product_model.countries:
-        product_data["countries"] = product_model.countries
-    # channels: DB stores strings, schema uses MediaChannel enum
-    if hasattr(product_model, "channels") and product_model.channels:
+    # is_custom: column is Mapped[bool] non-null with default False on the ORM.
+    product_data["is_custom"] = product_model.is_custom
+
+    # Optional fields — emit only when set, so Pydantic field defaults apply
+    # for the rest. ``price_guidance`` is DB-only metadata; pricing lives on
+    # ``pricing_options`` per AdCP spec.
+    _OPTIONAL_PASSTHROUGH = (
+        "measurement",
+        "creative_policy",
+        "product_card",
+        "product_card_detailed",
+        "placements",
+        "property_targeting_allowed",
+        "signal_targeting_allowed",
+        "catalog_match",
+        "catalog_types",
+        "conversion_tracking",
+        "data_provider_signals",
+        "forecast",
+    )
+    for field_name in _OPTIONAL_PASSTHROUGH:
+        value = getattr(product_model, field_name, None)
+        if value is not None:
+            product_data[field_name] = value
+
+    # channels: DB stores strings, schema uses MediaChannel enum.
+    if product_model.channels:
         converted_channels = []
         for ch in product_model.channels:
             try:
@@ -361,128 +355,24 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         if converted_channels:
             product_data["channels"] = converted_channels
 
-    if product_model.product_card:
-        product_data["product_card"] = product_model.product_card
-    if product_model.product_card_detailed:
-        product_data["product_card_detailed"] = product_model.product_card_detailed
-    if product_model.placements:
-        product_data["placements"] = product_model.placements
-    # AdCP 4.4 made reporting_capabilities required. The ORM column is NOT NULL
-    # with a server_default (migration c8404b483cf3), so this is always populated.
-    product_data["reporting_capabilities"] = product_model.reporting_capabilities
+    # countries: filter-related, kept on the schema with ``exclude=True`` so it
+    # doesn't reach the wire.
+    if product_model.countries:
+        product_data["countries"] = product_model.countries
 
-    # Default is_custom to False if not set
-    product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
+    # implementation_config: prefer the inventory-profile-resolved value
+    # (``effective_implementation_config`` is defined on the ORM model and
+    # falls back to the row's own column when no profile is attached).
+    product_data["implementation_config"] = product_model.effective_implementation_config
 
-    # AdCP 3.6.0 fields — direct attribute access on typed Mapped[] columns
-    if product_model.property_targeting_allowed is not None:
-        product_data["property_targeting_allowed"] = product_model.property_targeting_allowed
-    if product_model.signal_targeting_allowed is not None:
-        product_data["signal_targeting_allowed"] = product_model.signal_targeting_allowed
-    if product_model.catalog_match is not None:
-        product_data["catalog_match"] = product_model.catalog_match
-    if product_model.catalog_types is not None:
-        product_data["catalog_types"] = product_model.catalog_types
-    if product_model.conversion_tracking is not None:
-        product_data["conversion_tracking"] = product_model.conversion_tracking
-    if product_model.data_provider_signals is not None:
-        product_data["data_provider_signals"] = product_model.data_provider_signals
-    if product_model.forecast is not None:
-        product_data["forecast"] = product_model.forecast
+    # Principal access control (internal field, ``exclude=True`` on schema).
+    product_data["allowed_principal_ids"] = product_model.allowed_principal_ids
 
-    # Internal fields (not in AdCP spec, but in our extended Product schema)
-    # Use effective_implementation_config to auto-resolve from inventory profile if set
-    if hasattr(product_model, "effective_implementation_config"):
-        product_data["implementation_config"] = product_model.effective_implementation_config
-    elif hasattr(product_model, "implementation_config"):
-        product_data["implementation_config"] = product_model.implementation_config
-    else:
-        product_data["implementation_config"] = None
-
-    # Principal access control (internal field)
-    product_data["allowed_principal_ids"] = getattr(product_model, "allowed_principal_ids", None)
-
-    # Device type targeting (from targeting_template.device_targets)
-    targeting_template = getattr(product_model, "targeting_template", None)
-    if targeting_template and isinstance(targeting_template, dict):
+    # Device type targeting (from targeting_template.device_targets).
+    targeting_template = product_model.targeting_template
+    if isinstance(targeting_template, dict):
         device_targets = targeting_template.get("device_targets")
         if isinstance(device_targets, list):
             product_data["device_types"] = device_targets
 
     return Product(**product_data)
-
-
-def dump_pricing_option_v2_compat(po_model) -> dict:
-    """Serialize a pricing option model with v2.x backward-compat fields.
-
-    Takes a pricing option model object (CpmPricingOption, VcpmPricingOption, etc.)
-    and returns a serialized dict that includes v2.x fields:
-    - is_fixed: True if fixed_price is present, False otherwise
-    - rate: Copy of fixed_price when present (v2.x field name)
-    - price_guidance.floor: Copy of floor_price when present
-
-    Handles both RootModel-wrapped and unwrapped pricing option types.
-
-    Args:
-        po_model: A pricing option model (library type or RootModel wrapper).
-
-    Returns:
-        Serialized pricing option dict with v2.x backward-compat fields added.
-    """
-    # Unwrap RootModel if needed (adcp library wraps in PricingOption RootModel)
-    inner = getattr(po_model, "root", po_model)
-
-    # Serialize the model to dict
-    po_dict = inner.model_dump(mode="json", exclude_none=True)
-
-    # Read fields from the model, not the dict, to derive v2 compat values
-    fixed_price = getattr(inner, "fixed_price", None)
-    floor_price = getattr(inner, "floor_price", None)
-
-    # Add is_fixed discriminator (v2.x expected this field)
-    po_dict["is_fixed"] = fixed_price is not None
-
-    # Add rate field (v2.x name for fixed_price)
-    if fixed_price is not None:
-        po_dict["rate"] = fixed_price
-
-    # If floor_price is set, add floor to price_guidance for v2.x compat
-    if floor_price is not None:
-        if "price_guidance" not in po_dict:
-            po_dict["price_guidance"] = {}
-        po_dict["price_guidance"]["floor"] = floor_price
-
-    return po_dict
-
-
-def dump_product_v2_compat(product) -> dict:
-    """Serialize a Product model with v2.x backward-compat pricing options.
-
-    Takes a Product model and returns a serialized dict where pricing_options
-    include v2.x backward-compat fields (is_fixed, rate, price_guidance.floor).
-
-    Args:
-        product: A Product model (schema object with pricing_options).
-
-    Returns:
-        Serialized product dict with v2.x backward-compat pricing options.
-    """
-    product_dict = product.model_dump(mode="json")
-
-    # Replace pricing_options with v2-compat serialization from models
-    if hasattr(product, "pricing_options") and product.pricing_options:
-        product_dict["pricing_options"] = [dump_pricing_option_v2_compat(po) for po in product.pricing_options]
-
-    return product_dict
-
-
-def dump_products_v2_compat(products: list) -> list[dict]:
-    """Serialize a list of Product models with v2.x backward-compat pricing.
-
-    Args:
-        products: List of Product model objects.
-
-    Returns:
-        List of serialized product dicts with v2.x backward-compat fields.
-    """
-    return [dump_product_v2_compat(p) for p in products]
