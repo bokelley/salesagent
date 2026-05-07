@@ -452,7 +452,17 @@ def _make_product_model_mock(**overrides: Any) -> SimpleNamespace:
         "product_card": None,
         "product_card_detailed": None,
         "placements": None,
-        "reporting_capabilities": None,
+        # adcp 4.4: required on the wire; mirror the column server_default
+        # (the conversion path can no longer rely on a schema-side
+        # default_factory — see PR #110).
+        "reporting_capabilities": {
+            "available_reporting_frequencies": ["daily"],
+            "expected_delay_minutes": 0,
+            "timezone": "UTC",
+            "supports_webhooks": False,
+            "available_metrics": ["impressions"],
+            "date_range_support": "date_range",
+        },
         "signal_targeting_allowed": None,
         "catalog_match": None,
         "catalog_types": None,
@@ -532,27 +542,27 @@ class TestConvertProductHandlesNullableColumns:
 
         LibProduct.model_validate(wire)
 
-    def test_reporting_capabilities_present_on_wire_when_orm_null(self) -> None:
-        """When the ORM ``reporting_capabilities`` column is null, the wire
-        output must still include a valid ``reporting_capabilities`` block.
+    def test_reporting_capabilities_present_on_wire_when_populated(self) -> None:
+        """When the ORM ``reporting_capabilities`` column is set, it survives
+        ``model_dump(mode='json', exclude_none=True)`` to the wire.
 
-        adcp v4.4.0 made the field required upstream. The local Product
-        schema's default factory (see src/core/schemas/product.py:108)
-        produces a minimal-valid block so legacy rows still satisfy the
-        library validator. This is the regression test for #71 — if anyone
-        ever swaps the default back to ``None``, the field disappears under
-        ``exclude_none=True`` and the SDK rejects the response.
+        Issue #71 was the inverse case (column null → field stripped → SDK
+        rejects). Migration c8404b483cf3 made the column non-null with a
+        ``server_default`` so the conversion path can never see ``None``
+        coming from the DB. This test verifies the populated path still
+        emits the field — the regression guard for #71.
         """
         from src.core.product_conversion import convert_product_model_to_schema
 
-        model = _make_product_model_mock(reporting_capabilities=None)
+        # Default fixture supplies a populated reporting_capabilities block;
+        # exercise that path explicitly.
+        model = _make_product_model_mock()
         schema = convert_product_model_to_schema(model, adapter_type="mock")
         wire = schema.model_dump(mode="json", exclude_none=True)
 
         assert "reporting_capabilities" in wire, (
             "reporting_capabilities is required on the wire (adcp 4.4.0+); "
-            "exclude_none=True must not strip it. Check that the local "
-            "Product schema still has a default_factory."
+            "exclude_none=True must not strip a populated value."
         )
         rc = wire["reporting_capabilities"]
         # Library requires these keys on the nested object.
