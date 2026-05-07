@@ -380,8 +380,17 @@ def _update_media_buy_impl(
         # Wired to the DB row directly (no adapter dispatch yet — the mock
         # adapter only had an in-memory state change for this; GAM order
         # archive on cancel is a follow-up). ``cancellation_reason`` is
-        # echoed back on the response and stored alongside the status flip.
-        if getattr(req, "canceled", None) is True:
+        # echoed back on the response.
+        #
+        # IMPORTANT: ``UpdateMediaBuyRequest.canceled`` is the AdCP-generated
+        # ``Literal[True] = True`` field — the Pydantic default is True
+        # whenever the buyer didn't include it in the wire payload. A
+        # naive ``req.canceled is True`` check would therefore fire on
+        # EVERY update (pause, budget, packages, etc.), preempting their
+        # branches. Gate on ``model_fields_set`` so only an explicit
+        # ``canceled=True`` from the buyer triggers cancellation.
+        canceled_in_request = "canceled" in getattr(req, "model_fields_set", set())
+        if canceled_in_request and req.canceled is True:
             current_mb = uow.media_buys.get_by_id(req.media_buy_id)
             if current_mb and str(current_mb.status) == "canceled":
                 error_response = UpdateMediaBuyError(
