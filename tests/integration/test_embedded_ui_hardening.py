@@ -236,9 +236,9 @@ class TestSettingsHiddenSectionsOnEmbedded:
 
         # The matching nav item is also .active and points to the same target.
         active_nav = re.findall(r'<a class="settings-nav-item active" data-section="([^"]+)"', body)
-        assert active_nav == [
-            "business-rules"
-        ], f"Nav-active and section-active must agree; got nav={active_nav}, section={active_sections}"
+        assert active_nav == ["business-rules"], (
+            f"Nav-active and section-active must agree; got nav={active_nav}, section={active_sections}"
+        )
 
     def test_open_default_section_is_account(self, client, open_tenant_id):
         """Mirror of the embedded case for open-instance: Account is the

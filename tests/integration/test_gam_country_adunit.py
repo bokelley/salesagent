@@ -8,8 +8,6 @@ ad unit analysis, and combined reporting features.
 
 import unittest.mock
 
-import pytest
-
 from src.adapters.gam_reporting_service import GAMReportingService
 
 
@@ -93,7 +91,6 @@ def create_mock_gam_client():
     return MockGAMClient()
 
 
-@pytest.mark.requires_db
 def test_country_breakdown():
     """Test the country breakdown functionality"""
     # Create mock client and service
@@ -126,7 +123,6 @@ def test_country_breakdown():
     assert isinstance(first_country["ctr"], int | float)
 
 
-@pytest.mark.requires_db
 def test_ad_unit_breakdown():
     """Test the ad unit breakdown functionality"""
     # Create mock client and service
@@ -167,7 +163,6 @@ def test_ad_unit_breakdown():
         assert "cpm" in country_data, "Country data should have CPM"
 
 
-@pytest.mark.requires_db
 def test_combined_reporting():
     """Test getting both country and ad unit data with the include flags"""
     # Create mock client and service
@@ -208,7 +203,6 @@ def test_combined_reporting():
     assert len(result.metrics) > 0, "Should have summary metrics"
 
 
-@pytest.mark.requires_db
 def test_gam_reporting_integration():
     """Integration test that runs all GAM reporting functionality"""
     # Create mock client and service for integration test
@@ -259,7 +253,6 @@ class TestGAMCountryAdUnitReporting:
         service = GAMReportingService(mock_client, "America/New_York")
         assert service is not None
 
-    @pytest.mark.requires_db
     def test_country_breakdown_detailed(self):
         """Detailed test of country breakdown functionality"""
         # Create mock client and service
@@ -279,7 +272,6 @@ class TestGAMCountryAdUnitReporting:
         for expected in expected_countries:
             assert expected in country_names, f"Expected country {expected} not found in results"
 
-    @pytest.mark.requires_db
     def test_ad_unit_breakdown_detailed(self):
         """Detailed test of ad unit breakdown functionality"""
         # Create mock client and service

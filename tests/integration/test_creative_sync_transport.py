@@ -70,17 +70,23 @@ class TestSyncCreativeCreateTransport:
             assert db_creative is not None, "Created creative should be persisted in DB"
             assert db_creative.name == "Transport Test Creative"
 
-    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_empty_creative_list_returns_success(self, integration_db, transport):
-        """Empty creative list is a valid no-op across all transports."""
+    def test_empty_creative_list_rejected_at_wire(self, integration_db):
+        """Per AdCP spec, ``creatives`` MUST contain at least one item.
+
+        The library schema (``adcp.types.SyncCreativesRequest``) declares
+        ``creatives: list[Creative]`` with ``min_length=1``, so any wire-format
+        caller (MCP, A2A, REST) must be rejected with ``INVALID_REQUEST`` before
+        the request ever reaches the impl. ``call_impl`` is deliberately not
+        covered here — the impl layer is transport-agnostic and operates on
+        already-validated domain inputs; wire-shape validation is the wrapper
+        boundary's responsibility.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
+            result = env.call_via(Transport.MCP, creatives=[])
 
-            result = env.call_via(transport, creatives=[])
-
-        assert result.is_success
-        assert_envelope(result, transport)
-        assert len(result.payload.creatives) == 0
+        assert not result.is_success, "Empty creatives list must be rejected per spec"
+        assert "INVALID_REQUEST" in str(result.error), f"Expected INVALID_REQUEST, got {result.error!r}"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_dry_run_does_not_persist(self, integration_db, transport):

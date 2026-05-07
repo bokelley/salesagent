@@ -90,7 +90,6 @@ class TestGAMOrderLifecycleIntegration:
             )
             assert is_admin_adapter._is_admin_principal() is True
 
-    @pytest.mark.requires_db
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
         """Test lifecycle action workflows with business validation (AdCP 2.4 compliant)."""
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
@@ -182,7 +181,6 @@ class TestGAMOrderLifecycleIntegration:
         assert has_guaranteed is True
         assert "STANDARD" in types and "SPONSORSHIP" in types
 
-    @pytest.mark.requires_db
     def test_activation_validation_with_guaranteed_items(self, test_principals, gam_config):
         """Test activation validation blocking guaranteed line items (AdCP 2.4 compliant)."""
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):

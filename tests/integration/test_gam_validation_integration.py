@@ -13,7 +13,7 @@ import pytest
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration]
 
 
 class TestGAMValidationIntegration:
