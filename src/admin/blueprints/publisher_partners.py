@@ -552,6 +552,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/refresh", methods=["POST"])
+@require_tenant_access(api_mode=True)
 def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Force-refresh AAO status for a single publisher partner.
 
