@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 
 # Lock guards lazy initialization. The store is process-singleton; once
 # constructed we never rebuild it.
+#
+# We deliberately do NOT detect ``DATABASE_URL`` changes and rebuild the pool.
+# Production never mutates ``DATABASE_URL`` mid-process — the URL is set once
+# at startup. The only place the URL changes between uses is the integration
+# test suite (per-test databases via ``tests/fixtures/integration_db.py``),
+# which calls :func:`reset_for_tests` to drop the singletons explicitly. Adding
+# defensive URL-comparison logic to a hot path to handle a test-only
+# concern would push test plumbing into production code.
 _LOCK = threading.Lock()
 _STORE: IdempotencyStore | None = None
 _POOL = None  # AsyncConnectionPool, kept around so the GC doesn't close it
