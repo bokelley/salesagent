@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
+from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.bearer_to_adcp_auth import BearerToAdcpAuthMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
 from src.core.signing import SigningVerifyMiddleware
@@ -85,6 +86,16 @@ def test_bearer_translation_runs_after_admin_mount(middleware_classes):
         f"AdminWSGIMount (idx={admin_idx}) must run before "
         f"BearerToAdcpAuthMiddleware (idx={bearer_idx}) so admin paths "
         f"short-circuit to Flask without entering buyer-protocol middlewares."
+    )
+
+
+def test_agent_card_public_url_middleware_present(middleware_classes):
+    """``AgentCardPublicUrlMiddleware`` must be in the chain — without it,
+    ``/.well-known/agent-card.json`` advertises the container's localhost
+    URL and SDK clients can't discover the public A2A endpoint (#103)."""
+    assert AgentCardPublicUrlMiddleware in middleware_classes, (
+        "AgentCardPublicUrlMiddleware missing from asgi_middleware — A2A "
+        "agent card will leak the localhost URL and SDK discovery breaks."
     )
 
 

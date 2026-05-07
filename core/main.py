@@ -61,6 +61,7 @@ from adcp.server import (
 from sqlalchemy import select
 
 from core.middleware.admin_mount import AdminWSGIMount
+from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.bearer_to_adcp_auth import BearerToAdcpAuthMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
@@ -426,6 +427,14 @@ def _serve_kwargs(
         # the SDK validation boundary so the defaults land before the
         # typed-dispatcher rejects the payload.
         (SpecDefaultsMiddleware, {}),
+        # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
+        # /.well-known/agent-card.json response with the request's public
+        # host (X-Forwarded-Host / Host). The framework hardcodes
+        # ``http://localhost:{port}/`` at server-init time and exposes no
+        # hook for injecting a public URL — without this rewrite, SDK
+        # clients reading the card try to reach the internal socket and
+        # all A2A discovery cascades to "fetch failed" (#103).
+        (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
         subdomain_router = build_subdomain_router()
