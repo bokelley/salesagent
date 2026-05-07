@@ -26,11 +26,35 @@ A simulated ad server for testing and development.
 
 [Get started with Mock](mock/)
 
+### [Triton Digital](triton/)
+
+Connect to Triton Digital's TAP Media Buying API for streaming audio and podcast advertising.
+
+- Publisher-scoped JWT authentication
+- Campaign + flight creation against `mbapi.tritondigital.com`
+- Station, station-group, genre, and daypart targeting
+- CPM and FLAT_RATE pricing
+
+[Get started with Triton](triton/)
+
+### [FreeWheel](freewheel/)
+
+Connect to Comcast/FreeWheel's Publisher API for video and CTV advertising.
+
+- OAuth2 `client_credentials` authentication (7-day bearer token)
+- Campaign + line item creation against `api.freewheel.tv`
+- Placement, targeting profile, and custom key-value targeting
+- CPM and FLAT_RATE pricing
+
+[Get started with FreeWheel](freewheel/)
+
 ## Choosing an Adapter
 
 | Adapter | Use Case |
 |---------|----------|
 | **GAM** | Production deployments with Google Ad Manager |
+| **FreeWheel** | Video + CTV inventory via Comcast/FreeWheel Publisher API |
+| **Triton** | Streaming audio + podcast inventory via TAP |
 | **Mock** | Testing, demos, development |
 
 ## Multi-Tenant Considerations

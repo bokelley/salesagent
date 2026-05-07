@@ -454,7 +454,7 @@ def tenant_settings(tenant_id, section=None):
 
 @tenants_bp.route("/<tenant_id>/update", methods=["POST"])
 @log_admin_action("update")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update(tenant_id):
     """Update tenant settings."""
     try:
@@ -492,7 +492,7 @@ def update(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/update_slack", methods=["POST"])
 @log_admin_action("update_slack")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update_slack(tenant_id):
     """Update tenant Slack settings."""
     try:
@@ -531,7 +531,7 @@ def update_slack(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])
 @log_admin_action("test_slack")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def test_slack(tenant_id):
     """Test Slack webhook."""
     try:
@@ -592,7 +592,7 @@ def test_slack(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])
 @log_admin_action("deactivate_tenant")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def deactivate_tenant(tenant_id):
     """Deactivate (soft delete) a tenant."""
     try:
@@ -786,7 +786,7 @@ def _is_valid_favicon_url(url: str) -> bool:
 
 @tenants_bp.route("/<tenant_id>/upload_favicon", methods=["POST"])
 @log_admin_action("upload_favicon")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def upload_favicon(tenant_id):
     """Upload a custom favicon for the tenant."""
     try:
@@ -856,7 +856,7 @@ def upload_favicon(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/update_favicon_url", methods=["POST"])
 @log_admin_action("update_favicon_url")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update_favicon_url(tenant_id):
     """Update the tenant's favicon URL (for external URLs)."""
     try:
@@ -893,7 +893,7 @@ def update_favicon_url(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/remove_favicon", methods=["POST"])
 @log_admin_action("remove_favicon")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def remove_favicon(tenant_id):
     """Remove the tenant's custom favicon."""
     try:

@@ -1,0 +1,195 @@
+{#
+Triton Digital Adapter Connection Configuration Template
+
+Included in the settings page when the Triton adapter is selected. Provides
+form fields for TritonConnectionConfig — publisher-scoped credentials.
+
+Expected context:
+- adapter_config: dict with current adapter configuration
+- tenant_id: current tenant ID
+#}
+
+<div class="adapter-connection-config" data-adapter-type="triton">
+    <div class="form-section">
+        <h3>Triton Digital TAP Configuration</h3>
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            Connect to your Triton Digital publisher account. Credentials authenticate against
+            the TAP Login API and grant access to all stations under your publisher.
+            Station selection happens at the product level.
+        </p>
+
+        <div class="form-group">
+            <label for="triton_auth_type">Authentication Method</label>
+            <select id="triton_auth_type" name="triton_auth_type" class="form-control">
+                <option value="password" {% if not adapter_config or adapter_config.get('auth_type', 'password') == 'password' %}selected{% endif %}>
+                    User login (publisher email + password)
+                </option>
+                <option value="oauth_client_credentials" {% if adapter_config and adapter_config.get('auth_type') == 'oauth_client_credentials' %}selected{% endif %}>
+                    OAuth client credentials (service account)
+                </option>
+            </select>
+            <small class="form-text text-muted">
+                Use OAuth client credentials when Triton's Account Team has issued
+                a service-account client_id/client_secret pair for server-to-server use.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="triton_username">Publisher Email / Client ID *</label>
+            <input type="text" id="triton_username" name="triton_username"
+                   value="{{ adapter_config.get('username', '') if adapter_config else '' }}"
+                   placeholder="publisher@example.com or client_id"
+                   required>
+            <small class="form-text text-muted">
+                Publisher login email (default) or OAuth client_id when using service-account auth.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="triton_password">Publisher Password *</label>
+            <input type="password" id="triton_password" name="triton_password"
+                   value=""
+                   placeholder="{% if adapter_config and adapter_config.get('username') %}(leave blank to keep existing){% else %}Enter publisher password{% endif %}">
+            <small class="form-text text-muted">
+                Stored encrypted at rest. Leave blank to keep the previously saved password.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="triton_default_advertiser_id">Default Advertiser ID</label>
+            <input type="text" id="triton_default_advertiser_id" name="triton_default_advertiser_id"
+                   value="{{ adapter_config.get('default_advertiser_id', '') if adapter_config else '' }}"
+                   placeholder="Optional — used when principal has no triton mapping">
+            <small class="form-text text-muted">
+                Fallback TAP advertiser ID for principals without explicit Triton mappings.
+            </small>
+        </div>
+
+        <details style="margin-top: 1rem;">
+            <summary style="cursor: pointer; color: #666; font-size: 0.9em;">▸ Advanced: API endpoints</summary>
+            <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+                <div class="form-group">
+                    <label for="triton_base_url">Media Buying API URL</label>
+                    <input type="text" id="triton_base_url" name="triton_base_url"
+                           value="{{ adapter_config.get('base_url', 'https://mbapi.tritondigital.com') if adapter_config else 'https://mbapi.tritondigital.com' }}">
+                </div>
+                <div class="form-group">
+                    <label for="triton_login_url">Login API URL</label>
+                    <input type="text" id="triton_login_url" name="triton_login_url"
+                           value="{{ adapter_config.get('login_url', 'https://login.tritondigital.com') if adapter_config else 'https://login.tritondigital.com' }}">
+                </div>
+            </div>
+        </details>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="triton_manual_approval_required">
+                <input type="checkbox" id="triton_manual_approval_required" name="triton_manual_approval_required"
+                       {% if adapter_config and adapter_config.get('manual_approval_required') %}checked{% endif %}>
+                Require Manual Approval
+            </label>
+            <small class="form-text text-muted">
+                When enabled, media buy operations require human approval before execution.
+            </small>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="saveTritonConfig()" class="btn btn-primary">
+                Save Configuration
+            </button>
+            <button type="button" onclick="testTritonConnection()" class="btn btn-secondary">
+                Test Connection
+            </button>
+            <span id="triton-connection-status"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function _tritonPayload() {
+    const passwordEl = document.getElementById('triton_password');
+    const config = {
+        auth_type: document.getElementById('triton_auth_type').value,
+        username: document.getElementById('triton_username').value,
+        base_url: document.getElementById('triton_base_url').value,
+        login_url: document.getElementById('triton_login_url').value,
+        default_advertiser_id: document.getElementById('triton_default_advertiser_id').value || null,
+        manual_approval_required: document.getElementById('triton_manual_approval_required').checked
+    };
+    // Only include password when the user typed one — empty means keep existing ciphertext.
+    if (passwordEl.value) {
+        config.password = passwordEl.value;
+    }
+    return config;
+}
+
+function saveTritonConfig() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const config = _tritonPayload();
+
+    if (!config.username) {
+        showNotification('Publisher email is required', 'error');
+        return;
+    }
+    if (!config.password && !{{ 'true' if adapter_config and adapter_config.get('username') else 'false' }}) {
+        showNotification('Publisher password is required for first-time setup', 'error');
+        return;
+    }
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapter-config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({adapter_type: 'triton', config: config})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Configuration saved successfully', 'success');
+            document.getElementById('triton_password').value = '';
+        } else {
+            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Error saving configuration: ' + error.message, 'error');
+    });
+}
+
+function testTritonConnection() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('triton-connection-status');
+    const username = document.getElementById('triton_username').value;
+    const password = document.getElementById('triton_password').value;
+
+    if (!username) {
+        showNotification('Publisher email is required to test connection', 'error');
+        return;
+    }
+
+    statusEl.innerHTML = '<span style="color: #6b7280;">Testing...</span>';
+
+    const payload = {username: username};
+    if (password) payload.password = password;
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/triton/test-connection', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Authenticated against TAP' +
+                (data.publisher_name ? ' (' + data.publisher_name + ')' : '') + '</span>';
+        } else {
+            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
+        }
+    })
+    .catch(error => {
+        statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
+    });
+}
+</script>

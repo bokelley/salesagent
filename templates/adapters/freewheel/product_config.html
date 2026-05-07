@@ -1,0 +1,52 @@
+{#
+FreeWheel Adapter Product Configuration Template Fragment
+
+Included in the product add/edit form when the FreeWheel adapter is selected.
+Drives FreeWheelProductConfig — placement selection, targeting profile, custom KV.
+
+Expected context:
+- implementation_config: dict with current product implementation config
+- tenant_id: current tenant ID
+#}
+
+<div class="adapter-product-config" data-adapter-type="freewheel">
+    <div class="form-section">
+        <h3>FreeWheel Placement &amp; Targeting</h3>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Choose which FreeWheel placements this product delivers into and any pre-built
+            targeting profile or custom key-value targeting that applies.
+        </p>
+
+        <div class="form-group">
+            <label for="impl_placement_ids">Placement IDs *</label>
+            <input type="text" id="impl_placement_ids" name="impl_placement_ids"
+                   value="{{ (implementation_config.get('placement_ids', [])|join(', ')) if implementation_config else '' }}"
+                   placeholder="e.g., 12345, 67890">
+            <small class="form-text text-muted">
+                Comma-separated FreeWheel placement IDs. Each line item created from this product
+                delivers into these placements.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_targeting_profile_id">Targeting Profile ID</label>
+            <input type="text" id="impl_targeting_profile_id" name="impl_targeting_profile_id"
+                   value="{{ implementation_config.get('targeting_profile_id', '') if implementation_config else '' }}"
+                   placeholder="Optional — pre-built FreeWheel targeting profile">
+            <small class="form-text text-muted">
+                Optional reference to a saved targeting profile in FreeWheel. Geo and device
+                targeting from the buyer's request layer on top of this profile.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_priority">Line Item Priority</label>
+            <input type="number" id="impl_priority" name="impl_priority"
+                   value="{{ implementation_config.get('priority', '') if implementation_config else '' }}"
+                   min="1" placeholder="Optional — lower numbers = higher priority">
+            <small class="form-text text-muted">
+                FreeWheel uses numeric priorities. Leave blank for default.
+            </small>
+        </div>
+    </div>
+</div>

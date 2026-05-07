@@ -82,7 +82,7 @@ def list_users(tenant_id):
 
 
 @users_bp.route("/add", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action(
     "add_user", extract_details=lambda r, **kw: {"email": request.form.get("email"), "role": request.form.get("role")}
 )
@@ -94,6 +94,16 @@ def add_user(tenant_id):
 
         if not email:
             flash("Email is required", "error")
+            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+
+        # Application-layer role validation. The ``ck_users_role`` CHECK
+        # constraint is the hard backstop, but rejecting at the boundary
+        # gives a clear UX message instead of an opaque DB exception.
+        from src.core.validation import FormValidator
+
+        role_err = FormValidator.validate_role(role)
+        if role_err:
+            flash(role_err, "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
         # Validate email format
@@ -140,7 +150,7 @@ def add_user(tenant_id):
 
 @users_bp.route("/<user_id>/toggle", methods=["POST"])
 @log_admin_action("toggle_user")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def toggle_user(tenant_id, user_id):
     """Toggle user active status."""
     try:
@@ -165,12 +175,15 @@ def toggle_user(tenant_id, user_id):
 
 @users_bp.route("/<user_id>/update_role", methods=["POST"])
 @log_admin_action("update_role")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update_role(tenant_id, user_id):
     """Update user role."""
     try:
         new_role = request.form.get("role")
-        if not new_role or new_role not in ["admin", "manager", "viewer"]:
+        # Canonical role enum aligned with the embedded-mode contract.
+        # Legacy ``manager`` rows are migrated to ``member`` — see
+        # alembic/versions/8407a32e9b07_rename_user_role_manager_to_member.py.
+        if not new_role or new_role not in ["admin", "member", "viewer"]:
             flash("Invalid role", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -193,7 +206,7 @@ def update_role(tenant_id, user_id):
 
 
 @users_bp.route("/domains", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("add_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def add_domain(tenant_id):
     """Add an authorized domain for the tenant."""
@@ -236,7 +249,7 @@ def add_domain(tenant_id):
 
 
 @users_bp.route("/domains", methods=["DELETE"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("remove_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def remove_domain(tenant_id):
     """Remove an authorized domain from the tenant."""
@@ -272,7 +285,7 @@ def remove_domain(tenant_id):
 
 
 @users_bp.route("/disable-setup-mode", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("disable_auth_setup_mode")
 def disable_setup_mode(tenant_id):
     """Disable auth setup mode for the tenant.
@@ -325,7 +338,7 @@ def disable_setup_mode(tenant_id):
 
 
 @users_bp.route("/enable-setup-mode", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("enable_auth_setup_mode")
 def enable_setup_mode(tenant_id):
     """Re-enable auth setup mode for the tenant.

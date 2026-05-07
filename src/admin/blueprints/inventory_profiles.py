@@ -173,7 +173,7 @@ def list_inventory_profiles(tenant_id: str):
 
 
 @inventory_profiles_bp.route("/add", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action("create_inventory_profile")
 def add_inventory_profile(tenant_id: str):
     """Create new inventory profile."""
@@ -369,7 +369,7 @@ def add_inventory_profile(tenant_id: str):
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/edit", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action("update_inventory_profile")
 def edit_inventory_profile(tenant_id: str, profile_id: int):
     """Edit existing inventory profile."""
@@ -587,7 +587,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/delete", methods=["DELETE", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action("delete_inventory_profile")
 def delete_inventory_profile(tenant_id: str, profile_id: int):
     """Delete inventory profile."""

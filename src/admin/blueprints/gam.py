@@ -129,7 +129,7 @@ def validate_gam_config(data: dict) -> list | None:
 
 @gam_bp.route("/detect-network", methods=["POST"])
 @log_admin_action("detect_gam_network")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def detect_gam_network(tenant_id):
     """Auto-detect GAM network code from refresh token."""
     if session.get("role") == "viewer":
@@ -342,7 +342,7 @@ def detect_gam_network(tenant_id):
 
 @gam_bp.route("/configure", methods=["POST"])
 @log_admin_action("configure_gam")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def configure_gam(tenant_id):
     """Save GAM configuration for a tenant."""
     if session.get("role") == "viewer":
@@ -701,7 +701,7 @@ def get_latest_sync_status(tenant_id):
 
 @gam_bp.route("/reset-stuck-sync", methods=["POST"])
 @log_admin_action("reset_stuck_gam_sync")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def reset_stuck_sync(tenant_id):
     """Reset a stuck inventory sync job.
 
@@ -752,7 +752,7 @@ def reset_stuck_sync(tenant_id):
 
 @gam_bp.route("/create-service-account", methods=["POST"])
 @log_admin_action("create_gam_service_account")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def create_service_account(tenant_id):
     """Create a GCP service account for GAM integration.
 
@@ -835,7 +835,7 @@ def get_service_account_email(tenant_id):
 
 @gam_bp.route("/test-connection", methods=["POST"])
 @log_admin_action("test_gam_connection")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def test_gam_connection(tenant_id):
     """Test GAM connection with refresh token or service account and fetch available resources.
 

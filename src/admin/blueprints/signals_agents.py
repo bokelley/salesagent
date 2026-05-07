@@ -66,7 +66,7 @@ def list_signals_agents(tenant_id):
 
 @signals_agents_bp.route("/add", methods=["GET", "POST"])
 @log_admin_action("add_signals_agent")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def add_signals_agent(tenant_id):
     """Add a new signals agent."""
     if request.method == "GET":
@@ -142,7 +142,7 @@ def add_signals_agent(tenant_id):
 
 @signals_agents_bp.route("/<int:agent_id>/edit", methods=["GET", "POST"])
 @log_admin_action("edit_signals_agent")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def edit_signals_agent(tenant_id, agent_id):
     """Edit an existing signals agent."""
     if request.method == "GET":
@@ -230,7 +230,7 @@ def edit_signals_agent(tenant_id, agent_id):
 
 
 @signals_agents_bp.route("/<int:agent_id>/delete", methods=["DELETE"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def delete_signals_agent(tenant_id, agent_id):
     """Delete a signals agent."""
     try:
@@ -253,7 +253,7 @@ def delete_signals_agent(tenant_id, agent_id):
 
 @signals_agents_bp.route("/<int:agent_id>/test", methods=["POST"])
 @log_admin_action("test_signals_agent")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def test_signals_agent(tenant_id, agent_id):
     """Test connection to a signals agent."""
     try:

@@ -463,7 +463,7 @@ def orders_browser(tenant_id):
 
 @inventory_bp.route("/api/tenant/<tenant_id>/sync/orders", methods=["POST"])
 @log_admin_action("sync_orders")
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def sync_orders(tenant_id):
     """Sync GAM orders for a tenant."""
     try:
@@ -742,7 +742,7 @@ def analyze_ad_server_inventory(tenant_id):
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/sync", methods=["POST"])
 @log_admin_action("sync_inventory")
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def sync_inventory(tenant_id):
     """Start inventory sync in background (non-blocking).
 

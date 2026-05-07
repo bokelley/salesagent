@@ -25,7 +25,13 @@ MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD",
 from adcp.types import CreativeAction, Error
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPMediaBuyNotFoundError,
+    AdCPPackageNotFoundError,
+    AdCPValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +69,9 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
 
     Raises:
         AdCPAuthenticationError: Missing principal
-        ValueError: Media buy not found
-        PermissionError: Principal doesn't own media buy
+        AdCPMediaBuyNotFoundError: Media buy not found (or exists in a different
+            tenant — tenant isolation hides the existence from cross-tenant callers).
+        AdCPAuthorizationError: Principal doesn't own this media buy (same tenant).
     """
     principal_id: str | None = context.principal_id
 
@@ -79,11 +86,13 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 
-    # Query database for media buy by ID
+    # Query database for media buy by ID. The repository is tenant-scoped, so
+    # rows that belong to a different tenant come back as ``None`` — surface
+    # that as MEDIA_BUY_NOT_FOUND so we don't leak cross-tenant existence.
     media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
-        raise ValueError(f"Media buy '{media_buy_id}' not found.")
+        raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
     if media_buy.principal_id != principal_id:
         # CRITICAL: Verify principal_id is set (security check, not assertion)
@@ -553,22 +562,17 @@ def _update_media_buy_impl(
                     from src.core.database.models import Creative as DBCreative
                     from src.core.database.models import CreativeAssignment as DBAssignment
 
-                    # Resolve media_buy_id
+                    # Resolve media_buy_id (tenant-scoped — None for cross-tenant)
                     media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
 
                     if not media_buy_obj:
                         error_msg = f"Media buy '{req.media_buy_id}' not found"
-                        response_data = UpdateMediaBuyError(
-                            errors=[Error(code="media_buy_not_found", message=error_msg)],
-                            context=req.context,
-                        )
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
                             error_message=error_msg,
                         )
-                        return response_data
+                        raise AdCPMediaBuyNotFoundError(error_msg)
 
                     # Use the actual internal media_buy_id
                     actual_media_buy_id = media_buy_obj.media_buy_id
@@ -840,16 +844,11 @@ def _update_media_buy_impl(
                     from src.core.database.models import CreativeAssignment as DBAssignment
                     from src.core.database.models import Product as ProductModel
 
-                    # Resolve media_buy_id
+                    # Resolve media_buy_id (tenant-scoped — None for cross-tenant)
                     media_buy_obj = uow.media_buys.get_by_id(req.media_buy_id)
 
                     if not media_buy_obj:
-                        error_msg = f"Media buy '{req.media_buy_id}' not found"
-                        response_data = UpdateMediaBuyError(
-                            errors=[Error(code="media_buy_not_found", message=error_msg)],
-                            context=req.context,
-                        )
-                        return response_data
+                        raise AdCPMediaBuyNotFoundError(f"Media buy '{req.media_buy_id}' not found")
 
                     actual_media_buy_id = media_buy_obj.media_buy_id
 
@@ -865,14 +864,9 @@ def _update_media_buy_impl(
                         pkg_record = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
 
                         if not pkg_record:
-                            error_msg = (
+                            raise AdCPPackageNotFoundError(
                                 f"Package '{pkg_update.package_id}' not found for media buy '{actual_media_buy_id}'"
                             )
-                            response_data = UpdateMediaBuyError(
-                                errors=[Error(code="package_not_found", message=error_msg)],
-                                context=req.context,
-                            )
-                            return response_data
 
                         product_id = pkg_record.package_config.get("product_id") if pkg_record.package_config else None
 
@@ -1016,17 +1010,12 @@ def _update_media_buy_impl(
 
                     if not media_package:
                         error_msg = f"Package {pkg_update.package_id} not found for media buy {req.media_buy_id}"
-                        response_data = UpdateMediaBuyError(
-                            errors=[Error(code="package_not_found", message=error_msg)],
-                            context=req.context,
-                        )
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
                             error_message=error_msg,
                         )
-                        return response_data
+                        raise AdCPPackageNotFoundError(error_msg)
 
                     # Store Targeting model directly — engine's pydantic_core.to_json serializer handles it
                     media_package.package_config["targeting_overlay"] = pkg_update.targeting_overlay
@@ -1160,17 +1149,12 @@ def _update_media_buy_impl(
 
                 if not existing_mb:
                     error_msg = f"Media buy {req.media_buy_id} not found"
-                    response_data = UpdateMediaBuyError(
-                        errors=[Error(code="media_buy_not_found", message=error_msg)],
-                        context=req.context,
-                    )
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        response_data=response_data.model_dump(mode="json"),
                         error_message=error_msg,
                     )
-                    return response_data
+                    raise AdCPMediaBuyNotFoundError(error_msg)
 
                 # Validate date range: end_time must be after start_time
                 # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)

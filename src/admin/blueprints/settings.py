@@ -150,7 +150,7 @@ def update_admin_settings():
 
 
 @settings_bp.route("/general", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("update_general_settings")
 def update_general(tenant_id):
     """Update general tenant settings."""
@@ -292,7 +292,7 @@ def update_general(tenant_id):
 
 
 @settings_bp.route("/adapter", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action(
     "update_adapter",
     extract_details=lambda r, **kw: {
@@ -480,7 +480,7 @@ def update_adapter(tenant_id):
 
 @settings_bp.route("/slack", methods=["POST"])
 @log_admin_action("update_slack")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update_slack(tenant_id):
     """Update Slack integration settings."""
     try:
@@ -528,7 +528,7 @@ def update_slack(tenant_id):
 
 @settings_bp.route("/ai", methods=["POST"])
 @log_admin_action("update_ai")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update_ai(tenant_id):
     """Update AI services settings (multi-provider configuration)."""
     try:
@@ -594,7 +594,7 @@ def update_ai(tenant_id):
 
 
 @settings_bp.route("/ai/test", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin",))
 def test_ai_connection(tenant_id):
     """Test AI connection with current configuration."""
     import asyncio
@@ -686,7 +686,7 @@ def test_ai_connection(tenant_id):
 
 
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin",))
 def test_logfire_connection(tenant_id):
     """Test Logfire connection with provided token."""
     try:
@@ -816,7 +816,7 @@ def get_ai_models(tenant_id):
 # Domain and Email Management Routes
 @settings_bp.route("/domains/add", methods=["POST"])
 @log_admin_action("add_authorized_domain")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def add_authorized_domain(tenant_id):
     """Add domain to tenant's authorized domains list."""
     from src.admin.domain_access import add_authorized_domain as add_domain
@@ -847,7 +847,7 @@ def add_authorized_domain(tenant_id):
 
 @settings_bp.route("/domains/remove", methods=["POST"])
 @log_admin_action("remove_authorized_domain")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def remove_authorized_domain(tenant_id):
     """Remove domain from tenant's authorized domains list."""
     from src.admin.domain_access import remove_authorized_domain as remove_domain
@@ -873,7 +873,7 @@ def remove_authorized_domain(tenant_id):
 
 @settings_bp.route("/emails/add", methods=["POST"])
 @log_admin_action("add_authorized_email")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def add_authorized_email(tenant_id):
     """Add email to tenant's authorized emails list."""
     from src.admin.domain_access import add_authorized_email as add_email
@@ -904,7 +904,7 @@ def add_authorized_email(tenant_id):
 
 @settings_bp.route("/emails/remove", methods=["POST"])
 @log_admin_action("remove_authorized_email")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def remove_authorized_email(tenant_id):
     """Remove email from tenant's authorized emails list."""
     from src.admin.domain_access import remove_authorized_email as remove_email
@@ -931,7 +931,7 @@ def remove_authorized_email(tenant_id):
 # Test route for domain access functionality
 @settings_bp.route("/access/test", methods=["POST"])
 @log_admin_action("test_domain_access")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def test_domain_access(tenant_id):
     """Test email access for this tenant."""
     from src.admin.domain_access import get_user_tenant_access
@@ -1167,7 +1167,7 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
 
 @settings_bp.route("/business-rules", methods=["POST"])
 @log_admin_action("update_business_rules")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def update_business_rules(tenant_id):
     """Update business rules (budget, naming, approvals, features).
 
@@ -1243,7 +1243,7 @@ def update_business_rules(tenant_id):
 
 
 @settings_bp.route("/approximated-domain-status", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def check_approximated_domain_status(tenant_id):
     """Check if a domain is registered with Approximated."""
     try:
@@ -1296,7 +1296,7 @@ def check_approximated_domain_status(tenant_id):
 
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("register_approximated_domain")
 def register_approximated_domain(tenant_id):
     """Register a domain with Approximated for TLS and routing."""
@@ -1356,7 +1356,7 @@ def register_approximated_domain(tenant_id):
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 @log_admin_action("unregister_approximated_domain")
 def unregister_approximated_domain(tenant_id):
     """Unregister a domain from Approximated."""
@@ -1401,7 +1401,7 @@ def unregister_approximated_domain(tenant_id):
 
 
 @settings_bp.route("/approximated-token", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def get_approximated_token(tenant_id):
     """Generate an Approximated DNS widget token and get DNS target."""
     try:

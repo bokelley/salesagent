@@ -290,7 +290,7 @@ def media_buy_detail(tenant_id, media_buy_id):
 
 
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     """Approve a media buy by approving its workflow step."""
     from datetime import UTC, datetime
@@ -618,7 +618,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
 
 @operations_bp.route("/media-buy/<media_buy_id>/trigger-delivery-webhook", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def trigger_delivery_webhook(tenant_id, media_buy_id, **kwargs):
     """Trigger a delivery report webhook for a media buy manually."""
     from flask import flash, redirect, url_for

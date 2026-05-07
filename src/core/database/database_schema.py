@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS users (
     tenant_id VARCHAR(50) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
-    role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'manager', 'viewer')),
+    role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'member', 'viewer')),
     google_id VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_login TIMESTAMPTZ,

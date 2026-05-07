@@ -44,16 +44,17 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
     )
 
 
+from src.adapters.freewheel import FreeWheelAdapter
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
-from src.adapters.triton_digital import TritonDigital
+from src.adapters.triton import TritonAdapter
 from src.core.database.database_session import get_db_session
 from src.core.schemas import Principal
 
 
 def get_adapter(
     principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
-) -> MockAdServerAdapter | GoogleAdManager | TritonDigital:
+) -> MockAdServerAdapter | GoogleAdManager | TritonAdapter | FreeWheelAdapter:
     """Get the appropriate adapter instance for the selected adapter type.
 
     Args:
@@ -134,9 +135,45 @@ def get_adapter(
                 else:
                     adapter_config["company_id"] = None
                     logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
-            elif adapter_type == "triton":
-                adapter_config["station_id"] = config_row.triton_station_id or ""
-                adapter_config["api_key"] = config_row.triton_api_key or ""
+            elif adapter_type in {"triton", "triton_digital"}:
+                # Triton credentials live in config_json. Rehydrate via the
+                # connection schema so the field validator decrypts password,
+                # then pull each field through attribute access — model_dump()
+                # would re-run the field_serializer and re-encrypt, which would
+                # ship ciphertext to the upstream login endpoint instead of
+                # plaintext.
+                stored = config_row.config_json or {}
+                if stored:
+                    triton_validated = TritonAdapter.connection_config_class(**stored)
+                    adapter_config.update(
+                        {
+                            "auth_type": triton_validated.auth_type,
+                            "username": triton_validated.username,
+                            "password": triton_validated.password,
+                            "base_url": triton_validated.base_url,
+                            "login_url": triton_validated.login_url,
+                            "default_advertiser_id": triton_validated.default_advertiser_id,
+                            "manual_approval_required": triton_validated.manual_approval_required,
+                        }
+                    )
+            elif adapter_type == "freewheel":
+                # FreeWheel credentials live in config_json. Same plaintext-via-
+                # attribute-access requirement as Triton above — model_dump()
+                # would re-encrypt client_secret before it reaches the OAuth
+                # token endpoint.
+                stored = config_row.config_json or {}
+                if stored:
+                    fw_validated = FreeWheelAdapter.connection_config_class(**stored)
+                    adapter_config.update(
+                        {
+                            "client_id": fw_validated.client_id,
+                            "client_secret": fw_validated.client_secret,
+                            "network_id": fw_validated.network_id,
+                            "environment": fw_validated.environment,
+                            "default_advertiser_id": fw_validated.default_advertiser_id,
+                            "manual_approval_required": fw_validated.manual_approval_required,
+                        }
+                    )
 
     if not selected_adapter:
         # Default to mock if no adapter specified
@@ -172,8 +209,10 @@ def get_adapter(
             targeting_config=targeting_config,
             naming_templates=naming_templates,
         )
-    elif selected_adapter in ["triton", "triton_digital"]:
-        return TritonDigital(adapter_config, principal, dry_run, tenant_id=tenant_id)
+    elif selected_adapter in {"triton", "triton_digital"}:
+        return TritonAdapter(adapter_config, principal, dry_run, tenant_id=tenant_id)
+    elif selected_adapter == "freewheel":
+        return FreeWheelAdapter(adapter_config, principal, dry_run, tenant_id=tenant_id)
     else:
         # Default to mock for unsupported adapters
         return MockAdServerAdapter(

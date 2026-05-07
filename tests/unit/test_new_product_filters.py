@@ -27,6 +27,12 @@ class TestAdapterDefaultChannels:
         assert "streaming_audio" in channels  # V3: audio → streaming_audio
         assert "podcast" in channels
 
+    def test_freewheel_supports_olv_ctv(self):
+        """Test that FreeWheel adapter supports olv (online video) and ctv."""
+        channels = get_adapter_default_channels("freewheel")
+        assert "olv" in channels
+        assert "ctv" in channels
+
     def test_mock_supports_all_common_channels(self):
         """Test that mock adapter supports all common channels for testing."""
         channels = get_adapter_default_channels("mock")

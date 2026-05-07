@@ -20,7 +20,7 @@ This contract applies when:
 It does **not** apply to:
 - Open instances (`MANAGED_INSTANCE=false`) — those use the salesagent's native Google OAuth flow.
 - Tenant Management API calls — those use API key auth (`X-Tenant-Management-API-Key`).
-- Buyer-protocol calls (MCP/A2A) — those use a related but separate header-based scoping mechanism (see [buyer-protocol-auth.md](./buyer-protocol-auth.md), forthcoming with sprint 2).
+- Buyer-protocol calls (MCP/A2A) — those use a related but separate header-based scoping mechanism (forthcoming with sprint 2).
 - Salesagent staff super-admin backdoor — uses Google OAuth on a private network.
 
 ## Headers

@@ -8,6 +8,16 @@ from cryptography.fernet import Fernet, InvalidToken
 logger = logging.getLogger(__name__)
 
 
+class EncryptionKeyMissingError(ValueError):
+    """Raised when ENCRYPTION_KEY is not set.
+
+    A typed subclass of ``ValueError`` so callers can distinguish "key
+    misconfigured at the deployment level" from "value is not a Fernet token"
+    (also a ``ValueError``) without depending on the string content of the
+    exception message.
+    """
+
+
 def _get_encryption_key() -> bytes:
     """Get encryption key from environment variable.
 
@@ -15,11 +25,14 @@ def _get_encryption_key() -> bytes:
         Encryption key as bytes.
 
     Raises:
-        ValueError: If ENCRYPTION_KEY environment variable is not set.
+        EncryptionKeyMissingError: If ENCRYPTION_KEY environment variable
+            is not set. Subclass of ValueError so existing callers that
+            catch ValueError continue to work, but new code can catch the
+            typed exception specifically.
     """
     key = os.environ.get("ENCRYPTION_KEY")
     if not key:
-        raise ValueError(
+        raise EncryptionKeyMissingError(
             "ENCRYPTION_KEY environment variable not set. "
             "Generate a key with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
         )
@@ -57,14 +70,18 @@ def decrypt_api_key(ciphertext: str) -> str:
         Decrypted API key in plaintext.
 
     Raises:
-        ValueError: If ENCRYPTION_KEY is not set, ciphertext is empty, or decryption fails.
+        EncryptionKeyMissingError: If ENCRYPTION_KEY is not set.
+        ValueError: If ciphertext is empty or decryption fails (wrong key,
+            tampered token, expired TTL).
     """
     if not ciphertext:
         raise ValueError("Cannot decrypt empty string")
 
+    # Let EncryptionKeyMissingError propagate unchanged so callers can
+    # catch it specifically. Don't wrap it in a generic ValueError.
+    key = _get_encryption_key()
+    fernet = Fernet(key)
     try:
-        key = _get_encryption_key()
-        fernet = Fernet(key)
         decrypted = fernet.decrypt(ciphertext.encode())
         return decrypted.decode()
     except InvalidToken:
@@ -76,26 +93,50 @@ def decrypt_api_key(ciphertext: str) -> str:
 
 
 def is_encrypted(value: str | None) -> bool:
-    """Check if a value appears to be encrypted.
+    """Check if a value is a Fernet ciphertext we can decrypt.
 
-    This is a heuristic check based on Fernet token format.
-    Fernet tokens are base64-encoded and start with 'gAAAAA'.
+    Two-stage:
+
+    1. **Structural check.** Fernet tokens are URL-safe-base64 of a fixed-format
+       payload that begins with version byte ``0x80`` — the resulting base64
+       always starts with ``gAAAAA``. Plaintext credentials that happen to
+       successfully decrypt-to-something would be bizarre, but the prefix check
+       short-circuits before we touch the key.
+    2. **Decryption check.** Only after the structural match do we attempt
+       ``decrypt_api_key()``. ``InvalidToken`` (wrong key, tampered ciphertext,
+       expired TTL) returns False — caller treats the value as plaintext.
+       Other exceptions (e.g. ``ENCRYPTION_KEY`` unset) propagate so a
+       misconfigured deployment fails loud rather than silently re-encrypting
+       ciphertext as if it were plaintext on the next save.
 
     Args:
         value: String to check, or None.
 
     Returns:
-        True if value appears to be encrypted, False otherwise.
-    """
-    if not value:
-        return False
+        True if value is a valid Fernet ciphertext under the current key.
+        False if value is plaintext / structurally not a Fernet token / token
+        is invalid for the current key.
 
-    # Fernet tokens are base64 and have a specific prefix
-    # Try to decrypt - if it works, it's encrypted
+    Raises:
+        ValueError: If ``ENCRYPTION_KEY`` is not set when a structural match
+            triggers a decryption attempt.
+    """
+    if not value or not value.startswith("gAAAAA"):
+        return False
     try:
         decrypt_api_key(value)
         return True
-    except (ValueError, TypeError, Exception):
+    except EncryptionKeyMissingError:
+        # Typed re-raise: a misconfigured deployment must fail loud rather
+        # than silently corrupting data. Caller (e.g. a Pydantic field
+        # validator) sees the exception bubble up and the request fails
+        # cleanly with a 500 instead of returning ciphertext-as-plaintext.
+        raise
+    except ValueError:
+        # InvalidToken or other Fernet errors wrapped as ValueError —
+        # structural prefix matched but the value isn't decryptable under
+        # the current key. Treat as not-encrypted so the caller falls
+        # through to plaintext handling.
         return False
 
 

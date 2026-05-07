@@ -136,7 +136,7 @@ def _check_resolve_domain_rate(tenant_id: str, user_key: str) -> bool:
 
 
 @principals_bp.route("/principals/resolve-domain", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def resolve_domain(tenant_id):
     """Look up a buyer's published agent metadata from their domain.
 
@@ -173,7 +173,7 @@ def resolve_domain(tenant_id):
 
 
 @principals_bp.route("/principals/create", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action(
     "create_principal",
     extract_details=lambda r, **kw: {"name": request.form.get("name")} if request.method == "POST" else {},
@@ -303,7 +303,7 @@ def create_principal(tenant_id):
 
 
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action(
     "edit_principal",
     extract_details=lambda r, **kw: {"principal_id": kw.get("principal_id")} if request.method == "POST" else {},
@@ -507,7 +507,7 @@ def get_principal(tenant_id, principal_id):
 
 @principals_bp.route("/principal/<principal_id>/update_mappings", methods=["POST"])
 @log_admin_action("update_mappings")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def update_mappings(tenant_id, principal_id):
     """Update principal platform mappings."""
     try:
@@ -564,7 +564,7 @@ def update_mappings(tenant_id, principal_id):
 
 @principals_bp.route("/api/gam/get-advertisers", methods=["POST"])
 @log_admin_action("get_gam_advertisers")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def get_gam_advertisers(tenant_id):
     """Get list of advertisers from GAM for a tenant.
 
@@ -706,7 +706,7 @@ def get_principal_config(tenant_id, principal_id):
 
 @principals_bp.route("/api/principal/<principal_id>/testing-config", methods=["POST"])
 @log_admin_action("save_testing_config")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def save_testing_config(tenant_id, principal_id):
     """Save testing configuration (HITL settings) for a mock adapter principal."""
     try:
@@ -785,7 +785,7 @@ def manage_webhooks(tenant_id, principal_id):
 
 @principals_bp.route("/principals/<principal_id>/webhooks/register", methods=["POST"])
 @log_admin_action("register_webhook")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def register_webhook(tenant_id, principal_id):
     """Register a new webhook for a principal."""
     try:
@@ -846,7 +846,7 @@ def register_webhook(tenant_id, principal_id):
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/delete", methods=["POST"])
 @log_admin_action("delete_webhook")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def delete_webhook(tenant_id, principal_id, config_id):
     """Delete a webhook configuration."""
     try:
@@ -876,7 +876,7 @@ def delete_webhook(tenant_id, principal_id, config_id):
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/toggle", methods=["POST"])
 @log_admin_action("toggle_webhook")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def toggle_webhook(tenant_id, principal_id, config_id):
     """Toggle webhook active status."""
     try:
@@ -905,7 +905,7 @@ def toggle_webhook(tenant_id, principal_id, config_id):
 
 @principals_bp.route("/principals/<principal_id>/delete", methods=["DELETE", "POST"])
 @log_admin_action("delete_principal")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def delete_principal(tenant_id, principal_id):
     """Delete a principal (advertiser)."""
     try:

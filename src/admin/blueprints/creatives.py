@@ -388,7 +388,7 @@ def add_ai(tenant_id, **kwargs):
 
 @creatives_bp.route("/analyze", methods=["POST"])
 @log_admin_action("analyze")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def analyze(tenant_id, **kwargs):
     """Analyze creative format with AI."""
     try:
@@ -503,7 +503,7 @@ def _send_post_commit_side_effects(
 
 @creatives_bp.route("/review/<creative_id>/approve", methods=["POST"])
 @log_admin_action("approve_creative")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
     try:
@@ -656,7 +656,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
 @creatives_bp.route("/review/<creative_id>/reject", methods=["POST"])
 @log_admin_action("reject_creative")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def reject_creative(tenant_id, creative_id, **kwargs):
     """Reject a creative with comments."""
     try:
@@ -1295,7 +1295,7 @@ def _ai_review_creative_impl_inner(
 
 @creatives_bp.route("/review/<creative_id>/ai-review", methods=["POST"])
 @log_admin_action("ai_review_creative")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def ai_review_creative(tenant_id, creative_id, **kwargs):
     """Flask endpoint wrapper for AI review."""
     result = _ai_review_creative_impl(tenant_id, creative_id)

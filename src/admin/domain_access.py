@@ -142,7 +142,7 @@ def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name:
     Args:
         email: User's email address
         tenant_id: Tenant to add user to
-        role: User role (admin, manager, viewer)
+        role: User role (admin, member, viewer)
         name: User's display name (optional)
 
     Returns:

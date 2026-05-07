@@ -1,0 +1,189 @@
+{#
+FreeWheel Adapter Connection Configuration Template
+
+Included in the settings page when the FreeWheel adapter is selected.
+OAuth2 client_credentials flow against api.freewheel.tv (or .stg for staging).
+
+Expected context:
+- adapter_config: dict with current adapter configuration
+- tenant_id: current tenant ID
+#}
+
+<div class="adapter-connection-config" data-adapter-type="freewheel">
+    <div class="form-section">
+        <h3>FreeWheel Publisher API Configuration</h3>
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            Connect to FreeWheel's Publisher API. Credentials are issued by your FreeWheel
+            Account Team — there is no self-serve provisioning. Tokens are minted via OAuth2
+            <code>client_credentials</code> and have a 7-day TTL.
+        </p>
+
+        <div class="form-group">
+            <label for="freewheel_client_id">OAuth Client ID *</label>
+            <input type="text" id="freewheel_client_id" name="freewheel_client_id"
+                   value="{{ adapter_config.get('client_id', '') if adapter_config else '' }}"
+                   placeholder="e.g., fw_client_abc123"
+                   required>
+            <small class="form-text text-muted">
+                Provisioned by FreeWheel Account Team alongside your network.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="freewheel_client_secret">OAuth Client Secret *</label>
+            <input type="password" id="freewheel_client_secret" name="freewheel_client_secret"
+                   value=""
+                   placeholder="{% if adapter_config and adapter_config.get('client_id') %}(leave blank to keep existing){% else %}Enter client secret{% endif %}">
+            <small class="form-text text-muted">
+                Stored encrypted at rest. Leave blank to keep the previously saved secret.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="freewheel_network_id">Network ID *</label>
+            <input type="text" id="freewheel_network_id" name="freewheel_network_id"
+                   value="{{ adapter_config.get('network_id', '') if adapter_config else '' }}"
+                   placeholder="e.g., 12345"
+                   required>
+            <small class="form-text text-muted">
+                FreeWheel network identifier. Used in API resource paths.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="freewheel_environment">Environment</label>
+            <select id="freewheel_environment" name="freewheel_environment" class="form-control">
+                <option value="production" {% if not adapter_config or adapter_config.get('environment', 'production') == 'production' %}selected{% endif %}>
+                    Production (api.freewheel.tv)
+                </option>
+                <option value="staging" {% if adapter_config and adapter_config.get('environment') == 'staging' %}selected{% endif %}>
+                    Staging (api.stg.freewheel.tv)
+                </option>
+            </select>
+            <small class="form-text text-muted">
+                Tokens are environment-scoped — staging tokens won't work in production and vice versa.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="freewheel_default_advertiser_id">Default Advertiser ID</label>
+            <input type="text" id="freewheel_default_advertiser_id" name="freewheel_default_advertiser_id"
+                   value="{{ adapter_config.get('default_advertiser_id', '') if adapter_config else '' }}"
+                   placeholder="Optional — used when principal has no freewheel mapping">
+            <small class="form-text text-muted">
+                Fallback FreeWheel advertiser ID for principals without explicit mappings.
+            </small>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="freewheel_manual_approval_required">
+                <input type="checkbox" id="freewheel_manual_approval_required" name="freewheel_manual_approval_required"
+                       {% if adapter_config and adapter_config.get('manual_approval_required') %}checked{% endif %}>
+                Require Manual Approval
+            </label>
+            <small class="form-text text-muted">
+                When enabled, media buy operations require human approval before execution.
+            </small>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="saveFreeWheelConfig()" class="btn btn-primary">
+                Save Configuration
+            </button>
+            <button type="button" onclick="testFreeWheelConnection()" class="btn btn-secondary">
+                Test Connection
+            </button>
+            <span id="freewheel-connection-status"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function _freewheelPayload() {
+    const secretEl = document.getElementById('freewheel_client_secret');
+    const config = {
+        client_id: document.getElementById('freewheel_client_id').value,
+        network_id: document.getElementById('freewheel_network_id').value,
+        environment: document.getElementById('freewheel_environment').value,
+        default_advertiser_id: document.getElementById('freewheel_default_advertiser_id').value || null,
+        manual_approval_required: document.getElementById('freewheel_manual_approval_required').checked
+    };
+    if (secretEl.value) {
+        config.client_secret = secretEl.value;
+    }
+    return config;
+}
+
+function saveFreeWheelConfig() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const config = _freewheelPayload();
+
+    if (!config.client_id || !config.network_id) {
+        showNotification('Client ID and Network ID are required', 'error');
+        return;
+    }
+    if (!config.client_secret && !{{ 'true' if adapter_config and adapter_config.get('client_id') else 'false' }}) {
+        showNotification('Client secret is required for first-time setup', 'error');
+        return;
+    }
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapter-config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({adapter_type: 'freewheel', config: config})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Configuration saved successfully', 'success');
+            document.getElementById('freewheel_client_secret').value = '';
+        } else {
+            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Error saving configuration: ' + error.message, 'error');
+    });
+}
+
+function testFreeWheelConnection() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('freewheel-connection-status');
+    const clientId = document.getElementById('freewheel_client_id').value;
+    const clientSecret = document.getElementById('freewheel_client_secret').value;
+    const networkId = document.getElementById('freewheel_network_id').value;
+    const environment = document.getElementById('freewheel_environment').value;
+
+    if (!clientId || !networkId) {
+        showNotification('Client ID and Network ID are required to test connection', 'error');
+        return;
+    }
+
+    statusEl.innerHTML = '<span style="color: #6b7280;">Testing...</span>';
+
+    const payload = {client_id: clientId, network_id: networkId, environment: environment};
+    if (clientSecret) payload.client_secret = clientSecret;
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/test-connection', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Authenticated against FreeWheel ' +
+                data.environment + (data.network_name ? ' (' + data.network_name + ')' : '') + '</span>';
+        } else {
+            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
+        }
+    })
+    .catch(error => {
+        statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
+    });
+}
+</script>

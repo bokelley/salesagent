@@ -1,0 +1,70 @@
+{#
+Triton Digital Adapter Product Configuration Template Fragment
+
+Included in the product add/edit form when the Triton adapter is selected.
+Drives TritonProductConfig — station selection, genres, dayparts.
+
+Expected context:
+- implementation_config: dict with current product implementation config
+- tenant_id: current tenant ID
+#}
+
+<div class="adapter-product-config" data-adapter-type="triton">
+    <div class="form-section">
+        <h3>Triton Station Selection</h3>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Choose which stations, station groups, and dayparts this product targets.
+            These translate into TAP flight <code>targetingRules</code> at media-buy creation.
+        </p>
+
+        <div class="form-group">
+            <label for="impl_station_ids">Station IDs</label>
+            <input type="text" id="impl_station_ids" name="impl_station_ids"
+                   value="{{ (implementation_config.get('station_ids', [])|join(', ')) if implementation_config else '' }}"
+                   placeholder="e.g., KROQ, KIIS, WXYZ">
+            <small class="form-text text-muted">
+                Comma-separated TAP station IDs. Each becomes a value in an
+                <code>{type:in, dimension:station}</code> targeting rule.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_station_group_ids">Station Group IDs</label>
+            <input type="text" id="impl_station_group_ids" name="impl_station_group_ids"
+                   value="{{ (implementation_config.get('station_group_ids', [])|join(', ')) if implementation_config else '' }}"
+                   placeholder="e.g., grp_west_coast, grp_top40">
+            <small class="form-text text-muted">
+                Publisher-defined station bundles. Comma-separated.
+            </small>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label for="impl_genres">Genres</label>
+                <input type="text" id="impl_genres" name="impl_genres"
+                       value="{{ (implementation_config.get('genres', [])|join(', ')) if implementation_config else '' }}"
+                       placeholder="e.g., Rock, News, Sports">
+                <small class="form-text text-muted">Station genre filter (Shoutcast taxonomy).</small>
+            </div>
+
+            <div class="form-group">
+                <label for="impl_stream_types">Stream Types</label>
+                <select id="impl_stream_types" name="impl_stream_types" class="form-control">
+                    <option value="" {% if not implementation_config or not implementation_config.get('stream_types') %}selected{% endif %}>Any</option>
+                    <option value="radio_stream" {% if implementation_config and 'radio_stream' in implementation_config.get('stream_types', []) %}selected{% endif %}>Radio Stream</option>
+                    <option value="podcast" {% if implementation_config and 'podcast' in implementation_config.get('stream_types', []) %}selected{% endif %}>Podcast</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_daypart_ids">Daypart IDs</label>
+            <input type="text" id="impl_daypart_ids" name="impl_daypart_ids"
+                   value="{{ (implementation_config.get('daypart_ids', [])|join(', ')) if implementation_config else '' }}"
+                   placeholder="e.g., dp_morning_drive, dp_evening">
+            <small class="form-text text-muted">
+                TAP daypart entity IDs. Configure dayparts in your Triton publisher account first.
+            </small>
+        </div>
+    </div>
+</div>

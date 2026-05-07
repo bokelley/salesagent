@@ -332,7 +332,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/upload", methods=["GET", "POST"])
 @log_admin_action("upload_authorized_properties")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def upload_authorized_properties(tenant_id: str) -> str | Response:
     """Upload authorized properties from JSON or CSV file."""
     if request.method == "GET":
@@ -401,7 +401,7 @@ def upload_authorized_properties(tenant_id: str) -> str | Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/<property_id>/delete", methods=["POST"])
 @log_admin_action("delete_property")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def delete_property(tenant_id: str, property_id: str) -> Response:
     """Delete an authorized property."""
     try:
@@ -481,7 +481,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
 
 @authorized_properties_bp.route("/<tenant_id>/property-tags/create", methods=["POST"])
 @log_admin_action("create_property_tag")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def create_property_tag(tenant_id: str) -> Response:
     """Create a new property tag."""
     try:
@@ -532,7 +532,7 @@ def create_property_tag(tenant_id: str) -> Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/verify-all", methods=["POST"])
 @log_admin_action("verify_all_properties")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def verify_all_properties(tenant_id: str) -> Response:
     """Verify all pending properties against their adagents.json files."""
     try:
@@ -583,7 +583,7 @@ def verify_all_properties(tenant_id: str) -> Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/sync-from-adagents", methods=["POST"])
 @log_admin_action("sync_properties_from_adagents")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def sync_properties_from_adagents(tenant_id: str) -> Response:
     """Sync properties and tags from publisher adagents.json files.
 
@@ -744,7 +744,7 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/<property_id>/verify-auto", methods=["POST"])
 @log_admin_action("verify_property_auto")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def verify_property_auto(tenant_id: str, property_id: str) -> Response:
     """Automatically verify a property against its adagents.json file."""
     try:
@@ -790,7 +790,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/create", methods=["GET", "POST"])
 @log_admin_action("create_property")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def create_property(tenant_id: str) -> str | Response:
     """Create a new authorized property."""
     if request.method == "GET":
@@ -863,7 +863,7 @@ def create_property(tenant_id: str) -> str | Response:
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/<property_id>/edit", methods=["GET", "POST"])
 @log_admin_action("edit_property")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def edit_property(tenant_id: str, property_id: str) -> str | Response:
     """Edit an existing authorized property."""
     if request.method == "GET":

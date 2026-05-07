@@ -178,8 +178,13 @@ class FormValidator:
 
     @staticmethod
     def validate_role(role: str) -> str | None:
-        """Validate user role."""
-        valid_roles = ["admin", "manager", "viewer"]
+        """Validate user role.
+
+        Canonical enum aligned with the embedded-mode contract. Legacy
+        ``manager`` rows were migrated to ``member`` — see
+        ``alembic/versions/8407a32e9b07_rename_user_role_manager_to_member.py``.
+        """
+        valid_roles = ["admin", "member", "viewer"]
         if role not in valid_roles:
             return f"Invalid role. Must be one of: {', '.join(valid_roles)}"
         return None

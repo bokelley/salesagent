@@ -64,7 +64,7 @@ def list_creative_agents(tenant_id):
 
 @creative_agents_bp.route("/add", methods=["GET", "POST"])
 @log_admin_action("add_creative_agent")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def add_creative_agent(tenant_id):
     """Add a new creative agent."""
     if request.method == "GET":
@@ -130,7 +130,7 @@ def add_creative_agent(tenant_id):
 
 @creative_agents_bp.route("/<int:agent_id>/edit", methods=["GET", "POST"])
 @log_admin_action("edit_creative_agent")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def edit_creative_agent(tenant_id, agent_id):
     """Edit an existing creative agent."""
     if request.method == "GET":
@@ -205,7 +205,7 @@ def edit_creative_agent(tenant_id, agent_id):
 
 
 @creative_agents_bp.route("/<int:agent_id>/delete", methods=["DELETE"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def delete_creative_agent(tenant_id, agent_id):
     """Delete a creative agent."""
     try:
@@ -228,7 +228,7 @@ def delete_creative_agent(tenant_id, agent_id):
 
 @creative_agents_bp.route("/<int:agent_id>/test", methods=["POST"])
 @log_admin_action("test_creative_agent")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def test_creative_agent(tenant_id, agent_id):
     """Test connection to a creative agent."""
     try:

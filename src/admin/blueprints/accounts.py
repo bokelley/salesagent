@@ -50,7 +50,7 @@ def list_accounts(tenant_id):
 
 
 @accounts_bp.route("/create", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action("create_account")
 def create_account(tenant_id):
     """Create a new account."""
@@ -120,7 +120,7 @@ def account_detail(tenant_id, account_id):
 
 
 @accounts_bp.route("/<account_id>/edit", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action("edit_account")
 def edit_account(tenant_id, account_id):
     """Edit an existing account."""
@@ -159,7 +159,7 @@ def edit_account(tenant_id, account_id):
 
 
 @accounts_bp.route("/<account_id>/status", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 @log_admin_action("change_account_status")
 def change_status(tenant_id, account_id):
     """Change account status (JSON API for AJAX calls)."""
@@ -176,13 +176,16 @@ def change_status(tenant_id, account_id):
 
         allowed = _STATUS_TRANSITIONS.get(account.status, set())
         if new_status not in allowed:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": f"Cannot transition from '{account.status}' to '{new_status}'. "
-                    f"Allowed: {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}.",
-                }
-            ), 400
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Cannot transition from '{account.status}' to '{new_status}'. "
+                        f"Allowed: {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}.",
+                    }
+                ),
+                400,
+            )
 
         uow.accounts.update_status(account_id, new_status)
 

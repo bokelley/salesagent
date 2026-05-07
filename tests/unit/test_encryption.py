@@ -14,6 +14,66 @@ from src.core.utils.encryption import (
 )
 
 
+class TestIsEncryptedHardening:
+    """is_encrypted is the gate every Fernet field_validator/serializer relies on.
+
+    A wrong implementation cascades into double-encryption + permanent data
+    corruption on the next save (security review M2).
+    """
+
+    def test_plaintext_without_fernet_prefix_returns_false(self, set_encryption_key):
+        assert is_encrypted("hunter2") is False
+        assert is_encrypted("plaintext-token") is False
+
+    def test_fernet_prefix_with_wrong_key_returns_false(self, set_encryption_key):
+        """A real Fernet token encrypted under a *different* key must not be reported as encrypted.
+
+        Otherwise a tenant in a deployment with a rotated key would have every
+        existing ciphertext silently treated as plaintext, then re-encrypted
+        under the new key on next save → original credential lost.
+        """
+        # Token encrypted under a different key — has the gAAAAA prefix but
+        # decryption fails under the current key.
+        other_token = Fernet(Fernet.generate_key()).encrypt(b"secret").decode()
+        assert other_token.startswith("gAAAAA")
+        assert is_encrypted(other_token) is False
+
+    def test_missing_encryption_key_raises_when_decrypt_attempted(self):
+        """Missing ENCRYPTION_KEY must fail loud, not silently corrupt data."""
+        with patch.dict(os.environ, {}, clear=True):
+            # Plaintext without prefix short-circuits before key access — fine.
+            assert is_encrypted("plaintext") is False
+            # A value that *looks* like a Fernet token must trigger key access
+            # and propagate the missing-key ValueError.
+            with pytest.raises(ValueError, match="ENCRYPTION_KEY"):
+                is_encrypted("gAAAAAfake-token-but-prefix-matches")
+
+    def test_missing_encryption_key_raises_typed_exception(self):
+        """is_encrypted re-raises EncryptionKeyMissingError, not generic ValueError.
+
+        Callers can branch on the typed exception to distinguish "deployment
+        misconfigured" from "value isn't a valid Fernet token under the current
+        key". Replaces the previous brittle substring-match logic.
+        """
+        from src.core.utils.encryption import EncryptionKeyMissingError
+
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(EncryptionKeyMissingError):
+                is_encrypted("gAAAAAfake-token-but-prefix-matches")
+
+        # And the typed exception is a ValueError subclass so existing
+        # broad ValueError catches keep working.
+        assert issubclass(EncryptionKeyMissingError, ValueError)
+
+    def test_none_returns_false(self, set_encryption_key):
+        assert is_encrypted(None) is False
+        assert is_encrypted("") is False
+
+    def test_correctly_encrypted_value_returns_true(self, set_encryption_key):
+        ciphertext = encrypt_api_key("real-secret")
+        assert is_encrypted(ciphertext) is True
+
+
 @pytest.fixture
 def encryption_key():
     """Generate a test encryption key."""

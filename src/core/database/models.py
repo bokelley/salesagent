@@ -724,7 +724,7 @@ class User(Base):
     tenant = relationship("Tenant", back_populates="users")
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'manager', 'viewer')"),
+        CheckConstraint("role IN ('admin', 'member', 'viewer')", name="ck_users_role"),
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),  # Unique per tenant
         Index("idx_users_tenant", "tenant_id"),
         Index("idx_users_email", "email"),
@@ -1374,10 +1374,6 @@ class AdapterConfig(Base):
 
     # Mock
     mock_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    # Triton
-    triton_station_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    triton_api_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Schema-driven configuration (coexists with legacy columns during migration)
     config_json: Mapped[dict] = mapped_column(

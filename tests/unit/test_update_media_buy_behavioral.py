@@ -529,7 +529,9 @@ def test_manual_approval_path_through_impl(standard_mocks):
 
 def test_package_not_found_returns_error(standard_mocks):
     """When package_id references non-existent package in targeting_overlay
-    update path, returns code='package_not_found'."""
+    update path, raises AdCPPackageNotFoundError (wire code PACKAGE_NOT_FOUND)."""
+    from src.core.exceptions import AdCPPackageNotFoundError
+
     _setup_db_session(standard_mocks)
 
     # Package lookup via repo returns None
@@ -542,12 +544,8 @@ def test_package_not_found_returns_error(standard_mocks):
             {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]}}
         ],
     )
-    result = _update_media_buy_impl(req=req, identity=identity)
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert len(result.errors) == 1
-    assert result.errors[0].code == "package_not_found"
-    assert "pkg_nonexistent" in result.errors[0].message
+    with pytest.raises(AdCPPackageNotFoundError, match="pkg_nonexistent"):
+        _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------
@@ -1368,9 +1366,9 @@ class TestUC003UpdateCreativeIds:
 
         from src.core.schemas import Creative
 
-        assert issubclass(Creative, (LibraryDeliveryCreative, LibraryListCreative)), (
-            f"Creative should extend an adcp library Creative, but MRO is: {[c.__name__ for c in Creative.__mro__]}"
-        )
+        assert issubclass(
+            Creative, (LibraryDeliveryCreative, LibraryListCreative)
+        ), f"Creative should extend an adcp library Creative, but MRO is: {[c.__name__ for c in Creative.__mro__]}"
 
 
 # ---------------------------------------------------------------------------
@@ -2371,10 +2369,12 @@ class TestUC003ExtL:
     """Package not found obligations."""
 
     def test_package_id_not_in_media_buy(self, standard_mocks):
-        """Package ID belongs to different media buy returns package_not_found.
+        """Package ID belongs to different media buy raises PACKAGE_NOT_FOUND.
 
         Covers: UC-003-EXT-L-01
         """
+        from src.core.exceptions import AdCPPackageNotFoundError
+
         _setup_db_session(standard_mocks)
 
         # Package lookup returns None (not in this media buy)
@@ -2385,16 +2385,16 @@ class TestUC003ExtL:
             media_buy_id="mb_wrong_pkg",
             packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "package_not_found"
+        with pytest.raises(AdCPPackageNotFoundError):
+            _update_media_buy_impl(req=req, identity=identity)
 
     def test_package_id_does_not_exist(self, standard_mocks):
-        """Non-existent package_id returns package_not_found.
+        """Non-existent package_id raises PACKAGE_NOT_FOUND.
 
         Covers: UC-003-EXT-L-02
         """
+        from src.core.exceptions import AdCPPackageNotFoundError
+
         _setup_db_session(standard_mocks)
 
         standard_mocks["uow_instance"].media_buys.get_package.return_value = None
@@ -2406,11 +2406,8 @@ class TestUC003ExtL:
                 {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]}}
             ],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "package_not_found"
-        assert "pkg_nonexistent" in result.errors[0].message
+        with pytest.raises(AdCPPackageNotFoundError, match="pkg_nonexistent"):
+            _update_media_buy_impl(req=req, identity=identity)
 
 
 # ---------------------------------------------------------------------------

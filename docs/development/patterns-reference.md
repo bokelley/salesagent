@@ -123,7 +123,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
     def call_impl(self, **kwargs) -> Any: ...  # Call production _impl
 ```
 
-**Test using the harness** (from [`tests/unit/test_delivery_poll_behavioral.py`](../../tests/unit/test_delivery_poll_behavioral.py)):
+**Test using the harness** (from [`tests/integration/test_delivery_poll_behavioral.py`](../../tests/integration/test_delivery_poll_behavioral.py)):
 
 ```python
 from tests.harness.delivery_poll_unit import DeliveryPollEnv

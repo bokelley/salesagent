@@ -20,7 +20,7 @@ adapters_bp = Blueprint("adapters", __name__)
 
 
 @adapters_bp.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def mock_config(tenant_id, product_id, **kwargs):
     """Configure mock adapter settings for a product."""
     with get_db_session() as session:
@@ -126,7 +126,7 @@ def adapter_adapter_name_inventory_schema(tenant_id, **kwargs):
 
 @adapters_bp.route("/setup_adapter", methods=["POST"])
 @log_admin_action("setup_adapter")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def setup_adapter(tenant_id, **kwargs):
     """TODO: Extract implementation from admin_ui.py."""
     # Placeholder implementation
@@ -135,7 +135,7 @@ def setup_adapter(tenant_id, **kwargs):
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapter-config", methods=["POST"])
 @log_admin_action("update_adapter_config")
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def save_adapter_config(tenant_id, **kwargs):
     """Save adapter connection configuration.
 
@@ -160,8 +160,46 @@ def save_adapter_config(tenant_id, **kwargs):
         if not adapter_type:
             return jsonify({"success": False, "error": "adapter_type is required"}), 400
 
-        # Validate config against adapter schema (keeps Pydantic model flowing)
+        # For adapters whose schemas mark a field as `secret`, two rules:
+        # (a) reject any submitted ciphertext on the wire — a tenant admin must
+        #     not be able to authenticate a session by replaying another tenant's
+        #     leaked DB-row ciphertext (cross-tenant credential smuggling),
+        # (b) preserve the previously-stored value when the caller omits the
+        #     field (UX: leave password blank to keep existing credential).
+        from src.core.utils.encryption import is_encrypted
+
         schemas = get_adapter_schemas(adapter_type)
+        if schemas and schemas.connection_config:
+            secret_fields = [
+                name
+                for name, field in schemas.connection_config.model_fields.items()
+                if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get("secret")
+            ]
+            for field_name in secret_fields:
+                submitted = config_data.get(field_name)
+                if submitted and is_encrypted(submitted):
+                    return (
+                        jsonify(
+                            {
+                                "success": False,
+                                "error": f"{field_name} must be plaintext (encrypted-token replay rejected)",
+                            }
+                        ),
+                        400,
+                    )
+            if secret_fields:
+                missing = [f for f in secret_fields if not config_data.get(f)]
+                if missing:
+                    with get_db_session() as session:
+                        stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
+                        existing = session.scalars(stmt).first()
+                        if existing and existing.config_json:
+                            for field_name in missing:
+                                existing_value = existing.config_json.get(field_name)
+                                if existing_value:
+                                    config_data[field_name] = existing_value
+
+        # Validate config against adapter schema (keeps Pydantic model flowing)
         validated_config = None
         if schemas and schemas.connection_config:
             try:
@@ -195,7 +233,8 @@ def save_adapter_config(tenant_id, **kwargs):
                 adapter_config.mock_manual_approval_required = getattr(
                     validated_config, "manual_approval_required", False
                 )
-            # Note: GAM, Triton will be added as their schemas are created
+            # Note: GAM will be added as its schema is created. Triton + FreeWheel
+            # already use config_json via their connection schemas.
 
             session.commit()
             logger.info(f"Saved adapter config for tenant {tenant_id}: {adapter_type}")
@@ -226,11 +265,173 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
         return jsonify({})
 
 
+# FreeWheel-specific endpoints
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/test-connection", methods=["POST"])
+@require_tenant_access()
+def test_freewheel_connection(tenant_id, **kwargs):
+    """Verify FreeWheel OAuth credentials by performing a client_credentials token fetch.
+
+    Accepts ``client_id``, ``network_id``, ``environment`` (production/staging) and
+    ``client_secret`` (optional — falls back to the encrypted secret already stored
+    on AdapterConfig.config_json).
+    """
+    from src.core.utils.encryption import is_encrypted
+
+    try:
+        data = request.get_json() or {}
+        client_id = data.get("client_id")
+        client_secret = data.get("client_secret")
+        network_id = data.get("network_id")
+        environment = data.get("environment", "production")
+
+        if not client_id or not network_id:
+            return jsonify({"success": False, "error": "client_id and network_id are required"}), 400
+
+        # Reject submitted ciphertext — only the DB-fallback path is allowed
+        # to use the stored ciphertext. See cross-tenant smuggling note in
+        # save_adapter_config.
+        if client_secret and is_encrypted(client_secret):
+            return (
+                jsonify(
+                    {"success": False, "error": "client_secret must be plaintext (encrypted-token replay rejected)"}
+                ),
+                400,
+            )
+
+        if not client_secret:
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            with get_db_session() as session:
+                existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if existing and existing.config_json:
+                    from src.adapters.freewheel import FreeWheelConnectionConfig
+
+                    try:
+                        rehydrated = FreeWheelConnectionConfig.model_validate(existing.config_json)
+                        client_secret = rehydrated.client_secret
+                    except ValidationError:
+                        client_secret = None
+        if not client_secret:
+            return (
+                jsonify({"success": False, "error": "client_secret is required for first connection test"}),
+                400,
+            )
+
+        from src.adapters.freewheel import FreeWheelAPIError, FreeWheelClient
+        from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
+
+        base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
+        client = FreeWheelClient(
+            client_id=client_id,
+            client_secret=client_secret,
+            network_id=network_id,
+            base_url=base_url,
+        )
+        try:
+            client._fetch_token()
+        except FreeWheelAPIError as exc:
+            # Log the full upstream body server-side; return only a generic
+            # message to the client to avoid echoing reflected request data
+            # or hint messages from the auth provider.
+            logger.warning("FreeWheel auth probe failed: %s body=%s", exc, exc.body)
+            return jsonify({"success": False, "error": "FreeWheel rejected the credentials"}), 200
+
+        network_name: str | None = None
+        try:
+            network = client.get_network()
+            network_name = network.get("name") or network.get("displayName")
+        except FreeWheelAPIError:
+            pass  # Token works; network endpoint specifics may vary
+
+        return jsonify({"success": True, "environment": environment, "network_name": network_name})
+
+    except Exception as e:
+        logger.error(f"FreeWheel connection test failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
+
+
+# Triton-specific endpoints
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/triton/test-connection", methods=["POST"])
+@require_tenant_access()
+def test_triton_connection(tenant_id, **kwargs):
+    """Verify Triton TAP credentials by performing a JWT login.
+
+    Accepts ``username`` (required) and ``password`` (optional — falls back to
+    the encrypted password already stored on AdapterConfig.config_json).
+    """
+    from src.core.utils.encryption import is_encrypted
+
+    try:
+        data = request.get_json() or {}
+        username = data.get("username")
+        password = data.get("password")
+        base_url = data.get("base_url") or "https://mbapi.tritondigital.com"
+        login_url = data.get("login_url") or "https://login.tritondigital.com"
+
+        if not username:
+            return jsonify({"success": False, "error": "username is required"}), 400
+
+        # https-only — prevent the form from redirecting credential POST to an
+        # attacker-controlled host.
+        if not base_url.startswith("https://") or not login_url.startswith("https://"):
+            return jsonify({"success": False, "error": "base_url and login_url must be https://"}), 400
+
+        # Reject submitted ciphertext — see cross-tenant smuggling note in
+        # save_adapter_config.
+        if password and is_encrypted(password):
+            return (
+                jsonify({"success": False, "error": "password must be plaintext (encrypted-token replay rejected)"}),
+                400,
+            )
+
+        if not password:
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            with get_db_session() as session:
+                existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if existing and existing.config_json:
+                    from src.adapters.triton import TritonConnectionConfig
+
+                    try:
+                        rehydrated = TritonConnectionConfig.model_validate(existing.config_json)
+                        password = rehydrated.password
+                    except ValidationError:
+                        password = None
+        if not password:
+            return jsonify({"success": False, "error": "password is required for first connection test"}), 400
+
+        from src.adapters.triton import TritonAPIError, TritonClient
+
+        client = TritonClient(username=username, password=password, base_url=base_url, login_url=login_url)
+        try:
+            client.login()
+        except TritonAPIError as exc:
+            logger.warning("Triton auth probe failed: %s body=%s", exc, exc.body)
+            return jsonify({"success": False, "error": "Triton rejected the credentials"}), 200
+
+        publisher_name: str | None = None
+        try:
+            publisher = client.get_publisher()
+            publisher_name = publisher.get("name") or publisher.get("displayName")
+        except TritonAPIError:
+            pass  # JWT works; publisher endpoint specifics may vary
+
+        return jsonify({"success": True, "publisher_name": publisher_name})
+
+    except Exception as e:
+        logger.error(f"Triton connection test failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
+
+
 # Broadstreet-specific endpoints
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/broadstreet/test-connection", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=("admin",))
 def test_broadstreet_connection(tenant_id, **kwargs):
     """Test Broadstreet API connection with provided credentials."""
     try:

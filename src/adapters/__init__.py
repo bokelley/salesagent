@@ -7,15 +7,17 @@ from .base import BaseProductConfig as BaseProductConfig
 from .base import TargetingCapabilities as TargetingCapabilities
 from .broadstreet import BroadstreetAdapter
 from .creative_engine import CreativeEngineAdapter
+from .freewheel import FreeWheelAdapter
 from .google_ad_manager import GoogleAdManager as GAMAdapter
 from .mock_ad_server import MockAdServer as MockAdapter
-from .triton_digital import TritonDigital as TritonAdapter
+from .triton import TritonAdapter
 
 # Map of adapter type strings to adapter classes
 ADAPTER_REGISTRY = {
     "gam": GAMAdapter,
     "google_ad_manager": GAMAdapter,
     "broadstreet": BroadstreetAdapter,
+    "freewheel": FreeWheelAdapter,
     "mock": MockAdapter,
     "triton": TritonAdapter,
     "triton_digital": TritonAdapter,

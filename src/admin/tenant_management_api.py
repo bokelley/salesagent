@@ -18,6 +18,7 @@ from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import attributes
 
 from src.admin.api_schemas.tenant_management import (
     WEBHOOK_EVENT_TYPES,
@@ -407,12 +408,57 @@ def create_tenant():
                     updated_at=datetime.now(UTC),
                 )
                 # NOTE: gam_company_id removed - advertiser_id is per-principal in platform_mappings
-            elif adapter_type == "triton":
+            elif adapter_type in {"triton", "triton_digital"}:
+                # Validate Triton credentials through TritonConnectionConfig (encrypts password).
+                # Reject submitted ciphertext to close the cross-tenant smuggling
+                # vector — same defence as the admin/blueprints/adapters.py
+                # save_adapter_config endpoint. See M1/S7 in security review.
+                from src.adapters.triton import TritonConnectionConfig
+                from src.core.utils.encryption import is_encrypted
+
+                if data.get("password") and is_encrypted(data["password"]):
+                    return jsonify({"error": "password must be plaintext (encrypted-token replay rejected)"}), 400
+                triton_payload = {
+                    k: data[k]
+                    for k in (
+                        "auth_type",
+                        "username",
+                        "password",
+                        "base_url",
+                        "login_url",
+                        "default_advertiser_id",
+                    )
+                    if k in data
+                }
+                validated = TritonConnectionConfig(**triton_payload)
                 new_adapter = AdapterConfig(
                     tenant_id=tenant_id,
                     adapter_type=adapter_type,
-                    triton_station_id=data.get("triton_station_id"),
-                    triton_api_key=data.get("triton_api_key"),
+                    config_json=validated.model_dump(),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            elif adapter_type == "freewheel":
+                # Validate FreeWheel credentials through FreeWheelConnectionConfig.
+                # Reject submitted ciphertext (cross-tenant smuggling defence).
+                from src.adapters.freewheel import FreeWheelConnectionConfig
+                from src.core.utils.encryption import is_encrypted
+
+                if data.get("client_secret") and is_encrypted(data["client_secret"]):
+                    return (
+                        jsonify({"error": "client_secret must be plaintext (encrypted-token replay rejected)"}),
+                        400,
+                    )
+                fw_payload = {
+                    k: data[k]
+                    for k in ("client_id", "client_secret", "network_id", "environment", "default_advertiser_id")
+                    if k in data
+                }
+                validated = FreeWheelConnectionConfig(**fw_payload)
+                new_adapter = AdapterConfig(
+                    tenant_id=tenant_id,
+                    adapter_type=adapter_type,
+                    config_json=validated.model_dump(),
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
                 )
@@ -438,8 +484,10 @@ def create_tenant():
                 if adapter_type == "google_ad_manager":
                     # For GAM, add a placeholder advertiser ID
                     default_mappings = {"google_ad_manager": {"advertiser_id": "placeholder"}}
-                elif adapter_type == "triton":
+                elif adapter_type in {"triton", "triton_digital"}:
                     default_mappings = {"triton": {"advertiser_id": "placeholder"}}
+                elif adapter_type == "freewheel":
+                    default_mappings = {"freewheel": {"advertiser_id": "placeholder"}}
                 else:
                     # For mock and others
                     default_mappings = {"mock": {"advertiser_id": "default"}}
@@ -576,11 +624,54 @@ def update_tenant(tenant_id):
                         if "gam_manual_approval_required" in adapter_data:
                             adapter.gam_manual_approval_required = adapter_data["gam_manual_approval_required"]
 
-                    elif adapter.adapter_type == "triton":
-                        if "triton_station_id" in adapter_data:
-                            adapter.triton_station_id = adapter_data["triton_station_id"]
-                        if "triton_api_key" in adapter_data:
-                            adapter.triton_api_key = adapter_data["triton_api_key"]
+                    elif adapter.adapter_type in {"triton", "triton_digital"}:
+                        # Reject submitted ciphertext (M1/S7: cross-tenant smuggling).
+                        from src.adapters.triton import TritonConnectionConfig
+                        from src.core.utils.encryption import is_encrypted
+
+                        if adapter_data.get("password") and is_encrypted(adapter_data["password"]):
+                            return (
+                                jsonify({"error": "password must be plaintext (encrypted-token replay rejected)"}),
+                                400,
+                            )
+                        merged = dict(adapter.config_json or {})
+                        for field_name in (
+                            "auth_type",
+                            "username",
+                            "password",
+                            "base_url",
+                            "login_url",
+                            "default_advertiser_id",
+                        ):
+                            if field_name in adapter_data:
+                                merged[field_name] = adapter_data[field_name]
+                        validated = TritonConnectionConfig(**merged)
+                        adapter.config_json = validated.model_dump()
+                        attributes.flag_modified(adapter, "config_json")
+
+                    elif adapter.adapter_type == "freewheel":
+                        # Reject submitted ciphertext (M1/S7: cross-tenant smuggling).
+                        from src.adapters.freewheel import FreeWheelConnectionConfig
+                        from src.core.utils.encryption import is_encrypted
+
+                        if adapter_data.get("client_secret") and is_encrypted(adapter_data["client_secret"]):
+                            return (
+                                jsonify({"error": "client_secret must be plaintext (encrypted-token replay rejected)"}),
+                                400,
+                            )
+                        merged = dict(adapter.config_json or {})
+                        for field_name in (
+                            "client_id",
+                            "client_secret",
+                            "network_id",
+                            "environment",
+                            "default_advertiser_id",
+                        ):
+                            if field_name in adapter_data:
+                                merged[field_name] = adapter_data[field_name]
+                        validated = FreeWheelConnectionConfig(**merged)
+                        adapter.config_json = validated.model_dump()
+                        attributes.flag_modified(adapter, "config_json")
 
                     elif adapter.adapter_type == "mock":
                         if "mock_dry_run" in adapter_data:
@@ -1149,7 +1240,7 @@ def _set_account_advertiser(
 ) -> None:
     """Set GAM advertiser id/name on ``Account.platform_mappings``.
 
-    Preserves any other adapter blocks (triton) and other GAM fields
+    Preserves any other adapter blocks (triton, freewheel) and other GAM fields
     we don't manage from this endpoint. Re-assigns the dict so SQLAlchemy
     sees the JSONType column as dirty even with mutation-tracking off.
     """

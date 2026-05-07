@@ -771,7 +771,16 @@
                         <span class="adapter-badge">Current</span>
                         {% endif %}
                         <h4>Triton Digital</h4>
-                        <p>Audio and podcast advertising platform</p>
+                        <p>Audio and podcast advertising via the TAP Media Buying API</p>
+                    </div>
+
+                    <div class="adapter-card {% if active_adapter == 'freewheel' %}current{% endif %}"
+                         onclick="selectAdapter('freewheel')">
+                        {% if active_adapter == 'freewheel' %}
+                        <span class="adapter-badge">Current</span>
+                        {% endif %}
+                        <h4>FreeWheel</h4>
+                        <p>Video and CTV advertising via Comcast/FreeWheel's Publisher API</p>
                     </div>
                 </div>
             </div>

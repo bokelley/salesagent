@@ -67,7 +67,7 @@ def get_config(tenant_id: str):
 
 
 @oidc_bp.route("/tenant/<tenant_id>/config", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin",))
 def save_config(tenant_id: str):
     """Save OIDC configuration for a tenant.
 
@@ -127,7 +127,7 @@ def save_config(tenant_id: str):
 
 
 @oidc_bp.route("/tenant/<tenant_id>/enable", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin",))
 def enable(tenant_id: str):
     """Enable OIDC authentication for a tenant."""
     if enable_oidc(tenant_id):
@@ -151,7 +151,7 @@ def enable(tenant_id: str):
 
 
 @oidc_bp.route("/tenant/<tenant_id>/disable", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin",))
 def disable(tenant_id: str):
     """Disable OIDC authentication for a tenant."""
     disable_oidc(tenant_id)

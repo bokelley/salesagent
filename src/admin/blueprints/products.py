@@ -479,9 +479,7 @@ def list_products(tenant_id):
                 formats_data = (
                     product.format_ids
                     if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
+                    else json.loads(product.format_ids) if product.format_ids else []
                 )
 
                 # Debug: Log raw formats data
@@ -557,16 +555,12 @@ def list_products(tenant_id):
                     "countries": (
                         product.countries
                         if isinstance(product.countries, list)
-                        else json.loads(product.countries)
-                        if product.countries
-                        else []
+                        else json.loads(product.countries) if product.countries else []
                     ),
                     "implementation_config": (
                         product.implementation_config
                         if isinstance(product.implementation_config, dict)
-                        else json.loads(product.implementation_config)
-                        if product.implementation_config
-                        else {}
+                        else json.loads(product.implementation_config) if product.implementation_config else {}
                     ),
                     "created_at": getattr(product, "created_at", None),
                     "inventory_details": inventory_details.get(
@@ -696,7 +690,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
 
 @products_bp.route("/add", methods=["GET", "POST"])
 @log_admin_action("add_product")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def add_product(tenant_id):
     """Add a new product - adapter-specific form."""
     # Get tenant's adapter type and currencies
@@ -1324,7 +1318,7 @@ def add_product(tenant_id):
 
 @products_bp.route("/<product_id>/edit", methods=["GET", "POST"])
 @log_admin_action("edit_product")
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def edit_product(tenant_id, product_id):
     """Edit an existing product."""
     from sqlalchemy import select
@@ -1924,18 +1918,14 @@ def edit_product(tenant_id, product_id):
             implementation_config = (
                 product.implementation_config
                 if isinstance(product.implementation_config, dict)
-                else json.loads(product.implementation_config)
-                if product.implementation_config
-                else {}
+                else json.loads(product.implementation_config) if product.implementation_config else {}
             )
 
             # Parse targeting_template - build from implementation_config if not set
             targeting_template = (
                 product.targeting_template
                 if isinstance(product.targeting_template, dict)
-                else json.loads(product.targeting_template)
-                if product.targeting_template
-                else {}
+                else json.loads(product.targeting_template) if product.targeting_template else {}
             )
 
             # If targeting_template doesn't have key_value_pairs but implementation_config has custom_targeting_keys,
@@ -1954,16 +1944,12 @@ def edit_product(tenant_id, product_id):
                 "formats": (
                     product.format_ids
                     if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
+                    else json.loads(product.format_ids) if product.format_ids else []
                 ),
                 "countries": (
                     product.countries
                     if isinstance(product.countries, list)
-                    else json.loads(product.countries)
-                    if product.countries
-                    else []
+                    else json.loads(product.countries) if product.countries else []
                 ),
                 "implementation_config": implementation_config,
                 "targeting_template": targeting_template,
@@ -2121,7 +2107,7 @@ def edit_product(tenant_id, product_id):
 
 
 @products_bp.route("/<product_id>/delete", methods=["DELETE"])
-@require_tenant_access()
+@require_tenant_access(role=("admin", "member"))
 def delete_product(tenant_id, product_id):
     """Delete a product."""
     try:
@@ -2202,7 +2188,7 @@ def delete_product(tenant_id, product_id):
 
 @products_bp.route("/<product_id>/inventory", methods=["POST"])
 @log_admin_action("assign_inventory_to_product")
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def assign_inventory_to_product(tenant_id, product_id):
     """Assign inventory items to a product.
 
@@ -2381,7 +2367,7 @@ def get_product_inventory(tenant_id, product_id):
 
 @products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
 @log_admin_action("unassign_inventory_from_product")
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
     """Remove an inventory assignment from a product (API endpoint)."""
     try:

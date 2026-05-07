@@ -84,12 +84,32 @@ class AdCPNotFoundError(AdCPError):
 
     status_code = 404
     error_code = "NOT_FOUND"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
     """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
 
     error_code = "ACCOUNT_NOT_FOUND"
+
+
+class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
+    """Media buy not found within the caller's tenant (404, MEDIA_BUY_NOT_FOUND).
+
+    Tenant isolation: cross-tenant access (a buyer probing IDs that exist on a
+    different tenant) MUST also surface as MEDIA_BUY_NOT_FOUND. Returning a
+    permissions error would leak the existence of cross-tenant media buys to
+    attackers — that's why the tenant-scoped repository returns ``None`` for
+    rows belonging to other tenants and this is the error we raise.
+    """
+
+    error_code = "MEDIA_BUY_NOT_FOUND"
+
+
+class AdCPPackageNotFoundError(AdCPNotFoundError):
+    """Package not found on the referenced media buy (404, PACKAGE_NOT_FOUND)."""
+
+    error_code = "PACKAGE_NOT_FOUND"
 
 
 class AdCPAccountSetupRequiredError(AdCPError):
@@ -140,6 +160,21 @@ class AdCPBudgetExhaustedError(AdCPError):
 
     status_code = 422
     error_code = "BUDGET_EXHAUSTED"
+    recovery: RecoveryHint = "correctable"
+
+
+class AdCPTermsRejectedError(AdCPError):
+    """Buyer-proposed measurement_terms or performance_standards cannot be honored (422).
+
+    Per AdCP spec, sellers receiving package-level measurement_terms or
+    performance_standards they cannot fulfill must reject with TERMS_REJECTED
+    rather than INTERNAL_ERROR. The error is correctable: buyer agents are
+    expected to relax the terms (e.g. wider variance tolerance, different
+    measurement window) and retry with a fresh idempotency_key.
+    """
+
+    status_code = 422
+    error_code = "TERMS_REJECTED"
     recovery: RecoveryHint = "correctable"
 
 

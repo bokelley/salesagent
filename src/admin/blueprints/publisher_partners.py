@@ -219,7 +219,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a new publisher partner."""
     try:
@@ -317,7 +317,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["DELETE"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Delete a publisher partner."""
     try:
@@ -346,7 +346,7 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """Sync verification status for all publisher partners."""
     try:
@@ -602,7 +602,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/refresh", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Force-refresh AAO status for a single publisher partner.
 

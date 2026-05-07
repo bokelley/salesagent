@@ -131,8 +131,10 @@ class AdServerAdapter(ABC):
 
 - **GoogleAdManagerAdapter** - Full GAM integration
 - **KevelAdapter** - Kevel ad server
+- **BroadstreetAdapter** - Broadstreet Ads
+- **TritonAdapter** - Triton Digital TAP (streaming audio + podcast)
+- **FreeWheelAdapter** - Comcast/FreeWheel Publisher API (video + CTV)
 - **MockAdapter** - Testing and development
-- **TritonAdapter** - Audio advertising
 
 Each adapter handles:
 - Platform authentication

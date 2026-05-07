@@ -314,6 +314,7 @@ def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | N
     adapter_field_map = {
         "gam": "gam_advertiser_id",
         "triton": "triton_advertiser_id",
+        "freewheel": "freewheel_advertiser_id",
         "mock": "mock_advertiser_id",
     }
 
