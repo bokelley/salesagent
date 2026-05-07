@@ -80,9 +80,9 @@ class TestBasicMediaBuyLifecycle:
             (p for p in products_resp.products if p.product_id == "guaranteed_display"),
             None,
         )
-        assert (
-            chosen is not None
-        ), f"Expected 'guaranteed_display' in product list, got {[p.product_id for p in products_resp.products]}"
+        assert chosen is not None, (
+            f"Expected 'guaranteed_display' in product list, got {[p.product_id for p in products_resp.products]}"
+        )
         # Synthesized pricing_option_id format: "{model}_{currency}_{fixed|auction}"
         # See src/core/tools/media_buy_create.py:1654-1661
         pricing_option_id = "cpm_usd_fixed"
@@ -137,9 +137,9 @@ class TestBasicMediaBuyLifecycle:
         )
 
         assert sync_resp.creatives, f"sync_creatives returned no creatives: {sync_resp}"
-        assert any(
-            c.creative_id == creative_id for c in sync_resp.creatives
-        ), f"Synced creative {creative_id} missing from response: {[c.creative_id for c in sync_resp.creatives]}"
+        assert any(c.creative_id == creative_id for c in sync_resp.creatives), (
+            f"Synced creative {creative_id} missing from response: {[c.creative_id for c in sync_resp.creatives]}"
+        )
 
         with get_db_session() as session:
             db_creative = session.scalars(
@@ -158,16 +158,16 @@ class TestBasicMediaBuyLifecycle:
         )
         delivery_resp = _get_media_buy_delivery_impl(delivery_req, identity)
 
-        assert (
-            delivery_resp.errors is None or len(delivery_resp.errors) == 0
-        ), f"get_media_buy_delivery returned errors: {delivery_resp.errors}"
+        assert delivery_resp.errors is None or len(delivery_resp.errors) == 0, (
+            f"get_media_buy_delivery returned errors: {delivery_resp.errors}"
+        )
         # Mock adapter may return zero metrics for a fresh future-dated buy.
         # Validate shape, not values: the response must include our media buy.
         deliveries = delivery_resp.media_buy_deliveries or []
         delivery_ids = [d.media_buy_id for d in deliveries]
-        assert (
-            media_buy_id in delivery_ids
-        ), f"Expected {media_buy_id} in delivery response, got {delivery_ids}. Full response: {delivery_resp}"
+        assert media_buy_id in delivery_ids, (
+            f"Expected {media_buy_id} in delivery response, got {delivery_ids}. Full response: {delivery_resp}"
+        )
 
 
 class TestCreativeApprovalAsync:
@@ -218,9 +218,9 @@ class TestCreativeApprovalAsync:
                 )
             ).first()
             assert row is not None, f"creative {creative_id} not persisted"
-            assert (
-                row.status == "pending_review"
-            ), f"Expected pending_review, got {row.status}. sync response status={synced.status}"
+            assert row.status == "pending_review", (
+                f"Expected pending_review, got {row.status}. sync response status={synced.status}"
+            )
 
         # Simulate admin approval through the same repository method the
         # admin Flask route uses (CreativeRepository.admin_mark_approved).
@@ -273,9 +273,9 @@ class TestMediaBuyApprovalAsync:
         )
         result = await _create_media_buy_impl(req=req, identity=identity)
 
-        assert (
-            result.status == "submitted"
-        ), f"Expected submitted, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
+        assert result.status == "submitted", (
+            f"Expected submitted, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
+        )
         media_buy_id = result.response.media_buy_id
         assert media_buy_id
 
@@ -283,9 +283,9 @@ class TestMediaBuyApprovalAsync:
         with get_db_session() as session:
             steps = session.scalars(select(WorkflowStep).where(WorkflowStep.step_type == "media_buy_creation")).all()
             approval_steps = [s for s in steps if s.status == "requires_approval"]
-            assert (
-                approval_steps
-            ), f"Expected requires_approval workflow_step, got {[(s.step_id, s.status) for s in steps]}"
+            assert approval_steps, (
+                f"Expected requires_approval workflow_step, got {[(s.step_id, s.status) for s in steps]}"
+            )
 
         # Execute approval.
         success, error = execute_approved_media_buy(
@@ -431,9 +431,9 @@ class TestDeliveryWebhookFires:
                 },
             )
             create_result = await _create_media_buy_impl(req=create_req, identity=identity)
-            assert create_result.status not in (
-                "failed",
-            ), f"create failed: errors={getattr(create_result.response, 'errors', None)}"
+            assert create_result.status not in ("failed",), (
+                f"create failed: errors={getattr(create_result.response, 'errors', None)}"
+            )
             media_buy_id = create_result.response.media_buy_id
             assert media_buy_id
 
@@ -546,9 +546,9 @@ class TestDeliveryWebhookHeartbeatForPendingStart:
                 ),
                 identity=identity,
             )
-            assert create_result.status not in (
-                "failed",
-            ), f"create failed: {getattr(create_result.response, 'errors', None)}"
+            assert create_result.status not in ("failed",), (
+                f"create failed: {getattr(create_result.response, 'errors', None)}"
+            )
             media_buy_id = create_result.response.media_buy_id
             assert media_buy_id
 
@@ -572,9 +572,9 @@ class TestDeliveryWebhookHeartbeatForPendingStart:
 
             payload = received[0]
             result = payload.get("result") or {}
-            assert (
-                result.get("partial_data") is True
-            ), f"Heartbeat for pending_start should set partial_data=True, got result={result}"
+            assert result.get("partial_data") is True, (
+                f"Heartbeat for pending_start should set partial_data=True, got result={result}"
+            )
             deliveries = result.get("media_buy_deliveries") or []
             assert deliveries, f"missing media_buy_deliveries: {result}"
             assert deliveries[0]["media_buy_id"] == media_buy_id
@@ -671,9 +671,9 @@ class TestDeliveryWebhookOptOutPreStart:
 
             # Give the receiver thread a chance to pick up any inbound POST.
             sleep(2.0)
-            assert (
-                not received
-            ), f"Expected no webhook (tenant opted out of pre-start heartbeats) but receiver got: {received}"
+            assert not received, (
+                f"Expected no webhook (tenant opted out of pre-start heartbeats) but receiver got: {received}"
+            )
         finally:
             server.shutdown()
             server.server_close()

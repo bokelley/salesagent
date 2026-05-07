@@ -153,6 +153,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -2490,14 +2491,18 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Return success response with packages awaiting approval
-            # The workflow_step_id in packages indicates approval is required
+            # Async-pending-approval path — emit the spec's submitted envelope.
+            # Per ``create_media_buy_response`` (variant-3), the async shape carries
+            # ``status='submitted'`` and a ``task_id`` handle, and does NOT carry
+            # ``media_buy_id`` or ``packages`` (those belong to variant-1, whose
+            # ``status`` is a ``MediaBuyStatus`` and excludes 'submitted'). The
+            # ``media_buy_id`` is issued on the completion artifact (post-approval),
+            # not here. Buyers poll via ``tasks/get`` using ``task_id``.
             return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    creative_deadline=None,
-                    packages=pending_packages,
-                    workflow_step_id=step.step_id,  # Client can track approval via this ID
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message=f"Media buy {media_buy_id} submitted; awaiting human review.",
+                    workflow_step_id=step.step_id,
                     context=req.context,
                 ),
                 status=AdcpTaskStatus.submitted.value,
@@ -2511,7 +2516,10 @@ async def _create_media_buy_impl(
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
 
-        # Validate and auto-generate GAM implementation_config for each product if needed
+        # Validate and auto-generate GAM implementation_config for each product if needed.
+        # ``effective_configs`` lets us thread the auto-generated value through the
+        # rest of the function without mutating the wire-shape Product schema.
+        effective_configs: dict[str, dict] = {p.product_id: p.implementation_config or {} for p in products_in_buy}
         if adapter.__class__.__name__ == "GoogleAdManager":
             from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -2533,9 +2541,10 @@ async def _create_media_buy_impl(
                     formats_list: list[str] | None = None
                     if schema_product.format_ids:
                         formats_list = [fmt.id for fmt in schema_product.format_ids]
-                    schema_product.implementation_config = gam_validator.generate_default_config(
+                    auto_config = gam_validator.generate_default_config(
                         delivery_type=delivery_type_str, formats=formats_list
                     )
+                    effective_configs[schema_product.product_id] = auto_config
 
                     # Persist the auto-generated config to database
                     with MediaBuyUoW(tenant["tenant_id"]) as gam_uow:
@@ -2544,12 +2553,12 @@ async def _create_media_buy_impl(
                         product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
                         db_product = gam_uow.session.scalars(product_stmt).first()
                         if db_product:
-                            db_product.implementation_config = schema_product.implementation_config
+                            db_product.implementation_config = auto_config
                             # UoW auto-commits on clean exit
                             logger.info(f"Saved auto-generated GAM config for product {schema_product.product_id}")
 
                 # Validate the config (whether existing or auto-generated)
-                impl_config = schema_product.implementation_config if schema_product.implementation_config else {}
+                impl_config = effective_configs[schema_product.product_id]
                 is_valid, error_msg_temp = gam_validator.validate_config(impl_config)
                 error_msg = error_msg_temp if error_msg_temp else "Unknown error"
                 if not is_valid:
@@ -2574,8 +2583,7 @@ async def _create_media_buy_impl(
                 )
 
         product_auto_create = all(
-            p.implementation_config.get("auto_create_enabled", True) if p.implementation_config else True
-            for p in products_in_buy
+            effective_configs[p.product_id].get("auto_create_enabled", True) for p in products_in_buy
         )
 
         # Check if either tenant or product disables auto-creation
@@ -2652,10 +2660,13 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
+            # Tenant- or product-config-driven approval requirement: emit the
+            # spec's submitted envelope (variant-3 of create_media_buy_response).
+            # See the manual-approval branch above for the contract rationale.
             return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    packages=response_packages,
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message=f"Media buy {media_buy_id} submitted; {reason.lower()} requires approval.",
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
@@ -2779,9 +2790,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url

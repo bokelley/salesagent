@@ -49,6 +49,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
@@ -352,9 +353,9 @@ class TestMaxDailySpendExceeded:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
                     # Validation errors must NOT be about daily spend
-                    assert (
-                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
-                    ), f"Daily spend validation should have passed but got: {e}"
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
+                        f"Daily spend validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend validation are fine
 
@@ -726,9 +727,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index(
-            "approval_check"
-        ), f"Creatives must be processed before approval check. Order: {call_order}"
+        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
+            f"Creatives must be processed before approval check. Order: {call_order}"
+        )
 
 
 class TestMultipleInvalidCreativesAccumulated:
@@ -1113,9 +1114,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert (
-                        "not found" not in str(e).lower() or "product" not in str(e).lower()
-                    ), f"Product validation should have passed but got: {e}"
+                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
+                        f"Product validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to product validation are fine
 
@@ -1141,9 +1142,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert (
-                        "currency" not in str(e).lower() or "not supported" not in str(e).lower()
-                    ), f"Currency validation should have passed but got: {e}"
+                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
+                        f"Currency validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to currency validation are fine
 
@@ -1413,9 +1414,9 @@ class TestAsapStartTimingObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert (
-                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
-                    ), f"Daily spend validation should have passed but got: {e}"
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
+                        f"Daily spend validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend are fine
 
@@ -1450,7 +1451,10 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        # Spec ``create_media_buy_response`` (variant-3): async pending shape is
+        # the submitted envelope (task_id + status='submitted'), NOT the sync
+        # success body with media_buy_id/packages.
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
 
     @pytest.mark.asyncio
@@ -1480,7 +1484,7 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"
 
     @pytest.mark.asyncio
@@ -1552,7 +1556,10 @@ class TestManualApprovalObligations:
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
         assert result.status == "submitted"
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        # Spec variant-3: submitted envelope carries task_id (not media_buy_id).
+        # ``workflow_step_id`` is preserved as an internal handle (excluded from wire).
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id is not None
         assert result.response.workflow_step_id is not None
 
     @pytest.mark.asyncio
@@ -1651,8 +1658,10 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        # Spec variant-3: submitted envelope. ``task_id`` is the buyer-facing
+        # poll handle; ``workflow_step_id`` is preserved as an internal handle.
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id == "step_1"
         assert result.response.workflow_step_id == "step_1"
 
 
@@ -1894,10 +1903,14 @@ class TestCrossCuttingObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Manual path: adapter was NOT called, but records were persisted
+        # Manual path: adapter was NOT called, but records were persisted.
+        # Spec variant-3: the submitted envelope identifies the work via
+        # ``task_id`` — ``media_buy_id`` is issued on the completion artifact
+        # post-approval, not on the pending response.
         assert result.status == "submitted"
         mock_exec.assert_not_called()
-        assert result.response.media_buy_id is not None
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id is not None
 
     @pytest.mark.asyncio
     async def test_creative_in_valid_state_assigned_successfully(self):
