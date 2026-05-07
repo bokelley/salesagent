@@ -19,7 +19,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage
 from src.core.exceptions import AdCPAuthorizationError
-from src.core.schemas import GetMediaBuysRequest, UpdateMediaBuyRequest
+from src.core.schemas import GetMediaBuysRequest, UpdateMediaBuyError, UpdateMediaBuyRequest
 from src.core.tools._gam_projection import (
     is_projected_media_buy_id,
     materialize_projected_buy,
@@ -114,6 +114,30 @@ class TestProjectionSkipsMaterialized:
 
         ids = [mb.media_buy_id for mb in result.media_buys]
         assert ids.count(f"gam_{sc.order.order_id}") == 1
+
+
+class TestUpdateMediaBuyRejectsMutatingImportedBuy:
+    """Mutating fields on imported buys are rejected until adapter writeback exists."""
+
+    def test_pause_on_imported_buy_returns_not_implemented(self, factory_session):
+        sc = build_assigned_order_scenario()
+        GAMLineItemFactory(tenant=sc.tenant, order_id=sc.order.order_id)
+        factory_session.commit()
+
+        result = _update_media_buy_impl(
+            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}", paused=True),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+
+        assert isinstance(result, UpdateMediaBuyError)
+        assert result.errors[0].code == "not_implemented"
+
+        # Materialization happened despite the rejection — first read locked
+        # the buyer's ownership, so a follow-up call doesn't re-materialize.
+        with get_db_session() as session:
+            row = session.scalars(select(MediaBuy).filter_by(media_buy_id=f"gam_{sc.order.order_id}")).first()
+            assert row is not None
+            assert row.source == "gam_import"
 
 
 class TestUpdateMediaBuyMaterializesOnFirstWrite:

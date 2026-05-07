@@ -66,9 +66,12 @@ class TestProjectionStatusMapping:
     @pytest.mark.parametrize(
         "gam_status,expected",
         [
+            ("DRAFT", MediaBuyStatus.pending_start),
+            ("PENDING_APPROVAL", MediaBuyStatus.pending_start),
+            ("DISAPPROVED", MediaBuyStatus.rejected),
             ("PAUSED", MediaBuyStatus.paused),
             ("CANCELED", MediaBuyStatus.canceled),
-            ("DELETED", MediaBuyStatus.canceled),
+            ("ARCHIVED", MediaBuyStatus.canceled),
         ],
     )
     def test_terminal_status_short_circuits(self, factory_session, gam_status, expected):

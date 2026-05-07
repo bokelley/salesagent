@@ -18,27 +18,44 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from adcp.types import MediaBuyStatus
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import GAMLineItem, GAMOrder, MediaBuy, MediaPackage
+from src.core.database.models import GAMLineItem, GAMOrder, MediaBuy
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.exceptions import AdCPAuthorizationError, AdCPNotFoundError
 
-# Order-level status. Date logic decides between pending_start / active /
-# completed for non-terminal states; PAUSED / CANCELED / DELETED short-
-# circuit the date check.
-_ORDER_TERMINAL_STATUS: dict[str, MediaBuyStatus] = {
+# Map of GAM order status → AdCP MediaBuyStatus. The full GAM enum
+# (src/adapters/gam/utils/constants.py:GAMOrderStatus) is exhaustive
+# here so unknown statuses fail loud rather than silently date-deriving.
+#
+# Status semantics:
+# - DRAFT / PENDING_APPROVAL: not yet activated by seller — return
+#   pending_start regardless of flight dates.
+# - APPROVED: seller has activated it; flight dates decide pending_start
+#   / active / completed via the date logic below.
+# - PAUSED: explicit pause.
+# - DISAPPROVED: seller rejected it; AdCP MediaBuyStatus.rejected.
+# - CANCELED / ARCHIVED: terminal, no longer delivers.
+_ORDER_STATUS_MAP: dict[str, MediaBuyStatus] = {
+    "DRAFT": MediaBuyStatus.pending_start,
+    "PENDING_APPROVAL": MediaBuyStatus.pending_start,
+    "DISAPPROVED": MediaBuyStatus.rejected,
     "PAUSED": MediaBuyStatus.paused,
     "CANCELED": MediaBuyStatus.canceled,
-    "DELETED": MediaBuyStatus.canceled,
+    "ARCHIVED": MediaBuyStatus.canceled,
 }
 
 
 def project_gam_status(order_status: str | None, start: date | None, end: date | None, today: date) -> MediaBuyStatus:
-    """Map a GAM order's status + flight dates to an AdCP MediaBuyStatus."""
-    if order_status and order_status.upper() in _ORDER_TERMINAL_STATUS:
-        return _ORDER_TERMINAL_STATUS[order_status.upper()]
+    """Map a GAM order's status + flight dates to an AdCP MediaBuyStatus.
+
+    Non-APPROVED statuses short-circuit. APPROVED falls through to
+    flight-date logic to decide pending_start / active / completed.
+    """
+    if order_status:
+        upper = order_status.upper()
+        if upper in _ORDER_STATUS_MAP:
+            return _ORDER_STATUS_MAP[upper]
     if start is not None and today < start:
         return MediaBuyStatus.pending_start
     if end is not None and today > end:
@@ -63,17 +80,9 @@ def fetch_materialized_external_ids(session: Session, tenant_id: str, order_ids:
     projection. Identified by ``source = 'gam_import'`` and ``external_id``
     matching the order id.
     """
-    ids = list(order_ids)
-    if not ids:
-        return set()
-    rows = session.scalars(
-        select(MediaBuy.external_id).where(
-            MediaBuy.tenant_id == tenant_id,
-            MediaBuy.source == "gam_import",
-            MediaBuy.external_id.in_(ids),
-        )
-    ).all()
-    return {r for r in rows if r is not None}
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    return MediaBuyRepository(session, tenant_id).list_external_ids_for_source("gam_import", list(order_ids))
 
 
 def project_orders_for_principal(
@@ -191,18 +200,26 @@ def materialize_projected_buy(
     of the same projected ID return the materialized row directly (the
     projection skips materialized order ids).
 
+    Authorization: caller must be the principal currently assigned to
+    the order's GAM advertiser. Both "unknown order" and "unassigned
+    advertiser" raise the same ``AdCPAuthorizationError`` so an attacker
+    cannot enumerate orders by id.
+
     Raises:
-        AdCPNotFoundError: order_id is not in gam_orders for this tenant.
-        AdCPAuthorizationError: caller is not the assigned principal for
-            the order's advertiser.
+        AdCPAuthorizationError: order_id is not assigned to ``principal_id``
+            (or no such order exists for this tenant — collapsed to the
+            same error to avoid enumeration leaks).
+        ValueError: ``media_buy_id`` is not a projected GAM id.
     """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
     if not is_projected_media_buy_id(media_buy_id):
         raise ValueError(f"{media_buy_id!r} is not a projected GAM media_buy_id")
 
     order_id = order_id_from_projected(media_buy_id)
 
-    repo = GAMSyncRepository(session, tenant_id)
-    orders = repo.list_orders_for_advertisers(repo.list_advertiser_ids_assigned_to(principal_id))
+    gam_repo = GAMSyncRepository(session, tenant_id)
+    orders = gam_repo.list_orders_for_advertisers(gam_repo.list_advertiser_ids_assigned_to(principal_id))
     order = next((o for o in orders if o.order_id == order_id), None)
     if order is None:
         raise AdCPAuthorizationError(
@@ -210,15 +227,15 @@ def materialize_projected_buy(
         )
 
     fields = order_to_media_buy_fields(order)
-    advertiser = repo.get_advertiser(order.advertiser_id) if order.advertiser_id else None
+    advertiser = gam_repo.get_advertiser(order.advertiser_id) if order.advertiser_id else None
     advertiser_name = (
         (advertiser.name if advertiser else None) or order.advertiser_name or order.advertiser_id or "Unknown"
     )
 
     today = date.today()
-    media_buy = MediaBuy(
+    mb_repo = MediaBuyRepository(session, tenant_id)
+    media_buy = mb_repo.create_from_gam_import(
         media_buy_id=media_buy_id,
-        tenant_id=tenant_id,
         principal_id=principal_id,
         order_name=order.name,
         advertiser_name=advertiser_name,
@@ -229,26 +246,20 @@ def materialize_projected_buy(
         start_time=fields["start_time"],
         end_time=fields["end_time"],
         status=project_gam_status(order.status, fields["start_date"], fields["end_date"], today).value,
-        raw_request=fields["raw_request"],
-        source="gam_import",
         external_id=order.order_id,
+        raw_request=fields["raw_request"],
     )
-    session.add(media_buy)
 
-    line_items = repo.list_line_items_for_orders([order.order_id])
-    for li in line_items:
+    for li in gam_repo.list_line_items_for_orders([order.order_id]):
         pkg_fields = line_item_to_package_fields(li)
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy_id,
-                package_id=pkg_fields["package_id"],
-                package_config=pkg_fields["package_config"],
-                budget=pkg_fields["budget"],
-                bid_price=pkg_fields["bid_price"],
-            )
+        mb_repo.create_package(
+            media_buy_id=media_buy_id,
+            package_id=pkg_fields["package_id"],
+            package_config=pkg_fields["package_config"],
+            budget=pkg_fields["budget"],
+            bid_price=pkg_fields["bid_price"],
         )
 
-    session.flush()
     return media_buy
 
 
