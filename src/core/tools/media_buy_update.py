@@ -90,13 +90,10 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
 
-    # Query database for media buy by ID — accepts canonical media_buy_id
-    # or adapter-side external_id (e.g. the GAM order ID for an imported
-    # buy that's already been materialized). The repository is tenant-scoped,
-    # so rows that belong to a different tenant come back as ``None`` —
-    # surfaced as MEDIA_BUY_NOT_FOUND below to avoid leaking cross-tenant
-    # existence.
-    media_buy = repo.get_by_id_or_external_id(media_buy_id)
+    # Query database for media buy by ID. The repository is tenant-scoped, so
+    # rows that belong to a different tenant come back as ``None`` — surface
+    # that as MEDIA_BUY_NOT_FOUND so we don't leak cross-tenant existence.
+    media_buy = repo.get_by_id(media_buy_id)
 
     if not media_buy:
         raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
@@ -173,9 +170,14 @@ def _update_media_buy_impl(
         # and audit logs have a stable PK to attach to. Authorization
         # check happens inside materialize_projected_buy via the
         # GamAdvertiser.principal_id assignment.
+        #
+        # Native AdCP buys (mb_<uuid> ids) skip this whole branch — no
+        # extra DB calls in the hot path.
+        imported_buy = None
         if is_projected_media_buy_id(media_buy_id_to_use):
-            if uow.media_buys.get_by_id(media_buy_id_to_use) is None:
-                get_or_materialize_media_buy(
+            imported_buy = uow.media_buys.get_by_id(media_buy_id_to_use)
+            if imported_buy is None:
+                imported_buy = get_or_materialize_media_buy(
                     session=session,
                     tenant_id=tenant["tenant_id"],
                     principal_id=principal_id,
@@ -190,8 +192,7 @@ def _update_media_buy_impl(
         # mutation isn't propagated to GAM would lie about the seller's
         # state, so reject any request that carries mutating fields.
         # No-op calls (used to trigger materialization) are still allowed.
-        materialized = uow.media_buys.get_by_id(media_buy_id_to_use)
-        if materialized is not None and materialized.source == "gam_import":
+        if imported_buy is not None and imported_buy.source == "gam_import":
             mutating = (
                 req.paused is not None
                 or req.canceled is not None

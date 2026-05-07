@@ -554,7 +554,7 @@ def list_advertiser_assignments(tenant_id: str):
     methods=["PATCH"],
     strict_slashes=False,
 )
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=("admin", "member"))
 def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
     """Assign or clear the buyer agent for a GAM advertiser.
 

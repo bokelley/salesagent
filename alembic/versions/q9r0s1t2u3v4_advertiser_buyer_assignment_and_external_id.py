@@ -13,11 +13,10 @@ Adds the columns required to project GAM orders/line items into media_buys:
   either the canonical ``media_buy_id`` or the adapter ID.
 
 Revision ID: q9r0s1t2u3v4
-Revises: e0f450f098de
+Revises: 523ed762edce
 Create Date: 2026-05-07
 
-Lands on top of main's merge revision ``e0f450f098de`` (which converged
-``8407a32e9b07`` + ``p7q8r9s0t1u2``).
+Lands on top of main's latest merge revision ``523ed762edce``.
 
 """
 
@@ -28,7 +27,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "q9r0s1t2u3v4"
-down_revision: str | Sequence[str] | None = "e0f450f098de"
+down_revision: str | Sequence[str] | None = "523ed762edce"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
