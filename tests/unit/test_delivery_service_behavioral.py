@@ -19,7 +19,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.services.webhook_delivery_service import CircuitState
 
@@ -579,7 +579,7 @@ class TestDeliverWithBackoffGenericException:
     """
 
     def test_generic_exception_breaks_retry_loop(self):
-        from unittest.mock import MagicMock
+        import json
 
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
@@ -591,17 +591,25 @@ class TestDeliverWithBackoffGenericException:
         cb = CircuitBreaker()
         queue = WebhookQueue()
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/hook"
-        mock_config.webhook_secret = None
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-
+        # Slice 3 of signing-non-embedded: queue items now carry primitive
+        # snapshots (no detached ORM rows) + pre-serialized body bytes
+        # (so wire bytes are byte-identical to signature input). Build the
+        # post-refactor shape directly here — the production enqueue path
+        # in _send_webhook_enhanced does the same.
+        body_bytes = json.dumps({"test": "data"}, sort_keys=True, separators=(",", ":")).encode("utf-8")
         queue.enqueue(
             {
-                "config": mock_config,
-                "payload": {"test": "data"},
-                "timestamp": datetime.now(UTC),
+                "snapshot": {
+                    "tenant_id": "t1",
+                    "url": "https://example.com/hook",
+                    "signing_mode": "hmac",
+                    "webhook_secret": None,
+                    "authentication_type": None,
+                    "authentication_token": None,
+                },
+                "body_bytes": body_bytes,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "active_credential": None,
             }
         )
 
