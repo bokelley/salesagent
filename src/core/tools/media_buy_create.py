@@ -2511,7 +2511,10 @@ async def _create_media_buy_impl(
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
 
-        # Validate and auto-generate GAM implementation_config for each product if needed
+        # Validate and auto-generate GAM implementation_config for each product if needed.
+        # ``effective_configs`` lets us thread the auto-generated value through the
+        # rest of the function without mutating the wire-shape Product schema.
+        effective_configs: dict[str, dict] = {p.product_id: p.implementation_config or {} for p in products_in_buy}
         if adapter.__class__.__name__ == "GoogleAdManager":
             from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -2533,9 +2536,10 @@ async def _create_media_buy_impl(
                     formats_list: list[str] | None = None
                     if schema_product.format_ids:
                         formats_list = [fmt.id for fmt in schema_product.format_ids]
-                    schema_product.implementation_config = gam_validator.generate_default_config(
+                    auto_config = gam_validator.generate_default_config(
                         delivery_type=delivery_type_str, formats=formats_list
                     )
+                    effective_configs[schema_product.product_id] = auto_config
 
                     # Persist the auto-generated config to database
                     with MediaBuyUoW(tenant["tenant_id"]) as gam_uow:
@@ -2544,12 +2548,12 @@ async def _create_media_buy_impl(
                         product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
                         db_product = gam_uow.session.scalars(product_stmt).first()
                         if db_product:
-                            db_product.implementation_config = schema_product.implementation_config
+                            db_product.implementation_config = auto_config
                             # UoW auto-commits on clean exit
                             logger.info(f"Saved auto-generated GAM config for product {schema_product.product_id}")
 
                 # Validate the config (whether existing or auto-generated)
-                impl_config = schema_product.implementation_config if schema_product.implementation_config else {}
+                impl_config = effective_configs[schema_product.product_id]
                 is_valid, error_msg_temp = gam_validator.validate_config(impl_config)
                 error_msg = error_msg_temp if error_msg_temp else "Unknown error"
                 if not is_valid:
@@ -2574,8 +2578,7 @@ async def _create_media_buy_impl(
                 )
 
         product_auto_create = all(
-            p.implementation_config.get("auto_create_enabled", True) if p.implementation_config else True
-            for p in products_in_buy
+            effective_configs[p.product_id].get("auto_create_enabled", True) for p in products_in_buy
         )
 
         # Check if either tenant or product disables auto-creation
