@@ -338,7 +338,7 @@ class AffectedPackage(LibraryPackage):
     - paused: Boolean indicating whether package is paused (replaces old status enum)
     """
 
-    # Internal fields for tracking what changed (not in AdCP spec)
+    # Internal fields for tracking what changed.
     changes_applied: dict[str, Any] | None = Field(
         None,
         description="Internal: Detailed changes applied to package (creative_ids added/removed, etc.)",
@@ -668,21 +668,21 @@ class Format(LibraryFormat):
         description="Internal: Platform-specific configuration (e.g., gam) for creative mapping",
     )
     category: Literal["standard", "custom", "generative"] | None = Field(
-        None, exclude=True, description="Internal: Format category (not in AdCP spec)"
+        None, exclude=True, description="Internal: Format category"
     )
     is_standard: bool | None = Field(
-        None, exclude=True, description="Internal: Whether this follows IAB specifications (not in AdCP spec)"
+        None, exclude=True, description="Internal: Whether this follows IAB specifications"
     )
     requirements: dict[str, Any] | None = Field(
         None,
         exclude=True,
-        description="Internal: Legacy technical specifications (not in AdCP spec, use renders instead)",
+        description="Internal: Legacy technical specifications (use renders instead)",
     )
     iab_specification: str | None = Field(
-        None, exclude=True, description="Internal: Name of IAB specification (not in AdCP spec)"
+        None, exclude=True, description="Internal: Name of IAB specification"
     )
     accepts_3p_tags: bool | None = Field(
-        None, exclude=True, description="Internal: Whether format accepts third-party tags (not in AdCP spec)"
+        None, exclude=True, description="Internal: Whether format accepts third-party tags"
     )
 
     @property
@@ -1309,7 +1309,7 @@ class PackageRequest(LibraryPackageRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Internal fields (not in AdCP spec) - excluded from API responses
+    # Internal fields — excluded from API responses.
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
     media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
     platform_line_item_id: str | None = Field(
@@ -1383,7 +1383,7 @@ class Package(LibraryPackage):
     - package_id, status
     """
 
-    # Internal fields (not in AdCP spec) - excluded from API responses
+    # Internal fields — excluded from API responses.
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
     media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
     platform_line_item_id: str | None = Field(
@@ -1599,12 +1599,13 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     creative_assignments, creatives, bid_price, ext, impressions, pacing,
     package_id).
 
-    Adds creative_ids — spec-mandated field missing from library codegen.
-    TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
+    The local ``creative_ids`` field is non-spec — the AdCP package-update
+    schema uses ``creatives`` (full objects) and ``creative_assignments``
+    (placement bindings). Drop ``creative_ids`` in the Pattern #1 cleanup
+    pass and migrate callers to the spec fields.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
 
 
@@ -1945,7 +1946,7 @@ class Signal(LibrarySignal):
     signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
 
-    # Internal fields (not in AdCP spec, excluded from serialization)
+    # Internal fields — excluded from serialization.
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
     created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
     updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)

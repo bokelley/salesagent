@@ -130,7 +130,12 @@ class Provenance(SalesAgentBaseModel):
 
 
 class CreativeStatusEnum(Enum):
-    """Creative status enum (not in adcp library, local definition)."""
+    """Local creative status enum.
+
+    The library exposes ``adcp.types.CreativeStatus`` with the same values plus
+    ``archived``. Switch to the library enum when the archived state is wired
+    into the creative workflow.
+    """
 
     processing = "processing"
     approved = "approved"
@@ -380,7 +385,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Internal-only fields (not in AdCP spec)
+    # Internal-only fields — excluded from API responses.
     status: str | None = Field(  # type: ignore[assignment]
         None, exclude=True, description="Current approval status of the creative (INTERNAL - excluded from responses)"
     )

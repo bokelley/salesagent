@@ -77,7 +77,7 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # Internal-only fields (not in AdCP spec)
+    # Internal-only fields — excluded from serialization.
     implementation_config: dict[str, Any] | None = Field(
         default=None,
         description="Internal: Ad server-specific configuration for implementing this product",
@@ -171,7 +171,7 @@ class GetProductsRequest(LibraryGetProductsRequest):
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
 
-    # Internal-only fields (not in AdCP spec)
+    # Internal-only field — excluded from external serialization.
     product_selectors: LibraryCatalog | None = Field(
         None,
         description="Selectors to filter the brand manifest product catalog for product discovery",
