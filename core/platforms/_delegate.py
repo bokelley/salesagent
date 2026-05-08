@@ -185,9 +185,15 @@ async def _delegate_get_products(req: GetProductsRequest, ctx: RequestContext[An
 async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/media_buy_create.py:_create_media_buy_impl``.
 
-    The impl pulls ``push_notification_config`` off the request itself
-    (not a separate kwarg in our wire shape), so we let it default to
-    None. The framework's idempotency wrap on the caller layer scopes
+    ``push_notification_config`` is a top-level AdCP request field that
+    the impl reads as a separate kwarg (NOT off ``req``) — it registers
+    a ``PushNotificationConfig`` DB row used by ``context_manager.
+    _send_push_notifications`` to fire workflow-step webhooks. We
+    extract it from ``req`` here and forward as a dict; without this,
+    buyers who set ``push_notification_config`` on the request body
+    silently get no completion webhooks.
+
+    The framework's idempotency wrap on the caller layer scopes
     retries; the impl's own transactional semantics handle the
     create-once invariant.
 
@@ -198,8 +204,16 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     """
     identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, CreateMediaBuyRequest)
+    pnc = req_model.push_notification_config
+    pnc_dict: dict[str, Any] | None
+    if pnc is None:
+        pnc_dict = None
+    elif hasattr(pnc, "model_dump"):
+        pnc_dict = pnc.model_dump(mode="json", exclude_none=True)
+    else:
+        pnc_dict = dict(pnc)
     try:
-        response = await _create_media_buy_impl(req_model, identity=identity)
+        response = await _create_media_buy_impl(req_model, push_notification_config=pnc_dict, identity=identity)
     except AdCPError as exc:
         raise _translate_adcp_error(exc) from exc
     return _to_wire(response)

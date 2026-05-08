@@ -3749,6 +3749,29 @@ async def _create_media_buy_impl(
         if hooks_result.media_buy_id_override:
             modified_response = adcp_response.model_copy(update={"media_buy_id": hooks_result.media_buy_id_override})
 
+        # Link the workflow step to the media buy so push-notification webhooks
+        # fire on completion. ``_send_push_notifications`` reads
+        # ``ObjectWorkflowMapping`` rows by step_id; without one, it returns
+        # early with "No object mappings found" and the buyer's webhook never
+        # fires. The manual-approval branch (~line 2362) already does this for
+        # its own flow; the auto-approval success branch needs the same. See
+        # issue #64.
+        if step is not None and not testing_ctx.dry_run:
+            with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
+                # FIXME(salesagent-9f2): workflow mapping should use a repository method
+                assert wf_uow.session is not None
+                from src.core.database.models import ObjectWorkflowMapping
+
+                mapping = ObjectWorkflowMapping(
+                    object_type="media_buy",
+                    object_id=modified_response.media_buy_id,
+                    step_id=step.step_id,
+                    action="create",
+                )
+                wf_uow.session.add(mapping)
+                # UoW auto-commits on clean exit
+                logger.info(f"✅ Linked workflow step {step.step_id} to media buy (auto-approval)")
+
         # Mark workflow step as completed on success
         ctx_manager.update_workflow_step(step.step_id, status="completed")
 
