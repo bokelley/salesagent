@@ -19,6 +19,7 @@ from src.core.database.models import Principal as PrincipalModel
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant as TenantModel
 from src.core.resolved_product import ResolvedProduct
+from src.core.schemas import Product as ProductSchema
 from src.core.tools.products import get_product_catalog
 
 
