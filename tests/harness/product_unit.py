@@ -1,6 +1,6 @@
 """ProductEnv — unit test environment for _get_products_impl.
 
-Patches: ProductUoW, get_principal_object, convert_product_model_to_schema,
+Patches: ProductUoW, get_principal_object, convert_product_model_to_resolved,
          PolicyCheckService, generate_variants_for_brief, DynamicPricingService,
          get_factory (ranking), resolve_property_list, get_adapter.
 
@@ -15,7 +15,7 @@ Usage::
 Available mocks via env.mock:
     "uow"                  -- ProductUoW class mock
     "principal"            -- get_principal_object mock
-    "convert"              -- convert_product_model_to_schema mock (identity)
+    "convert_resolved"     -- convert_product_model_to_resolved mock (wraps as ResolvedProduct)
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
     "ranking_factory"      -- get_factory mock (AI ranking)
@@ -107,10 +107,9 @@ class ProductEnv(ProductMixin, BaseTestEnv):
     EXTERNAL_PATCHES = {
         "uow": "src.core.database.repositories.uow.ProductUoW",
         "principal": f"{MODULE}.get_principal_object",
-        "convert": f"{MODULE}.convert_product_model_to_schema",
-        # Phase 2 slice 3: get_products now converts via convert_product_model_to_resolved.
-        # Mock as a wrapper that builds a ResolvedProduct from the harness's
-        # schema-shape input (which is what add_product feeds into list_all).
+        # Phase 2 slice 4: production calls only convert_product_model_to_resolved
+        # at this module. The patch wraps the harness's schema-shape input
+        # (add_product feeds Product instances into list_all) into a ResolvedProduct.
         "convert_resolved": f"{MODULE}.convert_product_model_to_resolved",
         "policy_service": f"{MODULE}.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
@@ -142,9 +141,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         self._uow_instance.__enter__ = MagicMock(return_value=self._uow_instance)
         self._uow_instance.__exit__ = MagicMock(return_value=False)
         self.mock["uow"].return_value = self._uow_instance
-
-        # Convert: identity function (return product as-is)
-        self.mock["convert"].side_effect = lambda product_obj, **kw: product_obj
 
         # convert_resolved: wrap the schema-shape ``product_obj`` into a
         # ResolvedProduct, pulling internal fields off the schema's own

@@ -81,12 +81,13 @@ def _base_patches(mock_uow, convert_fn=None):
             allowed_principal_ids=getattr(product_obj, "allowed_principal_ids", None),
         )
 
+    def _wrap(p, **kw):
+        return _resolved_fn(convert_fn(p, **kw))
+
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.get_principal_object", return_value=None),
-        patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
-        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
-        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_resolved_fn),
+        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_wrap),
     ]
 
 
@@ -193,7 +194,6 @@ class TestDynamicPricingExceptionPropagation:
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -231,7 +231,6 @@ class TestDynamicPricingExceptionPropagation:
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -343,7 +342,6 @@ class TestAdapterAnnotationExceptionPropagation:
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",

@@ -96,11 +96,14 @@ def _standard_patches(mock_uow, principal=None, convert_fn=None):
     """
     if convert_fn is None:
         convert_fn = lambda p, **kw: p  # noqa: E731
+
+    def _wrap(p, **kw):
+        return _phase2_wrap_resolved(convert_fn(p, **kw))
+
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.get_principal_object", return_value=principal),
-        patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
-        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
+        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_wrap),
         patch(
             "src.services.dynamic_products.generate_variants_for_brief",
             new_callable=AsyncMock,
