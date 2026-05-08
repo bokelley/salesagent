@@ -95,6 +95,23 @@ _GUARANTEED_LINE_ITEM_TYPES: set[str] = {"STANDARD", "SPONSORSHIP"}
 _RESERVATION_FIELDS: set[str] = {"start_time", "end_time", "budget"}
 
 
+def serialize_for_workflow_step(model: Any) -> dict[str, Any]:
+    """Serialize a Pydantic model for storage on ``workflow_step.response_data``.
+
+    The ``workflow_step`` table holds the original request/response blob in
+    a JSONB column so the approval reviewer can replay or inspect the call.
+    JSONB needs a dict, not a model — but this is *persistence*, not a
+    transport boundary, so the no-``.model_dump()``-in-``_impl`` rule does
+    not apply.
+
+    Centralizes the dump kwargs (``mode='json'``) so all ~22 call sites
+    stay consistent, and lets the architecture guard switch from a
+    fragile ``(file, line_number)`` allowlist to a single function-name
+    exemption — see issue #240.
+    """
+    return model.model_dump(mode="json")
+
+
 def _check_guaranteed_immutable(
     req: UpdateMediaBuyRequest,
     media_buy_id: str,
@@ -415,7 +432,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=response_data.model_dump(mode="json"),
+                    response_data=serialize_for_workflow_step(response_data),
                     error_message=error_msg,
                 )
             return response_data
@@ -463,7 +480,7 @@ def _update_media_buy_impl(
             ctx_manager.update_workflow_step(
                 step.step_id,
                 status="failed",
-                response_data=guaranteed_block.model_dump(mode="json"),
+                response_data=serialize_for_workflow_step(guaranteed_block),
                 error_message=err_msg,
             )
             return guaranteed_block
@@ -486,8 +503,8 @@ def _update_media_buy_impl(
                 # shape. (#158)
                 workflow_step_id=step.step_id,
             )
-            approval_data = approval_response.model_dump(mode="json")
-            approval_data["request_data"] = req.model_dump(mode="json")
+            approval_data = serialize_for_workflow_step(approval_response)
+            approval_data["request_data"] = serialize_for_workflow_step(req)
             ctx_manager.update_workflow_step(
                 step.step_id,
                 status="requires_approval",
@@ -541,7 +558,7 @@ def _update_media_buy_impl(
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        response_data=response_data.model_dump(mode="json"),
+                        response_data=serialize_for_workflow_step(response_data),
                         error_message=error_msg,
                     )
                     return response_data
@@ -598,7 +615,7 @@ def _update_media_buy_impl(
                                 ctx_manager.update_workflow_step(
                                     step.step_id,
                                     status="failed",
-                                    response_data=response_data.model_dump(mode="json"),
+                                    response_data=serialize_for_workflow_step(response_data),
                                     error_message=package_daily_spend_error,
                                 )
                                 return response_data
@@ -634,7 +651,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=error_response.model_dump(mode="json"),
+                    response_data=serialize_for_workflow_step(error_response),
                     error_message="already canceled",
                 )
                 return error_response
@@ -653,7 +670,7 @@ def _update_media_buy_impl(
             ctx_manager.update_workflow_step(
                 step.step_id,
                 status="completed",
-                response_data=cancel_response.model_dump(mode="json"),
+                response_data=serialize_for_workflow_step(cancel_response),
             )
             return cancel_response
 
@@ -675,7 +692,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=error_response.model_dump(mode="json"),
+                    response_data=serialize_for_workflow_step(error_response),
                     error_message=result.errors[0].message if result.errors else "Pause/resume failed",
                 )
                 return error_response
@@ -707,7 +724,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="completed",
-                    response_data=success_response.model_dump(mode="json"),
+                    response_data=serialize_for_workflow_step(success_response),
                 )
                 return success_response
 
@@ -747,7 +764,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_message,
                         )
                         return response_data
@@ -764,7 +781,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -818,7 +835,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_message,
                         )
                         return response_data
@@ -848,7 +865,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -889,7 +906,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -1072,7 +1089,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -1102,7 +1119,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -1130,7 +1147,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -1292,7 +1309,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=serialize_for_workflow_step(response_data),
                             error_message=error_msg,
                         )
                         return response_data
@@ -1356,7 +1373,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=response_data.model_dump(mode="json"),
+                    response_data=serialize_for_workflow_step(response_data),
                     error_message=error_msg,
                 )
                 return response_data
@@ -1473,7 +1490,7 @@ def _update_media_buy_impl(
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        response_data=response_data.model_dump(mode="json"),
+                        response_data=serialize_for_workflow_step(response_data),
                         error_message=error_msg,
                     )
                     return response_data
@@ -1557,7 +1574,7 @@ def _update_media_buy_impl(
         ctx_manager.update_workflow_step(
             step.step_id,
             status="completed",
-            response_data=final_response.model_dump(mode="json"),
+            response_data=serialize_for_workflow_step(final_response),
         )
 
     return final_response

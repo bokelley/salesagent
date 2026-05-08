@@ -328,6 +328,131 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         return None
 
 
+def _detect_overbook_warnings(
+    *,
+    adapter: Any,
+    products_in_buy: list[Any],
+    effective_configs: dict[str, dict],
+    req: "CreateMediaBuyRequest",
+    total_budget: float,
+) -> list[dict[str, Any]]:
+    """Pre-flight check that surfaces inventory-overbook warnings to the buyer.
+
+    For single-product GAM buys, compares the implied impression goal
+    (``budget / cpm * 1000``) against GAM's availability forecast for
+    the product's ad units. Returns a list of warning records with
+    ``code='inventory_overbook_minor'`` when goal exceeds forecast.
+
+    Fail-open everywhere: returns ``[]`` when the adapter is not GAM,
+    when the buy has multiple products (per #152 design — multi-product
+    budget allocation deferred to a follow-up), when forecast or rate
+    can't be determined, or when GAM rejects the forecast call. Never
+    blocks the buy; this is informational only.
+
+    Wire surface: callers attach the returned list to ``response.ext``
+    under the key ``warnings`` per AdCP convention. Once
+    https://github.com/adcontextprotocol/adcp/issues/4248 lands, this
+    moves to a first-class ``warnings[]`` field.
+    """
+    if adapter.__class__.__name__ != "GoogleAdManager":
+        return []
+    if len(products_in_buy) != 1:
+        # Multi-product allocation is non-trivial (different products may
+        # have different CPMs). Defer to a follow-up — see #152.
+        return []
+    if total_budget <= 0:
+        return []
+
+    product = products_in_buy[0]
+    impl_config = effective_configs.get(product.product_id, {}) or {}
+    ad_unit_ids = impl_config.get("targeted_ad_unit_ids") or []
+    if not ad_unit_ids:
+        return []
+
+    # Pull the first pricing option as the rate. The CPM-only cap is
+    # intentional for the first ship: derive impressions only when the
+    # rate is meaningful for that calculation.
+    pricing_options = getattr(product, "pricing_options", None) or []
+    if not pricing_options:
+        return []
+    first_option = pricing_options[0]
+    inner = getattr(first_option, "root", first_option)
+    pricing_model = str(getattr(inner, "pricing_model", "") or "").lower()
+    if pricing_model != "cpm":
+        return []
+    rate = getattr(inner, "rate", None)
+    if rate is None or float(rate) <= 0:
+        return []
+
+    cpm = float(rate)
+    implied_impressions = int(total_budget / cpm * 1000)
+    if implied_impressions <= 0:
+        return []
+
+    # Resolve flight window from the request
+    flight_start = getattr(req, "flight_start_date", None) or getattr(req, "start_time", None)
+    flight_end = getattr(req, "flight_end_date", None) or getattr(req, "end_time", None)
+    if flight_start is None or flight_end is None:
+        return []
+
+    if isinstance(flight_start, datetime):
+        start_d = flight_start.date()
+    else:
+        start_d = flight_start
+    if isinstance(flight_end, datetime):
+        end_d = flight_end.date()
+    else:
+        end_d = flight_end
+
+    # Get forecast manager from the adapter. Fail-open if absent.
+    orders_manager = getattr(adapter, "orders_manager", None)
+    client_manager = getattr(orders_manager, "client_manager", None)
+    if client_manager is None:
+        return []
+
+    from src.adapters.gam.managers.forecast import GAMForecastManager
+
+    advertiser_id = getattr(orders_manager, "advertiser_id", None)
+    forecast_manager = GAMForecastManager(client_manager=client_manager, advertiser_id=advertiser_id)
+
+    available = forecast_manager.get_available_units(
+        ad_unit_ids=ad_unit_ids,
+        start_date=start_d,
+        end_date=end_d,
+        line_item_type=impl_config.get("line_item_type", "STANDARD"),
+        cost_type=impl_config.get("cost_type", "CPM"),
+        include_descendants=bool(impl_config.get("include_descendants", True)),
+    )
+    if available is None:
+        # Forecast call failed or returned null — fail open. The buy
+        # proceeds without warning. The adapter call below will run as
+        # before; if delivery actually under-paces, the buyer sees that
+        # via get_media_buy_delivery.
+        return []
+
+    if implied_impressions <= available:
+        return []
+
+    overbook_pct = round((implied_impressions / available - 1) * 100, 1) if available > 0 else 100.0
+    return [
+        {
+            "code": "inventory_overbook_minor",
+            "message": (
+                f"Implied impression goal ({implied_impressions:,}) exceeds GAM availability "
+                f"forecast ({available:,}) by {overbook_pct}%. The line item will accept the "
+                f"buy but may land in INVENTORY_RELEASED until publisher resolves the overbook "
+                f"in GAM admin."
+            ),
+            "details": {
+                "goal_impressions": implied_impressions,
+                "forecast_available_impressions": available,
+                "overbook_percent": overbook_pct,
+                "product_id": product.product_id,
+            },
+        }
+    ]
+
+
 def _validate_creatives_before_adapter_call(
     packages: list[MediaPackage],
     tenant_id: str,
@@ -940,13 +1065,33 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 # Create creative map
                 creative_map = {c.creative_id: c for c in creatives}
 
+                # Resolve the per-tenant pre-approval gate once per buy approval
+                # (rather than per creative) since the flag changes only on
+                # operator action. (#145)
+                from src.core.feature_flags import is_creative_pre_approval_gate_enabled
+
+                gate_enabled = is_creative_pre_approval_gate_enabled(tenant_obj)
+
                 # Build assets list for adapter and collect all validation errors
                 assets = []
                 all_validation_errors = []
+                gated_creative_ids: list[str] = []
                 for creative_id, package_assignment_list in packages_by_creative.items():
                     creative = creative_map.get(creative_id)
                     if not creative:
                         logger.warning(f"[APPROVAL] Creative {creative_id} not found in database")
+                        continue
+
+                    # Pre-approval gate: hold back creatives that haven't
+                    # cleared local human review. They'll be pushed to the
+                    # ad server retroactively by approve_creative when the
+                    # operator flips status to 'approved'. (#145)
+                    if gate_enabled and creative.status == "pending_review":
+                        gated_creative_ids.append(creative_id)
+                        logger.info(
+                            f"[APPROVAL] Pre-approval gate held back creative {creative_id} "
+                            f"(status=pending_review). Adapter upload deferred to local approve."
+                        )
                         continue
 
                     # Convert Creative model to asset dict format expected by adapter
@@ -1097,6 +1242,159 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         error_msg = f"Adapter creation failed: {str(e)}"
         logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
         return False, error_msg
+
+
+def push_creative_to_existing_buy(
+    *,
+    creative_id: str,
+    media_buy_id: str,
+    tenant_id: str,
+) -> tuple[bool, str | None]:
+    """Push a single approved creative to an already-active GAM line item.
+
+    Used by ``approve_creative`` (admin blueprint) when the per-tenant
+    pre-approval gate is enabled and the operator just approved a
+    creative whose buy is already live in the ad server. The buy
+    approval flow (#145 gate at ``execute_approved_media_buy``) skipped
+    this creative because its local status was ``pending_review``;
+    now that a human has approved it, push it to the live line item.
+
+    Returns ``(success, error_message)``. ``error_message`` is non-None
+    only on failure. Local approval has already succeeded by the time
+    this fires — failures here log loudly but don't roll back the local
+    state. The operator can re-trigger by re-clicking Approve
+    (idempotent at the adapter layer for already-uploaded creatives).
+    """
+    from sqlalchemy import select
+
+    from src.core.config_loader import get_tenant_by_id, set_current_tenant
+    from src.core.database.models import (
+        Creative as CreativeModel,
+    )
+    from src.core.database.models import (
+        CreativeAssignment,
+        Tenant,
+    )
+    from src.core.database.repositories import MediaBuyUoW
+
+    try:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.session is not None
+            session = uow.session
+
+            tenant_obj = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if not tenant_obj:
+                return False, f"Tenant {tenant_id} not found"
+
+            # Set tenant ContextVar so adapter helpers resolve config correctly.
+            tenant_config = get_tenant_by_id(tenant_id)
+            if tenant_config:
+                set_current_tenant(tenant_config)
+
+            creative = session.scalars(
+                select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)
+            ).first()
+            if not creative:
+                return False, f"Creative {creative_id} not found"
+
+            assignment = session.scalars(
+                select(CreativeAssignment).filter_by(
+                    tenant_id=tenant_id, creative_id=creative_id, media_buy_id=media_buy_id
+                )
+            ).first()
+            if not assignment:
+                return False, (f"No assignment of creative {creative_id} to media buy {media_buy_id} — nothing to push")
+
+            principal = session.scalars(
+                select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
+            ).first()
+            if not principal:
+                return False, f"Principal {creative.principal_id} not found"
+
+            adapter = get_adapter(principal, dry_run=False, tenant=tenant_obj)
+            if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
+                return False, "Adapter does not support creative upload"
+
+            # Build the asset dict — same shape as execute_approved_media_buy.
+            from src.core.format_resolver import get_format
+            from src.core.helpers.creative_helpers import (
+                extract_click_url,
+                extract_impression_tracker_url,
+                extract_media_url_and_dimensions,
+            )
+
+            creative_data = creative.data or {}
+            try:
+                format_spec = get_format(
+                    str(creative.format),
+                    agent_url=creative.agent_url,
+                    tenant_id=tenant_id,
+                    product_id=None,
+                )
+            except Exception as e:
+                logger.warning(f"[GATE-PUSH] Could not load format spec for {creative_id}: {e}")
+                format_spec = None
+
+            url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+            click_url = extract_click_url(creative_data, format_spec)
+            impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
+
+            if not url or not width or not height:
+                return False, (
+                    f"Creative {creative_id} cannot be pushed: missing url/width/height "
+                    f"(width={width}, height={height}, url={'set' if url else 'missing'})"
+                )
+
+            asset: dict[str, Any] = {
+                "creative_id": creative.creative_id,
+                "package_assignments": [{"package_id": assignment.package_id, "weight": assignment.weight or 100}],
+                "width": width,
+                "height": height,
+                "url": url,
+                "click_url": click_url,
+                "asset_type": creative_data.get("asset_type", "image"),
+                "name": creative.name or f"Creative {creative.creative_id}",
+            }
+            if impression_tracker_url:
+                asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
+
+            # Resolve the GAM order id. Native AdCP buys use the GAM
+            # order id as their media_buy_id; gam_import buys carry it
+            # on external_id.
+            from src.core.database.models import MediaBuy as DBMediaBuy
+
+            media_buy_row = session.scalars(
+                select(DBMediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
+            ).first()
+            if media_buy_row is None:
+                return False, f"Media buy {media_buy_id} not found"
+            gam_order_id = media_buy_row.external_id or media_buy_id
+
+            try:
+                statuses = adapter.creatives_manager.add_creative_assets(gam_order_id, [asset], datetime.now(UTC))
+            except Exception as e:
+                logger.error(
+                    f"[GATE-PUSH] Adapter raised pushing creative {creative_id} to buy {media_buy_id}: {e}",
+                    exc_info=True,
+                )
+                return False, str(e)
+
+            # Inspect statuses: a single creative was uploaded; check it.
+            for status in statuses:
+                if status.creative_id == creative_id and status.status == "failed":
+                    return False, status.message or "Adapter reported upload failure"
+
+            logger.info(
+                f"[GATE-PUSH] Successfully pushed creative {creative_id} to live buy "
+                f"{media_buy_id} (GAM order {gam_order_id})"
+            )
+            return True, None
+    except Exception as e:
+        logger.error(
+            f"[GATE-PUSH] Unexpected error pushing creative {creative_id} to buy {media_buy_id}: {e}",
+            exc_info=True,
+        )
+        return False, str(e)
 
 
 def _validate_pricing_model_selection(
@@ -2642,6 +2940,30 @@ async def _create_media_buy_impl(
             effective_configs[p.product_id].get("auto_create_enabled", True) for p in products_in_buy
         )
 
+        # Pre-flight overbook detection (#152). Single-product GAM CPM
+        # buys only on this iteration; fail-open everywhere. Warnings
+        # surface on the success response via response.ext.warnings
+        # pending https://github.com/adcontextprotocol/adcp/issues/4248.
+        overbook_warnings: list[dict[str, Any]] = []
+        try:
+            overbook_warnings = _detect_overbook_warnings(
+                adapter=adapter,
+                products_in_buy=products_in_buy,
+                effective_configs=effective_configs,
+                req=req,
+                total_budget=total_budget,
+            )
+            if overbook_warnings:
+                logger.warning(
+                    f"[OVERBOOK] {len(overbook_warnings)} warning(s) attached to response: "
+                    f"{[w['details'] for w in overbook_warnings]}"
+                )
+        except Exception as e:
+            # Defence-in-depth — the detector is already fail-open, but
+            # any unexpected raise here must NOT block the buy.
+            logger.warning(f"[OVERBOOK] detector raised, fail-open: {e}", exc_info=True)
+            overbook_warnings = []
+
         # Check if either tenant or product disables auto-creation
         # Skip in dry_run mode - we're only validating, not creating workflow
         if not testing_ctx.dry_run and (not auto_create_enabled or not product_auto_create):
@@ -2853,9 +3175,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
@@ -3237,12 +3559,19 @@ async def _create_media_buy_impl(
                     request_pkg = req.packages[i] if req.packages and i < len(req.packages) else None
                     impressions = getattr(request_pkg, "impressions", None) if request_pkg else None
 
+                    # targeting_overlay is buyer-supplied input — pull from the request, not the
+                    # adapter response. Adapter responses are AdCP-spec ResponsePackage objects
+                    # which intentionally do not echo targeting back. Persisting the request value
+                    # is what lets get_media_buys later round-trip property_list / collection_list
+                    # references per the AdCP spec for sellers claiming list-targeting specialisms.
+                    request_targeting_overlay = request_pkg.targeting_overlay if request_pkg is not None else None
+
                     package_config = {
                         "package_id": resp_package_id,
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
                         "product_id": getattr(resp_package, "product_id", None),
                         "budget": getattr(resp_package, "budget", None),
-                        "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
+                        "targeting_overlay": request_targeting_overlay,
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),
@@ -3720,12 +4049,20 @@ async def _create_media_buy_impl(
         # Surface the DB-derived MediaBuyStatus on the wire so buyers see the correct
         # blocker (pending_creatives vs pending_start) on the create_media_buy reply
         # itself, matching what /get_media_buy will report later.
+        # Overbook warnings (#152) ride on response.ext per AdCP extension
+        # convention. Other Success construction sites (idempotency hit,
+        # simulated, deferred-for-approval) don't surface warnings yet —
+        # follow-up.
+        ext_payload: dict[str, Any] = {}
+        if overbook_warnings:
+            ext_payload["warnings"] = overbook_warnings
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
+            ext=ext_payload if ext_payload else None,
         )
 
         # Log activity
