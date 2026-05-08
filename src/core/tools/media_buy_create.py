@@ -328,6 +328,131 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
         return None
 
 
+def _detect_overbook_warnings(
+    *,
+    adapter: Any,
+    products_in_buy: list[Any],
+    effective_configs: dict[str, dict],
+    req: "CreateMediaBuyRequest",
+    total_budget: float,
+) -> list[dict[str, Any]]:
+    """Pre-flight check that surfaces inventory-overbook warnings to the buyer.
+
+    For single-product GAM buys, compares the implied impression goal
+    (``budget / cpm * 1000``) against GAM's availability forecast for
+    the product's ad units. Returns a list of warning records with
+    ``code='inventory_overbook_minor'`` when goal exceeds forecast.
+
+    Fail-open everywhere: returns ``[]`` when the adapter is not GAM,
+    when the buy has multiple products (per #152 design — multi-product
+    budget allocation deferred to a follow-up), when forecast or rate
+    can't be determined, or when GAM rejects the forecast call. Never
+    blocks the buy; this is informational only.
+
+    Wire surface: callers attach the returned list to ``response.ext``
+    under the key ``warnings`` per AdCP convention. Once
+    https://github.com/adcontextprotocol/adcp/issues/4248 lands, this
+    moves to a first-class ``warnings[]`` field.
+    """
+    if adapter.__class__.__name__ != "GoogleAdManager":
+        return []
+    if len(products_in_buy) != 1:
+        # Multi-product allocation is non-trivial (different products may
+        # have different CPMs). Defer to a follow-up — see #152.
+        return []
+    if total_budget <= 0:
+        return []
+
+    product = products_in_buy[0]
+    impl_config = effective_configs.get(product.product_id, {}) or {}
+    ad_unit_ids = impl_config.get("targeted_ad_unit_ids") or []
+    if not ad_unit_ids:
+        return []
+
+    # Pull the first pricing option as the rate. The CPM-only cap is
+    # intentional for the first ship: derive impressions only when the
+    # rate is meaningful for that calculation.
+    pricing_options = getattr(product, "pricing_options", None) or []
+    if not pricing_options:
+        return []
+    first_option = pricing_options[0]
+    inner = getattr(first_option, "root", first_option)
+    pricing_model = str(getattr(inner, "pricing_model", "") or "").lower()
+    if pricing_model != "cpm":
+        return []
+    rate = getattr(inner, "rate", None)
+    if rate is None or float(rate) <= 0:
+        return []
+
+    cpm = float(rate)
+    implied_impressions = int(total_budget / cpm * 1000)
+    if implied_impressions <= 0:
+        return []
+
+    # Resolve flight window from the request
+    flight_start = getattr(req, "flight_start_date", None) or getattr(req, "start_time", None)
+    flight_end = getattr(req, "flight_end_date", None) or getattr(req, "end_time", None)
+    if flight_start is None or flight_end is None:
+        return []
+
+    if isinstance(flight_start, datetime):
+        start_d = flight_start.date()
+    else:
+        start_d = flight_start
+    if isinstance(flight_end, datetime):
+        end_d = flight_end.date()
+    else:
+        end_d = flight_end
+
+    # Get forecast manager from the adapter. Fail-open if absent.
+    orders_manager = getattr(adapter, "orders_manager", None)
+    client_manager = getattr(orders_manager, "client_manager", None)
+    if client_manager is None:
+        return []
+
+    from src.adapters.gam.managers.forecast import GAMForecastManager
+
+    advertiser_id = getattr(orders_manager, "advertiser_id", None)
+    forecast_manager = GAMForecastManager(client_manager=client_manager, advertiser_id=advertiser_id)
+
+    available = forecast_manager.get_available_units(
+        ad_unit_ids=ad_unit_ids,
+        start_date=start_d,
+        end_date=end_d,
+        line_item_type=impl_config.get("line_item_type", "STANDARD"),
+        cost_type=impl_config.get("cost_type", "CPM"),
+        include_descendants=bool(impl_config.get("include_descendants", True)),
+    )
+    if available is None:
+        # Forecast call failed or returned null — fail open. The buy
+        # proceeds without warning. The adapter call below will run as
+        # before; if delivery actually under-paces, the buyer sees that
+        # via get_media_buy_delivery.
+        return []
+
+    if implied_impressions <= available:
+        return []
+
+    overbook_pct = round((implied_impressions / available - 1) * 100, 1) if available > 0 else 100.0
+    return [
+        {
+            "code": "inventory_overbook_minor",
+            "message": (
+                f"Implied impression goal ({implied_impressions:,}) exceeds GAM availability "
+                f"forecast ({available:,}) by {overbook_pct}%. The line item will accept the "
+                f"buy but may land in INVENTORY_RELEASED until publisher resolves the overbook "
+                f"in GAM admin."
+            ),
+            "details": {
+                "goal_impressions": implied_impressions,
+                "forecast_available_impressions": available,
+                "overbook_percent": overbook_pct,
+                "product_id": product.product_id,
+            },
+        }
+    ]
+
+
 def _validate_creatives_before_adapter_call(
     packages: list[MediaPackage],
     tenant_id: str,
@@ -2642,6 +2767,30 @@ async def _create_media_buy_impl(
             effective_configs[p.product_id].get("auto_create_enabled", True) for p in products_in_buy
         )
 
+        # Pre-flight overbook detection (#152). Single-product GAM CPM
+        # buys only on this iteration; fail-open everywhere. Warnings
+        # surface on the success response via response.ext.warnings
+        # pending https://github.com/adcontextprotocol/adcp/issues/4248.
+        overbook_warnings: list[dict[str, Any]] = []
+        try:
+            overbook_warnings = _detect_overbook_warnings(
+                adapter=adapter,
+                products_in_buy=products_in_buy,
+                effective_configs=effective_configs,
+                req=req,
+                total_budget=total_budget,
+            )
+            if overbook_warnings:
+                logger.warning(
+                    f"[OVERBOOK] {len(overbook_warnings)} warning(s) attached to response: "
+                    f"{[w['details'] for w in overbook_warnings]}"
+                )
+        except Exception as e:
+            # Defence-in-depth — the detector is already fail-open, but
+            # any unexpected raise here must NOT block the buy.
+            logger.warning(f"[OVERBOOK] detector raised, fail-open: {e}", exc_info=True)
+            overbook_warnings = []
+
         # Check if either tenant or product disables auto-creation
         # Skip in dry_run mode - we're only validating, not creating workflow
         if not testing_ctx.dry_run and (not auto_create_enabled or not product_auto_create):
@@ -2853,9 +3002,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
@@ -3720,12 +3869,20 @@ async def _create_media_buy_impl(
         # Surface the DB-derived MediaBuyStatus on the wire so buyers see the correct
         # blocker (pending_creatives vs pending_start) on the create_media_buy reply
         # itself, matching what /get_media_buy will report later.
+        # Overbook warnings (#152) ride on response.ext per AdCP extension
+        # convention. Other Success construction sites (idempotency hit,
+        # simulated, deferred-for-approval) don't surface warnings yet —
+        # follow-up.
+        ext_payload: dict[str, Any] = {}
+        if overbook_warnings:
+            ext_payload["warnings"] = overbook_warnings
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
+            ext=ext_payload if ext_payload else None,
         )
 
         # Log activity
