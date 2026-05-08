@@ -24,7 +24,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import force_approve_media_buy_in_db
+from tests.e2e.utils import force_approve_media_buy_in_db, resolve_media_buy_id
 
 
 class TestAdCPFullLifecycle:
@@ -92,8 +92,11 @@ class TestAdCPFullLifecycle:
             media_buy_result = await client.call_tool("create_media_buy", media_buy_request)
             media_buy_data = parse_tool_result(media_buy_result)
 
-            media_buy_id = media_buy_data.get("media_buy_id")
-            assert media_buy_id, f"create_media_buy must return media_buy_id, got: {list(media_buy_data.keys())}"
+            # Per PR #183, the response can be either the sync-success
+            # variant (carries media_buy_id) or the submitted variant
+            # (carries only task_id; media_buy_id is recorded server-side
+            # in object_workflow_mapping). resolve_media_buy_id handles both.
+            media_buy_id = resolve_media_buy_id(live_server, media_buy_data)
 
             # Force-approve the media buy so delivery works
             force_approve_media_buy_in_db(live_server, media_buy_id)
@@ -128,9 +131,9 @@ class TestAdCPFullLifecycle:
             )
             delivery_data = parse_tool_result(delivery_result)
 
-            assert "deliveries" in delivery_data or "media_buy_deliveries" in delivery_data, (
-                f"Response must contain deliveries, got: {list(delivery_data.keys())}"
-            )
+            assert (
+                "deliveries" in delivery_data or "media_buy_deliveries" in delivery_data
+            ), f"Response must contain deliveries, got: {list(delivery_data.keys())}"
 
             # Delivery may be empty for freshly created media buys (mock adapter
             # delivery simulator needs a cycle to generate metrics). Verify structure only.
