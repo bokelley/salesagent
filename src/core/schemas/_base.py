@@ -891,7 +891,7 @@ class Targeting(TargetingOverlay):
     # axe_include_segment: str | None
     # axe_exclude_segment: str | None
 
-    # Override frequency_cap to use our extended FrequencyCap with scope
+    # Override frequency_cap to use our local FrequencyCap subclass (customization hook).
     frequency_cap: FrequencyCap | None = None
 
     # --- Geo exclusion extensions (not in library) ---
