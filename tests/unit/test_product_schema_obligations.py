@@ -526,7 +526,7 @@ class TestNoBriefSchemaObligations:
         # The schema allows brief=None on GetProductsRequest
         from src.core.schemas import GetProductsRequest
 
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.brief is None
 
 
@@ -1016,7 +1016,7 @@ class TestPaginatedDiscoverySchema:
         # GetProductsRequest.pagination is optional; default page size is 50
         from src.core.schemas import GetProductsRequest
 
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.pagination is None  # Not specified = use server default (50)
 
     async def test_pagination_min_max_results_bounds(self):
@@ -1466,6 +1466,7 @@ class TestGetProductsRequestSchema:
         from src.core.schemas import GetProductsRequest
 
         req = GetProductsRequest(
+            buying_mode="wholesale",
             brief="video ads for sports fans",
             brand={"domain": "nike.com"},
             account={"account_id": "acct_001"},
@@ -1486,25 +1487,27 @@ class TestGetProductsRequestSchema:
         """
         from src.core.schemas import GetProductsRequest
 
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.brief is None
         assert req.brand is None
         assert req.filters is None
 
-    def test_request_rejects_unknown_fields_in_dev(self):
-        """GetProductsRequest rejects unknown fields in dev mode (extra=forbid).
+    def test_request_keeps_unknown_fields_off_spec_attributes(self):
+        """GetProductsRequest accepts forward-compat extras but doesn't bind them
+        to spec attributes.
 
         Covers: CONSTR-GET-PRODUCTS-REQUEST-01
-        """
-        import os
 
+        Phase 2 slice 7: GetProductsRequest is now an alias for the AdCP library
+        type, which uses ``extra='allow'`` for forward compatibility with future
+        spec extensions. Unknown fields land on ``model_extra`` rather than
+        raising — but they don't show up as named attributes on the request.
+        """
         from src.core.schemas import GetProductsRequest
 
-        # In dev/test mode (default), extra=forbid should reject unknown fields
-        env = os.environ.get("ENVIRONMENT", "")
-        if env != "production":
-            with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-                GetProductsRequest(**{"brief": "test", "unknown_field_xyz": "bad"})
+        req = GetProductsRequest(buying_mode="wholesale", brief="test", unknown_field_xyz="bad")
+        assert not hasattr(req, "unknown_field_xyz") or req.unknown_field_xyz == "bad"
+        assert req.model_extra == {"unknown_field_xyz": "bad"}
 
     def test_request_has_channels_filter(self):
         """GetProductsRequest filters support channels field (v3 addition).

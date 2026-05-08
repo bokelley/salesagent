@@ -33,13 +33,13 @@ class TestGetProductsRequestAlignment:
         Per AdCP spec, ALL fields in GetProductsRequest are optional.
         """
         # Empty request is valid per spec
-        empty_req = GetProductsRequest()
+        empty_req = GetProductsRequest(buying_mode="wholesale")
         assert empty_req.brand is None
         assert empty_req.brief is None
         assert empty_req.filters is None
 
         # With brand only (adcp 3.6.0: brand replaced brand_manifest)
-        req = GetProductsRequest(brand={"domain": "nike.com"})
+        req = GetProductsRequest(buying_mode="wholesale", brand={"domain": "nike.com"})
         # Local schema may store as dict, library coerces to BrandReference
         assert req.brand is not None
         assert req.brief is None  # Optional, defaults to None
@@ -48,6 +48,7 @@ class TestGetProductsRequestAlignment:
     def test_with_all_optional_fields(self):
         """Test with all optional fields that AdCP spec allows."""
         req = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "acme.com"},
             brief="Looking for display advertising on tech sites",
             filters=ProductFilters(
@@ -74,6 +75,7 @@ class TestGetProductsRequestAlignment:
     def test_filters_as_dict(self):
         """Test that filters can be provided as dict (JSON deserialization pattern)."""
         req = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "tesla.com"},
             filters={
                 "delivery_type": "non_guaranteed",
@@ -89,6 +91,7 @@ class TestGetProductsRequestAlignment:
     def test_partial_filters(self):
         """Test with only some filter fields (all filters are optional)."""
         req = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "spotify.com"},
             filters=ProductFilters(delivery_type="guaranteed"),
         )
@@ -102,18 +105,26 @@ class TestGetProductsRequestAlignment:
         from src.core.schemas import FormatId
 
         fid = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")
-        req = GetProductsRequest(brand={"domain": "testbrand.com"}, filters=ProductFilters(format_ids=[fid]))
+        req = GetProductsRequest(
+            buying_mode="wholesale", brand={"domain": "testbrand.com"}, filters=ProductFilters(format_ids=[fid])
+        )
         assert req.filters.format_ids[0].id == "display_300x250"
 
     def test_filters_delivery_type_values(self):
         """Test that delivery_type accepts valid values per AdCP spec."""
         # Guaranteed products
-        req1 = GetProductsRequest(brand={"domain": "testbrand.com"}, filters=ProductFilters(delivery_type="guaranteed"))
+        req1 = GetProductsRequest(
+            buying_mode="wholesale",
+            brand={"domain": "testbrand.com"},
+            filters=ProductFilters(delivery_type="guaranteed"),
+        )
         assert req1.filters.delivery_type.value == "guaranteed"
 
         # Non-guaranteed products
         req2 = GetProductsRequest(
-            brand={"domain": "testbrand.com"}, filters=ProductFilters(delivery_type="non_guaranteed")
+            buying_mode="wholesale",
+            brand={"domain": "testbrand.com"},
+            filters=ProductFilters(delivery_type="non_guaranteed"),
         )
         assert req2.filters.delivery_type.value == "non_guaranteed"
 
@@ -175,6 +186,7 @@ class TestAdCPSchemaCompatibility:
         """
         # This is the updated example - using brand (BrandReference) instead of brand_manifest
         req = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "mobileapps.com"},
             filters={"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard"}]},
         )
@@ -188,20 +200,22 @@ class TestAdCPSchemaCompatibility:
         Per AdCP spec, all fields are optional - even brand.
         """
         # Empty request is valid
-        empty_req = GetProductsRequest()
+        empty_req = GetProductsRequest(buying_mode="wholesale")
         assert empty_req.brand is None
         assert empty_req.brief is None
         assert empty_req.filters is None
 
         # Brand only
-        req = GetProductsRequest(brand={"domain": "eco-products.com"})
+        req = GetProductsRequest(buying_mode="wholesale", brand={"domain": "eco-products.com"})
         assert req.brand is not None
         assert req.brief is None  # Optional, defaults to None
         assert req.filters is None
 
     def test_example_with_brief(self):
         """Test request with brief field."""
-        req = GetProductsRequest(brief="display advertising", brand={"domain": "eco-products.com"})
+        req = GetProductsRequest(
+            buying_mode="wholesale", brief="display advertising", brand={"domain": "eco-products.com"}
+        )
 
         assert req.brief == "display advertising"
         assert req.brand is not None
@@ -209,6 +223,7 @@ class TestAdCPSchemaCompatibility:
     def test_example_multiple_filter_fields(self):
         """Test request with multiple filter fields."""
         req = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "premium-video.com"},
             filters={
                 "delivery_type": "non_guaranteed",
@@ -236,6 +251,7 @@ class TestRegressionPrevention:
         """
         try:
             req = GetProductsRequest(
+                buying_mode="wholesale",
                 brand={"domain": "catfood.com"},
                 brief="video ads",
                 filters={
@@ -253,7 +269,7 @@ class TestRegressionPrevention:
     def test_all_fields_optional(self):
         """Test that all GetProductsRequest fields are optional per spec."""
         # Empty request is valid
-        req = GetProductsRequest()
+        req = GetProductsRequest(buying_mode="wholesale")
         assert req.brand is None
         assert req.brief is None
         assert req.filters is None
@@ -273,7 +289,7 @@ class TestRegressionPrevention:
             },
         }
 
-        req = GetProductsRequest(**payload)
+        req = GetProductsRequest(buying_mode="wholesale", **payload)
 
         assert req.brand is not None
         assert req.brief == "video advertising campaigns"
