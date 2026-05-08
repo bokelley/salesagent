@@ -37,9 +37,9 @@ def assert_field_type(data: dict, field: str, expected_type: type, *, allow_none
     assert field in data, f"Missing field '{field}' in {sorted(data.keys())}"
     if allow_none and data[field] is None:
         return
-    assert isinstance(
-        data[field], expected_type
-    ), f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
+    assert isinstance(data[field], expected_type), (
+        f"Field '{field}' expected {expected_type.__name__}, got {type(data[field]).__name__}: {data[field]!r}"
+    )
 
 
 def assert_fields_present(data: dict, required_fields: list[str]) -> None:
@@ -616,8 +616,8 @@ class TestUpdateMediaBuyResponseShape:
         assert_field_type(pkg, "paused", bool)
         assert pkg["package_id"] == "pkg_001"
 
-    def test_internal_fields_excluded(self):
-        """Internal fields (workflow_step_id, changes_applied, buyer_package_ref) are excluded."""
+    def test_package_internal_fields_excluded(self):
+        """AffectedPackage internal fields (changes_applied, buyer_package_ref) stay excluded."""
         from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
 
         package = AffectedPackage(
@@ -633,7 +633,10 @@ class TestUpdateMediaBuyResponseShape:
         )
         data = resp.model_dump(mode="json")
 
-        assert "workflow_step_id" not in data
+        # workflow_step_id is now wire-visible per #158 — buyers need it
+        # to disambiguate "deferred for approval" from "applied with no
+        # package effect". The two payloads were otherwise byte-identical.
+        assert data["workflow_step_id"] == "wf_456"
 
         pkg = data["affected_packages"][0]
         assert "changes_applied" not in pkg, "Internal 'changes_applied' field should be excluded"
