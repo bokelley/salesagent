@@ -276,7 +276,7 @@ def media_buy_detail(tenant_id, media_buy_id):
             # the buyer.
             from src.core.database.repositories.delivery import DeliveryRepository
 
-            webhook_deliveries = DeliveryRepository(db_session, tenant_id).list_logs_for_media_buy(
+            webhook_deliveries = DeliveryRepository(db_session, tenant_id).list_logs_for_operator(
                 media_buy_id, limit=200
             )
 

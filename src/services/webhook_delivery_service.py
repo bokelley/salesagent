@@ -778,7 +778,7 @@ class WebhookDeliveryService:
                 session.commit()
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Failed to persist webhook_delivery_log entry " "(tenant=%s, media_buy=%s, attempt=%d): %s",
+                "Failed to persist webhook_delivery_log entry (tenant=%s, media_buy=%s, attempt=%d): %s",
                 tenant_id,
                 media_buy_id,
                 attempt,

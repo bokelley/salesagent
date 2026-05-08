@@ -499,8 +499,7 @@ def _update_media_buy_impl(
                         Error(
                             code="NOT_CANCELLABLE",
                             message=(
-                                f"media_buy_id={req.media_buy_id!r} is already canceled — "
-                                "cannot cancel a terminal buy"
+                                f"media_buy_id={req.media_buy_id!r} is already canceled — cannot cancel a terminal buy"
                             ),
                         )
                     ],

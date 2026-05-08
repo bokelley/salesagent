@@ -392,27 +392,41 @@ class DeliveryRepository:
     # WebhookDeliveryLog reads — for #101 buyer self-debug surface
     # ------------------------------------------------------------------
 
-    def list_logs_for_media_buy(
-        self,
-        media_buy_id: str,
-        *,
-        principal_id: str | None = None,
-        limit: int = 50,
-    ) -> list[WebhookDeliveryLog]:
-        """Recent webhook delivery log entries for a media buy.
-
-        Most-recent-first. ``principal_id`` filter is applied when set
-        so a buyer agent only sees its own deliveries, even if multiple
-        agents share visibility into the same buy via account access.
-
-        Defaults to 50 rows to match the get_media_buys ext surface.
-        """
-        stmt = (
+    def _list_logs_query(self, media_buy_id: str, limit: int):
+        return (
             select(WebhookDeliveryLog)
             .where(WebhookDeliveryLog.tenant_id == self._tenant_id)
             .where(WebhookDeliveryLog.media_buy_id == media_buy_id)
+            .order_by(WebhookDeliveryLog.created_at.desc())
+            .limit(limit)
         )
-        if principal_id is not None:
-            stmt = stmt.where(WebhookDeliveryLog.principal_id == principal_id)
-        stmt = stmt.order_by(WebhookDeliveryLog.created_at.desc()).limit(limit)
+
+    def list_logs_for_buyer(
+        self,
+        media_buy_id: str,
+        principal_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[WebhookDeliveryLog]:
+        """Recent webhook deliveries for a media buy, scoped to one principal.
+
+        Use on buyer-facing surfaces. ``principal_id`` is required so a
+        buyer agent never sees another principal's deliveries even if
+        multiple agents share visibility into the same buy.
+        """
+        stmt = self._list_logs_query(media_buy_id, limit).where(WebhookDeliveryLog.principal_id == principal_id)
         return list(self._session.scalars(stmt).all())
+
+    def list_logs_for_operator(
+        self,
+        media_buy_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[WebhookDeliveryLog]:
+        """Recent webhook deliveries for a media buy across all principals.
+
+        Tenant-scoped. Use only on operator-facing surfaces (admin UI)
+        where the caller is authorized to see all webhook activity for
+        every principal in the tenant.
+        """
+        return list(self._session.scalars(self._list_logs_query(media_buy_id, limit)).all())

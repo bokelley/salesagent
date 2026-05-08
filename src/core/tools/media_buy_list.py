@@ -295,9 +295,10 @@ def _fetch_webhook_activity(
     repo = DeliveryRepository(session, tenant_id)
     activity: dict[str, list[dict]] = {}
     for media_buy_id in media_buy_ids:
-        rows = repo.list_logs_for_media_buy(media_buy_id, principal_id=principal_id, limit=limit)
+        rows = repo.list_logs_for_buyer(media_buy_id, principal_id, limit=limit)
         activity[media_buy_id] = [
             {
+                "delivery_id": row.id,
                 "fired_at": row.created_at.isoformat() if row.created_at else None,
                 "completed_at": row.completed_at.isoformat() if row.completed_at else None,
                 "task_type": row.task_type,
@@ -305,9 +306,10 @@ def _fetch_webhook_activity(
                 "sequence_number": row.sequence_number,
                 "attempt": row.attempt_count,
                 "status": row.status,
-                "url": row.webhook_url,
+                "url": _redact_url_query(row.webhook_url),
                 "http_status_code": row.http_status_code,
                 "response_time_ms": row.response_time_ms,
+                "payload_size_bytes": row.payload_size_bytes,
                 "error_message": row.error_message,
                 # Bodies are pre-truncated at insert time (DeliveryRepository
                 # caps at 64KB). Surface as-is — buyers wanting full payload
@@ -318,6 +320,23 @@ def _fetch_webhook_activity(
             for row in rows
         ]
     return activity
+
+
+def _redact_url_query(url: str | None) -> str | None:
+    """Strip query string from a webhook URL before echoing to buyers.
+
+    Why: buyer-configured webhook URLs commonly carry bearer tokens or
+    signed-URL parameters in the query string. Even though the buyer
+    sent the URL to us originally, surfacing it back in API responses
+    risks accidental disclosure (screenshots, logs, third-party agents
+    in the buyer pipeline). Path is preserved for debug value.
+    """
+    if not url:
+        return url
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def _fetch_target_media_buys(

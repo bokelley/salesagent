@@ -603,6 +603,10 @@ class TestDeliverWithBackoffGenericException:
                 "body_bytes": b'{"test":"data"}',
                 "timestamp": datetime.now(UTC).isoformat(),
                 "active_credential": None,
+                # Persistence wiring (#101) — required by _deliver_with_backoff.
+                "principal_id": "p1",
+                "media_buy_id": "mb_1",
+                "delivery_payload": {"sequence_number": 1, "notification_type": "scheduled"},
             }
         )
 

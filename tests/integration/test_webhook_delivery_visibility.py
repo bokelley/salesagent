@@ -3,8 +3,8 @@
 Covers:
 - ``DeliveryRepository.create_log`` truncation of oversized request_payload
   and response_body (64KB cap).
-- ``DeliveryRepository.list_logs_for_media_buy`` ordering, principal scoping,
-  and limit handling.
+- ``DeliveryRepository.list_logs_for_buyer`` / ``list_logs_for_operator``
+  ordering, principal scoping, and limit handling.
 - ``get_media_buys`` ``ext.psa.include_webhook_activity`` opt-in surfaces
   the recent deliveries on each returned buy, scoped to the calling
   principal.
@@ -41,13 +41,14 @@ def _seed_log(
     response_body: str | None = None,
     http_status_code: int | None = 200,
     error_message: str | None = None,
+    webhook_url: str = "https://buyer.example.com/webhook",
 ) -> str:
     log_id = str(uuid4())
     repo.create_log(
         log_id=log_id,
         principal_id=principal_id,
         media_buy_id=media_buy_id,
-        webhook_url="https://buyer.example.com/webhook",
+        webhook_url=webhook_url,
         task_type="delivery_report",
         status=status,
         attempt_count=attempt,
@@ -84,7 +85,7 @@ class TestDeliveryRepositoryTruncation:
         # distinguish "real payload" from "metadata replacement" by
         # checking ``_meta`` membership rather than guessing from
         # leaked underscore-prefixed keys.
-        logs = repo.list_logs_for_media_buy(buy.media_buy_id, limit=1)
+        logs = repo.list_logs_for_operator(buy.media_buy_id, limit=1)
         stored = logs[0]
         assert stored.request_payload is not None
         assert "_meta" in stored.request_payload
@@ -108,7 +109,7 @@ class TestDeliveryRepositoryTruncation:
         )
         factory_session.commit()
 
-        stored = repo.list_logs_for_media_buy(buy.media_buy_id, limit=1)[0]
+        stored = repo.list_logs_for_operator(buy.media_buy_id, limit=1)[0]
         assert stored.request_payload == small
 
     def test_oversized_response_body_is_truncated(self, factory_session):
@@ -126,7 +127,7 @@ class TestDeliveryRepositoryTruncation:
         )
         factory_session.commit()
 
-        stored = repo.list_logs_for_media_buy(buy.media_buy_id, limit=1)[0]
+        stored = repo.list_logs_for_operator(buy.media_buy_id, limit=1)[0]
         assert stored.response_body is not None
         assert len(stored.response_body.encode("utf-8")) <= 64 * 1024 + 100  # +marker
         assert stored.response_body.endswith("[truncated]")
@@ -165,7 +166,7 @@ class TestListLogsForMediaBuy:
             row.created_at = base_time + timedelta(seconds=offset_seconds)
         factory_session.commit()
 
-        rows = repo.list_logs_for_media_buy(buy.media_buy_id, limit=10)
+        rows = repo.list_logs_for_operator(buy.media_buy_id, limit=10)
         assert [r.sequence_number for r in rows] == [3, 2, 1]
 
     def test_filters_by_principal_id(self, factory_session):
@@ -178,7 +179,7 @@ class TestListLogsForMediaBuy:
         _seed_log(repo, principal_id=outsider.principal_id, media_buy_id=buy.media_buy_id)
         factory_session.commit()
 
-        rows = repo.list_logs_for_media_buy(buy.media_buy_id, principal_id=owner.principal_id)
+        rows = repo.list_logs_for_buyer(buy.media_buy_id, owner.principal_id)
         assert len(rows) == 1
         assert rows[0].principal_id == owner.principal_id
 
@@ -191,7 +192,7 @@ class TestListLogsForMediaBuy:
             _seed_log(repo, principal_id=principal.principal_id, media_buy_id=buy.media_buy_id, sequence_number=seq)
         factory_session.commit()
 
-        rows = repo.list_logs_for_media_buy(buy.media_buy_id, limit=3)
+        rows = repo.list_logs_for_operator(buy.media_buy_id, limit=3)
         assert len(rows) == 3
 
 
@@ -260,6 +261,31 @@ class TestGetMediaBuysExtPsaWebhookActivity:
         )
         returned = next(mb for mb in result.media_buys if mb.media_buy_id == buy.media_buy_id)
         assert returned.ext["psa"]["webhook_deliveries"] == []
+
+    def test_buyer_surface_redacts_url_query_and_includes_delivery_id(self, factory_session):
+        """Buyer surface strips the query string from webhook_url and exposes
+        ``delivery_id`` so retries can be correlated."""
+        tenant = TenantFactory()
+        principal = PrincipalFactory(tenant=tenant)
+        buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+        repo = DeliveryRepository(factory_session, tenant.tenant_id)
+        log_id = _seed_log(
+            repo,
+            principal_id=principal.principal_id,
+            media_buy_id=buy.media_buy_id,
+            webhook_url="https://buyer.example.com/hook?token=secret123&sig=abc",
+        )
+        factory_session.commit()
+
+        result = _get_media_buys_impl(
+            req=GetMediaBuysRequest(ext={"psa": {"include_webhook_activity": True}}),
+            identity=make_identity(tenant.tenant_id, principal.principal_id),
+        )
+        returned = next(mb for mb in result.media_buys if mb.media_buy_id == buy.media_buy_id)
+        delivery = returned.ext["psa"]["webhook_deliveries"][0]
+        assert delivery["url"] == "https://buyer.example.com/hook"
+        assert "token" not in delivery["url"]
+        assert delivery["delivery_id"] == log_id
 
     def test_limit_param_caps_result_size(self, factory_session):
         tenant = TenantFactory()
