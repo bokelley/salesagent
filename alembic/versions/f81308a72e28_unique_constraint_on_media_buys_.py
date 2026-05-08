@@ -8,7 +8,7 @@ duplicate rows. Combined with the IntegrityError catch in
 wins, the loser re-fetches and continues.
 
 Revision ID: f81308a72e28
-Revises: r1s2t3u4v5w6
+Revises: d8e9f0a1b2c3
 Create Date: 2026-05-07
 
 """
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "f81308a72e28"
-down_revision: str | Sequence[str] | None = "r1s2t3u4v5w6"
+down_revision: str | Sequence[str] | None = "d8e9f0a1b2c3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

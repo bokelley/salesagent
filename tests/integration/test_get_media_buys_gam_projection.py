@@ -153,6 +153,7 @@ class TestProjectionExtGam:
             "gam": {
                 "imported": True,
                 "line_item_id": li.line_item_id,
+                "order_id": sc.order.order_id,
                 "line_item_status": "DELIVERING",
             }
         }

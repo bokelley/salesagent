@@ -164,10 +164,14 @@ def line_item_to_package_fields(line_item: GAMLineItem) -> dict:
     package_id = projected_package_id(line_item.line_item_id)
     bid_price = Decimal(str(line_item.cost_per_unit)) if line_item.cost_per_unit is not None else None
 
+    # ``gam_order_id`` is included so a flattened/cached package row can
+    # be cross-referenced back to its parent GAM order without walking
+    # the response tree (build_package_ext surfaces it on the wire).
     package_config: dict = {
         "platform_line_item_id": line_item.line_item_id,
         "imported": True,
         "gam_line_item_status": line_item.status,
+        "gam_order_id": line_item.order_id,
     }
 
     return {
@@ -208,9 +212,10 @@ def build_package_ext(package_config: dict | None) -> dict | None:
     """Build the ``ext.gam`` payload for a projected/imported Package response.
 
     Returns ``None`` for native AdCP packages. Returns
-    ``{"gam": {"imported": True, "line_item_id": ...}}`` for GAM-imported
-    packages (both projected and materialized variants store the line_item_id
-    in ``package_config["platform_line_item_id"]``).
+    ``{"gam": {"imported": True, "line_item_id": ..., "order_id": ...}}`` for
+    GAM-imported packages. ``order_id`` lets buyers cross-reference a flat
+    package row back to its parent GAM order without walking the response
+    tree.
     """
     if not package_config or not package_config.get("imported"):
         return None
@@ -218,6 +223,9 @@ def build_package_ext(package_config: dict | None) -> dict | None:
     line_item_id = package_config.get("platform_line_item_id")
     if line_item_id is not None:
         payload["line_item_id"] = line_item_id
+    order_id = package_config.get("gam_order_id")
+    if order_id is not None:
+        payload["order_id"] = order_id
     status = package_config.get("gam_line_item_status")
     if status is not None:
         payload["line_item_status"] = status
@@ -280,29 +288,34 @@ def materialize_projected_buy(
     today = date.today()
     mb_repo = MediaBuyRepository(session, tenant_id)
     try:
-        media_buy = mb_repo.create_from_gam_import(
-            media_buy_id=media_buy_id,
-            principal_id=principal_id,
-            order_name=order.name,
-            advertiser_name=advertiser_name,
-            budget=fields["budget"],
-            currency=fields["currency"] or "USD",
-            start_date=fields["start_date"] or today,
-            end_date=fields["end_date"] or today,
-            start_time=fields["start_time"],
-            end_time=fields["end_time"],
-            status=project_gam_status(order.status, fields["start_date"], fields["end_date"], today).value,
-            external_id=order.order_id,
-            raw_request=fields["raw_request"],
-        )
+        # Wrap the insert in a SAVEPOINT so a unique-index / PK collision
+        # on a concurrent materialization rolls back ONLY our failed
+        # insert — the caller's outer UoW transaction stays intact.
+        # Without nested(), session.rollback() would discard everything
+        # the caller has written before reaching this function.
+        with session.begin_nested():
+            media_buy = mb_repo.create_from_gam_import(
+                media_buy_id=media_buy_id,
+                principal_id=principal_id,
+                order_name=order.name,
+                advertiser_name=advertiser_name,
+                budget=fields["budget"],
+                currency=fields["currency"] or "USD",
+                start_date=fields["start_date"] or today,
+                end_date=fields["end_date"] or today,
+                start_time=fields["start_time"],
+                end_time=fields["end_time"],
+                status=project_gam_status(order.status, fields["start_date"], fields["end_date"], today).value,
+                external_id=order.order_id,
+                raw_request=fields["raw_request"],
+            )
     except IntegrityError:
-        # Concurrent materialization won the race. Roll back our half-
-        # written state on this session and pick up the row the other
+        # Concurrent materialization won the race. The savepoint already
+        # rolled back our failed insert; pick up the row the other
         # transaction wrote. Both the PK (media_buy_id) and the
         # ``(tenant_id, external_id) WHERE external_id IS NOT NULL``
         # unique index can fire this; either way the resolution is the
         # same — return the existing row, packages and all.
-        session.rollback()
         existing = mb_repo.get_by_id(media_buy_id)
         if existing is None:
             # Extremely unlikely: the racing transaction was rolled back
