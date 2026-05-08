@@ -149,6 +149,68 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         )
 
 
+def _replay_update_media_buy(step, tenant_id: str, db) -> tuple[bool, str | None]:
+    """Re-enter `_update_media_buy_impl` with the persisted request payload.
+
+    The originating buyer's `update_media_buy` call landed the step in
+    `requires_approval`; the operator just approved it on the workflows
+    page. Now we replay the deferred operation against the same identity,
+    bypassing the manual-approval gate (which has been satisfied).
+
+    Returns ``(success, error_message)``. ``error_message`` is non-None only
+    when the replay raised or returned ``UpdateMediaBuyError``; the caller
+    is responsible for surfacing it on the workflow step.
+    """
+    from src.core.config_loader import get_tenant_by_id
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
+    from src.core.tools.media_buy_update import _update_media_buy_impl
+
+    context = db.scalars(select(Context).filter_by(context_id=step.context_id)).first()
+    if context is None or not context.principal_id:
+        return False, f"Workflow step {step.step_id} has no associated principal context"
+
+    tenant = get_tenant_by_id(tenant_id)
+    if tenant is None:
+        return False, f"Tenant {tenant_id} not found"
+
+    # Filter persisted payload to the request schema. Drops the
+    # request_metadata `protocol` key the impl injects on creation, and
+    # any forward-compat fields that don't belong on UpdateMediaBuyRequest.
+    raw = step.request_data or {}
+    allowed = set(UpdateMediaBuyRequest.model_fields.keys())
+    payload = {k: v for k, v in raw.items() if k in allowed}
+
+    try:
+        req = UpdateMediaBuyRequest.model_validate(payload)
+    except Exception as e:
+        return False, f"Failed to reconstruct update_media_buy request: {e}"
+
+    identity = ResolvedIdentity(
+        principal_id=context.principal_id,
+        tenant_id=tenant_id,
+        tenant=tenant,
+        protocol="mcp",
+    )
+
+    try:
+        result = _update_media_buy_impl(
+            req=req,
+            identity=identity,
+            context_id=step.context_id,
+            bypass_manual_approval=True,
+        )
+    except Exception as e:
+        logger.error(f"[APPROVAL] update_media_buy replay raised for {step.step_id}: {e}", exc_info=True)
+        return False, str(e)
+
+    if isinstance(result, UpdateMediaBuyError):
+        msg = "; ".join(err.message for err in result.errors) or "update_media_buy replay failed"
+        return False, msg
+
+    return True, None
+
+
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve", methods=["POST"])
 @require_tenant_access(role=("admin", "member"))
 @log_admin_action("approve_workflow_step")
@@ -171,6 +233,25 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 return jsonify({"error": "Workflow step not found"}), 404
 
             db.commit()
+
+            # Dispatch on the originating tool. Each deferred operation
+            # has its own replay path; without this dispatch, only the
+            # `create_media_buy` flow ever fires and other approvals
+            # silently land in `approved` with no side effect.
+            if step.tool_name == "update_media_buy":
+                success, err_msg = _replay_update_media_buy(step, tenant_id, db)
+                if not success:
+                    workflow_repo.update_status(
+                        step_id,
+                        status="failed",
+                        error_message=err_msg,
+                    )
+                    db.commit()
+                    logger.error(f"[APPROVAL] update_media_buy replay failed for {step_id}: {err_msg}")
+                    flash(f"Workflow approval recorded but update failed: {err_msg}", "error")
+                    return jsonify({"success": False, "error": err_msg}), 500
+                flash("Workflow step approved and update applied successfully", "success")
+                return jsonify({"success": True}), 200
 
             # Check if this is a media buy creation workflow step
             mappings = workflow_repo.get_mappings_for_step(step_id)

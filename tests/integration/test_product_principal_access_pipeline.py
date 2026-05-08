@@ -241,28 +241,24 @@ class TestProductAccessFilterPipeline:
         assert len(result.products) == 1
 
 
-class TestProductSchemaWithAllowedPrincipalIds:
-    """Test that the Product schema includes the allowed_principal_ids field.
+class TestAllowedPrincipalIdsLivesOnResolvedProduct:
+    """Phase 2 slice 5 contract: ``allowed_principal_ids`` lives on
+    :class:`ResolvedProduct`, not on the wire-shape Product schema.
 
-    Note: These are pure schema tests -- no DB needed, but kept here for suite cohesion.
+    Note: These are pure type tests -- no DB needed, but kept here for suite cohesion.
     """
 
-    def test_product_schema_has_allowed_principal_ids_field(self):
-        """Product schema accepts allowed_principal_ids."""
+    def test_field_not_on_wire_product(self):
+        """Wire-shape Product schema must not declare allowed_principal_ids."""
         from src.core.schemas import Product
 
-        assert "allowed_principal_ids" in Product.model_fields
+        assert "allowed_principal_ids" not in Product.model_fields
 
-    def test_product_schema_field_is_optional(self):
-        """allowed_principal_ids is optional (None by default)."""
-        from src.core.schemas import Product
+    def test_field_lives_on_resolved_product(self):
+        """ResolvedProduct carries allowed_principal_ids alongside the wire shape."""
+        from dataclasses import fields
 
-        field_info = Product.model_fields["allowed_principal_ids"]
-        assert field_info.default is None
+        from src.core.resolved_product import ResolvedProduct
 
-    def test_product_schema_field_is_excluded_from_serialization(self):
-        """allowed_principal_ids is excluded from API responses."""
-        from src.core.schemas import Product
-
-        field_info = Product.model_fields["allowed_principal_ids"]
-        assert field_info.exclude is True
+        field_names = {f.name for f in fields(ResolvedProduct)}
+        assert "allowed_principal_ids" in field_names

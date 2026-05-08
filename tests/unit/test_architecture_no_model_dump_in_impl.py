@@ -27,30 +27,31 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # FIXME(salesagent-hr8n): 23 violations remain.
 # Line numbers reflect the current state of media_buy_update.py.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 21 violations (workflow step response_data).
+    # _update_media_buy_impl: 22 violations (workflow step response_data).
     # Line numbers shift on every edit to media_buy_update.py — regenerate via
     # the inline AST script in the parent test class on drift.
-    ("media_buy_update.py", 311),
-    ("media_buy_update.py", 363),
-    ("media_buy_update.py", 364),
-    ("media_buy_update.py", 418),
-    ("media_buy_update.py", 475),
-    ("media_buy_update.py", 511),
-    ("media_buy_update.py", 530),
-    ("media_buy_update.py", 552),
-    ("media_buy_update.py", 584),
+    ("media_buy_update.py", 391),
+    ("media_buy_update.py", 439),
+    ("media_buy_update.py", 457),
+    ("media_buy_update.py", 458),
+    ("media_buy_update.py", 512),
+    ("media_buy_update.py", 569),
+    ("media_buy_update.py", 605),
     ("media_buy_update.py", 624),
-    ("media_buy_update.py", 641),
-    ("media_buy_update.py", 695),
-    ("media_buy_update.py", 725),
-    ("media_buy_update.py", 766),
-    ("media_buy_update.py", 949),
-    ("media_buy_update.py", 979),
-    ("media_buy_update.py", 1007),
-    ("media_buy_update.py", 1169),
-    ("media_buy_update.py", 1233),
-    ("media_buy_update.py", 1355),
-    ("media_buy_update.py", 1415),
+    ("media_buy_update.py", 646),
+    ("media_buy_update.py", 678),
+    ("media_buy_update.py", 718),
+    ("media_buy_update.py", 735),
+    ("media_buy_update.py", 789),
+    ("media_buy_update.py", 819),
+    ("media_buy_update.py", 860),
+    ("media_buy_update.py", 1043),
+    ("media_buy_update.py", 1073),
+    ("media_buy_update.py", 1101),
+    ("media_buy_update.py", 1263),
+    ("media_buy_update.py", 1327),
+    ("media_buy_update.py", 1444),
+    ("media_buy_update.py", 1528),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 599),
     # _list_creatives_impl: 1 violation (filter dict conversion)

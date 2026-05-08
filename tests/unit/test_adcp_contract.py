@@ -123,18 +123,18 @@ class TestSchemaMatchesLibrary:
         # buying_mode and account are now in the library (adcp 3.9) but overridden locally
         # (buying_mode widened to str|None, account made optional)
         local_extensions = {"product_selectors"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert (
+            lib_fields == local_fields - local_extensions
+        ), f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
 
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
         # adcp 3.9: all fields now in library — no local extensions remaining
         local_extensions: set[str] = set()
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert (
+            lib_fields == local_fields - local_extensions
+        ), f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
 
         # Document known drift for other schemas (to be fixed)
         # These assertions document the current state and will fail when fixed
@@ -776,43 +776,117 @@ class TestAdCPContract:
             )
 
     def test_adcp_response_excludes_internal_fields(self):
-        """Test that AdCP responses don't expose internal fields."""
+        """AdCP wire dumps must not carry internal fields.
+
+        Phase 2 slice 5: internal fields (implementation_config, countries,
+        device_types, allowed_principal_ids) live on :class:`ResolvedProduct`,
+        not on the wire-shape :class:`Product` schema. Two layers of defense:
+
+        1. Declaration: the Product schema must not declare any of the four
+           internal fields as its own model fields.
+        2. Production path: :func:`convert_product_model_to_resolved` builds
+           the wire-shape Product from explicit ORM columns only. Even if
+           the ORM model carries an internal value (e.g. ``implementation_config``),
+           the converter pulls it onto ``ResolvedProduct`` and never threads
+           it into the wire-shape constructor — so ``resolved.wire.model_dump()``
+           is clean regardless of what extras Pydantic would have allowed.
+        """
+        from unittest.mock import MagicMock
+
+        from src.core.product_conversion import convert_product_model_to_resolved
+
+        forbidden = {"implementation_config", "countries", "device_types", "allowed_principal_ids"}
+
+        # Layer 1 — schema declaration.
+        assert not (forbidden & set(ProductSchema.model_fields.keys())), (
+            "Internal fields must not be declared on the wire-shape Product schema"
+        )
+
+        # Layer 2 — production converter path stays clean even when the ORM
+        # model carries values for all four internal fields.
         from tests.helpers.adcp_factories import (
             create_test_cpm_pricing_option,
+            create_test_format_id,
             create_test_publisher_properties_by_tag,
             create_test_reporting_capabilities,
         )
 
-        products = [
-            ProductSchema(
-                product_id="test",
-                name="Test Product",
-                description="Test",
-                format_ids=[],
-                delivery_type="guaranteed",
-                delivery_measurement={
-                    "provider": "test_provider",
-                    "notes": "Test measurement",
-                },  # Required per AdCP spec
-                implementation_config={"internal": "data"},  # Should be excluded
-                publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
-                pricing_options=[
-                    create_test_cpm_pricing_option(
-                        pricing_option_id="cpm_usd_fixed",
-                        currency="USD",
-                        rate=10.0,
-                    )
-                ],
-                reporting_capabilities=create_test_reporting_capabilities(),  # Required per AdCP 4.4
-            )
+        orm = MagicMock()
+        orm.product_id = "test"
+        orm.name = "Test Product"
+        orm.description = "Test"
+        orm.delivery_type = "guaranteed"
+        orm.effective_format_ids = [create_test_format_id("display_300x250")]
+        orm.effective_properties = [create_test_publisher_properties_by_tag(publisher_domain="test.com")]
+        orm.delivery_measurement = {"provider": "test_provider", "notes": "Test measurement"}
+        orm.pricing_options = []
+        orm.is_custom = False
+        orm.reporting_capabilities = create_test_reporting_capabilities()
+        orm.channels = None
+        for opt in (
+            "measurement",
+            "creative_policy",
+            "product_card",
+            "product_card_detailed",
+            "placements",
+            "property_targeting_allowed",
+            "signal_targeting_allowed",
+            "catalog_match",
+            "catalog_types",
+            "conversion_tracking",
+            "data_provider_signals",
+            "forecast",
+        ):
+            setattr(orm, opt, None)
+
+        # Internal fields populated on the ORM — the converter must keep them
+        # off the wire shape.
+        orm.countries = ["US", "CA"]
+        orm.allowed_principal_ids = ["secret"]
+        orm.effective_implementation_config = {"gam": "config"}
+        orm.targeting_template = {"device_targets": ["mobile"]}
+
+        # Skip the empty pricing_options check — patch the call to provide a stub.
+        orm.pricing_options = [
+            type(
+                "PO",
+                (),
+                {
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "min_spend_per_package": None,
+                    "vcpm_threshold": None,
+                    "duration_days": None,
+                    "metadata": None,
+                    "rate_card": None,
+                },
+            )()
         ]
 
-        response = GetProductsResponse(products=products)
-        response_dict = response.model_dump()
+        # Bypass the actual pricing converter (its constraints are exercised elsewhere).
+        from unittest.mock import patch
 
-        # Verify implementation_config is excluded from response
-        for product in response_dict["products"]:
-            assert "implementation_config" not in product, "Internal config should not be in AdCP response"
+        with patch("src.core.product_conversion.convert_pricing_option_to_adcp") as mock:
+            mock.return_value = create_test_cpm_pricing_option(
+                pricing_option_id="cpm_usd_fixed", currency="USD", rate=10.0
+            )
+            resolved = convert_product_model_to_resolved(orm, adapter_type="mock")
+
+        wire_dump = resolved.wire.model_dump()
+
+        for forbidden_name in forbidden:
+            assert forbidden_name not in wire_dump, (
+                f"Internal field '{forbidden_name}' leaked into the wire dump from the production converter"
+            )
+
+        # And the values still travel on the ResolvedProduct sidecar.
+        assert resolved.countries == ["US", "CA"]
+        assert resolved.allowed_principal_ids == ["secret"]
+        assert resolved.implementation_config == {"gam": "config"}
+        assert resolved.device_types == ["mobile"]
 
     def test_adcp_signal_support(self):
         """Test AdCP v2.4 signal support in Targeting schema.
@@ -996,15 +1070,15 @@ class TestAdCPContract:
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         assert len(adcp_response) >= 8, f"AdCP response should have at least 8 core fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
+        assert len(internal_response) >= len(
+            adcp_response
+        ), "Internal response should have at least as many fields as external response"
 
         # Verify internal response has more fields than external (due to internal fields)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 3, (
-            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
-        )
+        assert (
+            len(internal_only_fields) >= 3
+        ), f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
 
     def test_package_adcp_compliance(self):
         """Test that Package model complies with AdCP package schema."""
@@ -1080,15 +1154,15 @@ class TestAdCPContract:
         # Package has 1 required field (package_id) + any optional fields that are set
         # We set several optional fields above, so expect at least 1 field
         assert len(adcp_response) >= 1, f"AdCP response should have at least required fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
+        assert len(internal_response) >= len(
+            adcp_response
+        ), "Internal response should have at least as many fields as external response"
 
         # Verify internal response has more fields than external (due to internal fields)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 3, (
-            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
-        )
+        assert (
+            len(internal_only_fields) >= 3
+        ), f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
 
     def test_package_ignores_invalid_fields(self):
         """Test that Package schema ignores fields that don't exist in AdCP spec.
@@ -1200,21 +1274,21 @@ class TestAdCPContract:
             assert field in internal_response, f"Managed/internal field '{field}' missing from internal response"
 
         # Test managed fields are accessible internally
-        assert internal_response["key_value_pairs"]["aee_segment"] == "high_value", (
-            "Managed field should be in internal response"
-        )
+        assert (
+            internal_response["key_value_pairs"]["aee_segment"] == "high_value"
+        ), "Managed field should be in internal response"
 
         # Verify field count expectations (flexible - targeting has many optional fields)
         assert len(adcp_response) >= 9, f"AdCP response should have at least 9 fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
+        assert len(internal_response) >= len(
+            adcp_response
+        ), "Internal response should have at least as many fields as external response"
 
         # Verify internal response has more fields than external (due to managed/internal fields)
         internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 4, (
-            f"Expected at least 4 internal/managed-only fields, got {len(internal_only_fields)}"
-        )
+        assert (
+            len(internal_only_fields) >= 4
+        ), f"Expected at least 4 internal/managed-only fields, got {len(internal_only_fields)}"
 
     def test_budget_adcp_compliance(self):
         """Test that Budget model complies with AdCP budget schema."""
@@ -1291,9 +1365,9 @@ class TestAdCPContract:
         assert isinstance(adcp_response["templates_available"], bool), "templates_available must be boolean"
 
         # Verify field count (CreativePolicy is simple, count should be stable)
-        assert len(adcp_response) == 3, (
-            f"CreativePolicy response should have exactly 3 fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) == 3
+        ), f"CreativePolicy response should have exactly 3 fields, got {len(adcp_response)}"
 
     def test_creative_status_adcp_compliance(self):
         """Test that CreativeApprovalStatus model complies with AdCP creative-status schema."""
@@ -1323,9 +1397,9 @@ class TestAdCPContract:
         assert adcp_response["status"] in valid_statuses, f"Invalid status value: {adcp_response['status']}"
 
         # Verify field count (flexible - optional fields vary)
-        assert len(adcp_response) >= 3, (
-            f"CreativeStatus response should have at least 3 core fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 3
+        ), f"CreativeStatus response should have at least 3 core fields, got {len(adcp_response)}"
 
     def test_creative_assignment_adcp_compliance(self):
         """Test that CreativeAssignment model complies with AdCP creative-assignment schema."""
@@ -1368,9 +1442,9 @@ class TestAdCPContract:
         # Verify AdCP-specific requirements
         if adcp_response.get("rotation_type"):
             valid_rotations = ["weighted", "sequential", "even"]
-            assert adcp_response["rotation_type"] in valid_rotations, (
-                f"Invalid rotation_type: {adcp_response['rotation_type']}"
-            )
+            assert (
+                adcp_response["rotation_type"] in valid_rotations
+            ), f"Invalid rotation_type: {adcp_response['rotation_type']}"
 
         if adcp_response.get("weight") is not None:
             assert adcp_response["weight"] >= 0, "Weight must be non-negative"
@@ -1379,9 +1453,9 @@ class TestAdCPContract:
             assert 0 <= adcp_response["percentage_goal"] <= 100, "Percentage goal must be 0-100"
 
         # Verify field count (flexible - optional fields vary)
-        assert len(adcp_response) >= 4, (
-            f"CreativeAssignment response should have at least 4 core fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 4
+        ), f"CreativeAssignment response should have at least 4 core fields, got {len(adcp_response)}"
 
     def test_sync_creatives_request_adcp_compliance(self):
         """Test that SyncCreativesRequest model complies with AdCP v2.4 sync-creatives schema."""
@@ -1709,9 +1783,9 @@ class TestAdCPContract:
             assert field in adcp_response, f"Required field '{field}' missing from response"
 
         # Verify we have at least the required fields (and possibly some optional ones)
-        assert len(adcp_response) >= len(required_fields), (
-            f"Response should have at least {len(required_fields)} required fields, got {len(adcp_response)}"
-        )
+        assert len(adcp_response) >= len(
+            required_fields
+        ), f"Response should have at least {len(required_fields)} required fields, got {len(adcp_response)}"
 
     def test_create_media_buy_response_adcp_compliance(self):
         """Test that CreateMediaBuyResponse complies with AdCP create-media-buy-response schema.
@@ -1782,9 +1856,9 @@ class TestAdCPContract:
         assert isinstance(error_via_union, CreateMediaBuyError)
 
         # Verify field count for success response
-        assert len(adcp_response) >= 3, (
-            f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 3
+        ), f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
 
     def test_get_products_response_adcp_compliance(self):
         """Test that GetProductsResponse complies with AdCP get-products-response schema."""
@@ -1868,9 +1942,9 @@ class TestAdCPContract:
         # Verify __str__() provides appropriate empty message
         assert str(empty_response) == "No products matched your requirements."
         # Allow 2 or 3 fields (status is optional and may not be present, message removed)
-        assert len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3, (
-            f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
-        )
+        assert (
+            len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3
+        ), f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
 
     def test_list_creative_formats_response_adcp_compliance(self):
         """Test that ListCreativeFormatsResponse complies with AdCP list-creative-formats-response schema."""
@@ -1922,9 +1996,9 @@ class TestAdCPContract:
 
         # Verify field count - only required fields + non-None optional fields
         # formats is required; errors and creative_agents are omitted (None values)
-        assert len(adcp_response) >= 1, (
-            f"ListCreativeFormatsResponse should have at least required fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 1
+        ), f"ListCreativeFormatsResponse should have at least required fields, got {len(adcp_response)}"
 
     def test_update_media_buy_response_adcp_compliance(self):
         """Test that UpdateMediaBuyResponse complies with AdCP update-media-buy-response schema.
@@ -1976,9 +2050,9 @@ class TestAdCPContract:
         assert "buyer_ref" not in adcp_error, "Error response cannot have buyer_ref"
 
         # Verify field count for success response (media_buy_id, buyer_ref are required)
-        assert len(adcp_response) >= 2, (
-            f"UpdateMediaBuySuccess should have at least 2 required fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 2
+        ), f"UpdateMediaBuySuccess should have at least 2 required fields, got {len(adcp_response)}"
 
     def test_get_media_buy_delivery_request_adcp_compliance(self):
         """Test that GetMediaBuyDeliveryRequest complies with AdCP get-media-buy-delivery-request schema."""
@@ -2009,9 +2083,9 @@ class TestAdCPContract:
             # AdCP MediaBuyStatus enum: pending_activation, active, paused, completed
             valid_statuses = ["pending_activation", "active", "paused", "completed"]
             if isinstance(adcp_request["status_filter"], str):
-                assert adcp_request["status_filter"] in valid_statuses, (
-                    f"Invalid status: {adcp_request['status_filter']}"
-                )
+                assert (
+                    adcp_request["status_filter"] in valid_statuses
+                ), f"Invalid status: {adcp_request['status_filter']}"
             elif isinstance(adcp_request["status_filter"], list):
                 for status in adcp_request["status_filter"]:
                     assert status in valid_statuses, f"Invalid status in array: {status}"
@@ -2173,15 +2247,15 @@ class TestAdCPContract:
         )
 
         empty_adcp_response = empty_response.model_dump()
-        assert empty_adcp_response["media_buy_deliveries"] == [], (
-            "Empty media_buy_deliveries list should be empty array"
-        )
+        assert (
+            empty_adcp_response["media_buy_deliveries"] == []
+        ), "Empty media_buy_deliveries list should be empty array"
 
         # Verify field count - required fields + non-None optional fields
         # reporting_period, currency, media_buy_deliveries are required; aggregated_totals set; errors=None omitted
-        assert len(adcp_response) >= 3, (
-            f"GetMediaBuyDeliveryResponse should have at least 3 required fields, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 3
+        ), f"GetMediaBuyDeliveryResponse should have at least 3 required fields, got {len(adcp_response)}"
 
     def test_property_identifier_adcp_compliance(self):
         """Test that PropertyIdentifier complies with AdCP property identifier schema."""
@@ -2728,9 +2802,9 @@ class TestAdCPContract:
 
         # Verify field count (signals is required, errors is optional)
         # Per AdCP PR #113, protocol fields removed from domain responses
-        assert len(adcp_response) >= 1, (
-            f"GetSignalsResponse should have at least 1 core field (signals), got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 1
+        ), f"GetSignalsResponse should have at least 1 core field (signals), got {len(adcp_response)}"
 
         # Test with all fields
         signal_data = {
@@ -2769,9 +2843,9 @@ class TestAdCPContract:
         assert "signal_id" in adcp_response
 
         # Verify field count (domain fields only: signal_id, activation_details, errors)
-        assert len(adcp_response) >= 1, (
-            f"ActivateSignalResponse should have at least 1 core field, got {len(adcp_response)}"
-        )
+        assert (
+            len(adcp_response) >= 1
+        ), f"ActivateSignalResponse should have at least 1 core field, got {len(adcp_response)}"
 
         # Test with activation details (domain data)
         full_response = ActivateSignalResponse(

@@ -4,8 +4,6 @@ Extracted from src/core/schemas/__init__.py to reduce file size.
 All classes are re-exported from src.core.schemas for backward compatibility.
 """
 
-from typing import Any
-
 from adcp.types import Catalog as LibraryCatalog
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
@@ -63,59 +61,11 @@ class Placement(LibraryPlacement):
     )
 
 
-class Product(LibraryProduct):
-    """Product schema extending library Product with internal fields.
-
-    Inherits all AdCP-compliant fields from adcp library's Product,
-    ensuring we stay in sync with spec updates. Adds only internal-only
-    fields that we need for our implementation.
-
-    This pattern ensures:
-    - External serialization uses library Product (spec-compliant)
-    - Internal code has extra fields it needs (implementation_config)
-    - No conversion functions needed - inheritance handles it
-    - Automatic updates when library Product changes
-    """
-
-    # Internal-only fields — excluded from serialization.
-    implementation_config: dict[str, Any] | None = Field(
-        default=None,
-        description="Internal: Ad server-specific configuration for implementing this product",
-        exclude=True,  # Exclude from serialization by default
-    )
-
-    # Filter-related fields (not in AdCP Product spec, but needed for filtering)
-    countries: list[str] | None = Field(
-        default=None,
-        description="Internal: Country codes (ISO 3166-1 alpha-2) where this product is available",
-        exclude=True,  # Exclude from serialization by default
-    )
-    # channels: inherited from library Product as list[MediaChannel] | None (public per AdCP spec)
-
-    # Device type targeting (from targeting_template.device_targets in DB)
-    device_types: list[str] | None = Field(
-        default=None,
-        description="Internal: Device types this product supports (mobile, desktop, tablet, ctv, etc.)",
-        exclude=True,  # Exclude from serialization by default
-    )
-
-    # Principal access control
-    allowed_principal_ids: list[str] | None = Field(
-        default=None,
-        description="Internal: Principal IDs that can see this product. NULL/empty means visible to all.",
-        exclude=True,  # Exclude from serialization by default
-    )
-
-    # Pricing rules (AdCP V3): ``fixed_price`` present = fixed pricing,
-    # ``floor_price`` present = auction with floor. The consolidated
-    # CpmPricingOption/VcpmPricingOption types enforce this.
-    #
-    # ``publisher_properties`` non-emptiness is enforced by the library
-    # ``Product`` itself via ``MinLen(1)`` — no local validator needed.
-
-    # No model_dump override: internal-only fields are marked ``exclude=True`` on
-    # the field declaration (Pydantic strips them automatically), and the
-    # library Product is the source of truth for what's on the wire.
+# Wire-shape Product is just the AdCP library type. Internal fields live on
+# ``src.core.resolved_product.ResolvedProduct``; the production wire path goes
+# through :func:`src.core.product_conversion.convert_product_model_to_resolved`,
+# which builds the wire shape from explicit ORM fields only.
+Product = LibraryProduct
 
 
 class ProductFilters(LibraryFilters):

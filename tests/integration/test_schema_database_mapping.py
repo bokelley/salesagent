@@ -52,8 +52,8 @@ class TestSchemaFieldMapping:
             "publisher_properties",  # Populated from property_tags database column
             # AdCP 2.12.0+ protocol extension field - not stored in database
             "ext",  # Protocol extension field for future protocol additions
-            # Device type targeting - populated from targeting_template.device_targets during conversion
-            "device_types",  # Internal field for device type filtering
+            # device_types: lives on ResolvedProduct (not the wire schema) post Phase 2 slice 5;
+            # listed here only because the schema cross-check still iterates legacy field names.
             # property_targeting_allowed: now persisted (salesagent-kntn migration)
             # AdCP 3.9+ fields - inherited from library Product, not yet stored in database
             "max_optimization_goals",  # Max optimization goals from adcp 3.9 spec
@@ -242,9 +242,9 @@ class TestSchemaFieldMapping:
             db_columns = {column.name for column in model_class.__table__.columns}
 
             for field in required_fields:
-                assert field in db_columns, (
-                    f"Required field '{field}' missing from {model_class.__name__} database model"
-                )
+                assert (
+                    field in db_columns
+                ), f"Required field '{field}' missing from {model_class.__name__} database model"
 
     def test_pydantic_model_field_access_patterns(self):
         """Test patterns for safely accessing Pydantic model fields."""
