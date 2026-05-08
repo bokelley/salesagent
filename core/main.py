@@ -62,6 +62,7 @@ from sqlalchemy import select
 
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
+from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
 from core.platforms.gam import GamPlatform
@@ -405,6 +406,13 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
+        # DualCredentialAuditMiddleware logs WARNING when an inbound
+        # request carries two different bearer tokens (one in
+        # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores
+        # the audit signal the deleted bearer-translation shim used to
+        # emit (per #194 follow-up). Never logs token values; only
+        # SHA-256 fingerprints for log correlation.
+        (DualCredentialAuditMiddleware, {}),
         # SpecDefaultsMiddleware backfills wire fields the spec marks as
         # required but instructs sellers to default for pre-v3 clients
         # (e.g. GetProductsRequest.buying_mode → 'brief'). Sits *outside*

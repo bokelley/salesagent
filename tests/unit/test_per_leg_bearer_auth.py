@@ -191,3 +191,34 @@ async def test_a2a_rejects_unknown_bearer_token():
     assert inner.captured_scope is None
     starts = [m for m in messages if m.get("type") == "http.response.start"]
     assert starts and starts[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_a2a_401_carries_www_authenticate_bearer_challenge():
+    """RFC 6750 §3 + RFC 7235 §3.1 require ``WWW-Authenticate: Bearer`` on
+    every 401 from a Bearer-protected resource. Without it, RFC-compliant
+    clients (browsers, many HTTP libraries) treat the 401 as a generic
+    error and never surface the auth challenge to the buyer.
+
+    adcp 4.5.0 emits the header on every A2A 401 — this test pins that
+    contract so a future SDK upgrade can't silently drop it.
+    """
+    inner = _CapturingApp()
+    app = A2ABearerAuthMiddleware(inner, _production_auth())
+
+    messages: list[dict[str, Any]] = []
+    await _drain(messages, _post_scope([]), app)  # no auth header
+
+    starts = [m for m in messages if m.get("type") == "http.response.start"]
+    assert starts and starts[0]["status"] == 401, "Expected 401 on missing bearer"
+    headers = {name.decode("latin-1").lower(): value.decode("latin-1") for name, value in starts[0]["headers"]}
+    assert "www-authenticate" in headers, (
+        f"401 must carry WWW-Authenticate per RFC 6750 §3; got headers: {list(headers)}"
+    )
+    challenge = headers["www-authenticate"]
+    assert challenge.lower().startswith("bearer "), (
+        f"WWW-Authenticate must start with 'Bearer'; got {challenge!r}"
+    )
+    assert "realm=" in challenge.lower(), (
+        f"WWW-Authenticate Bearer challenge must include realm parameter; got {challenge!r}"
+    )
