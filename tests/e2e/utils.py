@@ -34,6 +34,51 @@ def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
     pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
 
 
+def resolve_media_buy_id_from_task_id(live_server: dict, task_id: str) -> str:
+    """Resolve a submitted-envelope ``task_id`` to its media_buy_id.
+
+    Per AdCP spec variant-3 (PR #183), the async ``create_media_buy``
+    response carries ``task_id`` (= the workflow_step.step_id) and does
+    NOT carry ``media_buy_id``. Tests that need to drive the buy past
+    approval look up the id via the ``ObjectWorkflowMapping`` row the
+    create path writes alongside the workflow step.
+
+    Runs inside the adcp-server container so we use the same
+    DATABASE_URL the app uses (no port-mapping mismatch on host).
+    """
+    lookup_script = f"""
+import os
+import psycopg2
+
+try:
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    cursor = conn.cursor()
+    cursor.execute(
+        \"\"\"SELECT object_id FROM object_workflow_mapping
+            WHERE step_id = %s AND object_type = 'media_buy'
+            LIMIT 1\"\"\",
+        ('{task_id}',),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        print('NOT_FOUND')
+    else:
+        print(row[0])
+    cursor.close()
+    conn.close()
+except Exception as e:
+    print(f'ERROR: {{e}}')
+    exit(1)
+"""
+    cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", lookup_script]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    out = result.stdout.strip().splitlines()
+    media_buy_id = out[-1] if out else ""
+    if not media_buy_id or media_buy_id == "NOT_FOUND":
+        raise AssertionError(f"No media_buy mapping for task_id={task_id}; raw={result.stdout!r}")
+    return media_buy_id
+
+
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
     """
     Force approve media buy in database to bypass approval workflow.
@@ -122,84 +167,3 @@ except Exception as e:
         except Exception as ex:
             print(f"Fallback failed: {ex}")
             raise e
-
-
-def resolve_media_buy_id(live_server: dict, media_buy_data: dict) -> str:
-    """Pull a media_buy_id out of a create_media_buy response, regardless of envelope variant.
-
-    Per the AdCP discriminated-union spec (PR #183), the response can be one of:
-
-    * sync-success — top-level ``media_buy_id`` + ``packages``
-    * submitted (async-pending-approval) — top-level ``task_id`` only;
-      ``media_buy_id`` is recorded on the server side via the
-      ``object_workflow_mapping`` row written alongside the approval
-      step. Resolve via the workflow_step → object_id link.
-    * error — neither, raises so callers see the wire error message.
-
-    Returns the media_buy_id string.
-    """
-    if "media_buy_id" in media_buy_data and media_buy_data["media_buy_id"]:
-        return media_buy_data["media_buy_id"]
-    if media_buy_data.get("status") == "submitted":
-        task_id = media_buy_data.get("task_id")
-        assert task_id, f"Submitted envelope missing task_id: {list(media_buy_data.keys())}"
-        # The submitted envelope's task_id IS the workflow_step_id (per
-        # ``CreateMediaBuySubmitted`` in src/core/schemas/_base.py:267).
-        # Look up the linked media_buy via object_workflow_mapping.
-        lookup_script = f"""
-import os
-import psycopg2
-
-conn = psycopg2.connect(os.environ['DATABASE_URL'])
-cursor = conn.cursor()
-cursor.execute(
-    \"\"\"
-    SELECT object_id FROM object_workflow_mapping
-    WHERE step_id = %s AND object_type = 'media_buy'
-    LIMIT 1
-    \"\"\",
-    ('{task_id}',),
-)
-row = cursor.fetchone()
-if row is None:
-    raise SystemExit(f'No object_workflow_mapping for step_id={task_id!r}')
-print(row[0])
-cursor.close()
-conn.close()
-"""
-        try:
-            cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", lookup_script]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            media_buy_id = result.stdout.strip()
-        except subprocess.CalledProcessError:
-            # Fallback: direct DB connection (matches force_approve_media_buy_in_db).
-            if "postgres_params" in live_server:
-                params = live_server["postgres_params"]
-                conn = psycopg2.connect(
-                    host=params["host"],
-                    port=params["port"],
-                    user=params["user"],
-                    password=params["password"],
-                    dbname=params["dbname"],
-                )
-            else:
-                conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT object_id FROM object_workflow_mapping
-                WHERE step_id = %s AND object_type = 'media_buy'
-                LIMIT 1
-                """,
-                (task_id,),
-            )
-            row = cursor.fetchone()
-            conn.close()
-            assert row is not None, f"No object_workflow_mapping for step_id={task_id!r}"
-            media_buy_id = row[0]
-        assert media_buy_id, f"Empty media_buy_id from object_workflow_mapping for {task_id!r}"
-        return media_buy_id
-    raise AssertionError(
-        f"create_media_buy response has neither media_buy_id nor submitted task_id: "
-        f"keys={list(media_buy_data.keys())}, body={media_buy_data}"
-    )
