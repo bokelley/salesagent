@@ -857,7 +857,7 @@ class TestSyncExtensions:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         assert result.action == CreativeAction.failed
-        assert any("list_creative_formats" in e for e in (result.errors or []))
+        assert any("list_creative_formats" in e.message for e in (result.errors or []))
 
     def test_unreachable_agent_fails_with_retry(self, integration_db):
         """Covers: UC-006-EXT-G-01 — agent unreachable → failed with retry suggestion."""
@@ -878,7 +878,7 @@ class TestSyncExtensions:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         assert result.action == CreativeAction.failed
-        assert any("unreachable" in e.lower() for e in (result.errors or []))
+        assert any("unreachable" in e.message.lower() for e in (result.errors or []))
 
     def test_package_not_found_lenient_logs_error(self, integration_db):
         """Covers: UC-006-EXT-J-02 — lenient: missing package → assignment_errors."""

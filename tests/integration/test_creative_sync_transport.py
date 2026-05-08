@@ -300,7 +300,7 @@ class TestSyncFormatValidationTransport:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
-        assert any("list_creative_formats" in e for e in (creative_result.errors or []))
+        assert any("list_creative_formats" in e.message for e in (creative_result.errors or []))
 
 
 @pytest.mark.requires_db
@@ -738,7 +738,7 @@ class TestFormatValidationUnreachable:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
-        assert any("unreachable" in e.lower() for e in (creative_result.errors or []))
+        assert any("unreachable" in e.message.lower() for e in (creative_result.errors or []))
 
 
 # ---------------------------------------------------------------------------
@@ -1084,7 +1084,8 @@ class TestStaticPreviewFailed:
             creative_result = result.payload.creatives[0]
             assert creative_result.action == CreativeAction.failed
             assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or [])
+                "no previews" in e.message.lower() or "no media_url" in e.message.lower()
+                for e in (creative_result.errors or [])
             )
 
 
@@ -1122,7 +1123,7 @@ class TestGeminiKeyMissing:
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
         assert creative_result.action == CreativeAction.failed
-        assert any("gemini" in e.lower() for e in (creative_result.errors or []))
+        assert any("gemini" in e.message.lower() for e in (creative_result.errors or []))
 
 
 # ---------------------------------------------------------------------------
