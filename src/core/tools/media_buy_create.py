@@ -1065,13 +1065,33 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 # Create creative map
                 creative_map = {c.creative_id: c for c in creatives}
 
+                # Resolve the per-tenant pre-approval gate once per buy approval
+                # (rather than per creative) since the flag changes only on
+                # operator action. (#145)
+                from src.core.feature_flags import is_creative_pre_approval_gate_enabled
+
+                gate_enabled = is_creative_pre_approval_gate_enabled(tenant_obj)
+
                 # Build assets list for adapter and collect all validation errors
                 assets = []
                 all_validation_errors = []
+                gated_creative_ids: list[str] = []
                 for creative_id, package_assignment_list in packages_by_creative.items():
                     creative = creative_map.get(creative_id)
                     if not creative:
                         logger.warning(f"[APPROVAL] Creative {creative_id} not found in database")
+                        continue
+
+                    # Pre-approval gate: hold back creatives that haven't
+                    # cleared local human review. They'll be pushed to the
+                    # ad server retroactively by approve_creative when the
+                    # operator flips status to 'approved'. (#145)
+                    if gate_enabled and creative.status == "pending_review":
+                        gated_creative_ids.append(creative_id)
+                        logger.info(
+                            f"[APPROVAL] Pre-approval gate held back creative {creative_id} "
+                            f"(status=pending_review). Adapter upload deferred to local approve."
+                        )
                         continue
 
                     # Convert Creative model to asset dict format expected by adapter
@@ -1222,6 +1242,159 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         error_msg = f"Adapter creation failed: {str(e)}"
         logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
         return False, error_msg
+
+
+def push_creative_to_existing_buy(
+    *,
+    creative_id: str,
+    media_buy_id: str,
+    tenant_id: str,
+) -> tuple[bool, str | None]:
+    """Push a single approved creative to an already-active GAM line item.
+
+    Used by ``approve_creative`` (admin blueprint) when the per-tenant
+    pre-approval gate is enabled and the operator just approved a
+    creative whose buy is already live in the ad server. The buy
+    approval flow (#145 gate at ``execute_approved_media_buy``) skipped
+    this creative because its local status was ``pending_review``;
+    now that a human has approved it, push it to the live line item.
+
+    Returns ``(success, error_message)``. ``error_message`` is non-None
+    only on failure. Local approval has already succeeded by the time
+    this fires — failures here log loudly but don't roll back the local
+    state. The operator can re-trigger by re-clicking Approve
+    (idempotent at the adapter layer for already-uploaded creatives).
+    """
+    from sqlalchemy import select
+
+    from src.core.config_loader import get_tenant_by_id, set_current_tenant
+    from src.core.database.models import (
+        Creative as CreativeModel,
+    )
+    from src.core.database.models import (
+        CreativeAssignment,
+        Tenant,
+    )
+    from src.core.database.repositories import MediaBuyUoW
+
+    try:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.session is not None
+            session = uow.session
+
+            tenant_obj = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if not tenant_obj:
+                return False, f"Tenant {tenant_id} not found"
+
+            # Set tenant ContextVar so adapter helpers resolve config correctly.
+            tenant_config = get_tenant_by_id(tenant_id)
+            if tenant_config:
+                set_current_tenant(tenant_config)
+
+            creative = session.scalars(
+                select(CreativeModel).filter_by(tenant_id=tenant_id, creative_id=creative_id)
+            ).first()
+            if not creative:
+                return False, f"Creative {creative_id} not found"
+
+            assignment = session.scalars(
+                select(CreativeAssignment).filter_by(
+                    tenant_id=tenant_id, creative_id=creative_id, media_buy_id=media_buy_id
+                )
+            ).first()
+            if not assignment:
+                return False, (f"No assignment of creative {creative_id} to media buy {media_buy_id} — nothing to push")
+
+            principal = session.scalars(
+                select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
+            ).first()
+            if not principal:
+                return False, f"Principal {creative.principal_id} not found"
+
+            adapter = get_adapter(principal, dry_run=False, tenant=tenant_obj)
+            if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
+                return False, "Adapter does not support creative upload"
+
+            # Build the asset dict — same shape as execute_approved_media_buy.
+            from src.core.format_resolver import get_format
+            from src.core.helpers.creative_helpers import (
+                extract_click_url,
+                extract_impression_tracker_url,
+                extract_media_url_and_dimensions,
+            )
+
+            creative_data = creative.data or {}
+            try:
+                format_spec = get_format(
+                    str(creative.format),
+                    agent_url=creative.agent_url,
+                    tenant_id=tenant_id,
+                    product_id=None,
+                )
+            except Exception as e:
+                logger.warning(f"[GATE-PUSH] Could not load format spec for {creative_id}: {e}")
+                format_spec = None
+
+            url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+            click_url = extract_click_url(creative_data, format_spec)
+            impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
+
+            if not url or not width or not height:
+                return False, (
+                    f"Creative {creative_id} cannot be pushed: missing url/width/height "
+                    f"(width={width}, height={height}, url={'set' if url else 'missing'})"
+                )
+
+            asset: dict[str, Any] = {
+                "creative_id": creative.creative_id,
+                "package_assignments": [{"package_id": assignment.package_id, "weight": assignment.weight or 100}],
+                "width": width,
+                "height": height,
+                "url": url,
+                "click_url": click_url,
+                "asset_type": creative_data.get("asset_type", "image"),
+                "name": creative.name or f"Creative {creative.creative_id}",
+            }
+            if impression_tracker_url:
+                asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
+
+            # Resolve the GAM order id. Native AdCP buys use the GAM
+            # order id as their media_buy_id; gam_import buys carry it
+            # on external_id.
+            from src.core.database.models import MediaBuy as DBMediaBuy
+
+            media_buy_row = session.scalars(
+                select(DBMediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
+            ).first()
+            if media_buy_row is None:
+                return False, f"Media buy {media_buy_id} not found"
+            gam_order_id = media_buy_row.external_id or media_buy_id
+
+            try:
+                statuses = adapter.creatives_manager.add_creative_assets(gam_order_id, [asset], datetime.now(UTC))
+            except Exception as e:
+                logger.error(
+                    f"[GATE-PUSH] Adapter raised pushing creative {creative_id} to buy {media_buy_id}: {e}",
+                    exc_info=True,
+                )
+                return False, str(e)
+
+            # Inspect statuses: a single creative was uploaded; check it.
+            for status in statuses:
+                if status.creative_id == creative_id and status.status == "failed":
+                    return False, status.message or "Adapter reported upload failure"
+
+            logger.info(
+                f"[GATE-PUSH] Successfully pushed creative {creative_id} to live buy "
+                f"{media_buy_id} (GAM order {gam_order_id})"
+            )
+            return True, None
+    except Exception as e:
+        logger.error(
+            f"[GATE-PUSH] Unexpected error pushing creative {creative_id} to buy {media_buy_id}: {e}",
+            exc_info=True,
+        )
+        return False, str(e)
 
 
 def _validate_pricing_model_selection(
