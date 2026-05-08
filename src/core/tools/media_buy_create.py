@@ -1305,9 +1305,10 @@ def push_creative_to_existing_buy(
             if not assignment:
                 return False, (f"No assignment of creative {creative_id} to media buy {media_buy_id} — nothing to push")
 
-            principal = session.scalars(
-                select(ModelPrincipal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
-            ).first()
+            # ``get_adapter`` requires the Pydantic ``Principal`` schema (with
+            # decoded platform_mappings); ``get_principal_object`` returns that
+            # shape from the ORM model.
+            principal = get_principal_object(creative.principal_id, tenant_id=tenant_id)
             if not principal:
                 return False, f"Principal {creative.principal_id} not found"
 
