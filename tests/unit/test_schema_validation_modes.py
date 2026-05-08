@@ -110,16 +110,23 @@ class TestExtFieldAccepted:
         assert cmr.ext is not None
 
 
-class TestInternalModelsRejectExtra:
-    """Models inheriting from our AdCPBaseModel also reject extra fields in dev."""
+class TestInternalModelsAcceptForwardCompatExtras:
+    """GetProductsRequest is now an alias for the AdCP library type, which uses
+    ``extra='allow'`` for forward compatibility with future spec extensions.
 
-    def test_get_products_request_rejects_extra(self):
-        with pytest.raises(ValidationError, match="unknown_field"):
-            GetProductsRequest(
-                brief="test",
-                brand={"domain": "test.com"},
-                unknown_field="should_fail",
-            )
+    Phase 2 slice 7 dropped the local override that previously enforced
+    ``extra='forbid'`` in dev — the library's own forward-compat posture takes
+    precedence so spec growth doesn't break callers mid-version.
+    """
+
+    def test_get_products_request_keeps_extras_in_model_extra(self):
+        req = GetProductsRequest(
+            buying_mode="wholesale",
+            brief="test",
+            brand={"domain": "test.com"},
+            unknown_field="forward_compat",
+        )
+        assert req.model_extra == {"unknown_field": "forward_compat"}
 
 
 class TestConfigHelperFunctions:

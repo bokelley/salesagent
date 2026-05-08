@@ -229,9 +229,9 @@ class TestRankingThresholdBehavior:
                 response = await env.call_impl(brief="campaign")
 
         for p in response.products:
-            assert (
-                getattr(p, "brief_relevance", None) is None
-            ), "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
+            assert getattr(p, "brief_relevance", None) is None, (
+                "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
+            )
 
 
 class TestRankingFailureFailopen:
@@ -879,7 +879,7 @@ class TestSearchCriteriaValidation:
             tenant = TenantFactory(tenant_id="no-crit", subdomain="no-crit")
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
+            req = GetProductsRequestGenerated(buying_mode="wholesale", brief=None, brand=None, filters=None)
             with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
                 await _get_products_impl(req, env.identity)
 
@@ -893,7 +893,7 @@ class TestSearchCriteriaValidation:
             tenant = TenantFactory(tenant_id="empty-br", subdomain="empty-br")
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            req = GetProductsRequestGenerated(brief="", brand=None, filters=None)
+            req = GetProductsRequestGenerated(buying_mode="wholesale", brief="", brand=None, filters=None)
             with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
                 await _get_products_impl(req, env.identity)
 
@@ -909,7 +909,9 @@ class TestSearchCriteriaValidation:
             p = ProductFactory(tenant=tenant, product_id="p1")
             PricingOptionFactory(product=p)
 
-            req = GetProductsRequestGenerated(brief="Athletic footwear", brand=None, filters=None)
+            req = GetProductsRequestGenerated(
+                buying_mode="wholesale", brief="Athletic footwear", brand=None, filters=None
+            )
             response = await _get_products_impl(req, env.identity)
 
         assert response.products is not None
@@ -950,7 +952,7 @@ class TestSearchCriteriaValidation:
             tenant = TenantFactory(tenant_id="err-code", subdomain="err-code")
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
-            req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
+            req = GetProductsRequestGenerated(buying_mode="wholesale", brief=None, brand=None, filters=None)
             with pytest.raises(AdCPValidationError) as exc_info:
                 await _get_products_impl(req, env.identity)
 
