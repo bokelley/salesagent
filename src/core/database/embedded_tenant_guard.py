@@ -22,6 +22,30 @@ API endpoints set the flag on entry::
 Super-admin tooling sets ``session.info["super_admin_override"] = True`` for
 emergency manual mutations.
 
+Platform-spawned background workers (e.g. inventory sync started by the
+management API's first-sync-on-provision hook) set
+``session.info["platform_background_worker"] = True``. These workers are
+acting on behalf of the platform — not the publisher UI — so writes to
+platform-managed surfaces like ``adapter_config.custom_targeting_keys``
+must pass the guard. The flag is distinct from ``management_api_caller``
+so audit logs can still tell synchronous-API and async-worker mutations
+apart.
+
+The closed set of authorized ``platform_background_worker`` call sites
+(everything else is either publisher UI — blocked by the embedded-mode
+middleware — or open-instance code that the guard short-circuits):
+
+- :func:`src.services.background_sync_service._sync_session` —
+  inventory + targeting-key + advertisers sync workers, kicked off by
+  ``/provision``, ``/refresh``, and the admin-button path.
+- :meth:`src.adapters.gam.managers.targeting.GAMTargetingManager.sync_custom_targeting_keys`
+  — adapter-layer cache rebuild for the same ``custom_targeting_keys``
+  field. Currently dormant (no in-code callers) but flagged for parity.
+
+Adding a new call site is a trust expansion — it should write a
+genuinely platform-managed surface, not paper over a publisher-UI write
+that would more correctly be routed through the management API.
+
 Importing this module attaches the listeners as a side effect; no further
 wiring is required.
 """
@@ -59,6 +83,9 @@ PUBLISHER_WRITABLE_FIELDS: dict[type, set[str]] = {
 }
 
 
+_AUTH_FLAGS = ("management_api_caller", "super_admin_override", "platform_background_worker")
+
+
 def _caller_is_authorized(target: Any, connection: Any) -> bool:
     """Return True if the active session/connection is allowed to mutate platform-managed state.
 
@@ -69,13 +96,11 @@ def _caller_is_authorized(target: Any, connection: Any) -> bool:
     # Prefer the session attached to the target — that's what API endpoints actually mutate.
     session = Session.object_session(target)
     session_info = getattr(session, "info", None)
-    if session_info and (session_info.get("management_api_caller") or session_info.get("super_admin_override")):
+    if session_info and any(session_info.get(flag) for flag in _AUTH_FLAGS):
         return True
 
     connection_info = getattr(connection, "info", None)
-    if connection_info and (
-        connection_info.get("management_api_caller") or connection_info.get("super_admin_override")
-    ):
+    if connection_info and any(connection_info.get(flag) for flag in _AUTH_FLAGS):
         return True
 
     return False

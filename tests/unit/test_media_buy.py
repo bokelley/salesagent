@@ -923,9 +923,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with (patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -1027,11 +1025,13 @@ class TestCreateMediaBuyStatusDetermination:
         end = datetime(2026, 3, 31, tzinfo=UTC)
         assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_start"
 
-    def test_pending_when_missing_creatives(self):
-        """UC-002-ST04: no creatives -> pending_start.
+    def test_pending_creatives_when_missing_creatives(self):
+        """UC-002-ST04: no creatives -> pending_creatives.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_start = "Media buy created but not yet activated"
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
+        Spec: CONFIRMED -- media-buy-status.json: pending_creatives = "Awaiting creative assets"
+        https://github.com/adcontextprotocol/adcp/blob/main/schemas/enums/media-buy-status.json
+        Missing creatives is a higher-priority blocker than future start_time, since the buyer's
+        next required action is sync_creatives before activation can proceed.
         Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
@@ -1039,7 +1039,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_start"
+        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_creatives"
 
     def test_pending_when_before_start(self):
         """UC-002-ST05: before start_time -> pending_start.
@@ -1054,6 +1054,45 @@ class TestCreateMediaBuyStatusDetermination:
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
         assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_start"
+
+    def test_pending_creatives_takes_precedence_over_future_start(self):
+        """UC-002-ST06: no creatives + future start -> pending_creatives (not pending_start).
+
+        Spec: pending_creatives is the higher-priority blocker per AdCP — the buyer's next
+        required action is sync_creatives. Even when the start_time is in the future,
+        a missing-creatives buy is reported as pending_creatives, not pending_start.
+
+        Pins the precedence surfaced by the live media_buy_seller storyboard
+        (pending_creatives_to_start/create_buy_no_creatives): a future-dated buy with
+        no creatives must report pending_creatives at /status. Regression guard for the
+        bug where _determine_media_buy_status collapsed all blockers to pending_start.
+        """
+        from src.core.tools.media_buy_create import _determine_media_buy_status
+
+        # Case 1: no creatives + future start -> pending_creatives (precedence)
+        now = datetime(2026, 2, 15, tzinfo=UTC)
+        future_start = datetime(2026, 3, 1, tzinfo=UTC)
+        end = datetime(2026, 3, 31, tzinfo=UTC)
+        assert (
+            _determine_media_buy_status(False, False, False, future_start, end, now) == "pending_creatives"
+        ), "no creatives + future start must yield pending_creatives, not pending_start"
+
+        # Case 2: creatives present + future start -> pending_start
+        assert (
+            _determine_media_buy_status(False, True, True, future_start, end, now) == "pending_start"
+        ), "creatives present + future start must yield pending_start"
+
+        # Case 3: no creatives + in-flight (past start) -> pending_creatives
+        in_flight_now = datetime(2026, 3, 15, tzinfo=UTC)
+        past_start = datetime(2026, 3, 1, tzinfo=UTC)
+        assert (
+            _determine_media_buy_status(False, False, False, past_start, end, in_flight_now) == "pending_creatives"
+        ), "no creatives + in-flight must yield pending_creatives"
+
+        # Case 4: creatives present + in-flight (past start) -> active
+        assert (
+            _determine_media_buy_status(False, True, True, past_start, end, in_flight_now) == "active"
+        ), "creatives present + in-flight must yield active"
 
 
 class TestCreateMediaBuyImplAuth:
@@ -4139,52 +4178,40 @@ class TestGetMediaBuysImplAuth:
         assert resp.errors is not None
         assert any("principal" in str(e).lower() for e in resp.errors)
 
-    def test_account_id_not_supported(self):
-        """GMB-A03: account_id parameter raises 'not yet supported' error.
+    def test_account_is_tolerated(self):
+        """GMB-A03: ``account`` is an optional spec-defined scoping hint and
+        MUST NOT cause the request to fail.
 
-        Spec: CONFIRMED -- account_id exists in spec (media-buy.json has account field)
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/media-buy.json
-        Priority: P1
-        Type: unit
+        Per AdCP get-media-buys-request.json: "Account to retrieve media buys
+        for. When omitted, returns data across all accessible accounts." The
+        principal already scopes to a tenant, so an explicit account reference
+        used by buyer agents (and storyboards like
+        ``media_buy_seller/inventory_list_targeting``) for routing context is
+        tolerated rather than rejected.
+
+        Spec: CONFIRMED -- account is optional on get-media-buys-request.json.
         Source: get_media_buys
         """
-        from src.core.exceptions import AdCPValidationError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
-        req = GetMediaBuysRequest(account_id="acc_123")
+        req = GetMediaBuysRequest(account={"account_id": "acc_123"})
         identity = ResolvedIdentity(
-            principal_id="principal_1",
+            # No principal short-circuits past the DB lookup so the test
+            # exercises the request-validation path without needing a tenant
+            # context fixture. The presence of ``account`` must not raise.
+            principal_id=None,
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
             protocol="mcp",
             testing_context=None,
         )
 
-        with pytest.raises(AdCPValidationError, match="(?i)account.*not.*supported"):
-            _get_media_buys_impl(req, identity=identity)
-
-    def test_account_id_unsupported_recovery_is_correctable(self):
-        """Unsupported account_id should be correctable — buyer removes the param.
-
-        Covers: salesagent-bmlk (PR #1083 review)
-        """
-        from src.core.exceptions import AdCPValidationError
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-
-        req = GetMediaBuysRequest(account_id="acc_123")
-        identity = ResolvedIdentity(
-            principal_id="principal_1",
-            tenant_id="tenant_1",
-            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
-            protocol="mcp",
-            testing_context=None,
-        )
-
-        with pytest.raises(AdCPValidationError) as exc_info:
-            _get_media_buys_impl(req, identity=identity)
-        assert exc_info.value.recovery == "correctable"
+        # Should not raise. We expect the principal-not-found path (empty list +
+        # error code), not an AdCPValidationError on account.
+        resp = _get_media_buys_impl(req, identity=identity)
+        assert isinstance(resp, GetMediaBuysResponse)
+        assert resp.media_buys == []
 
 
 # ===========================================================================

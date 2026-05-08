@@ -232,6 +232,9 @@ class GAMTargetingManager:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             with get_db_session() as session:
+                # Platform-internal cache write — same surface the background
+                # inventory-sync writes, just from the adapter side.
+                session.info["platform_background_worker"] = True
                 repo = AdapterConfigRepository(session, self.tenant_id)
                 repo.update_custom_targeting_keys(key_name_to_id)
                 session.commit()
@@ -939,7 +942,7 @@ class GAMTargetingManager:
         Returns:
             Updated targeting configuration with inventory targeting
         """
-        inventory_targeting = {}
+        inventory_targeting: dict[str, Any] = {}
 
         if targeted_ad_unit_ids:
             inventory_targeting["targetedAdUnits"] = [
@@ -948,9 +951,7 @@ class GAMTargetingManager:
             ]
 
         if targeted_placement_ids:
-            inventory_targeting["targetedPlacements"] = [
-                {"placementId": placement_id} for placement_id in targeted_placement_ids
-            ]
+            inventory_targeting["targetedPlacementIds"] = [str(placement_id) for placement_id in targeted_placement_ids]
 
         if inventory_targeting:
             targeting["inventoryTargeting"] = inventory_targeting

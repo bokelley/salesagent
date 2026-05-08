@@ -645,6 +645,38 @@ class TestWriteGuard:
                 session.commit()
             session.rollback()
 
+    def test_platform_background_worker_flag_allows_adapter_config_update(self, managed_tenant):
+        # Guard-layer contract: a session marked with
+        # platform_background_worker=True must be allowed to write
+        # platform-managed columns on an embedded tenant. UI sessions
+        # don't set this flag, so publisher writes still fail.
+        with get_db_session() as session:
+            session.info["platform_background_worker"] = True
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter is not None
+            adapter.custom_targeting_keys = {"sport": "12345", "team": "67890"}
+            session.commit()
+        with get_db_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter.custom_targeting_keys == {"sport": "12345", "team": "67890"}
+
+    def test_sync_session_helper_sets_platform_background_worker(self, managed_tenant):
+        # End-to-end: the background_sync_service._sync_session() helper is
+        # what every inventory-sync worker actually opens. This test goes
+        # through the helper itself (not a synthetic flag-set) and proves
+        # a write that would otherwise fire the guard succeeds. If anyone
+        # removes the flag-set line in _sync_session(), this test fails.
+        from src.services.background_sync_service import _sync_session
+
+        with _sync_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter is not None
+            adapter.custom_targeting_keys = {"helper": "wires-flag"}
+            session.commit()
+        with get_db_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter.custom_targeting_keys == {"helper": "wires-flag"}
+
 
 # ---------------------------------------------------------------------------
 # End-to-end + reverse-proxy + OpenAPI smoke

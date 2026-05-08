@@ -153,7 +153,6 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
-    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -162,7 +161,6 @@ from src.core.schemas import (
     Package,
     PackageRequest,
     Principal,
-    Product,
     Targeting,
 )
 from src.core.schemas import (
@@ -212,15 +210,12 @@ def _determine_media_buy_status(
     This ensures consistent status across all adapters (GAM, Mock, etc.).
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
-    1. pending_activation: Manual approval required OR needs creatives OR scheduled for future
-    2. active: Currently delivering (has creatives, approved, within flight dates)
-    3. completed: Past end date
-    4. paused: (Reserved for future use - not currently returned)
-
-    Internal states mapped to spec statuses:
-    - "pending_approval" → pending_activation (awaiting manual approval)
-    - "needs_creatives" → pending_activation (missing or unapproved creatives)
-    - "ready" → pending_activation (scheduled for future start)
+    1. completed: Past end date (terminal — must check first)
+    2. pending_creatives: Missing or unapproved creatives — buyer's next action is
+       sync_creatives. Higher priority than pending_start because creatives are a
+       concrete missing artifact, not just a wall-clock wait.
+    3. pending_start: Manual approval required OR scheduled for future start
+    4. active: Currently delivering (has creatives, approved, within flight dates)
 
     Args:
         manual_approval_required: Whether the media buy requires manual approval
@@ -231,24 +226,79 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP MediaBuyStatus enum (pending_activation, active, paused, completed)
+        Status string matching AdCP MediaBuyStatus enum
+        (pending_creatives, pending_start, active, completed)
     """
     if now is None:
         now = datetime.now(UTC)
 
-    # Priority 1: Completed (past end date - check first to avoid false pending_activation)
+    # Priority 1: Completed (past end date - check first to avoid false pending state)
     if now > end_time:
         return MediaBuyStatus.completed.value
 
-    # Priority 2: Pending activation (any blocking condition or scheduled for future)
-    # - Manual approval required
-    # - Missing creatives or unapproved creatives
-    # - Scheduled for future start
-    if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
+    # Priority 2: Pending creatives (higher than pending_start). Per AdCP, this is the
+    # buyer's signal to call sync_creatives. A future-dated buy with no creatives is
+    # blocked on creatives, not on the clock — pending_creatives wins.
+    if not has_creatives or not creatives_approved:
+        return MediaBuyStatus.pending_creatives.value
+
+    # Priority 3: Pending start (manual approval gate or scheduled for future)
+    if manual_approval_required or now < start_time:
         return MediaBuyStatus.pending_start.value
 
-    # Priority 3: Active (currently delivering - all conditions met)
+    # Priority 4: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
+
+
+def _request_has_creatives(req: CreateMediaBuyRequest) -> bool:
+    """True if the request carries any creative references (ids or inline objects).
+
+    Used to pick the spec ``MediaBuyStatus`` for a synchronously-minted buy:
+    when no creatives accompany the request, the buyer's next step is to call
+    ``sync_creatives``, which corresponds to ``MediaBuyStatus.pending_creatives``.
+    When creatives are already present, the buy is awaiting governance/start
+    rather than creatives, which corresponds to ``MediaBuyStatus.pending_start``.
+    """
+    if not req.packages:
+        return False
+    for pkg in req.packages:
+        # Local PackageRequest extension: list of pre-uploaded creative ids
+        if _get_creative_ids(pkg):
+            return True
+        # adcp PackageRequest: inline ``creatives`` list (full creative objects)
+        inline = getattr(pkg, "creatives", None)
+        if inline:
+            return True
+    return False
+
+
+def _link_step_to_media_buy(*, tenant_id: str, step_id: str, media_buy_id: str, branch: str) -> None:
+    """Persist the workflow_step ↔ media_buy linkage as an ``ObjectWorkflowMapping``.
+
+    ``context_manager._send_push_notifications`` walks these mappings to know
+    which media_buy a step refers to when firing completion webhooks. Without
+    a mapping, it returns early with "No object mappings found" and the
+    buyer's webhook never fires.
+
+    Both the manual-approval and auto-approval success branches need this row,
+    hence the shared helper. ``branch`` is just a log label so we can tell the
+    two call sites apart in the activity feed.
+    """
+    # FIXME(salesagent-9f2): workflow mapping should use a repository method
+    from src.core.database.models import ObjectWorkflowMapping
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as wf_uow:
+        assert wf_uow.session is not None
+        mapping = ObjectWorkflowMapping(
+            object_type="media_buy",
+            object_id=media_buy_id,
+            step_id=step_id,
+            action="create",
+        )
+        wf_uow.session.add(mapping)
+        # UoW auto-commits on clean exit
+        logger.info(f"✅ Linked workflow step {step_id} to media buy ({branch})")
 
 
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
@@ -2360,17 +2410,12 @@ async def _create_media_buy_impl(
                 logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
-            with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
-                # FIXME(salesagent-9f2): workflow mapping should use a repository method
-                assert wf_uow.session is not None
-                from src.core.database.models import ObjectWorkflowMapping
-
-                mapping = ObjectWorkflowMapping(
-                    object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
-                )
-                wf_uow.session.add(mapping)
-                # UoW auto-commits on clean exit
-                logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
+            _link_step_to_media_buy(
+                tenant_id=tenant["tenant_id"],
+                step_id=step.step_id,
+                media_buy_id=media_buy_id,
+                branch="manual-approval",
+            )
 
             # Create creative assignments for manual approval flow
             # This must happen AFTER media packages are created so we have package_ids
@@ -2491,21 +2536,32 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Async-pending-approval path — emit the spec's submitted envelope.
-            # Per ``create_media_buy_response`` (variant-3), the async shape carries
-            # ``status='submitted'`` and a ``task_id`` handle, and does NOT carry
-            # ``media_buy_id`` or ``packages`` (those belong to variant-1, whose
-            # ``status`` is a ``MediaBuyStatus`` and excludes 'submitted'). The
-            # ``media_buy_id`` is issued on the completion artifact (post-approval),
-            # not here. Buyers poll via ``tasks/get`` using ``task_id``.
+            # Manual-approval workflow with a synchronously-minted buy — emit
+            # variant-1 of ``create_media_buy_response`` (the sync-success
+            # shape) carrying ``media_buy_id``, ``packages``, and the spec
+            # ``MediaBuyStatus`` that reflects what's blocking activation:
+            #   - no creatives on the request → ``pending_creatives`` (buyer's
+            #     next call is ``sync_creatives``);
+            #   - creatives present → ``pending_start`` (awaiting human
+            #     governance and/or start time).
+            # Variant-3 (``status='submitted'`` + ``task_id``, no
+            # ``media_buy_id``) is reserved for genuinely async cases where
+            # the seller hasn't minted a buy yet. Here the buy is already in
+            # the DB with a permanent id, so withholding it from the buyer
+            # forces them through a polling round-trip and breaks downstream
+            # tools that key off ``media_buy_id``.
+            buy_status = (
+                MediaBuyStatus.pending_start if _request_has_creatives(req) else MediaBuyStatus.pending_creatives
+            )
             return CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    message=f"Media buy {media_buy_id} submitted; awaiting human review.",
+                response=CreateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    packages=pending_packages,
+                    status=buy_status,
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
-                status=AdcpTaskStatus.submitted.value,
+                status=AdcpTaskStatus.completed.value,
             )
 
         # Get products for the media buy to check product-level auto-creation settings
@@ -2660,17 +2716,24 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            # Tenant- or product-config-driven approval requirement: emit the
-            # spec's submitted envelope (variant-3 of create_media_buy_response).
-            # See the manual-approval branch above for the contract rationale.
+            # Tenant- or product-config-driven approval requirement with a
+            # synchronously-minted buy — emit variant-1 (sync-success) carrying
+            # ``media_buy_id``, ``packages``, and the spec ``MediaBuyStatus``
+            # that reflects what's blocking activation. See the manual-approval
+            # branch above for the rationale on why this is variant-1, not
+            # variant-3.
+            buy_status = (
+                MediaBuyStatus.pending_start if _request_has_creatives(req) else MediaBuyStatus.pending_creatives
+            )
             return CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    message=f"Media buy {media_buy_id} submitted; {reason.lower()} requires approval.",
+                response=CreateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    packages=response_packages,
+                    status=buy_status,
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
-                status=AdcpTaskStatus.submitted.value,
+                status=AdcpTaskStatus.completed.value,
             )
 
         # Continue with synchronized media buy creation
@@ -2697,7 +2760,7 @@ async def _create_media_buy_impl(
                 error_msg = f"Package {idx} has no product_id field set"
                 raise ValueError(error_msg)
 
-            pkg_product: Product | None = None
+            pkg_product: Any | None = None
             for p in products_in_buy:
                 if p.product_id == pkg_product_id:
                     pkg_product = p
@@ -2790,9 +2853,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
@@ -3653,10 +3716,14 @@ async def _create_media_buy_impl(
                 )
             )
 
-        # Create AdCP response with typed Package objects
+        # Create AdCP response with typed Package objects.
+        # Surface the DB-derived MediaBuyStatus on the wire so buyers see the correct
+        # blocker (pending_creatives vs pending_start) on the create_media_buy reply
+        # itself, matching what /get_media_buy will report later.
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
+            status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
         )
@@ -3709,6 +3776,21 @@ async def _create_media_buy_impl(
         modified_response = adcp_response
         if hooks_result.media_buy_id_override:
             modified_response = adcp_response.model_copy(update={"media_buy_id": hooks_result.media_buy_id_override})
+
+        # Link the workflow step to the media buy so push-notification webhooks
+        # fire on completion. ``_send_push_notifications`` reads
+        # ``ObjectWorkflowMapping`` rows by step_id; without one, it returns
+        # early with "No object mappings found" and the buyer's webhook never
+        # fires. The manual-approval branch (~line 2362) already does this for
+        # its own flow; the auto-approval success branch needs the same. See
+        # issue #64.
+        if step is not None and not testing_ctx.dry_run:
+            _link_step_to_media_buy(
+                tenant_id=tenant["tenant_id"],
+                step_id=step.step_id,
+                media_buy_id=modified_response.media_buy_id,
+                branch="auto-approval",
+            )
 
         # Mark workflow step as completed on success
         ctx_manager.update_workflow_step(step.step_id, status="completed")

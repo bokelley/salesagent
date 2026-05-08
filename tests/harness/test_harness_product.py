@@ -60,7 +60,7 @@ class TestProductEnvContract:
         with ProductEnv() as env:
             assert "uow" in env.mock
             assert "principal" in env.mock
-            assert "convert" in env.mock
+            assert "convert_resolved" in env.mock
             assert "policy_service" in env.mock
             assert "dynamic_variants" in env.mock
             assert "ranking_factory" in env.mock

@@ -62,8 +62,10 @@ from sqlalchemy import select
 
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
+from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
+from core.middleware.transport_detect import TransportDetectMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -405,6 +407,23 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
+        # TransportDetectMiddleware sets a ``current_transport`` ContextVar
+        # based on the URL path so platform methods know whether the
+        # inbound request was MCP or A2A. Webhook payload shape is
+        # transport-matched (A2A buyers expect ``Task``, MCP buyers expect
+        # ``McpWebhookPayload``); without this signal the platform
+        # defaults to MCP and A2A buyers get the wrong shape. Runs after
+        # ``AdminWSGIMount`` so admin paths short-circuit before this
+        # fires (admin traffic doesn't carry buyer transport semantics).
+        # See issue #202.
+        (TransportDetectMiddleware, {}),
+        # DualCredentialAuditMiddleware logs WARNING when an inbound
+        # request carries two different bearer tokens (one in
+        # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores
+        # the audit signal the deleted bearer-translation shim used to
+        # emit (per #194 follow-up). Never logs token values; only
+        # SHA-256 fingerprints for log correlation.
+        (DualCredentialAuditMiddleware, {}),
         # SpecDefaultsMiddleware backfills wire fields the spec marks as
         # required but instructs sellers to default for pre-v3 clients
         # (e.g. GetProductsRequest.buying_mode → 'brief'). Sits *outside*

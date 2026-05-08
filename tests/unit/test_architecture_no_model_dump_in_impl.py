@@ -39,22 +39,22 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 530),
     ("media_buy_update.py", 552),
     ("media_buy_update.py", 584),
-    ("media_buy_update.py", 611),
-    ("media_buy_update.py", 628),
-    ("media_buy_update.py", 682),
-    ("media_buy_update.py", 712),
-    ("media_buy_update.py", 753),
-    ("media_buy_update.py", 936),
-    ("media_buy_update.py", 966),
-    ("media_buy_update.py", 994),
-    ("media_buy_update.py", 1156),
-    ("media_buy_update.py", 1220),
-    ("media_buy_update.py", 1342),
-    ("media_buy_update.py", 1402),
+    ("media_buy_update.py", 624),
+    ("media_buy_update.py", 641),
+    ("media_buy_update.py", 695),
+    ("media_buy_update.py", 725),
+    ("media_buy_update.py", 766),
+    ("media_buy_update.py", 949),
+    ("media_buy_update.py", 979),
+    ("media_buy_update.py", 1007),
+    ("media_buy_update.py", 1169),
+    ("media_buy_update.py", 1233),
+    ("media_buy_update.py", 1355),
+    ("media_buy_update.py", 1415),
     # _get_products_impl: 1 violation (logging)
-    ("products.py", 610),
+    ("products.py", 599),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 138),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 141),  # filters.model_dump(exclude_none=True)
 }
 
 
