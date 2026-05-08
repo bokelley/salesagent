@@ -798,9 +798,9 @@ class TestAdCPContract:
         forbidden = {"implementation_config", "countries", "device_types", "allowed_principal_ids"}
 
         # Layer 1 — schema declaration.
-        assert not (forbidden & set(ProductSchema.model_fields.keys())), (
-            "Internal fields must not be declared on the wire-shape Product schema"
-        )
+        assert not (
+            forbidden & set(ProductSchema.model_fields.keys())
+        ), "Internal fields must not be declared on the wire-shape Product schema"
 
         # Layer 2 — production converter path stays clean even when the ORM
         # model carries values for all four internal fields.
@@ -878,9 +878,9 @@ class TestAdCPContract:
         wire_dump = resolved.wire.model_dump()
 
         for forbidden_name in forbidden:
-            assert forbidden_name not in wire_dump, (
-                f"Internal field '{forbidden_name}' leaked into the wire dump from the production converter"
-            )
+            assert (
+                forbidden_name not in wire_dump
+            ), f"Internal field '{forbidden_name}' leaked into the wire dump from the production converter"
 
         # And the values still travel on the ResolvedProduct sidecar.
         assert resolved.countries == ["US", "CA"]
