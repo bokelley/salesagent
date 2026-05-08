@@ -27,14 +27,85 @@ single-process scope.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import threading
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
+from adcp.decisioning import AdcpError
+from adcp.exceptions import IdempotencyConflictError
 from adcp.server.idempotency import IdempotencyStore, MemoryBackend, PgBackend
 
 logger = logging.getLogger(__name__)
+
+_F = TypeVar("_F", bound=Callable[..., Awaitable[Any]])
+
+
+def translate_idempotency_conflict(handler: _F) -> _F:
+    """Decorator: translate framework :class:`IdempotencyConflictError` to a
+    wire-shaped :class:`AdcpError` with code ``IDEMPOTENCY_CONFLICT`` and
+    ``recovery="correctable"``.
+
+    The framework's :class:`IdempotencyStore.wrap` raises
+    :class:`IdempotencyConflictError` when the same idempotency_key is reused
+    with a materially different (post-JCS-canonicalization) payload — a
+    spec-defined buyer mistake, not a server failure. Without translation the
+    untyped exception bubbles through the dispatcher's generic catch-all and
+    surfaces as ``INTERNAL_ERROR`` (terminal), discarding the spec's
+    correctable classification and breaking buyer-side retry-with-fresh-key
+    recovery.
+
+    Apply this decorator OUTSIDE the ``@_IDEMPOTENCY.wrap`` decorator on every
+    platform method that uses idempotency caching::
+
+        @translate_idempotency_conflict
+        @_IDEMPOTENCY.wrap
+        async def create_media_buy(self, req, ctx) -> dict[str, Any]:
+            ...
+
+    Decorator stacking order matters: ``@_IDEMPOTENCY.wrap`` must wrap the raw
+    method first (innermost), then ``@translate_idempotency_conflict`` wraps
+    the wrap (outermost) so it sees the conflict exception when the framework
+    invokes the platform method.
+    """
+
+    @functools.wraps(handler)
+    async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await handler(*args, **kwargs)
+        except IdempotencyConflictError as exc:
+            raise AdcpError(
+                "IDEMPOTENCY_CONFLICT",
+                message=(
+                    "idempotency_key reused with a different payload — either "
+                    "resend the exact original payload or mint a fresh "
+                    "uuid.uuid4() key and retry"
+                ),
+                recovery="correctable",
+                field="idempotency_key",
+            ) from exc
+
+    # The framework's boot-time ``validate_idempotency_wiring`` calls
+    # ``is_wrapped(fn)`` on each platform method to confirm idempotency is
+    # actually wired. ``is_wrapped`` checks membership in the framework's
+    # private ``_WRAPPED_FUNCTIONS`` WeakSet — and that check does not walk
+    # ``__wrapped__``, so our outer translator hides the inner wrap from the
+    # validator unless we also register here. Registering is correct: the
+    # outer function preserves all idempotency semantics (it only intercepts
+    # the conflict-raise path, which is the framework's own exception).
+    try:
+        from adcp.server.idempotency.store import _WRAPPED_FUNCTIONS
+
+        _WRAPPED_FUNCTIONS.add(_wrapper)
+    except (ImportError, AttributeError):  # pragma: no cover — defensive
+        # Framework refactored the registry — fall back to leaving the
+        # validator to fail loudly so the discrepancy is caught at boot.
+        pass
+
+    return _wrapper  # type: ignore[return-value]
+
 
 # Lock guards lazy initialization. The store is process-singleton; once
 # constructed we never rebuild it.

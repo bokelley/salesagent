@@ -207,6 +207,29 @@ class TestValidatePublicAgentUrlHostname:
             sales_agent_domain=None,
         )
 
+    def test_idn_punycode_matches_unicode_virtual_host(self):
+        """If the URL hostname comes through as punycode (``xn--bcher-kva.example``)
+        but ``virtual_host`` is stored as unicode (``bücher.example``), the
+        validator IDN-folds both sides to ASCII before comparing — same
+        domain, same match."""
+        validate_public_agent_url_hostname(
+            "https://xn--bcher-kva.example",
+            is_embedded=False,
+            virtual_host="bücher.example",
+            subdomain=None,
+            sales_agent_domain=None,
+        )
+
+    def test_idn_unicode_url_matches_punycode_virtual_host(self):
+        """And the reverse: unicode in URL, punycode in virtual_host."""
+        validate_public_agent_url_hostname(
+            "https://bücher.example",
+            is_embedded=False,
+            virtual_host="xn--bcher-kva.example",
+            subdomain=None,
+            sales_agent_domain=None,
+        )
+
 
 # SSRF guard for publisher_domain lives in src.core.security.url_validator
 # (introduced by main's PR #98); see tests/unit/test_publisher_domain_ssrf.py

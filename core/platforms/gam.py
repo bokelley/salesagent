@@ -44,7 +44,7 @@ from adcp.decisioning.capabilities import (
     SupportedProtocol,
 )
 
-from core.idempotency import get_idempotency_store
+from core.idempotency import get_idempotency_store, translate_idempotency_conflict
 from core.platforms._delegate import (
     _delegate_create_media_buy,
     _delegate_get_media_buy_delivery,
@@ -95,6 +95,7 @@ class GamPlatform(DecisioningPlatform):
     ) -> dict[str, Any]:
         return await _delegate_get_products(req, ctx)
 
+    @translate_idempotency_conflict
     @_IDEMPOTENCY.wrap
     async def create_media_buy(
         self,
@@ -103,6 +104,7 @@ class GamPlatform(DecisioningPlatform):
     ) -> dict[str, Any]:
         return await _delegate_create_media_buy(req, ctx)
 
+    @translate_idempotency_conflict
     @_IDEMPOTENCY.wrap
     async def update_media_buy(
         self,
@@ -112,6 +114,7 @@ class GamPlatform(DecisioningPlatform):
     ) -> dict[str, Any]:
         return await _delegate_update_media_buy(media_buy_id, patch, ctx)
 
+    @translate_idempotency_conflict
     @_IDEMPOTENCY.wrap
     async def sync_creatives(
         self,

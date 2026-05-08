@@ -66,10 +66,12 @@ async def test_update_media_buy_response_omits_stored_context_so_sdk_can_inject(
         patch = {"paused": True, "context": {"e2e": "update_media_buy"}}
 
         # Note: we exercise the wrapped method via the underlying impl
-        # to bypass the @_IDEMPOTENCY.wrap decorator. The decorator's
-        # cache lookup needs a fresh idempotency_key at the wire layer;
-        # for this regression we exercise the pure response-shape contract.
-        underlying = MockSellerPlatform.update_media_buy.__wrapped__  # type: ignore[attr-defined]
+        # to bypass the decorator stack. The cache lookup needs a fresh
+        # idempotency_key at the wire layer; for this regression we exercise
+        # the pure response-shape contract. Two decorators wrap the raw
+        # method (``translate_idempotency_conflict`` outside ``_IDEMPOTENCY.wrap``)
+        # so we peel both ``__wrapped__`` layers.
+        underlying = MockSellerPlatform.update_media_buy.__wrapped__.__wrapped__  # type: ignore[attr-defined]
         result: Any = await underlying(platform, media_buy_id, patch, ctx)
 
         # The response MUST NOT carry the create-time context. The SDK's
@@ -84,8 +86,8 @@ async def test_update_media_buy_response_omits_stored_context_so_sdk_can_inject(
         )
         # Defend against silent regressions where update_media_buy becomes
         # a no-op (would still pass the context check above).
-        assert result["status"] == "paused", (
-            "Patch was not applied: paused=True should transition the buy to paused state"
-        )
+        assert (
+            result["status"] == "paused"
+        ), "Patch was not applied: paused=True should transition the buy to paused state"
     finally:
         _MEDIA_BUYS.pop(media_buy_id, None)
