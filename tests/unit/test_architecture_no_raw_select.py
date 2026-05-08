@@ -381,7 +381,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Core tools ──
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
-    ("src/core/tools/media_buy_create.py", "push_creative_to_existing_buy"),  # select(Tenant)+select(Principal) — PR #249 pre-approval gate
+    ("src/core/tools/media_buy_create.py", "push_creative_to_existing_buy"),  # select(Tenant) — PR #249 pre-approval gate
     ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
     # ── Services ──
     ("src/services/auth_config_service.py", "delete_oidc_config"),
