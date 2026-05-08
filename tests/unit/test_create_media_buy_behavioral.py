@@ -1943,7 +1943,10 @@ class TestInlineCreativeObligations:
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
-        # When creatives are not approved, status reflects pending activation
+        # When creatives are not approved, status reflects the creative-side blocker.
+        # Per AdCP, pending_creatives covers both "no creatives uploaded" and
+        # "creatives present but not yet approved" — both block activation pending
+        # buyer/system action on creatives.
         status = _determine_media_buy_status(
             manual_approval_required=False,
             has_creatives=True,
@@ -1951,8 +1954,8 @@ class TestInlineCreativeObligations:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
         )
-        # Unapproved creatives -> pending_start (waiting for creative approval)
-        assert status == "pending_start"
+        # Unapproved creatives -> pending_creatives (waiting for creative approval)
+        assert status == "pending_creatives"
 
 
 class TestProposalBasedObligations:

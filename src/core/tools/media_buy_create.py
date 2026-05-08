@@ -210,15 +210,12 @@ def _determine_media_buy_status(
     This ensures consistent status across all adapters (GAM, Mock, etc.).
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
-    1. pending_activation: Manual approval required OR needs creatives OR scheduled for future
-    2. active: Currently delivering (has creatives, approved, within flight dates)
-    3. completed: Past end date
-    4. paused: (Reserved for future use - not currently returned)
-
-    Internal states mapped to spec statuses:
-    - "pending_approval" → pending_activation (awaiting manual approval)
-    - "needs_creatives" → pending_activation (missing or unapproved creatives)
-    - "ready" → pending_activation (scheduled for future start)
+    1. completed: Past end date (terminal — must check first)
+    2. pending_creatives: Missing or unapproved creatives — buyer's next action is
+       sync_creatives. Higher priority than pending_start because creatives are a
+       concrete missing artifact, not just a wall-clock wait.
+    3. pending_start: Manual approval required OR scheduled for future start
+    4. active: Currently delivering (has creatives, approved, within flight dates)
 
     Args:
         manual_approval_required: Whether the media buy requires manual approval
@@ -229,23 +226,27 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP MediaBuyStatus enum (pending_activation, active, paused, completed)
+        Status string matching AdCP MediaBuyStatus enum
+        (pending_creatives, pending_start, active, completed)
     """
     if now is None:
         now = datetime.now(UTC)
 
-    # Priority 1: Completed (past end date - check first to avoid false pending_activation)
+    # Priority 1: Completed (past end date - check first to avoid false pending state)
     if now > end_time:
         return MediaBuyStatus.completed.value
 
-    # Priority 2: Pending activation (any blocking condition or scheduled for future)
-    # - Manual approval required
-    # - Missing creatives or unapproved creatives
-    # - Scheduled for future start
-    if manual_approval_required or not has_creatives or not creatives_approved or now < start_time:
+    # Priority 2: Pending creatives (higher than pending_start). Per AdCP, this is the
+    # buyer's signal to call sync_creatives. A future-dated buy with no creatives is
+    # blocked on creatives, not on the clock — pending_creatives wins.
+    if not has_creatives or not creatives_approved:
+        return MediaBuyStatus.pending_creatives.value
+
+    # Priority 3: Pending start (manual approval gate or scheduled for future)
+    if manual_approval_required or now < start_time:
         return MediaBuyStatus.pending_start.value
 
-    # Priority 3: Active (currently delivering - all conditions met)
+    # Priority 4: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
 
 
@@ -3715,10 +3716,14 @@ async def _create_media_buy_impl(
                 )
             )
 
-        # Create AdCP response with typed Package objects
+        # Create AdCP response with typed Package objects.
+        # Surface the DB-derived MediaBuyStatus on the wire so buyers see the correct
+        # blocker (pending_creatives vs pending_start) on the create_media_buy reply
+        # itself, matching what /get_media_buy will report later.
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
+            status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
         )
