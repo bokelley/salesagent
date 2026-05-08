@@ -272,6 +272,35 @@ def _request_has_creatives(req: CreateMediaBuyRequest) -> bool:
     return False
 
 
+def _link_step_to_media_buy(*, tenant_id: str, step_id: str, media_buy_id: str, branch: str) -> None:
+    """Persist the workflow_step ↔ media_buy linkage as an ``ObjectWorkflowMapping``.
+
+    ``context_manager._send_push_notifications`` walks these mappings to know
+    which media_buy a step refers to when firing completion webhooks. Without
+    a mapping, it returns early with "No object mappings found" and the
+    buyer's webhook never fires.
+
+    Both the manual-approval and auto-approval success branches need this row,
+    hence the shared helper. ``branch`` is just a log label so we can tell the
+    two call sites apart in the activity feed.
+    """
+    # FIXME(salesagent-9f2): workflow mapping should use a repository method
+    from src.core.database.models import ObjectWorkflowMapping
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as wf_uow:
+        assert wf_uow.session is not None
+        mapping = ObjectWorkflowMapping(
+            object_type="media_buy",
+            object_id=media_buy_id,
+            step_id=step_id,
+            action="create",
+        )
+        wf_uow.session.add(mapping)
+        # UoW auto-commits on clean exit
+        logger.info(f"✅ Linked workflow step {step_id} to media buy ({branch})")
+
+
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     """Get format specification synchronously using asyncio.run().
 
@@ -2381,17 +2410,12 @@ async def _create_media_buy_impl(
                 logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
-            with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
-                # FIXME(salesagent-9f2): workflow mapping should use a repository method
-                assert wf_uow.session is not None
-                from src.core.database.models import ObjectWorkflowMapping
-
-                mapping = ObjectWorkflowMapping(
-                    object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
-                )
-                wf_uow.session.add(mapping)
-                # UoW auto-commits on clean exit
-                logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
+            _link_step_to_media_buy(
+                tenant_id=tenant["tenant_id"],
+                step_id=step.step_id,
+                media_buy_id=media_buy_id,
+                branch="manual-approval",
+            )
 
             # Create creative assignments for manual approval flow
             # This must happen AFTER media packages are created so we have package_ids
@@ -3748,6 +3772,21 @@ async def _create_media_buy_impl(
         modified_response = adcp_response
         if hooks_result.media_buy_id_override:
             modified_response = adcp_response.model_copy(update={"media_buy_id": hooks_result.media_buy_id_override})
+
+        # Link the workflow step to the media buy so push-notification webhooks
+        # fire on completion. ``_send_push_notifications`` reads
+        # ``ObjectWorkflowMapping`` rows by step_id; without one, it returns
+        # early with "No object mappings found" and the buyer's webhook never
+        # fires. The manual-approval branch (~line 2362) already does this for
+        # its own flow; the auto-approval success branch needs the same. See
+        # issue #64.
+        if step is not None and not testing_ctx.dry_run:
+            _link_step_to_media_buy(
+                tenant_id=tenant["tenant_id"],
+                step_id=step.step_id,
+                media_buy_id=modified_response.media_buy_id,
+                branch="auto-approval",
+            )
 
         # Mark workflow step as completed on success
         ctx_manager.update_workflow_step(step.step_id, status="completed")
