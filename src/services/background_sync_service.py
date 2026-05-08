@@ -7,6 +7,7 @@ and losing progress on container restarts.
 
 import logging
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +21,24 @@ logger = logging.getLogger(__name__)
 # Global registry of running sync threads
 _active_syncs: dict[str, threading.Thread] = {}
 _sync_lock = threading.Lock()
+
+
+@contextmanager
+def _sync_session():
+    """Open a DB session flagged as a platform background worker.
+
+    Inventory sync writes platform-managed columns (notably
+    ``adapter_config.custom_targeting_keys``, which the GAM targeting
+    manager reads at media-buy approval time). The embedded-tenant guard
+    in :mod:`src.core.database.embedded_tenant_guard` blocks writes to
+    those surfaces unless the session is flagged. Sync workers run on
+    behalf of the platform — kicked off by the Tenant Management API's
+    first-sync-on-provision hook, by ``POST /tenants/{tid}/refresh``, or
+    by cron — so every sync session is platform-authorized.
+    """
+    with get_db_session() as db:
+        db.info["platform_background_worker"] = True
+        yield db
 
 
 def start_inventory_sync_background(
@@ -59,7 +78,7 @@ def start_inventory_sync_background(
     """
 
     # Create sync job record
-    with get_db_session() as db:
+    with _sync_session() as db:
         # Get adapter type for the tenant via repository
         from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
@@ -218,7 +237,7 @@ def _run_sync_thread(
         from src.services.gam_inventory_service import GAMInventoryService
 
         # Get tenant and adapter config (fresh session per thread)
-        with get_db_session() as db:
+        with _sync_session() as db:
             tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
                 _mark_sync_failed(sync_id, "Tenant not found")
@@ -251,7 +270,7 @@ def _run_sync_thread(
         # Get last successful sync time for incremental mode
         last_sync_time = None
         if sync_mode == "incremental":
-            with get_db_session() as db:
+            with _sync_session() as db:
                 from sqlalchemy import desc
 
                 last_successful_sync = db.scalars(
@@ -299,7 +318,7 @@ def _run_sync_thread(
         # Phase 0: Full reset - delete all existing inventory (only for full sync)
         if sync_mode == "full":
             update_progress("Deleting Existing Inventory", 1)
-            with get_db_session() as db:
+            with _sync_session() as db:
                 from sqlalchemy import delete
 
                 from src.core.database.models import GAMInventory
@@ -310,7 +329,7 @@ def _run_sync_thread(
                 logger.info(f"[{sync_id}] Full reset: deleted all existing inventory for tenant {tenant_id}")
 
         # Initialize inventory service for streaming writes
-        with get_db_session() as db:
+        with _sync_session() as db:
             inventory_service = GAMInventoryService(db)
             sync_time = datetime.now(UTC)
 
@@ -391,7 +410,7 @@ def _run_sync_thread(
 
         # For incremental sync, also report total counts from database (not just newly synced items)
         if sync_mode == "incremental":
-            with get_db_session() as db:
+            with _sync_session() as db:
                 # Import here to avoid circular imports
                 from sqlalchemy import func
 
@@ -516,7 +535,7 @@ def _run_sync_thread(
 def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
     """Update sync job progress in database."""
     try:
-        with get_db_session() as db:
+        with _sync_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
             sync_job = db.scalars(stmt).first()
             if sync_job:
@@ -529,7 +548,7 @@ def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
 def _mark_sync_complete(sync_id: str, summary: dict[str, Any]):
     """Mark sync as completed with summary."""
     try:
-        with get_db_session() as db:
+        with _sync_session() as db:
             import json
 
             stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
@@ -548,7 +567,7 @@ def _mark_sync_complete(sync_id: str, summary: dict[str, Any]):
 def _mark_sync_failed(sync_id: str, error_message: str):
     """Mark sync as failed with error message."""
     try:
-        with get_db_session() as db:
+        with _sync_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
             sync_job = db.scalars(stmt).first()
             if sync_job:

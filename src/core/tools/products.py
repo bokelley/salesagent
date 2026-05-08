@@ -19,8 +19,7 @@ from src.core.auth import get_principal_object
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
-    GetProductsResponse,
-    Product,  # Extends library Product
+    GetProductsResponse,  # Extends library Product
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.validation_helpers import safe_parse_json_field
@@ -52,7 +51,7 @@ def get_recommended_cpm(product: Any) -> float | None:
 
 
 # Import conversion utilities from dedicated module to avoid circular imports
-from src.core.product_conversion import convert_product_model_to_resolved, convert_product_model_to_schema
+from src.core.product_conversion import convert_product_model_to_resolved
 from src.core.resolved_product import ResolvedProduct
 
 
@@ -593,16 +592,6 @@ async def _get_products_impl(
                     if adapter_channels and not request_channels.intersection(set(adapter_channels)):
                         continue
 
-            # Filter by device_types (local extension, not in AdCP spec)
-            requested_device_types = getattr(req.filters, "device_types", None)
-            if requested_device_types:
-                product_device_types = getattr(product, "device_types", None)
-                if product_device_types:
-                    # Product declares supported device types — must have intersection
-                    if not set(product_device_types).intersection(set(requested_device_types)):
-                        continue
-                # else: product has no device_types restriction — matches any filter
-
             # Product passed all filters
             filtered_products.append(product)
 
@@ -786,14 +775,17 @@ async def _get_products_impl(
     return resp
 
 
-def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
+def get_product_catalog(tenant_id: str | None = None) -> list[ResolvedProduct]:
     """Get products for a tenant.
 
     Args:
         tenant_id: Tenant ID to load products for. Falls back to ContextVar if not provided.
 
     Returns:
-        List of Product objects with full pricing options
+        List of ``ResolvedProduct`` (wire-shape ``LibraryProduct`` + internal
+        fields) — same shape ``_get_products_impl`` produces. Server-side
+        consumers read ``r.implementation_config`` etc. directly off the
+        dataclass; wire-bound consumers project ``r.wire``.
     """
     from src.core.database.repositories.uow import ProductUoW
 
@@ -806,9 +798,9 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
         assert uow.products is not None
         products = uow.products.list_all_with_inventory()
 
-        # Use convert_product_model_to_schema for consistency
-        loaded_products = []
-        for product in products:
-            loaded_products.append(convert_product_model_to_schema(product))
+        # Match the get_products pipeline: ORM → ResolvedProduct via the
+        # sidecar conversion, so internal fields (implementation_config,
+        # countries, etc.) travel alongside the wire shape.
+        loaded_products = [convert_product_model_to_resolved(product) for product in products]
 
     return loaded_products

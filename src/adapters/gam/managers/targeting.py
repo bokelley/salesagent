@@ -232,6 +232,9 @@ class GAMTargetingManager:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             with get_db_session() as session:
+                # Platform-internal cache write — same surface the background
+                # inventory-sync writes, just from the adapter side.
+                session.info["platform_background_worker"] = True
                 repo = AdapterConfigRepository(session, self.tenant_id)
                 repo.update_custom_targeting_keys(key_name_to_id)
                 session.commit()

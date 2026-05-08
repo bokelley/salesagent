@@ -96,11 +96,14 @@ def _standard_patches(mock_uow, principal=None, convert_fn=None):
     """
     if convert_fn is None:
         convert_fn = lambda p, **kw: p  # noqa: E731
+
+    def _wrap(p, **kw):
+        return _phase2_wrap_resolved(convert_fn(p, **kw))
+
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.get_principal_object", return_value=principal),
-        patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
-        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
+        patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_wrap),
         patch(
             "src.services.dynamic_products.generate_variants_for_brief",
             new_callable=AsyncMock,
@@ -606,19 +609,21 @@ class TestGetProductCatalogConversionError:
     """
 
     def test_corrupt_product_raises_valueerror(self):
-        """Conversion error propagates — not silently swallowed."""
+        """Conversion error propagates — not silently swallowed.
+
+        Phase 2 slice 4: get_product_catalog now calls
+        convert_product_model_to_resolved, so error injection moves
+        there.
+        """
         good_product = MagicMock()
         good_product.product_id = "good-prod"
         bad_product = MagicMock()
         bad_product.product_id = "bad-prod"
 
-        mock_converted = MagicMock()
-        mock_converted.product_id = "good-prod"
-
         def mock_convert(p, **kw):
             if p.product_id == "bad-prod":
                 raise ValueError("corrupt pricing_options JSON")
-            return mock_converted
+            return _phase2_wrap_resolved(p)
 
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -627,8 +632,7 @@ class TestGetProductCatalogConversionError:
 
         with (
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=mock_convert),
-            patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=_phase2_wrap_resolved),
+            patch("src.core.tools.products.convert_product_model_to_resolved", side_effect=mock_convert),
         ):
             from src.core.tools.products import get_product_catalog
 
@@ -648,7 +652,7 @@ class TestGetProductCatalogConversionError:
         with (
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch(
-                "src.core.tools.products.convert_product_model_to_schema",
+                "src.core.tools.products.convert_product_model_to_resolved",
                 side_effect=ValueError("corrupt"),
             ),
         ):

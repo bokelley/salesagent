@@ -18,6 +18,7 @@ from src.core.database.models import PricingOption as PricingOptionModel
 from src.core.database.models import Principal as PrincipalModel
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant as TenantModel
+from src.core.resolved_product import ResolvedProduct
 from src.core.schemas import Product as ProductSchema
 from src.core.tools.products import get_product_catalog
 
@@ -99,7 +100,7 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
 
     # Verify all products have pricing_options
     for prod in products:
-        assert isinstance(prod, ProductSchema), f"Product should be a Pydantic schema, got {type(prod)}"
+        assert isinstance(prod, ResolvedProduct), f"Product should be a ResolvedProduct, got {type(prod)}"
         assert hasattr(prod, "pricing_options"), "Product should have pricing_options attribute"
         assert prod.pricing_options is not None, f"Product {prod.product_id} has None pricing_options"
         assert isinstance(prod.pricing_options, list), f"Product {prod.product_id} pricing_options should be a list"

@@ -98,7 +98,7 @@
                         <td>{{ buy.created_at.strftime('%Y-%m-%d %H:%M') if buy.created_at else 'N/A' }}</td>
                         <td>
                             {% if buy.status == 'pending_approval' %}
-                            <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}/approve" class="btn btn-sm btn-primary" title="Review and Approve">
+                            <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}" class="btn btn-sm btn-primary" title="Review and Approve">
                                 Review & Approve
                             </a>
                             {% elif buy.status == 'active' %}
@@ -146,11 +146,12 @@
                         <th>ID</th>
                         <th>Type</th>
                         <th>Step Name</th>
-                        <th>Workflow</th>
+                        <th>Context</th>
                         <th>Status</th>
                         <th>Assigned To</th>
                         <th>Created</th>
                         <th>Completed</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -160,8 +161,8 @@
                         <td>{{ task.step_type or 'workflow' }}</td>
                         <td>{{ task.step_name or task.step_id }}</td>
                         <td>
-                            {% if task.workflow_id %}
-                            <code>{{ task.workflow_id }}</code>
+                            {% if task.context_id %}
+                            <code>{{ task.context_id }}</code>
                             {% else %}
                             -
                             {% endif %}
@@ -182,6 +183,21 @@
                         <td>{{ task.assigned_to or task.principal_name or 'Unassigned' }}</td>
                         <td>{{ task.created_at.strftime('%Y-%m-%d %H:%M') if task.created_at else 'N/A' }}</td>
                         <td>{{ task.completed_at.strftime('%Y-%m-%d %H:%M') if task.completed_at else '-' }}</td>
+                        <td>
+                            {% if task.context_id and task.step_id %}
+                                {% set review_url = url_for('workflows.review_workflow_step',
+                                                            tenant_id=tenant_id,
+                                                            workflow_id=task.context_id,
+                                                            step_id=task.step_id) %}
+                                {% if task.status in ('requires_approval', 'pending_approval') %}
+                                <a href="{{ review_url }}" class="btn btn-sm btn-primary">Review &amp; Approve</a>
+                                {% else %}
+                                <a href="{{ review_url }}" class="btn btn-sm btn-link">View</a>
+                                {% endif %}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
