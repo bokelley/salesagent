@@ -276,11 +276,11 @@ class TestMediaBuyApprovalAsync:
         assert (
             result.status == "submitted"
         ), f"Expected submitted, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
-        # Per AdCP discriminated-union spec (PR #183), the submitted envelope
-        # carries ``task_id`` + ``workflow_step_id`` but NOT ``media_buy_id``
-        # (media_buy_id only appears on the sync-success variant). Look up
-        # the pending media_buy_id via the ObjectWorkflowMapping that
-        # ``_create_media_buy_impl`` writes alongside the approval step.
+        # adcp 4.x: CreateMediaBuySubmitted carries only ``context`` and
+        # ``ext`` — ``media_buy_id`` is intentionally not on the wire for the
+        # submitted state (locked in by PR #183). Look up the persisted buy
+        # via ObjectWorkflowMapping instead, which links workflow steps to
+        # their object_id.
         from src.core.database.models import ObjectWorkflowMapping
 
         with get_db_session() as session:
@@ -290,15 +290,11 @@ class TestMediaBuyApprovalAsync:
                 approval_steps
             ), f"Expected requires_approval workflow_step, got {[(s.step_id, s.status) for s in steps]}"
             mapping = session.scalars(
-                select(ObjectWorkflowMapping).where(
-                    ObjectWorkflowMapping.step_id == approval_steps[0].step_id,
-                    ObjectWorkflowMapping.object_type == "media_buy",
-                )
+                select(ObjectWorkflowMapping)
+                .where(ObjectWorkflowMapping.object_type == "media_buy")
+                .where(ObjectWorkflowMapping.step_id == approval_steps[0].step_id)
             ).first()
-            assert mapping is not None, (
-                f"Expected ObjectWorkflowMapping for approval step {approval_steps[0].step_id}; "
-                "_create_media_buy_impl is supposed to write media_buy↔step mapping"
-            )
+            assert mapping is not None, "ObjectWorkflowMapping must link approval step to a media buy"
             media_buy_id = mapping.object_id
         assert media_buy_id
 
