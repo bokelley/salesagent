@@ -90,6 +90,10 @@ class TestTemplateUrlValidation:
                             test_params["user_id"] = "test_user"
                         if "account_id" in params:
                             test_params["account_id"] = "test_account"
+                        if "workflow_id" in params:
+                            test_params["workflow_id"] = "test_workflow"
+                        if "step_id" in params:
+                            test_params["step_id"] = "test_step"
 
                         # Try to build the URL
                         url = url_for(endpoint, **test_params)
