@@ -54,3 +54,29 @@ def test_idempotency_replay_ttl_constant_matches_pgbackend_window() -> None:
     assert (
         3600 <= IDEMPOTENCY_REPLAY_TTL_SECONDS <= 604800
     ), f"replay_ttl_seconds must be 3600-604800 per spec, got {IDEMPOTENCY_REPLAY_TTL_SECONDS}"
+
+
+def test_router_capabilities_advertise_agent_billing() -> None:
+    """Capabilities must list ``agent`` in ``account.supported_billing`` so
+    buyers can discover the agent-billing path before calling sync_accounts.
+
+    Per-principal ``billing_enabled`` enforcement is a sync_accounts-time
+    concern (slice 4, BR-RULE-061), not a capabilities-time one — issue #31.
+    Declaring ``supported_billing=["operator"]`` only would tell honest
+    buyers we don't support the path, even though we do (gated).
+    """
+    from core.main import build_router
+
+    with patch("core.main._build_proposal_managers", return_value={}):
+        router = build_router()
+    account_block = router.capabilities.account
+
+    assert account_block is not None, "DecisioningCapabilities.account must be set"
+    # Compare via .value because the SDK projects enum members onto the list.
+    advertised = {b.value if hasattr(b, "value") else b for b in account_block.supported_billing}
+    assert "agent" in advertised, (
+        f"capabilities.account.supported_billing must include 'agent' so buyers "
+        f"can discover the agent-billing path; got {advertised}. "
+        f"Per-principal billing_enabled gating happens at sync_accounts, not here."
+    )
+    assert "operator" in advertised, f"capabilities.account.supported_billing must keep 'operator'; got {advertised}."

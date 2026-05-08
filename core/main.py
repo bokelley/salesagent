@@ -240,7 +240,12 @@ def build_router() -> LazyPlatformRouter:
             major_versions=[3],
             idempotency=IdempotencySupported(supported=True, replay_ttl_seconds=IDEMPOTENCY_REPLAY_TTL_SECONDS),
         ),
-        account=CapabilitiesAccount(supported_billing=["operator"]),
+        # Both billing modes are supported at the platform level.
+        # ``"agent"`` is gated per-principal by ``Principal.billing_enabled``
+        # in :func:`src.core.tools.accounts._check_billing_policy` —
+        # capabilities advertises what the seller offers, sync_accounts
+        # enforces who can use it.
+        account=CapabilitiesAccount(supported_billing=["operator", "agent"]),
         media_buy=MediaBuy(
             supported_pricing_models=["cpm"],
             # inline_creative_management: sync_creatives / list_creatives
