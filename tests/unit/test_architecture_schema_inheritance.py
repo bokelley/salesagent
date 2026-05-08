@@ -230,7 +230,6 @@ class TestSchemaInheritance:
             ("SyncAccountsRequest", "idempotency_key"),
             # Schema overrides for partial-construction tolerance / wider types
             ("Creative", "variants"),
-            ("Product", "reporting_capabilities"),
             ("SyncCreativeResult", "status"),
         }
 

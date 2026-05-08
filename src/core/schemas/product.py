@@ -61,25 +61,11 @@ class Placement(LibraryPlacement):
     )
 
 
-class Product(LibraryProduct):
-    """Wire-shape Product (AdCP-compliant fields only).
-
-    Internal-only fields (implementation_config, countries, device_types,
-    allowed_principal_ids) live on :class:`src.core.resolved_product.ResolvedProduct`,
-    not here. This subclass is a stable import name kept for callers; slice 6
-    will collapse it into ``LibraryProduct`` directly.
-
-    Note on extras: ``LibraryProduct`` inherits ``extra='allow'`` for forward
-    compatibility with adcp library spec growth. Nothing in this subclass
-    overrides that — but the production wire path always goes through
-    :func:`src.core.product_conversion.convert_product_model_to_resolved`,
-    which builds a ``Product`` from explicit ORM fields only. Internal field
-    names cannot reach the wire dump unless a caller passes them as kwargs.
-    The behavioral test in ``test_adcp_response_excludes_internal_fields``
-    asserts the converter path stays clean.
-    """
-
-    pass
+# Wire-shape Product is just the AdCP library type. Internal fields live on
+# ``src.core.resolved_product.ResolvedProduct``; the production wire path goes
+# through :func:`src.core.product_conversion.convert_product_model_to_resolved`,
+# which builds the wire shape from explicit ORM fields only.
+Product = LibraryProduct
 
 
 class ProductFilters(LibraryFilters):
