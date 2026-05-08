@@ -145,6 +145,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
+    bypass_manual_approval: bool = False,
 ) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -157,6 +158,11 @@ def _update_media_buy_impl(
         req: Validated UpdateMediaBuyRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
         context_id: Optional workflow context ID
+        bypass_manual_approval: When True, skip the manual-approval gate and
+            apply the update immediately. Used by the workflows-blueprint
+            replay path: an operator has already approved the deferred step
+            and we are now executing it. Buyer-facing transports (MCP/A2A)
+            never set this.
 
     Returns:
         UpdateMediaBuyResponse with updated media buy details
@@ -351,7 +357,7 @@ def _update_media_buy_impl(
         manual_approval_required = adapter.manual_approval_required
         manual_approval_operations = adapter.manual_approval_operations
 
-        if manual_approval_required and "update_media_buy" in manual_approval_operations:
+        if manual_approval_required and "update_media_buy" in manual_approval_operations and not bypass_manual_approval:
             # Store the original request alongside the response so the approval
             # execution path can re-execute the update after human approval.
             # This mirrors create_media_buy's raw_request pattern.
@@ -1288,11 +1294,6 @@ def _update_media_buy_impl(
 
         # Handle start_time/end_time updates
         if req.start_time is not None or req.end_time is not None:
-            # TODO: Sync date changes to GAM order
-            # Currently only updates database - does NOT sync to GAM API
-            # This creates data inconsistency between our database and GAM
-            # Need to implement: adapter.orders_manager.update_order_dates(order_id, start_time, end_time)
-
             update_values: dict[str, Any] = {}
             if req.start_time is not None:
                 # Parse start_time (handle 'asap' and datetime strings)
@@ -1358,11 +1359,35 @@ def _update_media_buy_impl(
                     return response_data
 
                 uow.media_buys.update_fields(req.media_buy_id, **update_values)
-                logger.warning(
-                    f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
+                logger.info(
+                    f"Updated MediaBuy {req.media_buy_id} dates in DB: "
                     f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
                 )
-                logger.warning("GAM sync NOT implemented - GAM still has old dates")
+
+                # Sync the change to the underlying ad server. The DB write
+                # above captures the buyer's intent durably; if the adapter
+                # call fails we log loudly but don't roll back, so a retry
+                # can re-apply GAM-side without losing intent.
+                orders_manager = getattr(adapter, "orders_manager", None)
+                gam_order_id = existing_mb.external_id or existing_mb.media_buy_id
+                if orders_manager is not None and gam_order_id:
+                    try:
+                        synced = orders_manager.update_order_dates(
+                            order_id=gam_order_id,
+                            start_time=update_values.get("start_time"),
+                            end_time=update_values.get("end_time"),
+                        )
+                    except Exception as e:
+                        synced = False
+                        logger.error(
+                            f"Adapter raised while syncing dates for {req.media_buy_id} "
+                            f"(GAM order {gam_order_id}): {e}",
+                            exc_info=True,
+                        )
+                    if not synced:
+                        logger.error(
+                            f"GAM date sync FAILED for {req.media_buy_id} (Order {gam_order_id}); DB updated, GAM stale"
+                        )
 
         # Create ObjectWorkflowMapping to link media buy update to workflow step
         # This enables webhook delivery when the update completes
