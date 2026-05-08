@@ -46,6 +46,7 @@ collect_reports() {
     for name in unit integration e2e admin bdd ui; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done
+    return 0
 }
 
 # --- Quick mode (no Docker) ---
