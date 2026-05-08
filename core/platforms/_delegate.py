@@ -87,14 +87,25 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
     # can read it from the dispatched _impl without any threading.
     principal_id = current_principal.get() or getattr(ctx, "auth_principal", None)
 
+    # ``meta.transport`` was stamped into ``ctx.metadata`` by
+    # ``auth_context_factory`` (see adcp.server.auth:423). It's the only
+    # transport-of-origin signal available at this layer. We forward it onto
+    # ``ResolvedIdentity.protocol`` because downstream impls (specifically
+    # ``_create_media_buy_impl``) write ``identity.protocol`` into the
+    # workflow step's request_metadata, which the webhook dispatcher in
+    # context_manager.py reads to decide between A2A (Task /
+    # TaskStatusUpdateEvent) and MCP (McpWebhookPayload) wire shapes.
+    # Defaulting to "mcp" here meant every A2A request's webhook came back
+    # in MCP shape (no ``id`` / ``taskId`` field), failing the
+    # AdCP-spec-compliant Task payload contract on terminal statuses.
+    transport_marker = (ctx.metadata or {}).get("transport")
+    protocol = "a2a" if transport_marker == "a2a" else "mcp"
+
     return ResolvedIdentity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant_dict,
-        # protocol is informational on _impl — defaults to "mcp" since
-        # the framework's transport context isn't passed through ctx;
-        # impls don't branch on it for any business logic today.
-        protocol="mcp",
+        protocol=protocol,
         testing_context=AdCPTestContext(),
     )
 

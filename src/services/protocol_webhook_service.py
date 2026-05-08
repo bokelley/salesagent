@@ -108,12 +108,39 @@ class ProtocolWebhookService:
         }
         logger.info(f"push_notification_config (sanitized): {safe_config}")
 
-        # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send)
+        # Serialize payload to dict at the delivery boundary (for HMAC signing and JSON send).
+        #
+        # ``Task`` / ``TaskStatusUpdateEvent`` come from ``a2a.types`` and are
+        # protobuf messages (``google._upb._message.Message``), not Pydantic
+        # models — calling ``model_dump`` would raise AttributeError and abort
+        # the webhook. ``MessageToDict`` is the protobuf-native JSON shape and
+        # matches the AdCP spec wire format (camelCase ``id`` / ``taskId``).
+        # Post-process the ``status.state`` enum from its protobuf form
+        # (``TASK_STATE_COMPLETED``) to the spec form (``completed``) — same
+        # transform the adcp client uses on the receiving side
+        # (``adcp.client._a2a_state_to_string``); inline since that helper is
+        # private. Promote upstream if a third call site appears.
         payload_dict: dict[str, Any]
-        if isinstance(payload, (Task, TaskStatusUpdateEvent, McpWebhookPayload)):
-            payload_dict = payload.model_dump(mode="json", exclude_none=True)  # type: ignore[union-attr]
-        else:
+        if isinstance(payload, (Task, TaskStatusUpdateEvent)):
+            from google.protobuf.json_format import MessageToDict
+
+            payload_dict = MessageToDict(payload)
+            status_obj = payload_dict.get("status")
+            if isinstance(status_obj, dict):
+                state = status_obj.get("state")
+                if isinstance(state, str) and state.startswith("TASK_STATE_"):
+                    status_obj["state"] = state[len("TASK_STATE_") :].lower().replace("_", "-")
+        elif hasattr(payload, "model_dump"):
+            # Covers McpWebhookPayload + any future Pydantic-shaped variant.
+            payload_dict = payload.model_dump(mode="json", exclude_none=True)
+        elif isinstance(payload, dict):
             payload_dict = payload
+        else:
+            raise TypeError(
+                f"Unsupported webhook payload type: {type(payload).__name__}. "
+                "Expected protobuf Task/TaskStatusUpdateEvent, a Pydantic model "
+                "with model_dump(), or a dict."
+            )
 
         # Apply authentication based on schemes
         if (
