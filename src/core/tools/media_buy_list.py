@@ -151,6 +151,19 @@ def _get_media_buys_impl(
         for media_buy_id, packages in projected_packages.items():
             packages_by_media_buy[media_buy_id] = packages
 
+        # Webhook activity opt-in (#101). When ``ext.psa.include_webhook_activity``
+        # is true, fetch recent webhook_delivery_log rows for the
+        # returned buys (scoped to the calling principal so a buyer
+        # only sees its own deliveries even if multiple agents share
+        # visibility into the same buy).
+        webhook_activity_by_buy = _fetch_webhook_activity(
+            req,
+            uow.session,
+            tenant_id,
+            principal_id,
+            [b.media_buy_id for b in target_media_buys],
+        )
+
     # Get snapshots from adapter if requested
     snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
     unavailable_reason: SnapshotUnavailableReason | None = None
@@ -215,6 +228,15 @@ def _get_media_buys_impl(
         total_budget = float(buy.budget) if buy.budget else 0.0
         buyer_campaign_ref = (buy.raw_request or {}).get("buyer_campaign_ref")
 
+        # Build the response ``ext`` field. ``ext.gam`` carries import
+        # provenance for projected/materialized GAM buys; ``ext.psa``
+        # carries publisher-side activity (webhook deliveries, future
+        # PSA-specific surfaces). Both vendors coexist under the same dict.
+        buy_ext = build_buy_ext(buy.raw_request)
+        webhook_deliveries = webhook_activity_by_buy.get(buy.media_buy_id)
+        if webhook_deliveries is not None:
+            buy_ext = (buy_ext or {}) | {"psa": {"webhook_deliveries": webhook_deliveries}}
+
         response_media_buys.append(
             GetMediaBuysMediaBuy(
                 media_buy_id=buy.media_buy_id,
@@ -225,7 +247,7 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                ext=build_buy_ext(buy.raw_request),
+                ext=buy_ext,
             )
         )
 
@@ -233,6 +255,69 @@ def _get_media_buys_impl(
         media_buys=response_media_buys,
         context=req.context,
     )
+
+
+_WEBHOOK_ACTIVITY_DEFAULT_LIMIT = 50
+_WEBHOOK_ACTIVITY_MAX_LIMIT = 200
+
+
+def _fetch_webhook_activity(
+    req: GetMediaBuysRequest,
+    session: Session,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_ids: list[str],
+) -> dict[str, list[dict]]:
+    """Build the per-buy webhook delivery list when ``ext.psa`` opted in.
+
+    Returns a map of ``media_buy_id -> [delivery_dicts]``. Empty dict
+    when the request didn't opt in (so the caller can skip the merge
+    cheaply). Deliveries are scoped to the calling principal so a
+    buyer agent only sees its own webhook history even when multiple
+    agents share access to the same media buy.
+    """
+    ext = req.ext or {}
+    psa = ext.get("psa") or {}
+    if not psa.get("include_webhook_activity"):
+        return {}
+    if not media_buy_ids:
+        return {}
+
+    raw_limit = psa.get("webhook_activity_limit", _WEBHOOK_ACTIVITY_DEFAULT_LIMIT)
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = _WEBHOOK_ACTIVITY_DEFAULT_LIMIT
+    limit = max(1, min(_WEBHOOK_ACTIVITY_MAX_LIMIT, limit))
+
+    from src.core.database.repositories.delivery import DeliveryRepository
+
+    repo = DeliveryRepository(session, tenant_id)
+    activity: dict[str, list[dict]] = {}
+    for media_buy_id in media_buy_ids:
+        rows = repo.list_logs_for_media_buy(media_buy_id, principal_id=principal_id, limit=limit)
+        activity[media_buy_id] = [
+            {
+                "fired_at": row.created_at.isoformat() if row.created_at else None,
+                "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                "task_type": row.task_type,
+                "notification_type": row.notification_type,
+                "sequence_number": row.sequence_number,
+                "attempt": row.attempt_count,
+                "status": row.status,
+                "url": row.webhook_url,
+                "http_status_code": row.http_status_code,
+                "response_time_ms": row.response_time_ms,
+                "error_message": row.error_message,
+                # Bodies are pre-truncated at insert time (DeliveryRepository
+                # caps at 64KB). Surface as-is — buyers wanting full payload
+                # debug get what we stored.
+                "request_payload": row.request_payload,
+                "response_body": row.response_body,
+            }
+            for row in rows
+        ]
+    return activity
 
 
 def _fetch_target_media_buys(

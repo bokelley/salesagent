@@ -227,6 +227,46 @@ class DeliveryRepository:
     # WebhookDeliveryLog writes
     # ------------------------------------------------------------------
 
+    # Maximum size in bytes for stored request_payload (JSON-encoded) and
+    # response_body. Anything larger is truncated at insert time so a
+    # pathologically-large webhook body can't blow up the row.
+    _BODY_TRUNCATION_BYTES: int = 64 * 1024
+
+    @classmethod
+    def _truncate_request_payload(cls, payload: dict | None) -> dict | None:
+        """Truncate a JSON payload to ~64KB on the wire.
+
+        Returns the original dict if it fits. If oversized, returns a
+        replacement dict ``{"_truncated": True, "_original_size_bytes": N,
+        "_preview": <first 4KB of stringified payload>}`` so debug
+        viewers see something useful without storing the whole blob.
+        """
+        if payload is None:
+            return None
+        import json
+
+        try:
+            encoded = json.dumps(payload)
+        except (TypeError, ValueError):
+            return {"_truncated": True, "_reason": "unserializable"}
+        if len(encoded.encode("utf-8")) <= cls._BODY_TRUNCATION_BYTES:
+            return payload
+        return {
+            "_truncated": True,
+            "_original_size_bytes": len(encoded.encode("utf-8")),
+            "_preview": encoded[:4096],
+        }
+
+    @classmethod
+    def _truncate_response_body(cls, body: str | None) -> str | None:
+        """Truncate a response body to ~64KB. Appends a marker on overflow."""
+        if body is None:
+            return None
+        encoded = body.encode("utf-8")
+        if len(encoded) <= cls._BODY_TRUNCATION_BYTES:
+            return body
+        return encoded[: cls._BODY_TRUNCATION_BYTES].decode("utf-8", errors="ignore") + "\n... [truncated]"
+
     def create_log(
         self,
         *,
@@ -245,11 +285,18 @@ class DeliveryRepository:
         response_time_ms: int | None = None,
         completed_at: datetime | None = None,
         next_retry_at: datetime | None = None,
+        request_payload: dict | None = None,
+        response_body: str | None = None,
     ) -> WebhookDeliveryLog:
         """Create or update a webhook delivery log entry.
 
         Uses session.merge() to handle upsert semantics (the protocol webhook
         service updates the same log entry across retry attempts).
+
+        ``request_payload`` and ``response_body`` are truncated to ~64KB
+        on insert so a pathologically-large webhook body can't blow up
+        the row. Pass them when you have them; older callers that don't
+        provide them get ``None`` (rows pre-#101 schema).
 
         Does NOT commit — the caller handles that.
         """
@@ -270,7 +317,38 @@ class DeliveryRepository:
             response_time_ms=response_time_ms,
             completed_at=completed_at,
             next_retry_at=next_retry_at,
+            request_payload=self._truncate_request_payload(request_payload),
+            response_body=self._truncate_response_body(response_body),
         )
         self._session.merge(log_entry)
         self._session.flush()
         return log_entry
+
+    # ------------------------------------------------------------------
+    # WebhookDeliveryLog reads — for #101 buyer self-debug surface
+    # ------------------------------------------------------------------
+
+    def list_logs_for_media_buy(
+        self,
+        media_buy_id: str,
+        *,
+        principal_id: str | None = None,
+        limit: int = 50,
+    ) -> list[WebhookDeliveryLog]:
+        """Recent webhook delivery log entries for a media buy.
+
+        Most-recent-first. ``principal_id`` filter is applied when set
+        so a buyer agent only sees its own deliveries, even if multiple
+        agents share visibility into the same buy via account access.
+
+        Defaults to 50 rows to match the get_media_buys ext surface.
+        """
+        stmt = (
+            select(WebhookDeliveryLog)
+            .where(WebhookDeliveryLog.tenant_id == self._tenant_id)
+            .where(WebhookDeliveryLog.media_buy_id == media_buy_id)
+        )
+        if principal_id is not None:
+            stmt = stmt.where(WebhookDeliveryLog.principal_id == principal_id)
+        stmt = stmt.order_by(WebhookDeliveryLog.created_at.desc()).limit(limit)
+        return list(self._session.scalars(stmt).all())

@@ -2376,6 +2376,17 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
     account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
     context: ContextObject | None = Field(default=None, description="Application-level context")
+    ext: dict | None = Field(
+        default=None,
+        description=(
+            "Vendor-namespaced extension object. Recognized keys: "
+            "``psa.include_webhook_activity`` (bool, default false) — when true, "
+            "each returned media buy carries ``ext.psa.webhook_deliveries`` with "
+            "the most-recent webhook delivery log entries scoped to the caller. "
+            "Optional ``psa.webhook_activity_limit`` (int, default 50) caps the "
+            "list size."
+        ),
+    )
 
 
 class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):

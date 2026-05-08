@@ -269,6 +269,17 @@ def media_buy_detail(tenant_id, media_buy_id):
                     logger.warning(f"Could not fetch delivery metrics for {media_buy_id}: {e}")
                     # Continue without metrics - don't fail the whole page
 
+            # #101 — webhook delivery activity for the per-buy admin tab.
+            # Operator-scoped: shows deliveries from any principal that
+            # ever fired against this buy (no principal_id filter), so
+            # publisher ops can debug end-to-end without impersonating
+            # the buyer.
+            from src.core.database.repositories.delivery import DeliveryRepository
+
+            webhook_deliveries = DeliveryRepository(db_session, tenant_id).list_logs_for_media_buy(
+                media_buy_id, limit=200
+            )
+
             return render_template(
                 "media_buy_detail.html",
                 tenant=tenant,
@@ -283,6 +294,7 @@ def media_buy_detail(tenant_id, media_buy_id):
                 computed_state=computed_state,
                 readiness=readiness,
                 delivery_metrics=delivery_metrics,
+                webhook_deliveries=webhook_deliveries,
             )
     except Exception as e:
         logger.error(f"Error viewing media buy: {e}", exc_info=True)

@@ -355,6 +355,56 @@
     {% endif %}
 </div>
 
+<!-- Webhook Activity (#101) — operator-scoped view of delivery webhook fires -->
+{% if webhook_deliveries %}
+<div class="custom-card">
+    <h2>Webhook Activity</h2>
+    <p style="color: #6b7280; font-size: 0.9rem; margin-top: -0.5rem; margin-bottom: 1rem;">
+        Most recent {{ webhook_deliveries|length }} webhook fire{{ '' if webhook_deliveries|length == 1 else 's' }}
+        for this media buy. Buyers can self-serve the same view via
+        <code>get_media_buys</code> with <code>ext.psa.include_webhook_activity=true</code>.
+    </p>
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+        <thead>
+            <tr style="background: #f9fafb; text-align: left; border-bottom: 1px solid #e5e7eb;">
+                <th style="padding: 0.5rem; font-weight: 600;">Fired</th>
+                <th style="padding: 0.5rem; font-weight: 600;">Type</th>
+                <th style="padding: 0.5rem; font-weight: 600;">Seq #</th>
+                <th style="padding: 0.5rem; font-weight: 600;">Attempt</th>
+                <th style="padding: 0.5rem; font-weight: 600;">Status</th>
+                <th style="padding: 0.5rem; font-weight: 600;">HTTP</th>
+                <th style="padding: 0.5rem; font-weight: 600;">Latency</th>
+                <th style="padding: 0.5rem; font-weight: 600;">URL</th>
+                <th style="padding: 0.5rem; font-weight: 600;">Error</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in webhook_deliveries %}
+            <tr style="border-bottom: 1px solid #f3f4f6;">
+                <td style="padding: 0.5rem; white-space: nowrap;">{{ d.created_at.strftime('%Y-%m-%d %H:%M:%S') if d.created_at else '—' }}</td>
+                <td style="padding: 0.5rem;">{{ d.notification_type or d.task_type }}</td>
+                <td style="padding: 0.5rem;">{{ d.sequence_number }}</td>
+                <td style="padding: 0.5rem;">{{ d.attempt_count }}</td>
+                <td style="padding: 0.5rem;">
+                    {% if d.status == 'success' %}
+                        <span style="color: #16a34a; font-weight: 500;">{{ d.status }}</span>
+                    {% elif d.status == 'failed' %}
+                        <span style="color: #dc2626; font-weight: 500;">{{ d.status }}</span>
+                    {% else %}
+                        <span style="color: #d97706; font-weight: 500;">{{ d.status }}</span>
+                    {% endif %}
+                </td>
+                <td style="padding: 0.5rem;">{{ d.http_status_code or '—' }}</td>
+                <td style="padding: 0.5rem;">{{ d.response_time_ms ~ ' ms' if d.response_time_ms else '—' }}</td>
+                <td style="padding: 0.5rem; font-family: var(--sa-font-mono, monospace); font-size: 0.8rem; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ d.webhook_url }}">{{ d.webhook_url }}</td>
+                <td style="padding: 0.5rem; color: #dc2626; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ d.error_message or '' }}">{{ d.error_message or '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 <!-- Workflow History -->
 {% if workflow_steps %}
 <div class="custom-card">

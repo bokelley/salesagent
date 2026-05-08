@@ -2457,6 +2457,13 @@ class WebhookDeliveryLog(Base):
     payload_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Body capture for buyer-side debug visibility (#101). Truncated to
+    # ~64KB at insert time by the persistence helper. Both nullable:
+    # older rows pre-date these columns, and non-HTTP failures
+    # (connection refused, timeout) have no response_body.
+    request_payload: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

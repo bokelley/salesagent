@@ -450,6 +450,13 @@ class WebhookDeliveryService:
                     "body_bytes": body_bytes,
                     "timestamp": enqueue_timestamp,
                     "active_credential": active_credential,
+                    # Threaded through so _deliver_with_backoff can
+                    # record a webhook_delivery_log row per attempt
+                    # (#101). delivery_payload is the parsed body so
+                    # we can persist the JSON shape for buyer debug.
+                    "principal_id": principal_id,
+                    "media_buy_id": media_buy_id,
+                    "delivery_payload": delivery_payload,
                 }
 
                 if not queue.enqueue(webhook_data):
@@ -501,6 +508,17 @@ class WebhookDeliveryService:
         body_bytes: bytes = webhook_data["body_bytes"]
         timestamp: str = webhook_data["timestamp"]
         active_credential: LoadedSigningCredential | None = webhook_data["active_credential"]
+
+        # Metadata for #101 webhook_delivery_log persistence.
+        # principal_id / media_buy_id / delivery_payload are threaded
+        # from _send_webhook_enhanced; they identify which buy this
+        # attempt belongs to so buyers can self-debug via get_media_buys.
+        log_principal_id: str = webhook_data["principal_id"]
+        log_media_buy_id: str = webhook_data["media_buy_id"]
+        log_delivery_payload: dict = webhook_data["delivery_payload"]
+        log_tenant_id: str = snapshot.get("tenant_id", "unknown")
+        log_sequence_number: int = log_delivery_payload.get("sequence_number", 1)
+        log_notification_type: str | None = log_delivery_payload.get("notification_type")
 
         url = snapshot["url"]
         signing_mode = snapshot["signing_mode"]
@@ -558,14 +576,18 @@ class WebhookDeliveryService:
 
         # Exponential backoff with jitter
         for attempt in range(max_retries):
+            attempt_one_based = attempt + 1
             try:
                 # Calculate delay with exponential backoff and jitter
                 if attempt > 0:
                     # Base delay * 2^attempt + random jitter (0-1 seconds)
                     delay = (base_delay * (2**attempt)) + random.uniform(0, 1)
-                    logger.debug(f"Retrying webhook delivery after {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
+                    logger.debug(
+                        f"Retrying webhook delivery after {delay:.2f}s (attempt {attempt_one_based}/{max_retries})"
+                    )
                     time.sleep(delay)
 
+                request_started_at = time.monotonic()
                 # Send webhook. Use ``content=body_bytes`` (NOT ``json=``)
                 # so the wire body is byte-identical to what we signed —
                 # httpx's ``json`` re-serializes via its own encoder.
@@ -575,9 +597,24 @@ class WebhookDeliveryService:
                         content=body_bytes,
                         headers=headers,
                     )
+                    response_time_ms = int((time.monotonic() - request_started_at) * 1000)
 
                     if 200 <= response.status_code < 300:
                         logger.debug(f"Webhook delivered to {url} (status: {response.status_code})")
+                        self._record_delivery_log(
+                            tenant_id=log_tenant_id,
+                            principal_id=log_principal_id,
+                            media_buy_id=log_media_buy_id,
+                            url=url,
+                            delivery_payload=log_delivery_payload,
+                            attempt=attempt_one_based,
+                            status="success",
+                            sequence_number=log_sequence_number,
+                            notification_type=log_notification_type,
+                            http_status_code=response.status_code,
+                            response_body=response.text,
+                            response_time_ms=response_time_ms,
+                        )
                         circuit_breaker.record_success()
                         return True
 
@@ -586,26 +623,167 @@ class WebhookDeliveryService:
                         logger.warning(
                             f"Webhook delivery to {url} returned client error {response.status_code}, will not retry"
                         )
+                        self._record_delivery_log(
+                            tenant_id=log_tenant_id,
+                            principal_id=log_principal_id,
+                            media_buy_id=log_media_buy_id,
+                            url=url,
+                            delivery_payload=log_delivery_payload,
+                            attempt=attempt_one_based,
+                            status="failed",
+                            sequence_number=log_sequence_number,
+                            notification_type=log_notification_type,
+                            http_status_code=response.status_code,
+                            response_body=response.text,
+                            response_time_ms=response_time_ms,
+                            error_message=f"HTTP {response.status_code} client error (no retry)",
+                        )
                         circuit_breaker.record_failure()
                         return False
 
                     logger.warning(
                         f"Webhook delivery to {url} returned "
                         f"status {response.status_code} "
-                        f"(attempt: {attempt + 1}/{max_retries})"
+                        f"(attempt: {attempt_one_based}/{max_retries})"
+                    )
+                    # 5xx — retryable. Record this attempt; the next iteration
+                    # will record its own. status='retrying' unless this is
+                    # the final attempt, in which case 'failed'.
+                    is_final_attempt = attempt_one_based == max_retries
+                    self._record_delivery_log(
+                        tenant_id=log_tenant_id,
+                        principal_id=log_principal_id,
+                        media_buy_id=log_media_buy_id,
+                        url=url,
+                        delivery_payload=log_delivery_payload,
+                        attempt=attempt_one_based,
+                        status="failed" if is_final_attempt else "retrying",
+                        sequence_number=log_sequence_number,
+                        notification_type=log_notification_type,
+                        http_status_code=response.status_code,
+                        response_body=response.text,
+                        response_time_ms=response_time_ms,
+                        error_message=f"HTTP {response.status_code} server error",
                     )
 
             except httpx.TimeoutException:
-                logger.warning(f"Webhook delivery to {url} timed out (attempt: {attempt + 1}/{max_retries})")
+                logger.warning(f"Webhook delivery to {url} timed out (attempt: {attempt_one_based}/{max_retries})")
+                self._record_delivery_log(
+                    tenant_id=log_tenant_id,
+                    principal_id=log_principal_id,
+                    media_buy_id=log_media_buy_id,
+                    url=url,
+                    delivery_payload=log_delivery_payload,
+                    attempt=attempt_one_based,
+                    status="failed" if attempt_one_based == max_retries else "retrying",
+                    sequence_number=log_sequence_number,
+                    notification_type=log_notification_type,
+                    error_message="timeout",
+                )
             except httpx.RequestError as e:
-                logger.warning(f"Webhook delivery to {url} failed: {e} (attempt: {attempt + 1}/{max_retries})")
+                logger.warning(f"Webhook delivery to {url} failed: {e} (attempt: {attempt_one_based}/{max_retries})")
+                self._record_delivery_log(
+                    tenant_id=log_tenant_id,
+                    principal_id=log_principal_id,
+                    media_buy_id=log_media_buy_id,
+                    url=url,
+                    delivery_payload=log_delivery_payload,
+                    attempt=attempt_one_based,
+                    status="failed" if attempt_one_based == max_retries else "retrying",
+                    sequence_number=log_sequence_number,
+                    notification_type=log_notification_type,
+                    error_message=f"connection error: {e}",
+                )
             except Exception as e:
                 logger.error(f"Unexpected error delivering to {url}: {e}", exc_info=True)
+                self._record_delivery_log(
+                    tenant_id=log_tenant_id,
+                    principal_id=log_principal_id,
+                    media_buy_id=log_media_buy_id,
+                    url=url,
+                    delivery_payload=log_delivery_payload,
+                    attempt=attempt_one_based,
+                    status="failed",
+                    sequence_number=log_sequence_number,
+                    notification_type=log_notification_type,
+                    error_message=f"unexpected error: {e}",
+                )
                 break
 
         # All retries failed
         circuit_breaker.record_failure()
         return False
+
+    @staticmethod
+    def _record_delivery_log(
+        *,
+        tenant_id: str,
+        principal_id: str,
+        media_buy_id: str,
+        url: str,
+        delivery_payload: dict,
+        attempt: int,
+        status: str,
+        sequence_number: int,
+        notification_type: str | None,
+        http_status_code: int | None = None,
+        response_body: str | None = None,
+        response_time_ms: int | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Persist one webhook_delivery_log row per attempt.
+
+        Best-effort: a DB failure must NEVER block the webhook delivery
+        itself. Caller swallows exceptions. Truncation of the request
+        payload + response body (~64KB cap) happens inside
+        ``DeliveryRepository.create_log``.
+
+        Each attempt gets a fresh row id (uuid4) so retries are
+        observable as distinct entries — buyers calling
+        ``get_media_buys`` with ``ext.psa.include_webhook_activity``
+        see "attempt 1 → 503, attempt 2 → 200" rather than just the
+        final state.
+        """
+        from uuid import uuid4
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.delivery import DeliveryRepository
+
+        try:
+            payload_size = len(json.dumps(delivery_payload).encode("utf-8"))
+        except (TypeError, ValueError):
+            payload_size = None
+
+        try:
+            with get_db_session() as session:
+                repo = DeliveryRepository(session, tenant_id)
+                repo.create_log(
+                    log_id=str(uuid4()),
+                    principal_id=principal_id,
+                    media_buy_id=media_buy_id,
+                    webhook_url=url,
+                    task_type="delivery_report",
+                    status=status,
+                    attempt_count=attempt,
+                    sequence_number=sequence_number,
+                    notification_type=notification_type,
+                    http_status_code=http_status_code,
+                    error_message=error_message,
+                    payload_size_bytes=payload_size,
+                    response_time_ms=response_time_ms,
+                    completed_at=datetime.now(UTC) if status == "success" else None,
+                    request_payload=delivery_payload,
+                    response_body=response_body,
+                )
+                session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to persist webhook_delivery_log entry " "(tenant=%s, media_buy=%s, attempt=%d): %s",
+                tenant_id,
+                media_buy_id,
+                attempt,
+                exc,
+            )
 
     def reset_sequence(self, media_buy_id: str):
         """Reset sequence number for a media buy.
