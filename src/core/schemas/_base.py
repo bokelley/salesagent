@@ -357,19 +357,19 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None  # type: ignore[assignment]
 
-    # Internal fields (excluded from AdCP responses)
+    # workflow_step_id is surfaced on the wire so buyers can disambiguate
+    # "deferred for approval" from "applied with no package effect" —
+    # both otherwise serialize to the same {media_buy_id, affected_packages: []}
+    # envelope. AdCP UpdateMediaBuyResponse1 has `extra='allow'`, so the
+    # extra field is permitted. None values are dropped by exclude_none on
+    # the wire boundary, so immediate-apply responses don't leak the field.
     workflow_step_id: str | None = None
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
-        """Serialize model, excluding internal fields by default."""
+        """Serialize model — keeps workflow_step_id for deferred-state signal."""
         # Get base serialization
         data = serializer(self)
-
-        # Exclude workflow_step_id from protocol responses
-        # (unless explicitly requested via model_dump_internal)
-        if not info.context or not info.context.get("include_internal"):
-            data.pop("workflow_step_id", None)
 
         # Explicitly serialize affected_packages to ensure AffectedPackage.model_dump() is called
         # This ensures internal fields (changes_applied, buyer_package_ref) are excluded via exclude=True
@@ -399,10 +399,15 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
+        if self.workflow_step_id and not self.affected_packages:
+            return (
+                f"Media buy {self.media_buy_id} update queued for seller approval "
+                f"(workflow step {self.workflow_step_id}). Poll the workflow step for "
+                f"the final outcome."
+            )
         if self.affected_packages:
             return f"Media buy {self.media_buy_id} updated: {len(self.affected_packages)} package(s) affected."
-        else:
-            return f"Media buy {self.media_buy_id} updated successfully."
+        return f"Media buy {self.media_buy_id} updated successfully."
 
 
 class UpdateMediaBuyError(AdCPUpdateMediaBuyError):

@@ -453,6 +453,11 @@ def _update_media_buy_impl(
                 media_buy_id=req.media_buy_id or "",
                 affected_packages=[],  # Not yet applied — pending approval
                 context=req.context,
+                # Surface the workflow step id so buyers can disambiguate
+                # "deferred for approval" from "applied with no package
+                # effect" — both otherwise serialize to the same envelope
+                # shape. (#158)
+                workflow_step_id=step.step_id,
             )
             approval_data = approval_response.model_dump(mode="json")
             approval_data["request_data"] = req.model_dump(mode="json")
