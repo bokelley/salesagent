@@ -23,6 +23,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 
 from alembic import op
+from src.core.database.json_type import JSONType
 
 revision: str = "cca52ba4ec44"
 down_revision: str | Sequence[str] | None = "f81308a72e28"
@@ -33,7 +34,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column(
         "webhook_delivery_log",
-        sa.Column("request_payload", sa.JSON(), nullable=True),
+        sa.Column("request_payload", JSONType(), nullable=True),
     )
     op.add_column(
         "webhook_delivery_log",

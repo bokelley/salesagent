@@ -80,14 +80,18 @@ class TestDeliveryRepositoryTruncation:
         )
         factory_session.commit()
 
-        stored = repo.get_log_by_id(log_id) if hasattr(repo, "get_log_by_id") else None
-        # Repository doesn't expose get_log_by_id; pull via list instead.
+        # Sentinel namespaces under ``_meta`` so consumers can
+        # distinguish "real payload" from "metadata replacement" by
+        # checking ``_meta`` membership rather than guessing from
+        # leaked underscore-prefixed keys.
         logs = repo.list_logs_for_media_buy(buy.media_buy_id, limit=1)
         stored = logs[0]
         assert stored.request_payload is not None
-        assert stored.request_payload.get("_truncated") is True
-        assert stored.request_payload.get("_original_size_bytes", 0) > 64 * 1024
-        assert "_preview" in stored.request_payload
+        assert "_meta" in stored.request_payload
+        meta = stored.request_payload["_meta"]
+        assert meta.get("truncated") is True
+        assert meta.get("original_size_bytes", 0) > 64 * 1024
+        assert "preview" in meta
 
     def test_small_request_payload_passes_through(self, factory_session):
         tenant = TenantFactory()

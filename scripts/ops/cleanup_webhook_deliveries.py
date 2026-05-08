@@ -28,10 +28,8 @@ from pathlib import Path
 # Ensure ``src.*`` imports resolve when running this as a stand-alone script.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from sqlalchemy import delete  # noqa: E402
-
 from src.core.database.database_session import get_db_session  # noqa: E402
-from src.core.database.models import WebhookDeliveryLog  # noqa: E402
+from src.core.database.repositories.delivery import DeliveryRepository  # noqa: E402
 
 logger = logging.getLogger("cleanup_webhook_deliveries")
 
@@ -63,7 +61,8 @@ def cleanup(retention_days: int, dry_run: bool = False) -> int:
     """Delete (or count, in dry-run) webhook_delivery_log rows older than the cutoff.
 
     Returns the number of rows affected (or that would be affected in
-    dry-run).
+    dry-run). DELETE statement uses ``rowcount`` directly — no
+    pre-count + delete race window. Pre-count only runs on dry-run.
     """
     if retention_days < 1:
         raise ValueError("retention_days must be >= 1")
@@ -72,16 +71,13 @@ def cleanup(retention_days: int, dry_run: bool = False) -> int:
     logger.info("Cutoff: %s (retention=%d days, dry_run=%s)", cutoff.isoformat(), retention_days, dry_run)
 
     with get_db_session() as session:
-        count_stmt = (
-            session.query(WebhookDeliveryLog).filter(WebhookDeliveryLog.created_at < cutoff).count()  # type: ignore[attr-defined]
-        )
-        logger.info("Rows older than cutoff: %d", count_stmt)
-        if dry_run or count_stmt == 0:
-            return count_stmt
+        if dry_run:
+            count = DeliveryRepository.count_logs_older_than(session, cutoff)
+            logger.info("Rows older than cutoff: %d (dry-run, not deleted)", count)
+            return count
 
-        result = session.execute(delete(WebhookDeliveryLog).where(WebhookDeliveryLog.created_at < cutoff))
+        affected = DeliveryRepository.delete_logs_older_than(session, cutoff)
         session.commit()
-        affected = result.rowcount or 0
         logger.info("Deleted %d webhook_delivery_log rows", affected)
         return affected
 

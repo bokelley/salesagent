@@ -234,12 +234,19 @@ class DeliveryRepository:
 
     @classmethod
     def _truncate_request_payload(cls, payload: dict | None) -> dict | None:
-        """Truncate a JSON payload to ~64KB on the wire.
+        """Truncate or replace a JSON payload to ~64KB.
 
-        Returns the original dict if it fits. If oversized, returns a
-        replacement dict ``{"_truncated": True, "_original_size_bytes": N,
-        "_preview": <first 4KB of stringified payload>}`` so debug
-        viewers see something useful without storing the whole blob.
+        Shape contract for buyer-visible consumers:
+        - Returns the original dict unchanged if it fits and is
+          serializable (this is the common case — buyers see exactly the
+          AdCP webhook body we sent).
+        - On overflow / unserializable input, returns a sentinel dict
+          with a single ``_meta`` key:
+          ``{"_meta": {"truncated": True, "original_size_bytes": N,
+          "preview": <first 4KB of stringified payload>}}``
+          so consumers can distinguish "real payload" from "metadata
+          replacement" by checking ``_meta`` membership rather than
+          guessing from leaked underscore-prefixed keys.
         """
         if payload is None:
             return None
@@ -248,24 +255,47 @@ class DeliveryRepository:
         try:
             encoded = json.dumps(payload)
         except (TypeError, ValueError):
-            return {"_truncated": True, "_reason": "unserializable"}
-        if len(encoded.encode("utf-8")) <= cls._BODY_TRUNCATION_BYTES:
+            return {"_meta": {"truncated": True, "reason": "unserializable"}}
+        size = len(encoded.encode("utf-8"))
+        if size <= cls._BODY_TRUNCATION_BYTES:
             return payload
         return {
-            "_truncated": True,
-            "_original_size_bytes": len(encoded.encode("utf-8")),
-            "_preview": encoded[:4096],
+            "_meta": {
+                "truncated": True,
+                "original_size_bytes": size,
+                "preview": encoded[:4096],
+            }
         }
 
     @classmethod
     def _truncate_response_body(cls, body: str | None) -> str | None:
-        """Truncate a response body to ~64KB. Appends a marker on overflow."""
+        """Truncate a response body to ~64KB.
+
+        Plain ASCII / valid UTF-8 bodies get sliced at the byte boundary
+        with a ``[truncated]`` marker appended. If the body is not
+        decodable as UTF-8 (binary error pages, gzipped HTML, etc.)
+        we replace the whole field with a sentinel string rather than
+        silently producing a partially-stripped garbage string from
+        ``decode(errors='ignore')``.
+        """
         if body is None:
             return None
         encoded = body.encode("utf-8")
-        if len(encoded) <= cls._BODY_TRUNCATION_BYTES:
+        size = len(encoded)
+        if size <= cls._BODY_TRUNCATION_BYTES:
             return body
-        return encoded[: cls._BODY_TRUNCATION_BYTES].decode("utf-8", errors="ignore") + "\n... [truncated]"
+        # Try to slice at the byte boundary and decode strictly. If the
+        # cut lands mid-multibyte, walk back up to 3 bytes until we
+        # find a valid prefix. If nothing decodes (rare — implies
+        # invalid UTF-8 in the original body too), fall through to the
+        # binary sentinel.
+        for end in range(cls._BODY_TRUNCATION_BYTES, max(0, cls._BODY_TRUNCATION_BYTES - 4), -1):
+            try:
+                prefix = encoded[:end].decode("utf-8")
+                return prefix + "\n... [truncated]"
+            except UnicodeDecodeError:
+                continue
+        return f"<binary response, {size} bytes, not stored>"
 
     def create_log(
         self,
@@ -323,6 +353,40 @@ class DeliveryRepository:
         self._session.merge(log_entry)
         self._session.flush()
         return log_entry
+
+    # ------------------------------------------------------------------
+    # WebhookDeliveryLog cross-tenant maintenance (retention)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def delete_logs_older_than(session: Session, cutoff: datetime) -> int:
+        """Delete every webhook_delivery_log row with ``created_at < cutoff``.
+
+        Tenant-agnostic — used by the retention script which prunes
+        across the whole table. Returns the rowcount of the DELETE.
+        Caller commits.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        result = session.execute(sa_delete(WebhookDeliveryLog).where(WebhookDeliveryLog.created_at < cutoff))
+        # CursorResult.rowcount is set after a DELETE on the SA 2.0 dialect.
+        rowcount = getattr(result, "rowcount", 0) or 0
+        return int(rowcount)
+
+    @staticmethod
+    def count_logs_older_than(session: Session, cutoff: datetime) -> int:
+        """Count rows that ``delete_logs_older_than`` would delete.
+
+        Used for ``--dry-run`` reporting in the retention script.
+        Tenant-agnostic.
+        """
+        from sqlalchemy import func as sa_func
+
+        return int(
+            session.execute(
+                select(sa_func.count()).select_from(WebhookDeliveryLog).where(WebhookDeliveryLog.created_at < cutoff)
+            ).scalar_one()
+        )
 
     # ------------------------------------------------------------------
     # WebhookDeliveryLog reads — for #101 buyer self-debug surface
