@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types import ContextObject, CreativeAction, CreativeAsset, Error
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
@@ -186,7 +186,7 @@ def _sync_creatives_impl(
                             action="failed",
                             status=None,
                             platform_id=None,
-                            errors=[error_msg],
+                            errors=[Error(code="validation_failed", message=error_msg)],
                             review_feedback=None,
                             assigned_to=None,
                             assignment_errors=None,
@@ -265,7 +265,9 @@ def _sync_creatives_impl(
                             failed_creatives.append(
                                 {
                                     "creative_id": existing_creative.creative_id,
-                                    "error": update_result.errors[0] if update_result.errors else "Unknown error",
+                                    "error": update_result.errors[0].message
+                                    if update_result.errors
+                                    else "Unknown error",
                                     "format": creative.format_id,
                                 }
                             )
@@ -326,7 +328,9 @@ def _sync_creatives_impl(
                             failed_creatives.append(
                                 {
                                     "creative_id": creative_id,
-                                    "error": create_result.errors[0] if create_result.errors else "Unknown error",
+                                    "error": create_result.errors[0].message
+                                    if create_result.errors
+                                    else "Unknown error",
                                     "format": creative.format_id,
                                 }
                             )
@@ -373,7 +377,7 @@ def _sync_creatives_impl(
                         action="failed",
                         status=None,
                         platform_id=None,
-                        errors=[error_msg],
+                        errors=[Error(code="processing_failed", message=error_msg)],
                         review_feedback=None,
                         assigned_to=None,
                         assignment_errors=None,
