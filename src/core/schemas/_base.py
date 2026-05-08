@@ -1134,16 +1134,12 @@ class AIReviewPolicy(SalesAgentBaseModel):
 
 
 class CreativePolicy(LibraryCreativePolicy):
-    """Extends library CreativePolicy with AI provenance requirements.
+    """Local alias for adcp ``CreativePolicy``.
 
-    Library provides: co_branding, landing_page, templates_available.
-    Local extension adds provenance_required for EU AI Act Article 50 compliance.
+    Library covers co_branding, landing_page, templates_available, and the
+    full provenance_required + provenance_requirements EU AI Act Article 50
+    surface. Subclass kept as a customization hook.
     """
-
-    provenance_required: bool | None = Field(
-        default=None,
-        description="When True, creatives must include AI provenance metadata (EU AI Act Article 50)",
-    )
 
 
 # --- Core Schemas ---
