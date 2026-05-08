@@ -249,6 +249,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "toggle_user"),
     ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "_replay_update_media_buy"),  # select(Context) — replay path from #229
+    ("src/core/tools/media_buy_create.py", "push_creative_to_existing_buy"),  # select(Tenant) — pre-approval gate from #249
     ("src/admin/blueprints/workflows.py", "approve_workflow_step"),  # select(CreativeAssignment) — no creative repo yet
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
