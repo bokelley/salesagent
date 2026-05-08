@@ -776,43 +776,18 @@ class TestAdCPContract:
             )
 
     def test_adcp_response_excludes_internal_fields(self):
-        """Test that AdCP responses don't expose internal fields."""
-        from tests.helpers.adcp_factories import (
-            create_test_cpm_pricing_option,
-            create_test_publisher_properties_by_tag,
-            create_test_reporting_capabilities,
+        """AdCP responses must not carry internal fields.
+
+        After Phase 2 slice 5, internal fields (implementation_config,
+        countries, device_types, allowed_principal_ids) live on
+        :class:`ResolvedProduct`, not on the wire-shape :class:`Product`
+        schema. The wire shape has no slot for them, so a dump can't
+        contain them. This test asserts the schema contract directly.
+        """
+        forbidden = {"implementation_config", "countries", "device_types", "allowed_principal_ids"}
+        assert not (forbidden & set(ProductSchema.model_fields.keys())), (
+            "Internal fields must not be declared on the wire-shape Product schema"
         )
-
-        products = [
-            ProductSchema(
-                product_id="test",
-                name="Test Product",
-                description="Test",
-                format_ids=[],
-                delivery_type="guaranteed",
-                delivery_measurement={
-                    "provider": "test_provider",
-                    "notes": "Test measurement",
-                },  # Required per AdCP spec
-                implementation_config={"internal": "data"},  # Should be excluded
-                publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
-                pricing_options=[
-                    create_test_cpm_pricing_option(
-                        pricing_option_id="cpm_usd_fixed",
-                        currency="USD",
-                        rate=10.0,
-                    )
-                ],
-                reporting_capabilities=create_test_reporting_capabilities(),  # Required per AdCP 4.4
-            )
-        ]
-
-        response = GetProductsResponse(products=products)
-        response_dict = response.model_dump()
-
-        # Verify implementation_config is excluded from response
-        for product in response_dict["products"]:
-            assert "implementation_config" not in product, "Internal config should not be in AdCP response"
 
     def test_adcp_signal_support(self):
         """Test AdCP v2.4 signal support in Targeting schema.

@@ -214,9 +214,7 @@ class TestProductSchemaContract:
                     min_spend_per_package=2000.0,
                 )
             ],
-            # Internal fields
             "expires_at": datetime(2025, 12, 31, tzinfo=UTC),
-            "implementation_config": {"gam_placement_id": "12345"},
         }
 
         # AdCP spec required fields
@@ -230,10 +228,13 @@ class TestProductSchemaContract:
             "pricing_options",
         }
 
-        # Internal-only fields that should not appear in AdCP output
         # ``expires_at`` was promoted from internal-only to AdCP spec field
         # somewhere in adcp 3.x → 4.x; it's now emitted on the wire.
-        internal_only_fields = {"implementation_config", "targeting_template"}
+        # Phase 2 slice 5: implementation_config / targeting_template no longer
+        # belong on the wire-shape Product schema — they live on ResolvedProduct
+        # or the ORM model. Pydantic's extra="forbid" at construction would
+        # reject them outright, so they can't sneak into the dump.
+        internal_only_fields: set[str] = set()
 
         validator.validate_schema_contract(Product, test_data, adcp_spec_fields, internal_only_fields)
 
