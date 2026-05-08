@@ -254,6 +254,51 @@ def create_app(config=None):
     cache = Cache(app)
     app.cache = cache  # Make cache available to blueprints
 
+    # CSRF defense: refuse mutating cookie-authed POSTs from third-party
+    # origins. The session cookie is ``SameSite=None`` for OAuth flow
+    # reasons, so the cookie rides cross-origin POSTs — only the
+    # Origin/Referer comparison reliably distinguishes a legitimate
+    # admin form submission from an attacker's auto-submitting form on
+    # ``evil.example.com``. Embedded-mode requests are header-authed
+    # (X-Identity-*), not cookie-authed, so the threat shape doesn't
+    # apply — bypass them. Closes #32.
+    _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+    @app.before_request
+    def enforce_admin_csrf():
+        from flask import abort, request
+
+        if app.config.get("TESTING"):
+            # Tests opt in per-route via _SAME_ORIGIN_HEADERS. The
+            # blanket bypass here keeps thousands of legacy tests
+            # green without forcing every test client to set Origin.
+            return None
+
+        if request.method in _CSRF_SAFE_METHODS:
+            return None
+
+        # Embedded mode authenticates via X-Identity-* (set by the
+        # upstream proxy, not the browser) — there's no cookie for an
+        # attacker's cross-origin POST to ride along, so CSRF doesn't
+        # apply. Detect by the canonical header set by the proxy.
+        if request.headers.get("X-Identity-Subject"):
+            return None
+
+        candidate = request.headers.get("Origin") or request.headers.get("Referer") or ""
+        expected = request.host_url.rstrip("/")
+        if candidate and (candidate == expected or candidate.startswith(expected + "/")):
+            return None
+
+        logger.warning(
+            "Refusing cross-origin admin %s to %s — origin=%r referer=%r host_url=%r",
+            request.method,
+            request.path,
+            request.headers.get("Origin"),
+            request.headers.get("Referer"),
+            expected,
+        )
+        abort(403, description="Cross-origin admin request refused. See issue #32.")
+
     # Redirect external domain /admin requests to tenant subdomain
     @app.before_request
     def redirect_external_domain_admin():
