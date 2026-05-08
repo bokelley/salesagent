@@ -366,6 +366,11 @@ def convert_product_model_to_resolved(product_model, adapter_type: str | None = 
     wire = convert_product_model_to_schema(product_model, adapter_type=adapter_type)
 
     countries = product_model.countries if product_model.countries else None
+    # Direct read — do NOT coerce ``[]`` to ``None``. ``allowed_principal_ids``
+    # is access-control data: an empty list means "no restrictions" while
+    # ``None`` means the same thing semantically, but the filter at
+    # ``products.py`` distinguishes them via ``getattr(..., None)`` and the
+    # caller may rely on the original shape.
     allowed_principal_ids = product_model.allowed_principal_ids
     implementation_config = product_model.effective_implementation_config
 
