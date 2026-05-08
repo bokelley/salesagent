@@ -38,6 +38,7 @@
     "tests.integration.test_adapter_config_repository,tests.integration.test_gam_adapter_auth",
     "tests.integration.test_adapter_factory,tests.integration.test_gam_adapter_auth",
     "tests.integration.test_basic_media_buy_lifecycle,tests.integration.test_gam_real_media_buy_lifecycle",
+    "tests.integration.test_basic_media_buy_lifecycle,tests.integration.test_targeting_overlay_roundtrip",
     "tests.integration.test_buyer_advertiser_routing,tests.integration.test_gam_advertisers_cache",
     "tests.integration.test_buyer_routing_page,tests.integration.test_embed_breadcrumbs",
     "tests.integration.test_creative_async_lifecycle_obligations,tests.integration.test_creative_sync_processing",

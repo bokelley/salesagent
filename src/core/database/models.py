@@ -2563,4 +2563,16 @@ class TenantSigningCredential(Base):
             "is_active",
             postgresql_where=text("is_active"),
         ),
+        # At-most-one-active per (tenant, purpose). Mirrored in the
+        # alembic migration so production gets the same enforcement.
+        # Without this, two concurrent admin sessions both creating an
+        # active credential succeed; the snapshot loader then picks one
+        # arbitrarily and the operator-published JWKS may list the other.
+        Index(
+            "ux_tenant_signing_credentials_active",
+            "tenant_id",
+            "purpose",
+            unique=True,
+            postgresql_where=text("is_active = TRUE"),
+        ),
     )

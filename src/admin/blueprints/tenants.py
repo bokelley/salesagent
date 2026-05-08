@@ -9,6 +9,7 @@
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime
 
 from babel import numbers as babel_numbers
@@ -656,6 +657,159 @@ def deactivate_tenant(tenant_id):
         logger.error(f"Error deactivating tenant {tenant_id}: {e}", exc_info=True)
         flash(f"Error deactivating sales agent: {str(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
+
+
+# Kid format the salesagent accepts for filename use. The adcp library's
+# ``_default_kid`` returns shapes like ``adcp-ed25519-20260508-abcd``;
+# this regex matches that and rejects anything that could escape the
+# signing-keys directory if a future library release widens the format.
+_SIGNING_KID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def _verify_request_same_origin() -> bool:
+    """Reject signing-key POSTs from third-party origins.
+
+    Browsers always send ``Origin`` on cross-origin POSTs and
+    ``Referer`` on most form submissions; an attacker on
+    ``evil.example.com`` cannot forge either. The cookie's ``SameSite``
+    is set to ``None`` in production for OAuth flow reasons, so
+    SameSite alone is not a CSRF defense — Origin/Referer is.
+    Implemented inline (not Flask-WTF) to keep the dependency surface
+    small; see issue #32 for app-wide CSRF.
+    """
+    candidate = request.headers.get("Origin") or request.headers.get("Referer") or ""
+    if not candidate:
+        return False
+    expected = request.host_url.rstrip("/")
+    return candidate == expected or candidate.startswith(expected + "/")
+
+
+@tenants_bp.route("/<tenant_id>/signing-keys/generate", methods=["POST"])
+@log_admin_action(
+    "generate_webhook_signing_key",
+    extract_details=lambda r, **kw: {"key_id": getattr(r, "_generated_kid", None)},
+)
+@require_tenant_access(role=("admin",))
+def generate_webhook_signing_key(tenant_id):
+    """Generate an Ed25519 keypair for webhook signing.
+
+    Writes the PEM under ``WEBHOOK_SIGNING_KEYS_DIR`` (atomically
+    created with mode 0600 via ``os.open(..., O_EXCL)``) and inserts a
+    ``TenantSigningCredential`` row with ``is_active=True``. If a
+    previous active credential exists, it is rotated out in the same
+    transaction so the partial unique index
+    ``ux_tenant_signing_credentials_active`` invariant holds.
+
+    The session listener in ``src.services.webhook_signing`` evicts
+    the per-process snapshot cache on commit; cross-replica caches
+    converge within the 5-min TTL window.
+    """
+    from adcp.signing.keygen import generate_signing_keypair
+
+    from src.core.database.repositories import TenantSigningCredentialRepository
+    from src.services.webhook_signing import _resolve_signing_keys_dir
+
+    redirect_resp = redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+
+    if not _verify_request_same_origin():
+        flash("Request blocked: cross-origin POST refused.", "error")
+        return redirect_resp
+
+    try:
+        pem_bytes, jwk = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
+        kid = jwk.get("kid")
+        if not kid or not _SIGNING_KID_RE.fullmatch(kid):
+            logger.error(f"Generated kid {kid!r} failed validation against {_SIGNING_KID_RE.pattern!r}")
+            flash("Internal error generating signing key (invalid kid). See logs.", "error")
+            return redirect_resp
+
+        keys_dir = _resolve_signing_keys_dir()
+        keys_dir.mkdir(parents=True, exist_ok=True)
+        pem_path = (keys_dir / f"{tenant_id}-{kid}.pem").resolve()
+        # Containment check: even after symlink/relative-path collapse,
+        # the resolved path must still live under keys_dir. Belt-and-
+        # suspenders alongside the kid regex.
+        if not pem_path.is_relative_to(keys_dir.resolve()):
+            logger.error(f"Computed PEM path {pem_path} escapes keys_dir {keys_dir}")
+            flash("Internal error generating signing key (path traversal). See logs.", "error")
+            return redirect_resp
+
+        # Atomic create with mode 0600 baked in — never exists transiently
+        # at a wider mode. ``O_EXCL`` refuses to overwrite, so a kid
+        # collision (essentially impossible given 4 hex chars of entropy
+        # in adcp's _default_kid) fails loudly instead of silently
+        # clobbering a still-active key.
+        fd = os.open(str(pem_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, pem_bytes)
+        finally:
+            os.close(fd)
+
+        with get_db_session() as db_session:
+            repo = TenantSigningCredentialRepository(db_session, tenant_id=tenant_id)
+            existing = repo.get_active("webhook-signing")
+            if existing is not None:
+                repo.rotate_out("webhook-signing", existing.key_id)
+            repo.create(
+                purpose="webhook-signing",
+                backend="local_pem",
+                backend_ref=str(pem_path),
+                public_jwk=jwk,
+                key_id=kid,
+            )
+            db_session.commit()
+
+        # Stash the kid on the response so ``log_admin_action``'s
+        # ``extract_details`` can record it in the audit row.
+        redirect_resp._generated_kid = kid
+        flash(
+            f"Generated new webhook-signing keypair (kid={kid}). "
+            "Publish the public JWK below to your JWKS endpoint so buyers can verify.",
+            "success",
+        )
+    except Exception:
+        logger.exception(f"Error generating webhook signing key for {tenant_id}")
+        flash("Error generating signing key. See logs for details.", "error")
+    return redirect_resp
+
+
+@tenants_bp.route("/<tenant_id>/signing-keys/<key_id>/rotate-out", methods=["POST"])
+@log_admin_action(
+    "rotate_out_webhook_signing_key",
+    extract_details=lambda r, **kw: {"key_id": kw.get("key_id")},
+)
+@require_tenant_access(role=("admin",))
+def rotate_out_webhook_signing_key(tenant_id, key_id):
+    """Mark a webhook-signing credential inactive.
+
+    The salesagent stops signing with this kid immediately (cache
+    evicted by the session listener on commit). The PEM file on disk
+    is intentionally NOT deleted — buyers may still receive webhooks
+    referencing the old kid in flight, and the verifier-side JWKS
+    can take time to drop the entry.
+    """
+    from src.core.database.repositories import TenantSigningCredentialRepository
+
+    redirect_resp = redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+
+    if not _verify_request_same_origin():
+        flash("Request blocked: cross-origin POST refused.", "error")
+        return redirect_resp
+
+    try:
+        with get_db_session() as db_session:
+            repo = TenantSigningCredentialRepository(db_session, tenant_id=tenant_id)
+            ok = repo.rotate_out("webhook-signing", key_id)
+            if not ok:
+                flash(f"No webhook-signing credential found with kid={key_id!r}.", "error")
+                return redirect_resp
+            db_session.commit()
+
+        flash(f"Rotated out webhook-signing kid={key_id}. Generate a replacement to resume signing.", "success")
+    except Exception:
+        logger.exception(f"Error rotating out signing key {key_id} for {tenant_id}")
+        flash("Error rotating out signing key. See logs for details.", "error")
+    return redirect_resp
 
 
 @tenants_bp.route("/<tenant_id>/media-buys", methods=["GET"])
