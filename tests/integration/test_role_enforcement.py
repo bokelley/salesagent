@@ -78,16 +78,16 @@ class TestAdminOnlyMutation:
         # Test super_admin maps to admin role; passes the role gate.
         # Handler then 404s on missing tenant or proceeds — anything BUT
         # 403 means the gate passed.
-        assert (
-            resp.status_code != 403
-        ), f"admin should clear admin-only role gate; got 403: {resp.get_data(as_text=True)[:200]}"
+        assert resp.status_code != 403, (
+            f"admin should clear admin-only role gate; got 403: {resp.get_data(as_text=True)[:200]}"
+        )
 
     def test_member_blocked_with_role_not_authorized(self, app):
         url, method, body = ADMIN_ONLY_MUTATION
         resp = _request(_client_with_role(app, "member"), method, url, body)
-        assert (
-            resp.status_code == 403
-        ), f"member must be blocked from admin-only route: {resp.get_data(as_text=True)[:200]}"
+        assert resp.status_code == 403, (
+            f"member must be blocked from admin-only route: {resp.get_data(as_text=True)[:200]}"
+        )
 
     def test_viewer_blocked(self, app):
         url, method, body = ADMIN_ONLY_MUTATION

@@ -279,8 +279,9 @@ class TestMediaBuyApprovalAsync:
 
         # adcp 4.x: CreateMediaBuySubmitted carries only ``context`` and
         # ``ext`` — ``media_buy_id`` is intentionally not on the wire for the
-        # submitted state. Look up the persisted buy via ObjectWorkflowMapping
-        # instead, which links workflow steps to their object_id.
+        # submitted state (locked in by PR #183). Look up the persisted buy
+        # via ObjectWorkflowMapping instead, which links workflow steps to
+        # their object_id.
         from src.core.database.models import ObjectWorkflowMapping
 
         with get_db_session() as session:

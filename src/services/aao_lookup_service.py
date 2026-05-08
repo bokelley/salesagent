@@ -71,6 +71,15 @@ class PublisherPartnerStatus:
 # (single-worker). Multi-worker deployments will need a Redis-backed cache
 # or accept duplicate fetches across workers (low-cost since adagents.json
 # is a small static JSON file).
+#
+# Note: there's a benign race here — concurrent calls for the same domain
+# can both miss, both fetch, both write. Final state is correct (same
+# adagents.json data), just one wasted HTTP call. We don't add a lock
+# because the contention window is small at 6h TTL and adagents.json is
+# tiny + cacheable upstream. If profiling ever shows duplicate-fetch
+# overhead, single-flight via a per-domain ``threading.Lock`` is the
+# right primitive (asyncio.Lock won't coordinate across the per-request
+# event loops Flask creates).
 _ADAGENTS_TTL_SECONDS = 21600  # 6 hours
 
 _ADAGENTS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -132,12 +141,31 @@ class PublicAgentUrlMismatch(ValueError):
 
 
 def _normalize_hostname_for_compare(host: str) -> str:
-    """Lowercase, strip trailing FQDN dot, strip ``:port`` suffix.
+    """Lowercase, strip trailing FQDN dot, strip ``:port`` suffix, and
+    fold IDN to ASCII (punycode).
 
-    ``virtual_host`` may carry a ``:port`` in dev (``localhost:8001``);
-    ``urlparse`` already strips ports from URLs but a trailing FQDN dot
-    (``example.com.``) sticks around. Normalize both sides identically."""
-    return host.split(":", 1)[0].rstrip(".").lower()
+    Three normalizations on both sides of the comparison:
+
+    - ``virtual_host`` may carry ``:port`` in dev (``localhost:8001``);
+      ``urlparse`` already strips ports from URLs but the comparison
+      side hasn't been parsed.
+    - Trailing FQDN dot (``example.com.``) — valid DNS but
+      ``urlparse`` keeps it in ``hostname`` and ``virtual_host`` storage
+      generally doesn't.
+    - IDN: ``bücher.example`` and ``xn--bcher-kva.example`` are the same
+      domain. Without IDN folding, a unicode-stored ``virtual_host`` and
+      a punycode-encoded URL hostname false-mismatch.
+    """
+    base = host.split(":", 1)[0].rstrip(".").lower()
+    if not base or base.isascii():
+        return base
+    try:
+        return base.encode("idna").decode("ascii")
+    except UnicodeError:
+        # Malformed IDN label — fall back to the lowercased unicode
+        # form so the validator still produces a deterministic answer
+        # (it'll just refuse to match anything).
+        return base
 
 
 def validate_public_agent_url_hostname(
