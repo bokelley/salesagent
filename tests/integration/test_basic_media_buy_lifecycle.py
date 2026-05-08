@@ -244,8 +244,13 @@ class TestMediaBuyApprovalAsync:
     async def test_human_review_required_creates_workflow_step_then_executes(
         self, sample_tenant, sample_principal, sample_products
     ):
-        """tenant.human_review_required=True → create_media_buy returns
-        status='submitted'; execute_approved_media_buy transitions to active."""
+        """tenant.human_review_required=True → create_media_buy returns the
+        sync-success envelope (variant-1) carrying ``media_buy_id`` and
+        ``MediaBuyStatus.pending_creatives`` (no creatives in this request);
+        a ``requires_approval`` workflow_step is parked for the human;
+        execute_approved_media_buy then transitions the buy to active."""
+        from adcp.types import MediaBuyStatus
+
         from src.core.database.models import MediaBuy as DBMediaBuy
         from src.core.database.models import WorkflowStep
         from src.core.schemas import CreateMediaBuyRequest
@@ -273,16 +278,16 @@ class TestMediaBuyApprovalAsync:
         )
         result = await _create_media_buy_impl(req=req, identity=identity)
 
+        # Variant-1 (sync-success): the buy is minted synchronously with a
+        # ``MediaBuyStatus`` describing what's blocking activation. Without
+        # creatives in the request that's ``pending_creatives``. The wrapper
+        # ``status`` reports the seller's task as ``completed`` (sync work done).
         assert (
-            result.status == "submitted"
-        ), f"Expected submitted, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
-
-        # adcp 4.x: CreateMediaBuySubmitted carries only ``context`` and
-        # ``ext`` — ``media_buy_id`` is intentionally not on the wire for the
-        # submitted state (locked in by PR #183). Look up the persisted buy
-        # via ObjectWorkflowMapping instead, which links workflow steps to
-        # their object_id.
-        from src.core.database.models import ObjectWorkflowMapping
+            result.status == "completed"
+        ), f"Expected completed, got status={result.status}, errors={getattr(result.response, 'errors', None)}"
+        media_buy_id = result.response.media_buy_id
+        assert media_buy_id
+        assert result.response.status == MediaBuyStatus.pending_creatives
 
         with get_db_session() as session:
             steps = session.scalars(select(WorkflowStep).where(WorkflowStep.step_type == "media_buy_creation")).all()
@@ -290,14 +295,6 @@ class TestMediaBuyApprovalAsync:
             assert (
                 approval_steps
             ), f"Expected requires_approval workflow_step, got {[(s.step_id, s.status) for s in steps]}"
-            mapping = session.scalars(
-                select(ObjectWorkflowMapping)
-                .where(ObjectWorkflowMapping.object_type == "media_buy")
-                .where(ObjectWorkflowMapping.step_id == approval_steps[0].step_id)
-            ).first()
-            assert mapping is not None, "ObjectWorkflowMapping must link approval step to a media buy"
-            media_buy_id = mapping.object_id
-        assert media_buy_id
 
         # Execute approval.
         success, error = execute_approved_media_buy(

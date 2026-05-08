@@ -153,7 +153,6 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
-    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -249,6 +248,28 @@ def _determine_media_buy_status(
 
     # Priority 3: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
+
+
+def _request_has_creatives(req: CreateMediaBuyRequest) -> bool:
+    """True if the request carries any creative references (ids or inline objects).
+
+    Used to pick the spec ``MediaBuyStatus`` for a synchronously-minted buy:
+    when no creatives accompany the request, the buyer's next step is to call
+    ``sync_creatives``, which corresponds to ``MediaBuyStatus.pending_creatives``.
+    When creatives are already present, the buy is awaiting governance/start
+    rather than creatives, which corresponds to ``MediaBuyStatus.pending_start``.
+    """
+    if not req.packages:
+        return False
+    for pkg in req.packages:
+        # Local PackageRequest extension: list of pre-uploaded creative ids
+        if _get_creative_ids(pkg):
+            return True
+        # adcp PackageRequest: inline ``creatives`` list (full creative objects)
+        inline = getattr(pkg, "creatives", None)
+        if inline:
+            return True
+    return False
 
 
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
@@ -2491,21 +2512,32 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Async-pending-approval path — emit the spec's submitted envelope.
-            # Per ``create_media_buy_response`` (variant-3), the async shape carries
-            # ``status='submitted'`` and a ``task_id`` handle, and does NOT carry
-            # ``media_buy_id`` or ``packages`` (those belong to variant-1, whose
-            # ``status`` is a ``MediaBuyStatus`` and excludes 'submitted'). The
-            # ``media_buy_id`` is issued on the completion artifact (post-approval),
-            # not here. Buyers poll via ``tasks/get`` using ``task_id``.
+            # Manual-approval workflow with a synchronously-minted buy — emit
+            # variant-1 of ``create_media_buy_response`` (the sync-success
+            # shape) carrying ``media_buy_id``, ``packages``, and the spec
+            # ``MediaBuyStatus`` that reflects what's blocking activation:
+            #   - no creatives on the request → ``pending_creatives`` (buyer's
+            #     next call is ``sync_creatives``);
+            #   - creatives present → ``pending_start`` (awaiting human
+            #     governance and/or start time).
+            # Variant-3 (``status='submitted'`` + ``task_id``, no
+            # ``media_buy_id``) is reserved for genuinely async cases where
+            # the seller hasn't minted a buy yet. Here the buy is already in
+            # the DB with a permanent id, so withholding it from the buyer
+            # forces them through a polling round-trip and breaks downstream
+            # tools that key off ``media_buy_id``.
+            buy_status = (
+                MediaBuyStatus.pending_start if _request_has_creatives(req) else MediaBuyStatus.pending_creatives
+            )
             return CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    message=f"Media buy {media_buy_id} submitted; awaiting human review.",
+                response=CreateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    packages=pending_packages,
+                    status=buy_status,
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
-                status=AdcpTaskStatus.submitted.value,
+                status=AdcpTaskStatus.completed.value,
             )
 
         # Get products for the media buy to check product-level auto-creation settings
@@ -2660,17 +2692,24 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            # Tenant- or product-config-driven approval requirement: emit the
-            # spec's submitted envelope (variant-3 of create_media_buy_response).
-            # See the manual-approval branch above for the contract rationale.
+            # Tenant- or product-config-driven approval requirement with a
+            # synchronously-minted buy — emit variant-1 (sync-success) carrying
+            # ``media_buy_id``, ``packages``, and the spec ``MediaBuyStatus``
+            # that reflects what's blocking activation. See the manual-approval
+            # branch above for the rationale on why this is variant-1, not
+            # variant-3.
+            buy_status = (
+                MediaBuyStatus.pending_start if _request_has_creatives(req) else MediaBuyStatus.pending_creatives
+            )
             return CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    message=f"Media buy {media_buy_id} submitted; {reason.lower()} requires approval.",
+                response=CreateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    packages=response_packages,
+                    status=buy_status,
                     workflow_step_id=step.step_id,
                     context=req.context,
                 ),
-                status=AdcpTaskStatus.submitted.value,
+                status=AdcpTaskStatus.completed.value,
             )
 
         # Continue with synchronized media buy creation
@@ -2790,9 +2829,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[
-                    tuple[str | None, str], tuple[int | None, int | None, float | None]
-                ] = {}
+                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
+                    {}
+                )
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
