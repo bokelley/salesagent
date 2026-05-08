@@ -166,6 +166,42 @@ class WorkflowRepository:
             )
         ).first()
 
+    def find_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        principal_id: str,
+        tool_name: str,
+    ) -> WorkflowStep | None:
+        """Find an existing workflow step by ``idempotency_key`` within (tenant, principal, tool).
+
+        Defence-in-depth on the SDK's post-hoc ``IdempotencyStore.wrap``. The
+        SDK caches the response after the handler completes, so two
+        sequential same-key calls hitting the impl before the first commits
+        both reach the same code path. Returning the earliest matching
+        step lets the impl replay deterministically — no additional state
+        is mutated, no second adapter call is made.
+
+        Args:
+            idempotency_key: Buyer-supplied key extracted from
+                ``request_data["idempotency_key"]``.
+            principal_id: Caller's principal id (scoped via ``Context``).
+            tool_name: ``WorkflowStep.tool_name`` to match (e.g.
+                ``"update_media_buy"``).
+
+        Returns the earliest step matching the key, or ``None``.
+        """
+        return self._session.scalars(
+            select(WorkflowStep)
+            .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+            .where(
+                DBContext.tenant_id == self._tenant_id,
+                DBContext.principal_id == principal_id,
+                WorkflowStep.tool_name == tool_name,
+                WorkflowStep.request_data["idempotency_key"].as_string() == idempotency_key,
+            )
+            .order_by(asc(WorkflowStep.created_at))
+        ).first()
+
     def get_mappings_for_step(self, step_id: str) -> list[ObjectWorkflowMapping]:
         """Get all object mappings for a workflow step within the tenant."""
         return list(

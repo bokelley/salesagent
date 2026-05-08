@@ -112,7 +112,7 @@ def _get_media_buys_impl(
             errors=[{"code": "principal_id_missing", "message": "Principal ID not found in context"}],
         )
 
-    principal = get_principal_object(principal_id)
+    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],

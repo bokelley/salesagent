@@ -462,6 +462,62 @@ class TestGetMediaBuysImpl:
         assert package.targeting_overlay.collection_list is not None
         assert package.targeting_overlay.collection_list.list_id == "acme_outdoor_collections_v1"
 
+    @patch("src.core.tools.media_buy_list.MediaBuyUoW")
+    @patch("src.core.tools.media_buy_list._fetch_target_media_buys")
+    @patch("src.core.tools.media_buy_list._fetch_packages")
+    @patch("src.core.tools.media_buy_list._fetch_creative_approvals")
+    def test_does_not_rely_on_thread_local_tenant_context(
+        self,
+        mock_fetch_approvals,
+        mock_fetch_packages,
+        mock_fetch_buys,
+        mock_uow_cls,
+    ):
+        """_impl must pass identity.tenant_id explicitly — never depend on thread-local.
+
+        Regression for production RuntimeError("No tenant context set") on the
+        deployed Wonderstruck staging:
+
+            File "/app/src/core/tools/media_buy_list.py", line 115, in _get_media_buys_impl
+                principal = get_principal_object(principal_id)
+            File "/app/src/core/auth.py", line 294, in get_principal_object
+                tenant = get_current_tenant()
+            File "/app/src/core/config_loader.py", line 93, in get_current_tenant
+                raise RuntimeError("No tenant context set...")
+
+        ``_impl`` is transport-agnostic — the MCP transport does not set the
+        thread-local tenant ContextVar before invoking it. The fix is to pass
+        ``tenant_id=identity.tenant_id`` so ``get_principal_object`` skips the
+        ``get_current_tenant()`` fallback entirely.
+
+        We patch ``src.core.auth.get_current_tenant`` to raise. If ``_impl``
+        passes ``tenant_id`` explicitly, ``get_principal_object`` never reaches
+        that branch and the call succeeds.
+        """
+        mock_fetch_buys.return_value = []
+        mock_fetch_packages.return_value = {}
+        mock_fetch_approvals.return_value = {}
+
+        with patch(
+            "src.core.auth.get_current_tenant",
+            side_effect=RuntimeError("thread-local tenant context must not be read by _impl"),
+        ):
+            with patch("src.core.auth.get_db_session") as mock_db:
+                # Make get_principal_object return a principal-shaped row
+                principal_row = MagicMock()
+                principal_row.principal_id = "principal_1"
+                principal_row.name = "Test Principal"
+                principal_row.platform_mappings = {}
+                mock_session = MagicMock()
+                mock_session.scalars.return_value.first.return_value = principal_row
+                mock_db.return_value.__enter__.return_value = mock_session
+
+                req = self._make_request()
+                # Must not raise RuntimeError: identity.tenant_id satisfies the lookup.
+                response = _get_media_buys_impl(req, identity=make_identity())
+
+        assert response.media_buys == []
+
 
 class TestGetMediaBuysResponseStructure:
     """Tests for response schema compliance."""
