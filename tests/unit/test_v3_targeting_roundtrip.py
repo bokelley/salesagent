@@ -47,7 +47,7 @@ class TestV3ConstructRoundtrip:
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["602"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
             device_type_any_of=["mobile", "desktop"],
-            frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"},
+            frequency_cap={"max_impressions": 5, "suppress_minutes": 60},
         )
         d1 = t.model_dump(exclude_none=True)
         t2 = _roundtrip(t)
@@ -216,26 +216,24 @@ class TestLegacyNormalizerRoundtrip:
 # FrequencyCap Roundtrip
 # ---------------------------------------------------------------------------
 class TestFrequencyCapRoundtrip:
-    def test_freq_cap_scope_roundtrip(self):
-        """scope='package' survives dump -> reconstruct."""
-        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"})
+    def test_freq_cap_roundtrip(self):
+        """FrequencyCap survives dump -> reconstruct."""
+        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60})
         d1 = t.model_dump(exclude_none=True)
         t2 = _roundtrip(t)
         d2 = t2.model_dump(exclude_none=True)
-        assert d1["frequency_cap"]["scope"] == "package"
         assert d1 == d2
 
     def test_freq_cap_suppress_float_roundtrip(self):
         """Float suppress_minutes value survives roundtrip."""
-        t = Targeting(frequency_cap={"max_impressions": 3, "suppress_minutes": 45.5, "scope": "media_buy"})
+        t = Targeting(frequency_cap={"max_impressions": 3, "suppress_minutes": 45.5})
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.suppress_minutes == 45.5
 
     def test_freq_cap_json_roundtrip(self):
         """FrequencyCap through JSON storage roundtrip."""
-        t = Targeting(frequency_cap={"max_impressions": 10, "suppress_minutes": 120, "scope": "package"})
+        t = Targeting(frequency_cap={"max_impressions": 10, "suppress_minutes": 120})
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.max_impressions == 10
         assert t2.frequency_cap.suppress_minutes == 120.0
-        assert t2.frequency_cap.scope == "package"
         assert isinstance(t2.frequency_cap, FrequencyCap)

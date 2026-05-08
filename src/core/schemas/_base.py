@@ -810,13 +810,13 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
 
 
 class FrequencyCap(LibraryFrequencyCap):
-    """Frequency capping extending AdCP library type with scope.
+    """Local alias for adcp ``FrequencyCap`` — kept as a customization hook.
 
-    Inherits suppress_minutes: float from library.
-    Adds scope field for media buy vs package level capping.
+    The previous ``scope`` extension was wire-visible but never read by any
+    adapter or impl path. Tracked upstream as adcp RFC #4241; until it
+    lands, callers wanting media-buy vs package distinction can carry it
+    via ``ext.salesagent.scope``.
     """
-
-    scope: Literal["media_buy", "package"] = Field("media_buy", description="Apply at media buy or package level")
 
 
 class TargetingCapability(SalesAgentBaseModel):
