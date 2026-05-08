@@ -813,9 +813,8 @@ class FrequencyCap(LibraryFrequencyCap):
     """Local alias for adcp ``FrequencyCap`` — kept as a customization hook.
 
     The previous ``scope`` extension was wire-visible but never read by any
-    adapter or impl path. Tracked upstream as adcp RFC #4241; until it
-    lands, callers wanting media-buy vs package distinction can carry it
-    via ``ext.salesagent.scope``.
+    adapter or impl path. Tracked upstream as adcp RFC #4240; until that
+    lands, the media-buy vs package distinction is not preserved.
     """
 
 
