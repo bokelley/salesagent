@@ -1554,36 +1554,6 @@ class AssetStatus(SalesAgentBaseModel):
     workflow_step_id: str | None = None  # HITL workflow step ID for manual approval
 
 
-# Unified update models
-class PackageUpdate(SalesAgentBaseModel):
-    """Updates to apply to a specific package."""
-
-    package_id: str
-    active: bool | None = None  # True to activate, False to pause
-    budget: float | None = Field(None, ge=0)  # Budget allocation in the currency specified by the pricing option
-    impressions: int | None = None  # Direct impression goal (overrides budget calculation)
-    cpm: float | None = None  # Update CPM rate
-    daily_budget: float | None = None  # Daily spend cap
-    daily_impressions: int | None = None  # Daily impression cap
-    pacing: Literal["even", "asap", "front_loaded"] | None = None
-    creative_ids: list[str] | None = None  # Update creative assignments
-    targeting_overlay: Targeting | None = None  # Package-specific targeting refinements
-
-
-class UpdatePackageRequest(SalesAgentBaseModel):
-    """Update one or more packages within a media buy.
-
-    Uses PATCH semantics: Only packages mentioned are affected.
-    Omitted packages remain unchanged.
-    To remove a package from delivery, set active=false.
-    To add new packages, use create_media_buy or add_packages (future tool).
-    """
-
-    media_buy_id: str
-    packages: list[PackageUpdate]  # List of package updates
-    today: date | None = None  # For testing/simulation
-
-
 # AdCP-compliant supporting models for update-media-buy-request
 class AdCPPackageUpdate(LibraryPackageUpdate):
     """Package-specific update extending library type.
