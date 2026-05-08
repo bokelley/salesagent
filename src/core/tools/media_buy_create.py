@@ -3386,12 +3386,19 @@ async def _create_media_buy_impl(
                     request_pkg = req.packages[i] if req.packages and i < len(req.packages) else None
                     impressions = getattr(request_pkg, "impressions", None) if request_pkg else None
 
+                    # targeting_overlay is buyer-supplied input — pull from the request, not the
+                    # adapter response. Adapter responses are AdCP-spec ResponsePackage objects
+                    # which intentionally do not echo targeting back. Persisting the request value
+                    # is what lets get_media_buys later round-trip property_list / collection_list
+                    # references per the AdCP spec for sellers claiming list-targeting specialisms.
+                    request_targeting_overlay = request_pkg.targeting_overlay if request_pkg is not None else None
+
                     package_config = {
                         "package_id": resp_package_id,
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
                         "product_id": getattr(resp_package, "product_id", None),
                         "budget": getattr(resp_package, "budget", None),
-                        "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
+                        "targeting_overlay": request_targeting_overlay,
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),

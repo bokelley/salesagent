@@ -24,34 +24,13 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 23 violations remain.
-# Line numbers reflect the current state of media_buy_update.py.
+# Line numbers reflect the current state of source files.
+#
+# The 22 ``media_buy_update.py`` workflow_step persistence sites that
+# used to live here were collapsed into ``serialize_for_workflow_step``
+# (issue #240) — the helper is a module-level function, not an
+# ``_impl``, so the scanner naturally exempts its body.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data).
-    # Line numbers shift on every edit to media_buy_update.py — regenerate via
-    # the inline AST script in the parent test class on drift.
-    ("media_buy_update.py", 418),
-    ("media_buy_update.py", 466),
-    ("media_buy_update.py", 489),
-    ("media_buy_update.py", 490),
-    ("media_buy_update.py", 544),
-    ("media_buy_update.py", 601),
-    ("media_buy_update.py", 637),
-    ("media_buy_update.py", 656),
-    ("media_buy_update.py", 678),
-    ("media_buy_update.py", 710),
-    ("media_buy_update.py", 750),
-    ("media_buy_update.py", 767),
-    ("media_buy_update.py", 821),
-    ("media_buy_update.py", 851),
-    ("media_buy_update.py", 892),
-    ("media_buy_update.py", 1075),
-    ("media_buy_update.py", 1105),
-    ("media_buy_update.py", 1133),
-    ("media_buy_update.py", 1295),
-    ("media_buy_update.py", 1359),
-    ("media_buy_update.py", 1476),
-    ("media_buy_update.py", 1560),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 599),
     # _list_creatives_impl: 1 violation (filter dict conversion)
