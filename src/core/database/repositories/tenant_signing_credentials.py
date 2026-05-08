@@ -4,6 +4,13 @@ PR 1 of [signing-non-embedded](../../../../docs/design/signing-non-embedded.md).
 Stores KMS references + cached public JWKs for the salesagent's own outbound
 signing. Private bytes never live here for KMS-backed credentials; ``backend_ref``
 is the lookup key the SigningProvider uses to talk to the backend.
+
+Cache coherence: the per-process snapshot cache in
+``src.services.webhook_signing`` is evicted automatically on commit via a
+SQLAlchemy session listener registered at module load there. The repo
+itself does not couple to the cache — invalidation is the listener's
+job, fired post-commit so a concurrent reader can't re-cache the
+about-to-be-rotated kid.
 """
 
 from __future__ import annotations
@@ -81,14 +88,6 @@ class TenantSigningCredentialRepository:
             is_active=True,
         )
         self._session.add(row)
-        # Invalidate the webhook-signing snapshot cache so the next
-        # delivery picks up the freshly-created kid immediately rather
-        # than waiting for the 5-min TTL window. Mirrors rotate_out's
-        # invalidation contract.
-        if purpose == "webhook-signing":
-            from src.services.webhook_signing import invalidate_credential_cache
-
-            invalidate_credential_cache(self._tenant_id)
         return row
 
     def rotate_out(self, purpose: str, key_id: str, *, now: datetime | None = None) -> bool:
@@ -97,13 +96,4 @@ class TenantSigningCredentialRepository:
             return False
         row.is_active = False
         row.rotated_out_at = now or datetime.now(UTC)
-        # Webhook-signing snapshots are cached per-tenant in
-        # WebhookDeliveryService for 5 min — without explicit invalidation,
-        # the salesagent keeps signing with the rotated-out kid for up to
-        # the TTL window. Invalidating here couples DB rotation to cache
-        # state so operators don't have to remember a second step.
-        if purpose == "webhook-signing":
-            from src.services.webhook_signing import invalidate_credential_cache
-
-            invalidate_credential_cache(self._tenant_id)
         return True
