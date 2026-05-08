@@ -16,7 +16,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.product_conversion import convert_product_model_to_schema
+from src.core.product_conversion import convert_product_model_to_resolved
 
 
 @pytest.mark.requires_db
@@ -137,7 +137,7 @@ def test_product_with_null_allowed_principal_ids(integration_db):
 
 @pytest.mark.requires_db
 def test_convert_product_includes_allowed_principal_ids(integration_db):
-    """Test that convert_product_model_to_schema includes allowed_principal_ids."""
+    """convert_product_model_to_resolved carries allowed_principal_ids on the sidecar."""
     tenant_id = "test_convert_principal"
 
     with get_db_session() as session:
@@ -198,16 +198,14 @@ def test_convert_product_includes_allowed_principal_ids(integration_db):
         # Refresh to load relationships
         session.refresh(product_model)
 
-        # Convert to schema
-        product_schema = convert_product_model_to_schema(product_model)
+        resolved = convert_product_model_to_resolved(product_model)
 
-        # Verify allowed_principal_ids is included
-        assert product_schema.allowed_principal_ids == ["allowed_principal"]
+        assert resolved.allowed_principal_ids == ["allowed_principal"]
 
 
 @pytest.mark.requires_db
 def test_allowed_principal_ids_excluded_from_serialization(integration_db):
-    """Test that allowed_principal_ids is excluded from API serialization."""
+    """allowed_principal_ids stays on the sidecar; it never reaches the wire dump."""
     tenant_id = "test_serialize_principal"
 
     with get_db_session() as session:
@@ -266,14 +264,11 @@ def test_allowed_principal_ids_excluded_from_serialization(integration_db):
 
         session.refresh(product_model)
 
-        # Convert to schema and serialize
-        product_schema = convert_product_model_to_schema(product_model)
-        serialized = product_schema.model_dump()
+        resolved = convert_product_model_to_resolved(product_model)
+        wire_dump = resolved.wire.model_dump()
 
-        # allowed_principal_ids should NOT be in serialized output
-        assert "allowed_principal_ids" not in serialized
-        # But it should still be accessible on the object
-        assert product_schema.allowed_principal_ids == ["secret_principal"]
+        assert "allowed_principal_ids" not in wire_dump
+        assert resolved.allowed_principal_ids == ["secret_principal"]
 
 
 @pytest.mark.requires_db

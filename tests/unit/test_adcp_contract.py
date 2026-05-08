@@ -776,18 +776,117 @@ class TestAdCPContract:
             )
 
     def test_adcp_response_excludes_internal_fields(self):
-        """AdCP responses must not carry internal fields.
+        """AdCP wire dumps must not carry internal fields.
 
-        After Phase 2 slice 5, internal fields (implementation_config,
-        countries, device_types, allowed_principal_ids) live on
-        :class:`ResolvedProduct`, not on the wire-shape :class:`Product`
-        schema. The wire shape has no slot for them, so a dump can't
-        contain them. This test asserts the schema contract directly.
+        Phase 2 slice 5: internal fields (implementation_config, countries,
+        device_types, allowed_principal_ids) live on :class:`ResolvedProduct`,
+        not on the wire-shape :class:`Product` schema. Two layers of defense:
+
+        1. Declaration: the Product schema must not declare any of the four
+           internal fields as its own model fields.
+        2. Production path: :func:`convert_product_model_to_resolved` builds
+           the wire-shape Product from explicit ORM columns only. Even if
+           the ORM model carries an internal value (e.g. ``implementation_config``),
+           the converter pulls it onto ``ResolvedProduct`` and never threads
+           it into the wire-shape constructor — so ``resolved.wire.model_dump()``
+           is clean regardless of what extras Pydantic would have allowed.
         """
+        from unittest.mock import MagicMock
+
+        from src.core.product_conversion import convert_product_model_to_resolved
+
         forbidden = {"implementation_config", "countries", "device_types", "allowed_principal_ids"}
+
+        # Layer 1 — schema declaration.
         assert not (forbidden & set(ProductSchema.model_fields.keys())), (
             "Internal fields must not be declared on the wire-shape Product schema"
         )
+
+        # Layer 2 — production converter path stays clean even when the ORM
+        # model carries values for all four internal fields.
+        from tests.helpers.adcp_factories import (
+            create_test_cpm_pricing_option,
+            create_test_format_id,
+            create_test_publisher_properties_by_tag,
+            create_test_reporting_capabilities,
+        )
+
+        orm = MagicMock()
+        orm.product_id = "test"
+        orm.name = "Test Product"
+        orm.description = "Test"
+        orm.delivery_type = "guaranteed"
+        orm.effective_format_ids = [create_test_format_id("display_300x250")]
+        orm.effective_properties = [create_test_publisher_properties_by_tag(publisher_domain="test.com")]
+        orm.delivery_measurement = {"provider": "test_provider", "notes": "Test measurement"}
+        orm.pricing_options = []
+        orm.is_custom = False
+        orm.reporting_capabilities = create_test_reporting_capabilities()
+        orm.channels = None
+        for opt in (
+            "measurement",
+            "creative_policy",
+            "product_card",
+            "product_card_detailed",
+            "placements",
+            "property_targeting_allowed",
+            "signal_targeting_allowed",
+            "catalog_match",
+            "catalog_types",
+            "conversion_tracking",
+            "data_provider_signals",
+            "forecast",
+        ):
+            setattr(orm, opt, None)
+
+        # Internal fields populated on the ORM — the converter must keep them
+        # off the wire shape.
+        orm.countries = ["US", "CA"]
+        orm.allowed_principal_ids = ["secret"]
+        orm.effective_implementation_config = {"gam": "config"}
+        orm.targeting_template = {"device_targets": ["mobile"]}
+
+        # Skip the empty pricing_options check — patch the call to provide a stub.
+        orm.pricing_options = [
+            type(
+                "PO",
+                (),
+                {
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "min_spend_per_package": None,
+                    "vcpm_threshold": None,
+                    "duration_days": None,
+                    "metadata": None,
+                    "rate_card": None,
+                },
+            )()
+        ]
+
+        # Bypass the actual pricing converter (its constraints are exercised elsewhere).
+        from unittest.mock import patch
+
+        with patch("src.core.product_conversion.convert_pricing_option_to_adcp") as mock:
+            mock.return_value = create_test_cpm_pricing_option(
+                pricing_option_id="cpm_usd_fixed", currency="USD", rate=10.0
+            )
+            resolved = convert_product_model_to_resolved(orm, adapter_type="mock")
+
+        wire_dump = resolved.wire.model_dump()
+
+        for forbidden_name in forbidden:
+            assert forbidden_name not in wire_dump, (
+                f"Internal field '{forbidden_name}' leaked into the wire dump from the production converter"
+            )
+
+        # And the values still travel on the ResolvedProduct sidecar.
+        assert resolved.countries == ["US", "CA"]
+        assert resolved.allowed_principal_ids == ["secret"]
+        assert resolved.implementation_config == {"gam": "config"}
+        assert resolved.device_types == ["mobile"]
 
     def test_adcp_signal_support(self):
         """Test AdCP v2.4 signal support in Targeting schema.

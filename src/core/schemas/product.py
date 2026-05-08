@@ -66,9 +66,17 @@ class Product(LibraryProduct):
 
     Internal-only fields (implementation_config, countries, device_types,
     allowed_principal_ids) live on :class:`src.core.resolved_product.ResolvedProduct`,
-    not here. The Pydantic schema is a thin subclass of the library type
-    that exists only to centralize the import and provide a stable name
-    for callers.
+    not here. This subclass is a stable import name kept for callers; slice 6
+    will collapse it into ``LibraryProduct`` directly.
+
+    Note on extras: ``LibraryProduct`` inherits ``extra='allow'`` for forward
+    compatibility with adcp library spec growth. Nothing in this subclass
+    overrides that — but the production wire path always goes through
+    :func:`src.core.product_conversion.convert_product_model_to_resolved`,
+    which builds a ``Product`` from explicit ORM fields only. Internal field
+    names cannot reach the wire dump unless a caller passes them as kwargs.
+    The behavioral test in ``test_adcp_response_excludes_internal_fields``
+    asserts the converter path stays clean.
     """
 
     pass
