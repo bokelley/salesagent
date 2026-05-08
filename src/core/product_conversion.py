@@ -22,11 +22,23 @@ from adcp import (
     FlatRatePricingOption,
     VcpmPricingOption,
 )
+from adcp.types import Product as LibraryProduct
 from adcp.types._generated import MediaChannel
 
 # Import our extended Product (includes implementation_config)
 # Not the library Product - we need the internal fields
+from src.core.resolved_product import ResolvedProduct
 from src.core.schemas import Product
+
+# ``Product`` schema declares the four internal-only fields with
+# ``exclude=True`` so they are stripped by ``model_dump()``. The conversion
+# below relies on that contract — if any of these gets the marker dropped
+# upstream, the field would leak into ``LibraryProduct.model_validate`` and
+# either crash dev (extra='forbid') or silently drop in prod (extra='ignore').
+# Guard the contract at conversion time.
+_INTERNAL_FIELD_NAMES: frozenset[str] = frozenset(
+    {"implementation_config", "countries", "device_types", "allowed_principal_ids"}
+)
 
 logger = logging.getLogger(__name__)
 
@@ -378,7 +390,7 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     return Product(**product_data)
 
 
-def convert_product_model_to_resolved(product_model, adapter_type: str | None = None):
+def convert_product_model_to_resolved(product_model, adapter_type: str | None = None) -> ResolvedProduct:
     """Convert ORM Product → :class:`ResolvedProduct`.
 
     Sibling of :func:`convert_product_model_to_schema`. Returns a
@@ -391,15 +403,22 @@ def convert_product_model_to_resolved(product_model, adapter_type: str | None = 
     population, same defaults, same validation. Internal fields are
     pulled directly off the ORM model.
     """
-    from src.core.resolved_product import ResolvedProduct
-
     schema_product = convert_product_model_to_schema(product_model, adapter_type=adapter_type)
 
     # Project to library Product (drops the four internal fields, which
     # have ``exclude=True`` on the local Product extension; the resulting
     # dict is spec-clean).
     wire_dict = schema_product.model_dump(mode="python")
-    from adcp.types import Product as LibraryProduct
+
+    # Defense-in-depth: catch the day someone drops ``exclude=True`` on an
+    # internal field. Without this assert, a leaked field would either
+    # crash dev (LibraryProduct extra='forbid') or silently drop in prod
+    # (extra='ignore'). Fail loud, fail early.
+    leaked = _INTERNAL_FIELD_NAMES & wire_dict.keys()
+    assert not leaked, (
+        f"Internal Product fields leaked into wire dict: {leaked}. "
+        "Check ``exclude=True`` is set on these fields in src/core/schemas/product.py."
+    )
 
     wire = LibraryProduct.model_validate(wire_dict)
 

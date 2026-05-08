@@ -44,6 +44,30 @@ class TestWireDelegation:
         assert r.device_types is None
         assert r.allowed_principal_ids is None
 
+    def test_internal_field_shadows_wire_attr_with_same_name(self):
+        """The four internal-field names must shadow any wire attr that
+        happens to share a name. Today no LibraryProduct field collides
+        (we verified during slice 2.2 design), but the precedence is the
+        contract that lets us migrate callers field-by-field without
+        worrying about future library additions silently winning.
+        """
+        from types import SimpleNamespace
+
+        # Stand in for ``wire`` with an attribute that *would* collide if
+        # the library ever added a field named ``implementation_config``.
+        # Real LibraryProduct doesn't have one — that's the point of the
+        # test: the dataclass field must win regardless.
+        fake_wire = SimpleNamespace(
+            product_id="shadow_test",
+            implementation_config={"from": "wire"},
+        )
+        r = ResolvedProduct(wire=fake_wire, implementation_config={"from": "dataclass"})  # type: ignore[arg-type]
+        assert r.implementation_config == {"from": "dataclass"}, (
+            "Dataclass field must shadow same-named wire attribute. "
+            "If this test fails, ``__getattr__`` is somehow overriding "
+            "normal attribute resolution and the precedence guarantee is broken."
+        )
+
 
 class TestConversionFromOrm:
     def test_convert_populates_internal_fields(self):
