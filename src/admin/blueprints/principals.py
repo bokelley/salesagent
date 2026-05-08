@@ -6,7 +6,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, g, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
 
 from src.admin.services import DashboardService
@@ -302,11 +302,31 @@ def create_principal(tenant_id):
         return redirect(request.url)
 
 
+def _edit_principal_audit_details(r, **kw):
+    """Capture per-field diffs the audit reviewer cares about.
+
+    ``flask.g.billing_enabled_diff`` is set by ``edit_principal`` when
+    the toggle is flipped. ``billing_enabled`` is auth-relevant
+    (BR-RULE-061 gates agent-billed accounts on it), so a flip is the
+    kind of change a security reviewer needs to be able to subpoena.
+    Other fields can join over time without changing the contract — the
+    audit reviewer reads ``details`` as a free-form dict.
+    """
+    if request.method != "POST":
+        return {}
+    details = {"principal_id": kw.get("principal_id")}
+    diff = getattr(g, "billing_enabled_diff", None)
+    if diff is not None:
+        details["billing_enabled_before"] = diff[0]
+        details["billing_enabled_after"] = diff[1]
+    return details
+
+
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
 @require_tenant_access(role=("admin", "member"))
 @log_admin_action(
     "edit_principal",
-    extract_details=lambda r, **kw: {"principal_id": kw.get("principal_id")} if request.method == "POST" else {},
+    extract_details=_edit_principal_audit_details,
 )
 def edit_principal(tenant_id, principal_id):
     """Edit an existing principal - reuses create_principal.html template."""
@@ -450,8 +470,14 @@ def edit_principal(tenant_id, principal_id):
             principal.signing_required = signing_required
             # billing_enabled toggle (BR-RULE-061): unchecked = exempt from
             # being the billing party on Accounts. Read here so the value
-            # always round-trips (not just on first save).
-            principal.billing_enabled = bool(request.form.get("billing_enabled"))
+            # always round-trips (not just on first save). Capture the
+            # before/after pair on flask.g for the audit decorator —
+            # billing_enabled flips are auth-relevant and need an audit
+            # trail (#33).
+            new_billing_enabled = bool(request.form.get("billing_enabled"))
+            if principal.billing_enabled != new_billing_enabled:
+                g.billing_enabled_diff = (principal.billing_enabled, new_billing_enabled)
+            principal.billing_enabled = new_billing_enabled
 
             principal.updated_at = datetime.now(UTC)
             db_session.commit()

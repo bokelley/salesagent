@@ -210,8 +210,14 @@ def log_admin_action(
             else:
                 user_email = str(user_info) if user_info else "unknown"
 
-            # Get tenant_id from kwargs (most admin routes have this)
-            tenant_id: str | None = kwargs.get("tenant_id")
+            # Get tenant_id from kwargs first; fall back to args[0] because
+            # ``require_tenant_access`` (the outer decorator on most admin
+            # routes) strips ``tenant_id`` to positional via its own
+            # ``def decorated_function(tenant_id, *args, **kwargs)`` shape.
+            # Without this fallback, every audit write was a no-op for routes
+            # gated by ``require_tenant_access`` — the audit decorator's
+            # ``if tenant_id:`` guard short-circuited.
+            tenant_id: str | None = kwargs.get("tenant_id") or (args[0] if args else None)
 
             # Call the actual route function
             result: Any = None
