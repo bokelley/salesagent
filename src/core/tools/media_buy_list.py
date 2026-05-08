@@ -98,7 +98,7 @@ def _get_media_buys_impl(
     if identity is None:
         raise AdCPAuthenticationError("Identity is required")
 
-    if req.account is not None or req.account_id is not None:
+    if req.account is not None:
         raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
 
     testing_ctx = identity.testing_context

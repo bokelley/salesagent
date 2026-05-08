@@ -20,16 +20,9 @@ from adcp.types import (
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-
-# Import main request/response types from stable API
 from adcp.types import Format as LibraryFormat
-
-# Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import PackageRequest as LibraryPackageRequest
-
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
 from adcp.types import PackageUpdate as LibraryPackageUpdate
 from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
@@ -2363,13 +2356,15 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
 class GetMediaBuysRequest(SalesAgentBaseModel):
     """Request to retrieve media buys.
 
-    Matches the adcp 3.6.0 GetMediaBuysRequest spec.
-    Defined locally because adcp 3.6.0 is not yet required.
+    NOTE: standalone class (does not extend library GetMediaBuysRequest) because
+    salesagent treats ``include_snapshot``/``include_history`` as transport-only
+    flags, not buyer-facing fields. The library exposes them as request fields
+    per spec; we deliberately reject them at the schema layer to enforce the
+    policy. Track salesagent issue before moving to Pattern #1.
     """
 
     media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
     status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
-    account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
     account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
@@ -2377,7 +2372,8 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
 class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response from get_media_buys.
 
-    Matches the adcp 3.6.0 GetMediaBuysResponse spec.
+    NOTE: standalone class (does not extend library GetMediaBuysResponse).
+    Track salesagent issue before moving to Pattern #1 alongside the request.
     """
 
     media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
