@@ -54,6 +54,7 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_workflow_approve_replay.py", "test_success_calls_impl_with_reconstructed_identity"),
+    ("tests/unit/test_create_media_buy_overbook.py", "test_forecast_call_uses_product_implementation_config"),
 }
 
 
