@@ -1294,11 +1294,6 @@ def _update_media_buy_impl(
 
         # Handle start_time/end_time updates
         if req.start_time is not None or req.end_time is not None:
-            # TODO: Sync date changes to GAM order
-            # Currently only updates database - does NOT sync to GAM API
-            # This creates data inconsistency between our database and GAM
-            # Need to implement: adapter.orders_manager.update_order_dates(order_id, start_time, end_time)
-
             update_values: dict[str, Any] = {}
             if req.start_time is not None:
                 # Parse start_time (handle 'asap' and datetime strings)
@@ -1364,11 +1359,35 @@ def _update_media_buy_impl(
                     return response_data
 
                 uow.media_buys.update_fields(req.media_buy_id, **update_values)
-                logger.warning(
-                    f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
+                logger.info(
+                    f"Updated MediaBuy {req.media_buy_id} dates in DB: "
                     f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
                 )
-                logger.warning("GAM sync NOT implemented - GAM still has old dates")
+
+                # Sync the change to the underlying ad server. The DB write
+                # above captures the buyer's intent durably; if the adapter
+                # call fails we log loudly but don't roll back, so a retry
+                # can re-apply GAM-side without losing intent.
+                orders_manager = getattr(adapter, "orders_manager", None)
+                gam_order_id = existing_mb.external_id or existing_mb.media_buy_id
+                if orders_manager is not None and gam_order_id:
+                    try:
+                        synced = orders_manager.update_order_dates(
+                            order_id=gam_order_id,
+                            start_time=update_values.get("start_time"),
+                            end_time=update_values.get("end_time"),
+                        )
+                    except Exception as e:
+                        synced = False
+                        logger.error(
+                            f"Adapter raised while syncing dates for {req.media_buy_id} "
+                            f"(GAM order {gam_order_id}): {e}",
+                            exc_info=True,
+                        )
+                    if not synced:
+                        logger.error(
+                            f"GAM date sync FAILED for {req.media_buy_id} (Order {gam_order_id}); DB updated, GAM stale"
+                        )
 
         # Create ObjectWorkflowMapping to link media buy update to workflow step
         # This enables webhook delivery when the update completes
