@@ -116,16 +116,11 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LocalSyncCreativesRequest,
         )
 
-        # GetProductsRequest - local extends library with internal-only fields
+        # GetProductsRequest is now a plain alias for the library type (slice 7)
+        # — fields must match exactly, no local extensions.
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        # product_selectors — internal-only field (not in AdCP spec)
-        # buying_mode and account are now in the library (adcp 3.9) but overridden locally
-        # (buying_mode widened to str|None, account made optional)
-        local_extensions = {"product_selectors"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert lib_fields == local_fields, f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
 
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
