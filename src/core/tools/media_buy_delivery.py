@@ -477,7 +477,13 @@ def _get_media_buy_delivery_impl(
 
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
-                # Cast status to match Literal type requirement
+                # ``status`` is in the schema's internal vocab (``ready``,
+                # ``active``, ``paused``, ``completed``, ``failed``,
+                # ``reporting_delayed``). MediaBuyDeliveryData.status's
+                # @field_serializer maps ``ready`` → wire ``pending_start``
+                # at serialisation time so the AdCP wire validator stays
+                # happy without forcing every internal call site (filters,
+                # status comparisons, except blocks) to learn wire vocab.
                 from typing import Literal as LiteralType
                 from typing import cast
 

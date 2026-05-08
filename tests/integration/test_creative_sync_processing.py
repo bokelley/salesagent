@@ -349,7 +349,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
 
             creative_result = result.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any("GEMINI_API_KEY" in e for e in creative_result.errors)
+            assert any("GEMINI_API_KEY" in e.message for e in creative_result.errors)
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────
@@ -473,7 +473,10 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any("no previews" in e.lower() or "no media_url" in e.lower() for e in creative_result.errors)
+            assert any(
+                "no previews" in e.message.lower() or "no media_url" in e.message.lower()
+                for e in creative_result.errors
+            )
 
     def test_update_no_format_with_url_succeeds(self, integration_db):
         """Update creative: no matching format BUT has media_url → succeeds.
@@ -532,7 +535,9 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == CreativeAction.failed
-            assert any("unreachable" in e.lower() or "retry" in e.lower() for e in creative_result.errors)
+            assert any(
+                "unreachable" in e.message.lower() or "retry" in e.message.lower() for e in creative_result.errors
+            )
 
 
 class TestStaticPreviewDimensionExtraction:

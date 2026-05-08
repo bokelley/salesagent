@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from adcp.types import CreativeAsset
+from adcp.types import CreativeAsset, Error
 from pydantic import BaseModel
 
 from src.core.helpers import _extract_format_info, _validate_creative_assets
@@ -409,7 +409,7 @@ def _update_existing_creative(
                             action="failed",
                             status=None,
                             platform_id=None,
-                            errors=[error_msg],
+                            errors=[Error(code="preview_generation_failed", message=error_msg)],
                             review_feedback=None,
                             assigned_to=None,
                             assignment_errors=None,
@@ -434,7 +434,7 @@ def _update_existing_creative(
                     action="failed",
                     status=None,
                     platform_id=None,
-                    errors=[error_msg],
+                    errors=[Error(code="creative_agent_unreachable", message=error_msg)],
                     review_feedback=None,
                     assigned_to=None,
                     assignment_errors=None,
@@ -728,7 +728,7 @@ def _create_new_creative(
                                 action="failed",
                                 status=None,
                                 platform_id=None,
-                                errors=[error_msg],
+                                errors=[Error(code="preview_generation_failed", message=error_msg)],
                                 review_feedback=None,
                                 assigned_to=None,
                                 assignment_errors=None,
@@ -753,7 +753,7 @@ def _create_new_creative(
                     action="failed",
                     status=None,
                     platform_id=None,
-                    errors=[error_msg],
+                    errors=[Error(code="creative_agent_unreachable", message=error_msg)],
                     review_feedback=None,
                     assigned_to=None,
                     assignment_errors=None,

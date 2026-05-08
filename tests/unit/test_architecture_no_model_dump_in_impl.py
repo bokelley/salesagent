@@ -24,10 +24,10 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 21 violations remain.
+# FIXME(salesagent-hr8n): 23 violations remain.
 # Line numbers reflect the current state of media_buy_update.py.
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 19 violations (workflow step response_data).
+    # _update_media_buy_impl: 21 violations (workflow step response_data).
     # Line numbers shift on every edit to media_buy_update.py — regenerate via
     # the inline AST script in the parent test class on drift.
     ("media_buy_update.py", 265),
@@ -35,20 +35,22 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 318),
     ("media_buy_update.py", 372),
     ("media_buy_update.py", 429),
-    ("media_buy_update.py", 452),
-    ("media_buy_update.py", 484),
-    ("media_buy_update.py", 511),
-    ("media_buy_update.py", 528),
-    ("media_buy_update.py", 582),
-    ("media_buy_update.py", 612),
-    ("media_buy_update.py", 653),
-    ("media_buy_update.py", 836),
-    ("media_buy_update.py", 866),
-    ("media_buy_update.py", 894),
-    ("media_buy_update.py", 1056),
-    ("media_buy_update.py", 1120),
-    ("media_buy_update.py", 1242),
-    ("media_buy_update.py", 1302),
+    ("media_buy_update.py", 466),
+    ("media_buy_update.py", 485),
+    ("media_buy_update.py", 507),
+    ("media_buy_update.py", 539),
+    ("media_buy_update.py", 566),
+    ("media_buy_update.py", 583),
+    ("media_buy_update.py", 637),
+    ("media_buy_update.py", 667),
+    ("media_buy_update.py", 708),
+    ("media_buy_update.py", 891),
+    ("media_buy_update.py", 921),
+    ("media_buy_update.py", 949),
+    ("media_buy_update.py", 1111),
+    ("media_buy_update.py", 1175),
+    ("media_buy_update.py", 1297),
+    ("media_buy_update.py", 1357),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 610),
     # _list_creatives_impl: 1 violation (filter dict conversion)

@@ -14,6 +14,7 @@ from adcp.types import (
     AiTool,
     CreativeAction,
     CreativeStatus,
+    Error,
 )
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
@@ -387,11 +388,16 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
 
-    # Override library defaults: library uses None, we use [] for backward compatibility
+    # Override library defaults: library uses None, we use [] for backward compatibility.
+    # ``errors`` is ``list[Error]`` per AdCP spec (each entry needs a ``code`` for
+    # programmatic handling); the previous ``list[str]`` shape was off-spec and
+    # tripped FastMCP's response validator on the [mcp] transport.
     changes: list[str] = Field(
         default_factory=list, description="List of field names that were modified (for 'updated' action)"
     )
-    errors: list[str] = Field(default_factory=list, description="Validation or processing errors (for 'failed' action)")  # type: ignore[assignment]
+    errors: list[Error] = Field(
+        default_factory=list, description="Validation or processing errors (for 'failed' action)"
+    )
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
 
     def model_dump(self, **kwargs):
