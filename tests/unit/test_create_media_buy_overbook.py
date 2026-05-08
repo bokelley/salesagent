@@ -310,8 +310,10 @@ class TestForecastManagerInvocation:
                 total_budget=1000.0,
             )
 
-        mock_call.assert_called_once()
-        kwargs = mock_call.call_args.kwargs
-        assert kwargs["ad_unit_ids"] == ["ad_unit_1", "ad_unit_2"]
-        assert kwargs["line_item_type"] == "SPONSORSHIP"
-        assert kwargs["include_descendants"] is False
+        kwargs = mock_call.call_args.kwargs if mock_call.call_args else {}
+        mock_call.assert_called_once_with(
+            ad_unit_ids=["ad_unit_1", "ad_unit_2"],
+            line_item_type="SPONSORSHIP",
+            include_descendants=False,
+            **{k: v for k, v in kwargs.items() if k not in {"ad_unit_ids", "line_item_type", "include_descendants"}},
+        )
