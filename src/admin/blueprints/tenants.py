@@ -658,6 +658,101 @@ def deactivate_tenant(tenant_id):
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
 
 
+@tenants_bp.route("/<tenant_id>/signing-keys/generate", methods=["POST"])
+@log_admin_action("generate_webhook_signing_key")
+@require_tenant_access(role=("admin",))
+def generate_webhook_signing_key(tenant_id):
+    """Generate an Ed25519 keypair for webhook signing.
+
+    Writes the PEM under ``WEBHOOK_SIGNING_KEYS_DIR`` (mode 0600) and
+    inserts a ``TenantSigningCredential`` row with ``is_active=True``
+    and ``backend='local_pem'``. If a previous active credential
+    exists for ``purpose='webhook-signing'``, it is rotated out in
+    the same transaction so the at-most-one-active invariant holds.
+
+    The session listener in ``src.services.webhook_signing`` evicts
+    the per-process snapshot cache on commit; cross-replica caches
+    converge within the 5-min TTL window.
+    """
+
+    from adcp.signing.keygen import generate_signing_keypair
+
+    from src.core.database.repositories import TenantSigningCredentialRepository
+    from src.services.webhook_signing import _resolve_signing_keys_dir
+
+    try:
+        pem_bytes, jwk = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
+        kid = jwk.get("kid")
+        if not kid:
+            flash("Generated keypair is missing a kid — refusing to insert.", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+
+        keys_dir = _resolve_signing_keys_dir()
+        keys_dir.mkdir(parents=True, exist_ok=True)
+        pem_path = keys_dir / f"{tenant_id}-{kid}.pem"
+        # Mode 0600 — only the salesagent process user reads this. Operators
+        # who need to back up the PEM are responsible for off-host copy.
+        pem_path.write_bytes(pem_bytes)
+        try:
+            os.chmod(pem_path, 0o600)
+        except OSError as exc:
+            logger.warning(f"Could not chmod 0600 on {pem_path}: {exc}")
+
+        with get_db_session() as db_session:
+            repo = TenantSigningCredentialRepository(db_session, tenant_id=tenant_id)
+            existing = repo.get_active("webhook-signing")
+            if existing is not None:
+                repo.rotate_out("webhook-signing", existing.key_id)
+            repo.create(
+                purpose="webhook-signing",
+                backend="local_pem",
+                backend_ref=str(pem_path),
+                public_jwk=jwk,
+                key_id=kid,
+            )
+            db_session.commit()
+
+        flash(
+            f"Generated new webhook-signing keypair (kid={kid}). "
+            "Publish the public JWK below to your JWKS endpoint so buyers can verify.",
+            "success",
+        )
+    except Exception as e:
+        logger.error(f"Error generating webhook signing key for {tenant_id}: {e}", exc_info=True)
+        flash(f"Error generating signing key: {e}", "error")
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+
+
+@tenants_bp.route("/<tenant_id>/signing-keys/<key_id>/rotate-out", methods=["POST"])
+@log_admin_action("rotate_out_webhook_signing_key")
+@require_tenant_access(role=("admin",))
+def rotate_out_webhook_signing_key(tenant_id, key_id):
+    """Mark a webhook-signing credential inactive.
+
+    The salesagent stops signing with this kid immediately (cache
+    evicted by the session listener on commit). The PEM file on disk
+    is intentionally NOT deleted — buyers may still receive webhooks
+    referencing the old kid in flight, and the verifier-side JWKS
+    can take time to drop the entry.
+    """
+    from src.core.database.repositories import TenantSigningCredentialRepository
+
+    try:
+        with get_db_session() as db_session:
+            repo = TenantSigningCredentialRepository(db_session, tenant_id=tenant_id)
+            ok = repo.rotate_out("webhook-signing", key_id)
+            if not ok:
+                flash(f"No webhook-signing credential found with kid={key_id!r}.", "error")
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+            db_session.commit()
+
+        flash(f"Rotated out webhook-signing kid={key_id}. Generate a replacement to resume signing.", "success")
+    except Exception as e:
+        logger.error(f"Error rotating out signing key {key_id} for {tenant_id}: {e}", exc_info=True)
+        flash(f"Error rotating out signing key: {e}", "error")
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+
+
 @tenants_bp.route("/<tenant_id>/media-buys", methods=["GET"])
 @require_tenant_access()
 def media_buys_list(tenant_id):

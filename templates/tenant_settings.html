@@ -2777,10 +2777,23 @@ result = await client.tools.get_products(brief="video ads")</pre>
                 </ol>
             </div>
 
+            <div class="form-section" style="margin-bottom: 1rem;">
+                <form method="POST"
+                      action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/signing-keys/generate"
+                      onsubmit="return confirm('Generate a new Ed25519 keypair? Any existing active webhook-signing key will be rotated out — you must publish the new public JWK to your JWKS endpoint before buyers can verify.');">
+                    <button type="submit" class="btn btn-primary">
+                        🔐 Generate Ed25519 keypair
+                    </button>
+                    <small class="text-muted" style="margin-left: 0.75rem;">
+                        Creates a new active webhook-signing credential and rotates out any existing one.
+                    </small>
+                </form>
+            </div>
+
             {% if not signing_credentials %}
             <div class="status-card">
                 <strong>No outbound signing credentials configured.</strong>
-                <p>Webhooks fall back to HMAC. Rotation / upload UI tracked in #29.</p>
+                <p>Webhooks fall back to HMAC. Click <em>Generate Ed25519 keypair</em> above to enable RFC 9421 signing.</p>
             </div>
             {% else %}
             <div class="table-responsive">
@@ -2793,6 +2806,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
                             <th>Public JWK</th>
                             <th>Status</th>
                             <th>Created</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -2818,6 +2832,18 @@ result = await client.tools.get_products(brief="video ads")</pre>
                                 {% endif %}
                             </td>
                             <td><small>{{ cred.created_at.strftime('%Y-%m-%d') if cred.created_at else '—' }}</small></td>
+                            <td>
+                                {% if cred.is_active and cred.purpose == 'webhook-signing' %}
+                                <form method="POST"
+                                      action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/signing-keys/{{ cred.key_id }}/rotate-out"
+                                      style="display: inline;"
+                                      onsubmit="return confirm('Rotate out kid={{ cred.key_id }}? The salesagent will stop signing webhooks with this key immediately. Generate a replacement first if you need uninterrupted signing.');">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">Rotate out</button>
+                                </form>
+                                {% else %}
+                                <span class="text-muted small">—</span>
+                                {% endif %}
+                            </td>
                         </tr>
                     {% endfor %}
                     </tbody>
