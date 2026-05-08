@@ -145,6 +145,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
+    bypass_manual_approval: bool = False,
 ) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -157,6 +158,11 @@ def _update_media_buy_impl(
         req: Validated UpdateMediaBuyRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
         context_id: Optional workflow context ID
+        bypass_manual_approval: When True, skip the manual-approval gate and
+            apply the update immediately. Used by the workflows-blueprint
+            replay path: an operator has already approved the deferred step
+            and we are now executing it. Buyer-facing transports (MCP/A2A)
+            never set this.
 
     Returns:
         UpdateMediaBuyResponse with updated media buy details
@@ -351,7 +357,7 @@ def _update_media_buy_impl(
         manual_approval_required = adapter.manual_approval_required
         manual_approval_operations = adapter.manual_approval_operations
 
-        if manual_approval_required and "update_media_buy" in manual_approval_operations:
+        if manual_approval_required and "update_media_buy" in manual_approval_operations and not bypass_manual_approval:
             # Store the original request alongside the response so the approval
             # execution path can re-execute the update after human approval.
             # This mirrors create_media_buy's raw_request pattern.
