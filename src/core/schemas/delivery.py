@@ -73,14 +73,6 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # All AdCP fields inherited from library parent. The redeclaration of
-    # include_package_daily_breakdown below is redundant — the parent already exposes it.
-    # TODO: drop this redeclaration in the Pattern #1 cleanup pass.
-    include_package_daily_breakdown: bool | None = Field(
-        None,
-        description="Include daily_breakdown arrays within each package",
-    )
-
 
 # ---------------------------------------------------------------------------
 # Delivery data models

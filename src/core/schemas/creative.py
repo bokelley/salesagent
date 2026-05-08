@@ -159,7 +159,6 @@ class Creative(LibraryCreative):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # === Overrides of listing Creative fields ===
-    name: str = Field(description="Creative name")
     status: CreativeStatus = Field(
         default=CreativeStatus.pending_review,
         description="Workflow approval status",
