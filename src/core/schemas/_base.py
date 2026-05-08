@@ -2036,11 +2036,10 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
 # --- Signal Activation ---
 class ActivateSignalRequest(LibraryActivateSignalRequest):
-    """Extends library ActivateSignalRequest with local extension fields.
+    """Extends library ActivateSignalRequest.
 
     Library provides: signal_agent_segment_id, deployments, idempotency_key,
-    context, ext. Local extensions: campaign_id, media_buy_id (unused in impl,
-    kept for API compat).
+    context, ext.
 
     NOTE: ActivateSignalResponse is NOT migrated — library uses RootModel
     discriminated union (success|error) which is fundamentally incompatible
@@ -2059,10 +2058,6 @@ class ActivateSignalRequest(LibraryActivateSignalRequest):
         max_length=255,
         pattern=r"^[A-Za-z0-9_.:-]{16,255}$",
     )
-
-    # Extension fields (not in library spec)
-    campaign_id: str | None = Field(None, description="Optional campaign ID to activate signal for")
-    media_buy_id: str | None = Field(None, description="Optional media buy ID to activate signal for")
 
     @property
     def signal_id(self) -> str:

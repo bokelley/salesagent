@@ -121,29 +121,11 @@ class Product(LibraryProduct):
 class ProductFilters(LibraryFilters):
     """Product filters extending library Filters from AdCP spec.
 
-    Inherits all AdCP-compliant filter fields from adcp library's Filters class,
-    ensuring we stay in sync with spec updates. All fields come from the library:
-    - delivery_type: Filter by delivery type (guaranteed, auction)
-    - format_ids: Filter by specific format IDs
-    - format_types: Filter by format types (video, display, audio)
-    - is_fixed_price: Filter for fixed price vs auction products
-    - min_exposures: Minimum exposures for measurement validity
-    - standard_formats_only: Only return IAB standard formats
-
-    Local extensions (not in AdCP product-filters.json):
-    - device_types: Filter by device form factors (mobile, desktop, tablet, ctv, etc.)
-
-    This pattern ensures:
-    - External requests use library Filters (spec-compliant)
-    - We automatically get spec updates when library updates
-    - No manual field duplication = no drift from spec
+    All filter fields come from the library — see adcp ProductFilters for the
+    full list (delivery_type, format_ids, format_types, is_fixed_price,
+    min_exposures, standard_formats_only, countries, regions, metros,
+    channels, etc.).
     """
-
-    # Local extension: device type filtering
-    device_types: list[str] | None = Field(
-        default=None,
-        description="Filter by device form factors (mobile, desktop, tablet, ctv, dooh, audio)",
-    )
 
     @model_validator(mode="before")
     @classmethod
