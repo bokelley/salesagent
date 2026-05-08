@@ -347,6 +347,33 @@ def _update_media_buy_impl(
         # Extract testing context early (needed for dry_run check)
         testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
+        # Idempotency replay (defence-in-depth on the SDK's post-hoc
+        # IdempotencyStore.wrap): if a prior call with this idempotency_key
+        # already completed (response_data populated), replay its response
+        # verbatim instead of re-executing. The SDK wrap caches AFTER the
+        # handler completes, so two sequential same-key calls hitting the
+        # impl before the first commits both reach this point. Mirrors the
+        # create-path pattern at media_buy_create.py:1471-1489. Skipped in
+        # dry_run since dry_run never writes a workflow step to read back.
+        if not testing_ctx.dry_run and req.idempotency_key:
+            from src.core.database.repositories.workflow import WorkflowRepository
+
+            workflow_repo = WorkflowRepository(session, tenant["tenant_id"])
+            existing_step = workflow_repo.find_by_idempotency_key(
+                req.idempotency_key,
+                principal_id,
+                tool_name="update_media_buy",
+            )
+            if existing_step is not None and existing_step.response_data:
+                logger.info(
+                    f"[IDEMPOTENCY] update_media_buy replaying step {existing_step.step_id} "
+                    f"for key={req.idempotency_key[:8]}..."
+                )
+                cached = {k: v for k, v in existing_step.response_data.items() if k != "request_data"}
+                if cached.get("errors"):
+                    return UpdateMediaBuyError.model_validate(cached)
+                return UpdateMediaBuySuccess.model_validate(cached)
+
         # Create or get persistent context and workflow step
         # Skip for dry_run mode (no side effects, no database writes)
         ctx_manager = get_context_manager()
