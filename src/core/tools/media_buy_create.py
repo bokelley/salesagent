@@ -161,7 +161,6 @@ from src.core.schemas import (
     Package,
     PackageRequest,
     Principal,
-    Product,
     Targeting,
 )
 from src.core.schemas import (
@@ -2760,7 +2759,7 @@ async def _create_media_buy_impl(
                 error_msg = f"Package {idx} has no product_id field set"
                 raise ValueError(error_msg)
 
-            pkg_product: Product | None = None
+            pkg_product: Any | None = None
             for p in products_in_buy:
                 if p.product_id == pkg_product_id:
                     pkg_product = p
