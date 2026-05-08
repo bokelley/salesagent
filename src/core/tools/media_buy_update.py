@@ -53,6 +53,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._gam_projection import (
     get_or_materialize_media_buy,
     is_projected_media_buy_id,
+    log_materialization_audit,
 )
 from src.core.tools.financial_validation import (
     validate_max_campaign_budget,
@@ -174,6 +175,7 @@ def _update_media_buy_impl(
         # Native AdCP buys (mb_<uuid> ids) skip this whole branch — no
         # extra DB calls in the hot path.
         imported_buy = None
+        materialized_audit_payload: dict | None = None
         if is_projected_media_buy_id(media_buy_id_to_use):
             imported_buy = uow.media_buys.get_by_id(media_buy_id_to_use)
             if imported_buy is None:
@@ -183,6 +185,17 @@ def _update_media_buy_impl(
                     principal_id=principal_id,
                     media_buy_id=media_buy_id_to_use,
                 )
+                # Capture audit fields by value so the audit log call
+                # (which opens its own DB session and commits) doesn't
+                # need to re-read from the freshly-flushed instance.
+                materialized_audit_payload = {
+                    "tenant_id": tenant["tenant_id"],
+                    "principal_id": principal_id,
+                    "advertiser_name": imported_buy.advertiser_name,
+                    "advertiser_id": (imported_buy.raw_request or {}).get("gam_advertiser_id"),
+                    "order_id": imported_buy.external_id,
+                    "media_buy_id": imported_buy.media_buy_id,
+                }
 
         # Verify principal owns this media buy
         _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
@@ -203,6 +216,12 @@ def _update_media_buy_impl(
                 or bool(req.new_packages)
             )
             if mutating:
+                # Materialization persisted even though we're rejecting the
+                # mutation — emit the audit log here too. Session expiry
+                # from the audit logger's own commit doesn't matter on this
+                # path because we return immediately afterward.
+                if materialized_audit_payload is not None:
+                    log_materialization_audit(**materialized_audit_payload)
                 return UpdateMediaBuyError(
                     media_buy_id=media_buy_id_to_use,
                     errors=[
@@ -1356,5 +1375,12 @@ def _update_media_buy_impl(
             status="completed",
             response_data=final_response.model_dump(mode="json"),
         )
+
+    # Emit materialization audit AFTER the UoW commits — opening a fresh
+    # session inside the UoW would expire the just-flushed MediaBuy and
+    # break downstream reads. Fires once per first-time materialization;
+    # absent on no-op re-reads of an already-materialized buy.
+    if materialized_audit_payload is not None:
+        log_materialization_audit(**materialized_audit_payload)
 
     return final_response
