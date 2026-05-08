@@ -33,7 +33,7 @@ from adcp.decisioning.capabilities import (
     SupportedProtocol,
 )
 
-from core.idempotency import get_idempotency_store
+from core.idempotency import get_idempotency_store, translate_idempotency_conflict
 from core.platforms._delegate import (
     _delegate_create_media_buy,
     _delegate_get_media_buy_delivery,
@@ -82,6 +82,7 @@ class MockSellerPlatform(DecisioningPlatform):
 
     # ─────────────────────────── create_media_buy ────────────────────
 
+    @translate_idempotency_conflict
     @_IDEMPOTENCY.wrap
     async def create_media_buy(
         self,
@@ -97,6 +98,7 @@ class MockSellerPlatform(DecisioningPlatform):
     # ``method(self, media_buy_id=..., patch=..., ctx=...)`` rather than
     # the (self, params, context) shape the wrap originally required).
     # Salesagent task #35 closed.
+    @translate_idempotency_conflict
     @_IDEMPOTENCY.wrap
     async def update_media_buy(
         self,
@@ -108,6 +110,7 @@ class MockSellerPlatform(DecisioningPlatform):
 
     # ─────────────────────────── sync_creatives ──────────────────────
 
+    @translate_idempotency_conflict
     @_IDEMPOTENCY.wrap
     async def sync_creatives(
         self,

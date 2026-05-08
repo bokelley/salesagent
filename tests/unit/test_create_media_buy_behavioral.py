@@ -40,6 +40,8 @@ from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAdapterError,
+    AdCPConflictError,
+    AdCPIdempotencyConflictError,
     AdCPNotFoundError,
     AdCPTermsRejectedError,
     AdCPValidationError,
@@ -49,6 +51,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
@@ -1450,7 +1453,10 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        # Spec ``create_media_buy_response`` (variant-3): async pending shape is
+        # the submitted envelope (task_id + status='submitted'), NOT the sync
+        # success body with media_buy_id/packages.
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
 
     @pytest.mark.asyncio
@@ -1480,7 +1486,7 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"
 
     @pytest.mark.asyncio
@@ -1552,7 +1558,10 @@ class TestManualApprovalObligations:
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
         assert result.status == "submitted"
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        # Spec variant-3: submitted envelope carries task_id (not media_buy_id).
+        # ``workflow_step_id`` is preserved as an internal handle (excluded from wire).
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id is not None
         assert result.response.workflow_step_id is not None
 
     @pytest.mark.asyncio
@@ -1651,8 +1660,10 @@ class TestManualApprovalObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        # Spec variant-3: submitted envelope. ``task_id`` is the buyer-facing
+        # poll handle; ``workflow_step_id`` is preserved as an internal handle.
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id == "step_1"
         assert result.response.workflow_step_id == "step_1"
 
 
@@ -1894,10 +1905,14 @@ class TestCrossCuttingObligations:
 
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Manual path: adapter was NOT called, but records were persisted
+        # Manual path: adapter was NOT called, but records were persisted.
+        # Spec variant-3: the submitted envelope identifies the work via
+        # ``task_id`` — ``media_buy_id`` is issued on the completion artifact
+        # post-approval, not on the pending response.
         assert result.status == "submitted"
         mock_exec.assert_not_called()
-        assert result.response.media_buy_id is not None
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id is not None
 
     @pytest.mark.asyncio
     async def test_creative_in_valid_state_assigned_successfully(self):
@@ -2521,3 +2536,73 @@ class TestMeasurementTermsRejection:
                 except Exception:
                     # Downstream failures are unrelated to this gate.
                     pass
+
+
+# ===========================================================================
+# IdempotencyConflictError → IDEMPOTENCY_CONFLICT wire mapping
+# ===========================================================================
+
+
+class TestIdempotencyConflict:
+    """The salesagent ``AdCPIdempotencyConflictError`` declares the typed
+    contract that mirrors AdCP spec ``IDEMPOTENCY_CONFLICT`` (correctable
+    recovery, distinct from ``INTERNAL_ERROR``).
+
+    Per AdCP spec, when a buyer reuses an idempotency_key with a materially
+    different payload the seller must respond with ``IDEMPOTENCY_CONFLICT`` —
+    a *correctable* error so the buyer can either resend the exact original
+    payload or mint a fresh ``uuid.uuid4()`` key and retry. Conflating it with
+    ``INTERNAL_ERROR`` (terminal) breaks correctness: buyer agents either
+    abandon a recoverable replay or retry blindly without resetting their
+    keys.
+
+    The framework's :class:`adcp.server.idempotency.IdempotencyStore.wrap`
+    raises :class:`adcp.exceptions.IdempotencyConflictError` BEFORE the
+    platform method body runs. The translator decorator stacked OUTSIDE the
+    wrap (see ``core.idempotency.translate_idempotency_conflict``) catches
+    that exception and re-raises a wire-shaped framework
+    :class:`adcp.decisioning.AdcpError` with ``code="IDEMPOTENCY_CONFLICT"``
+    and ``recovery="correctable"``. End-to-end coverage of that flow lives
+    in ``core/tests/test_idempotency_conflict_translation.py``; the tests
+    below pin the salesagent-side exception class shape.
+
+    Pattern mirrors ``TestMeasurementTermsRejection`` (PR #133).
+    """
+
+    def test_adcp_idempotency_conflict_error_class_shape(self):
+        """:class:`AdCPIdempotencyConflictError` declares the wire-projection
+        contract: ``error_code="IDEMPOTENCY_CONFLICT"`` and
+        ``recovery="correctable"``. The 409 status_code matches the AdCP
+        spec's ``CONFLICT`` family (vs. 500 INTERNAL_ERROR).
+        """
+        exc = AdCPIdempotencyConflictError("idempotency_key reused with a different payload")
+
+        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
+        assert exc.recovery == "correctable"
+        assert exc.status_code == 409
+
+    def test_idempotency_conflict_inherits_from_conflict_base(self):
+        """:class:`AdCPIdempotencyConflictError` extends
+        :class:`AdCPConflictError` so generic conflict-handling code paths
+        catch it without requiring a special case.
+        """
+        exc = AdCPIdempotencyConflictError("conflict")
+
+        assert isinstance(exc, AdCPConflictError)
+
+    def test_idempotency_conflict_to_dict_serializes_for_wire(self):
+        """``to_dict()`` must preserve the spec-mandated ``error_code`` and
+        ``recovery`` so transport translators can project them onto the AdCP
+        error envelope without losing the correctable classification.
+        """
+        exc = AdCPIdempotencyConflictError(
+            "idempotency_key reused with a different payload",
+            details={"field": "idempotency_key"},
+        )
+
+        wire = exc.to_dict()
+
+        assert wire["error_code"] == "IDEMPOTENCY_CONFLICT"
+        assert wire["recovery"] == "correctable"
+        assert wire["message"] == "idempotency_key reused with a different payload"
+        assert wire["details"] == {"field": "idempotency_key"}

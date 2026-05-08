@@ -1,17 +1,17 @@
 """merge mock-platform branch into all current heads
 
-Reconciles three open heads as of 2026-05-07 evening:
-- ``789f9d88265e`` (main tip: add push_notification_configs.signing_mode)
-- ``523ed762edce`` (sibling main tip: phase1 slice 2 + latest main)
-- ``o6p7q8r9s0t1`` (drop tenants.house_domain — line my branch was
-  based on before main re-merged its tip)
+Reconciles three open heads as of 2026-05-07:
+- ``789f9d88265e`` (add push_notification_configs.signing_mode — not
+  subsumed by the post-merge chain below)
+- ``0fa8fa8610df`` (main mergepoint of fix-duplication + phase1-slice-2,
+  which transitively includes ``523ed762edce`` and ``o6p7q8r9s0t1``)
+- ``q9r0s1t2u3v4`` (advertiser buyer-assignment + external_id, revises
+  ``523ed762edce``)
 
-The two main-side heads sit on parallel descents from
-``ee6fe59f5407`` that never converge upstream of either, so this
-migration pulls them all together into a single graph head.
+Pulls all three orphan tips into a single graph head.
 
 Revision ID: d8e9f0a1b2c3
-Revises: 789f9d88265e, 523ed762edce, o6p7q8r9s0t1
+Revises: 789f9d88265e, 0fa8fa8610df, q9r0s1t2u3v4
 Create Date: 2026-05-07 15:55:00.000000
 
 """
@@ -20,7 +20,7 @@ from collections.abc import Sequence
 
 # revision identifiers, used by Alembic.
 revision: str = "d8e9f0a1b2c3"
-down_revision: str | Sequence[str] | None = ("789f9d88265e", "523ed762edce", "o6p7q8r9s0t1")
+down_revision: str | Sequence[str] | None = ("789f9d88265e", "0fa8fa8610df", "q9r0s1t2u3v4")
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

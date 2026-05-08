@@ -53,10 +53,13 @@ async def test_mock_sync_creatives_actually_invokes_shared_delegate() -> None:
     delegate_mock = AsyncMock(return_value=expected)
 
     with patch("core.platforms.mock._delegate_sync_creatives", delegate_mock):
-        # Bypass @_IDEMPOTENCY.wrap to avoid the cache-key requirement; the
+        # Bypass the decorator stack to avoid the cache-key requirement; the
         # contract under test is "method delegates", not "cache replay
-        # behaviour". Idempotency is exercised by the integration tier.
-        underlying = MockSellerPlatform.sync_creatives.__wrapped__  # type: ignore[attr-defined]
+        # behaviour". Idempotency + conflict-translation are exercised in
+        # ``core/tests/test_idempotency_conflict_translation.py``. Two layers
+        # to peel: ``translate_idempotency_conflict`` wraps ``_IDEMPOTENCY.wrap``
+        # which wraps the raw method.
+        underlying = MockSellerPlatform.sync_creatives.__wrapped__.__wrapped__  # type: ignore[attr-defined]
         result = await underlying(platform, fake_req, fake_ctx)
 
     delegate_mock.assert_awaited_once_with(fake_req, fake_ctx)
