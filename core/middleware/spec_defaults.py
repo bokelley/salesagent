@@ -43,8 +43,13 @@ _GET_PRODUCTS_DEFAULTS: dict[str, str] = {
 # wire boundary so the SDK's typed-dispatcher validation passes; our impl
 # layer ignores the placeholders.
 _AUTH_FILLED_TOOLS: frozenset[str] = frozenset(
-    {"sync_creatives", "sync_accounts", "activate_signal", "create_media_buy"}
+    {"sync_creatives", "activate_signal", "create_media_buy"}
 )
+
+# Tools that need an idempotency_key default but NOT an ``account``
+# injection — ``sync_accounts`` carries an ``accounts: list`` payload
+# instead of a single ``account`` (it IS the account-discovery surface).
+_IDEMPOTENCY_ONLY_TOOLS: frozenset[str] = frozenset({"sync_accounts"})
 
 #: Sentinel ``AccountReference`` used to satisfy strict request validation
 #: when callers don't supply one. ``account_id="auth-chain"`` signals that the
@@ -106,6 +111,10 @@ def _apply_get_products_defaults(args: dict[str, Any]) -> None:
 
 def _apply_auth_filled_defaults(args: dict[str, Any]) -> None:
     args.setdefault("account", _AUTH_CHAIN_ACCOUNT_REF)
+    args.setdefault("idempotency_key", f"idem-{uuid.uuid4()}")
+
+
+def _apply_idempotency_only_default(args: dict[str, Any]) -> None:
     args.setdefault("idempotency_key", f"idem-{uuid.uuid4()}")
 
 
@@ -186,6 +195,8 @@ def _patch_mcp_tools_call(payload: dict[str, Any]) -> dict[str, Any]:
         _apply_get_products_defaults(arguments)
     elif name in _AUTH_FILLED_TOOLS:
         _apply_auth_filled_defaults(arguments)
+    elif name in _IDEMPOTENCY_ONLY_TOOLS:
+        _apply_idempotency_only_default(arguments)
     if name == "sync_creatives":
         _backfill_asset_types(arguments.get("creatives"))
     return payload
@@ -201,6 +212,8 @@ def _patch_a2a_skill(payload: dict[str, Any]) -> dict[str, Any]:
         _apply_get_products_defaults(params)
     elif skill in _AUTH_FILLED_TOOLS:
         _apply_auth_filled_defaults(params)
+    elif skill in _IDEMPOTENCY_ONLY_TOOLS:
+        _apply_idempotency_only_default(params)
     if skill == "sync_creatives":
         _backfill_asset_types(params.get("creatives"))
     return payload

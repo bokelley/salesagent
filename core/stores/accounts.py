@@ -15,10 +15,18 @@ Resolution order:
 
 The resolved Account's ``metadata['tenant_id']`` is what
 :class:`PlatformRouter` reads to pick the per-tenant ``DecisioningPlatform``.
+
+This store also implements the framework's optional
+:class:`AccountStoreUpsert` / :class:`AccountStoreList` Protocols so
+``sync_accounts`` / ``list_accounts`` work on the wire — the framework's
+stub :class:`PlatformHandler` dispatchers are rebound onto these methods
+by :mod:`core.platforms.account_polyfill`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any, Literal
 
 from adcp.decisioning import AdcpError
@@ -32,6 +40,16 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant
+from src.core.exceptions import AdCPError
+from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas.account import (
+    ListAccountsRequest,
+    SyncAccountsRequest,
+)
+from src.core.testing_hooks import AdCPTestContext
+from src.core.tools.accounts import _list_accounts_impl, _sync_accounts_impl
+
+logger = logging.getLogger(__name__)
 
 
 class SalesagentAccountStore:
@@ -122,6 +140,89 @@ class SalesagentAccountStore:
         with get_db_session() as session:
             row = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         return row is not None and row.is_active
+
+    # ----- AccountStoreUpsert / AccountStoreList Protocols -----------
+    #
+    # Account dispatch on the wire flows through the AccountStore's
+    # ``upsert`` / ``list`` methods (see ``adcp.decisioning.accounts``).
+    # ``core.platforms.account_polyfill`` wires the framework's
+    # ``PlatformHandler.sync_accounts`` / ``list_accounts`` stubs onto
+    # these methods so the wire skill calls actually reach our impl.
+
+    async def upsert(
+        self,
+        params: SyncAccountsRequest | dict[str, Any],
+        ctx: Any | None = None,
+    ) -> Any:
+        """Forward ``sync_accounts`` to ``src/core/tools/accounts._sync_accounts_impl``."""
+        req = self._coerce_to_model(params, SyncAccountsRequest)
+        identity = self._identity_from_ctx(ctx)
+        try:
+            return await _sync_accounts_impl(req=req, identity=identity)
+        except AdCPError as exc:
+            raise self._translate(exc) from exc
+
+    async def list(
+        self,
+        params: ListAccountsRequest | dict[str, Any] | None = None,
+        ctx: Any | None = None,
+    ) -> Any:
+        """Forward ``list_accounts`` to ``src/core/tools/accounts._list_accounts_impl``."""
+        req = self._coerce_to_model(params, ListAccountsRequest) if params is not None else None
+        identity = self._identity_from_ctx(ctx)
+        try:
+            return await asyncio.to_thread(_list_accounts_impl, req, identity)
+        except AdCPError as exc:
+            raise self._translate(exc) from exc
+
+    @staticmethod
+    def _coerce_to_model(payload: Any, model_cls: Any) -> Any:
+        if isinstance(payload, model_cls):
+            return payload
+        if hasattr(payload, "model_dump"):
+            return model_cls(**payload.model_dump(exclude_none=True))
+        if isinstance(payload, dict):
+            return model_cls(**payload)
+        return model_cls.model_validate(payload)
+
+    def _identity_from_ctx(self, ctx: Any | None) -> ResolvedIdentity:
+        """Build a :class:`ResolvedIdentity` from the framework
+        :class:`ResolveContext` (or fall back to the request-scope
+        ContextVars when called outside the dispatch shim)."""
+        from src.core.config_loader import get_tenant_by_id
+
+        principal_id = current_principal.get()
+        tenant_id = auth_current_tenant.get()
+        if not tenant_id and ctx is not None:
+            agent = getattr(ctx, "agent", None)
+            tenant_id = getattr(agent, "tenant_id", None)
+        if not tenant_id:
+            raise AdcpError(
+                "ACCOUNT_NOT_FOUND",
+                message=(
+                    "sync_accounts/list_accounts requires an authenticated "
+                    "principal — no tenant resolved on the request context."
+                ),
+                recovery="terminal",
+                field="account",
+            )
+        tenant_dict = get_tenant_by_id(tenant_id)
+        return ResolvedIdentity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            tenant=tenant_dict,
+            protocol="mcp",
+            testing_context=AdCPTestContext(),
+        )
+
+    @staticmethod
+    def _translate(exc: AdCPError) -> AdcpError:
+        return AdcpError(
+            exc.error_code,
+            message=exc.message or str(exc),
+            recovery=exc.recovery,
+            details=exc.details if isinstance(exc.details, dict) else None,
+        )
 
 
 def _auth_info_to_dict(auth_info: AuthInfo | None) -> dict[str, Any] | None:

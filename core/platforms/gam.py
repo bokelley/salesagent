@@ -157,3 +157,7 @@ class GamPlatform(DecisioningPlatform):
         ctx: RequestContext[Any],
     ) -> dict[str, Any]:
         return await _delegate_provide_performance_feedback(req, ctx)
+
+    # sync_accounts / list_accounts dispatch lives on the shared
+    # SalesagentAccountStore (accounts attribute), not as platform
+    # methods — see core.platforms.account_polyfill.
