@@ -180,6 +180,11 @@ class AdminAccountEnv:
                 "password": "test123",
                 "tenant_id": tenant_id,
             },
+            # Same-origin Origin so the admin's CSRF before_request guard
+            # (#32) treats us as a legitimate browser submission. Without
+            # this, the POST is rejected with 403 before the auth handler
+            # ever sees the form.
+            headers={"Origin": self._base_url.rstrip("/")},
             allow_redirects=False,
         )
         # /test/auth redirects on success (302) — session cookie is stored
@@ -243,15 +248,23 @@ class AdminAccountEnv:
             return _AdminResponse.from_flask(self._flask_client.get(url))
         return _AdminResponse.from_requests(self._session.get(url, allow_redirects=False))
 
+    def _e2e_csrf_headers(self) -> dict[str, str]:
+        """Same-origin Origin so the admin's CSRF before_request guard
+        (#32) accepts the POST. Integration mode runs with TESTING=True
+        and bypasses the guard entirely, so this only matters for e2e."""
+        return {"Origin": self._base_url.rstrip("/")}
+
     def _post_form(self, url: str, data: dict[str, str]) -> _AdminResponse:
         if self._mode == "integration":
             return _AdminResponse.from_flask(self._flask_client.post(url, data=data, follow_redirects=False))
-        return _AdminResponse.from_requests(self._session.post(url, data=data, allow_redirects=False))
+        return _AdminResponse.from_requests(
+            self._session.post(url, data=data, headers=self._e2e_csrf_headers(), allow_redirects=False)
+        )
 
     def _post_json(self, url: str, data: dict[str, Any]) -> _AdminResponse:
         if self._mode == "integration":
             return _AdminResponse.from_flask(self._flask_client.post(url, json=data))
-        return _AdminResponse.from_requests(self._session.post(url, json=data))
+        return _AdminResponse.from_requests(self._session.post(url, json=data, headers=self._e2e_csrf_headers()))
 
     # ── Data setup ────────────────────────────────────────────────────────
 
