@@ -1003,6 +1003,27 @@ class TargetingOverlay(LibraryTargetingOverlay):
                 result[name] = value
         return result
 
+    @classmethod
+    def model_validate_persisted(cls, raw: "dict | TargetingOverlay") -> "TargetingOverlay":
+        """Hydrate from trusted DB-stored targeting JSON.
+
+        Strips keys that are no longer in the schema (e.g. fields dropped in
+        #280 cleanup waves). DB rows written before a field was removed would
+        otherwise trip ``extra='forbid'`` in dev/CI — production survives via
+        ``extra='ignore'`` but local replay of prod-shaped data would not.
+
+        Safe because DB-stored targeting is salesagent's own past output, not
+        untrusted buyer input. Buyer-facing validation still runs through the
+        normal ``Targeting(**...)`` / ``model_validate`` paths with strict
+        extras.
+        """
+        if isinstance(raw, cls):
+            return raw
+        valid_keys = set(cls.model_fields) | {v2 for v2, _v3, _t in _LEGACY_GEO_FIELDS}
+        valid_keys |= {"geo_city_any_of", "geo_city_none_of"}  # legacy normalizer signal
+        cleaned = {k: v for k, v in raw.items() if k in valid_keys}
+        return cls.model_validate(cleaned)
+
 
 # Back-compat alias — many adapters and tests import ``Targeting`` directly.
 # Removal tracked in #280 (Phase 2 cleanup — drop once non-spec dimensions

@@ -860,7 +860,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     if targeting_raw:
                         from src.core.schemas import Targeting
 
-                        targeting_overlay = Targeting(**targeting_raw)
+                        targeting_overlay = Targeting.model_validate_persisted(targeting_raw)
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'

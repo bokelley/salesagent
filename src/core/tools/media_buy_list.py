@@ -578,6 +578,4 @@ def _build_targeting_overlay(pkg_config: dict) -> Targeting | None:
     raw = pkg_config.get("targeting_overlay") or pkg_config.get("targeting")
     if not raw:
         return None
-    if isinstance(raw, Targeting):
-        return raw
-    return Targeting.model_validate(raw)
+    return Targeting.model_validate_persisted(raw)

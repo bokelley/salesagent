@@ -107,3 +107,50 @@ class TestInternalDumpPreservesAllFields:
         assert "tenant_id" not in result
         assert "created_at" not in result
         assert "key_value_pairs" not in result
+
+
+class TestPersistedHydrationToleratesDroppedFields:
+    """``model_validate_persisted`` is for DB hydration — must tolerate keys
+    removed in past schema cleanups (e.g. #280 wave A drops)."""
+
+    def test_dropped_fields_in_db_row_do_not_raise(self):
+        """A persisted row written before a field was dropped must still hydrate."""
+        legacy_row = {
+            "geo_countries": ["US"],
+            # All dropped in #280 wave A:
+            "connection_type_any_of": [1, 2],
+            "connection_type_none_of": [3],
+            "os_none_of": ["android"],
+            "browser_none_of": ["ie"],
+            "media_type_none_of": ["display"],
+            "content_cat_none_of": ["IAB1"],
+            "keywords_none_of": ["spam"],
+        }
+        t = TargetingOverlay.model_validate_persisted(legacy_row)
+        # Surviving fields hydrated correctly
+        assert t.geo_countries is not None
+        # Dropped fields are simply not present (no AttributeError, no validation error)
+        assert not hasattr(t, "connection_type_any_of")
+
+    def test_legacy_geo_aliases_still_normalize(self):
+        """Stripping unknown keys must not strip the legacy-geo aliases the
+        ``normalize_legacy_geo`` validator depends on."""
+        legacy_row = {"geo_country_any_of": ["US", "CA"], "geo_metro_any_of": ["501"]}
+        t = TargetingOverlay.model_validate_persisted(legacy_row)
+        assert t.geo_countries is not None
+        assert len(t.geo_countries) == 2
+        assert t.geo_metros is not None
+
+    def test_passthrough_when_already_typed(self):
+        existing = TargetingOverlay(geo_countries=["US"])
+        assert TargetingOverlay.model_validate_persisted(existing) is existing
+
+    def test_buyer_path_still_strict(self):
+        """``model_validate_persisted`` is the lenient hatch — direct construction
+        and ``model_validate`` keep their strict ``extra='forbid'`` contract for
+        dev/CI."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            TargetingOverlay(connection_type_any_of=[1])
