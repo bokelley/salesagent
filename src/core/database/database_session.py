@@ -92,6 +92,21 @@ def get_engine():
         connect_timeout = int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10"))  # 10s default
         pool_timeout = int(os.environ.get("DATABASE_POOL_TIMEOUT", "30"))  # 30s default
 
+        # TCP keepalive settings — let the OS detect half-open sockets quickly
+        # so SQLAlchemy's pool can replace evicted connections instead of handing
+        # back a dead one. Without these, a PgBouncer client_idle_timeout eviction
+        # leaves a half-open TCP socket that any subsequent operation
+        # (cursor.execute, SELECT 1, etc.) blocks on indefinitely.
+        # libpq keepalive params: keepalives_idle (start probing after Ns idle),
+        # keepalives_interval (gap between probes), keepalives_count (probes
+        # before declaring dead).
+        keepalive_args = {
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        }
+
         # Detect PgBouncer usage (typically port 6543)
         # PgBouncer requires different pooling strategy since it manages connections
         is_pgbouncer = _is_pgbouncer_connection(connection_string)
@@ -100,20 +115,28 @@ def get_engine():
             logger.info("PgBouncer detected - using optimized connection pool settings")
             # PgBouncer-optimized settings:
             # - Smaller pool_size (PgBouncer handles pooling)
-            # - No pool_pre_ping (can cause issues with transaction pooling)
+            # - pool_pre_ping=True: cheap SELECT 1 round-trip on checkout. Safe in
+            #   transaction-pooling mode (one transaction = one server backend),
+            #   and required to detect PgBouncer client_idle_timeout evictions
+            #   that close the connection between checkouts.
             # - Shorter pool_recycle (PgBouncer recycles for us)
-            # - statement_timeout set via event listener (PgBouncer doesn't support startup parameters)
+            # - statement_timeout set via event listener: PgBouncer rejects
+            #   statement_timeout as a libpq startup parameter
+            #   ("unsupported startup parameter in options: statement_timeout")
+            #   unless the operator adds it to ignore_startup_parameters in
+            #   pgbouncer.ini. We use SET on connect instead.
             _engine = create_engine(
                 connection_string,
                 pool_size=2,  # Small pool - PgBouncer does the pooling
                 max_overflow=5,  # Limited overflow
                 pool_timeout=pool_timeout,
                 pool_recycle=300,  # 5 minutes - shorter since PgBouncer manages connections
-                pool_pre_ping=False,  # Disable pre-ping with PgBouncer transaction pooling
+                pool_pre_ping=True,
                 echo=False,
                 json_serializer=_pydantic_json_serializer,
                 connect_args={
                     "connect_timeout": connect_timeout,
+                    **keepalive_args,
                 },
             )
         else:
@@ -130,12 +153,17 @@ def get_engine():
                 json_serializer=_pydantic_json_serializer,
                 connect_args={
                     "connect_timeout": connect_timeout,  # Connection timeout in seconds
+                    **keepalive_args,
                 },
             )
 
-        # Set statement_timeout after connection is established
-        # This works with both direct PostgreSQL and PgBouncer
-        # PgBouncer doesn't support startup parameters, so we must use SET command
+        # Set statement_timeout after connection is established.
+        # We can't pass it via libpq startup options because PgBouncer rejects
+        # unknown startup parameters by default (see comment above). The cursor
+        # execute below CAN itself hang on a stale TCP socket, but the keepalive
+        # settings + pool_pre_ping above mean we should never see a stale socket
+        # at this point: the OS-level keepalive probes will tear down dead
+        # sockets before they reach this listener.
         @event.listens_for(_engine, "connect")
         def set_statement_timeout(dbapi_conn, connection_record):
             """Set statement_timeout on new connections."""
