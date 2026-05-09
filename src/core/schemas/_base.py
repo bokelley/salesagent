@@ -1004,7 +1004,7 @@ class TargetingOverlay(LibraryTargetingOverlay):
         return result
 
     @classmethod
-    def model_validate_persisted(cls, raw: "dict | TargetingOverlay") -> "TargetingOverlay":
+    def model_validate_persisted(cls, raw: "dict[str, Any] | TargetingOverlay") -> "TargetingOverlay":
         """Hydrate from trusted DB-stored targeting JSON.
 
         Strips keys that are no longer in the schema (e.g. fields dropped in
@@ -1017,11 +1017,11 @@ class TargetingOverlay(LibraryTargetingOverlay):
         normal ``Targeting(**...)`` / ``model_validate`` paths with strict
         extras.
         """
-        if isinstance(raw, cls):
+        if isinstance(raw, TargetingOverlay):
             return raw
         valid_keys = set(cls.model_fields) | {v2 for v2, _v3, _t in _LEGACY_GEO_FIELDS}
         valid_keys |= {"geo_city_any_of", "geo_city_none_of"}  # legacy normalizer signal
-        cleaned = {k: v for k, v in raw.items() if k in valid_keys}
+        cleaned: dict[str, Any] = {k: v for k, v in raw.items() if k in valid_keys}
         return cls.model_validate(cleaned)
 
 
