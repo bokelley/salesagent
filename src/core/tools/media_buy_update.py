@@ -1285,19 +1285,41 @@ def _update_media_buy_impl(
                             updated_assignments.append(creative_id)
                             new_assignments_created.append(creative_id)
 
-                    # If media buy was approved (approved_at set) but is in draft status
-                    # (meaning it was approved without creatives), transition to pending_creatives
-                    # Check whenever creative_assignments are being set (not just when new ones created)
-                    if (
-                        pkg_update.creative_assignments
-                        and media_buy_obj.status == "draft"
-                        and media_buy_obj.approved_at is not None
-                    ):
-                        media_buy_obj.status = "pending_creatives"
-                        logger.info(
-                            f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
-                            f"(creative_assignments processed: {updated_assignments})"
-                        )
+                    # State machine: creative_assignments may unblock two transitions.
+                    # 1. draft + approved_at → pending_creatives (approved without creatives).
+                    # 2. pending_creatives → pending_start/active (creatives now attached).
+                    #    Per spec/storyboard ``pending_creatives_to_start``, the buy state
+                    #    advances when creatives are *attached*, independently of creative
+                    #    review state — the two lifecycles are decoupled. ``_compute_status``
+                    #    on the read path will derive pending_start/active from flight dates
+                    #    once we clear the persisted blocker.
+                    if pkg_update.creative_assignments and updated_assignments:
+                        if media_buy_obj.status == "draft" and media_buy_obj.approved_at is not None:
+                            media_buy_obj.status = "pending_creatives"
+                            logger.info(
+                                f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
+                                f"(creative_assignments processed: {updated_assignments})"
+                            )
+                        elif media_buy_obj.status == "pending_creatives" and (
+                            media_buy_obj.start_time is not None and media_buy_obj.end_time is not None
+                        ):
+                            # Clear the blocker so date-based status (pending_start/active)
+                            # takes over. Persist the date-derived value rather than
+                            # nulling out, so get_media_buys / response status agree.
+                            from src.core.tools.media_buy_create import _determine_media_buy_status
+
+                            media_buy_obj.status = _determine_media_buy_status(
+                                manual_approval_required=False,
+                                has_creatives=True,
+                                creatives_approved=True,
+                                start_time=media_buy_obj.start_time,
+                                end_time=media_buy_obj.end_time,
+                            )
+                            logger.info(
+                                f"[UPDATE] Media buy {actual_media_buy_id} transitioned from "
+                                f"pending_creatives to {media_buy_obj.status} "
+                                f"(creative_assignments processed: {updated_assignments})"
+                            )
 
                     # Flush to persist assignment changes within the session
                     session.flush()
@@ -1561,8 +1583,28 @@ def _update_media_buy_impl(
         # - AdCP-required fields (package_id) for spec compliance
         # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
+        # Compute current status on the way out: read what we just persisted and
+        # apply the same blocker / date logic the get_media_buys read path uses.
+        # Without this, the response's ``status`` is None and the storyboard
+        # ``pending_creatives_to_start/assign_creative_to_package`` step can't
+        # observe the transition we just performed.
+        from src.core.tools.media_buy_list import _compute_status
+
+        response_status: str | None = None
+        # The status field on UpdateMediaBuySuccess is best-effort — we want it
+        # populated when we can read the buy back, but a fetch/parse failure
+        # MUST NOT regress the rest of the response. Wrap the whole thing.
+        try:
+            post_update_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
+            if post_update_buy is not None:
+                today = datetime.now(UTC).date()
+                response_status = _compute_status(post_update_buy, today).value
+        except Exception as exc:
+            logger.warning(f"[update_media_buy] could not compute status for {req.media_buy_id}: {exc}")
+
         final_response = UpdateMediaBuySuccess(
             media_buy_id=req.media_buy_id or "",
+            status=response_status,
             affected_packages=affected_packages_list,
             context=req.context,
         )

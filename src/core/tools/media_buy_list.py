@@ -355,7 +355,14 @@ def _fetch_target_media_buys(
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
     assert uow.media_buys is not None
-    filter_statuses = _resolve_status_filter(req.status_filter)
+    # When the buyer explicitly names ``media_buy_ids`` *and* didn't supply a
+    # status_filter, honor the by-id request without applying the default-active
+    # gate — they're asking for those specific buys regardless of state.
+    # Storyboard ``inventory_list_targeting/get_after_create`` reads back a
+    # freshly-created (pending_creatives) buy by id; gating on ``active`` would
+    # silently return ``[]``. An explicit status_filter still narrows results.
+    skip_default_active = bool(req.media_buy_ids) and req.status_filter is None
+    filter_statuses = None if skip_default_active else _resolve_status_filter(req.status_filter)
 
     buys = uow.media_buys.get_by_principal(
         principal_id,
@@ -377,7 +384,7 @@ def _fetch_target_media_buys(
             status=buy.status,
         )
         for buy in buys
-        if _compute_status(buy, today) in filter_statuses
+        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
     ]
 
 
@@ -460,14 +467,17 @@ def _project_gam_buys(
     if not orders:
         return [], {}
 
-    filter_statuses = _resolve_status_filter(req.status_filter)
+    # Mirror ``_fetch_target_media_buys``: explicit ``media_buy_ids`` without
+    # a status_filter bypasses the default-active gate.
+    skip_default_active = bool(media_buy_ids_filter) and req.status_filter is None
+    filter_statuses = None if skip_default_active else _resolve_status_filter(req.status_filter)
 
     projected_buys: list[_MediaBuyData] = []
     projected_packages: dict[str, list[_PackageData]] = {}
     for order in orders:
         fields = order_to_media_buy_fields(order)
         status = project_gam_status(order.status, fields["start_date"], fields["end_date"], today)
-        if status not in filter_statuses:
+        if filter_statuses is not None and status not in filter_statuses:
             continue
         buy_data = _MediaBuyData(**fields, projected_status=status)
         projected_buys.append(buy_data)

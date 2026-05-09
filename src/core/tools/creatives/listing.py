@@ -278,6 +278,18 @@ def _list_creatives_impl(
             from src.core.schemas._asset_type_compat import infer_asset_types
 
             assets_dict = infer_asset_types(assets_dict)
+            # Drop null-valued optional asset fields. The bundled
+            # list-creatives-response schema declares these as ``type: string``
+            # / ``type: object`` (not nullable), so emitting ``format: null``
+            # / ``alt_text: null`` / ``provenance: null`` makes ImageAsset
+            # ambiguous against the asset oneOf and the storyboard validator
+            # rejects with ``Invalid input`` at /creatives/0/assets/<key>.
+            # Pydantic ImageAsset allows null on those fields, so the strict
+            # spec is what we have to satisfy on the wire.
+            assets_dict = {
+                key: ({k: v for k, v in value.items() if v is not None} if isinstance(value, dict) else value)
+                for key, value in assets_dict.items()
+            }
 
             # Convert string status to CreativeStatus enum
             from src.core.schemas import CreativeStatus

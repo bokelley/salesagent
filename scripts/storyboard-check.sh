@@ -155,6 +155,20 @@ echo
 RC_mcp=0
 RC_a2a=0
 run_one mcp "${AGENT_BASE}/mcp" || true
+
+# Storyboard scenarios mutate state (update_swap_lists, etc.) and reuse
+# idempotency keys per scenario. Running MCP and A2A back-to-back against the
+# same DB causes the second protocol's idempotency replay to return the cached
+# create response while reading the post-update DB state — surfaces as bogus
+# verify_create_persisted failures. Set BETWEEN_PROTOCOLS_HOOK to a shell
+# command that resets the seller's storage between protocol runs (no-op when
+# unset, e.g. against a remote agent we don't control).
+if [[ -n "${BETWEEN_PROTOCOLS_HOOK:-}" ]]; then
+    echo "── Reset between protocols ──"
+    eval "$BETWEEN_PROTOCOLS_HOOK" || echo "  (hook returned non-zero; continuing)"
+    echo
+fi
+
 run_one a2a "${AGENT_BASE}/" || true
 
 echo "── Result ──"
