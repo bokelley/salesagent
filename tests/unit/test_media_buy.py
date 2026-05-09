@@ -2200,10 +2200,11 @@ class TestUpdateMediaBuyCampaignBudget:
         """
         from src.core.schemas import AdCPPackageUpdate, Budget
 
-        # Positive budget at campaign level is accepted
+        # Positive budget at campaign level — carried via ext.salesagent.budget
+        # since AdCP spec has no top-level UpdateMediaBuyRequest.budget.
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_1",
-            budget=Budget(total=5000.0, currency="USD"),
+            ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD").model_dump()}},
         )
         assert req.budget is not None
         assert req.budget.total == 5000.0
@@ -2215,6 +2216,24 @@ class TestUpdateMediaBuyCampaignBudget:
         )
         assert req2.packages is not None
         assert req2.packages[0].budget == 3000.0
+
+    def test_legacy_top_level_budget_rejected_with_migration_message(self):
+        """Legacy top-level budget= rejected with a clear migration pointer.
+
+        AdCP spec has no top-level UpdateMediaBuyRequest.budget. Buyers using
+        the pre-cleanup wire shape get a ValidationError pointing them at
+        ext.salesagent.budget and adcp RFC #4241.
+
+        Priority: P1
+        Type: unit
+        Source: UC-003 alt-budget migration safety
+        Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-99
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            UpdateMediaBuyRequest(media_buy_id="mb_1", budget=15000)
+        msg = str(exc_info.value)
+        assert "ext.salesagent.budget" in msg, f"Migration message missing the new path: {msg}"
+        assert "4241" in msg, f"Migration message missing the RFC reference: {msg}"
 
     def test_zero_campaign_budget_rejected(self):
         """UC-003-B02: budget=0 rejected.

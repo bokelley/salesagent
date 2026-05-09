@@ -2496,7 +2496,9 @@ class TestAdCPContract:
             paused=False,  # adcp 2.12.0+: replaced 'active' with 'paused'
             start_time=datetime(2025, 2, 1, 9, 0, 0, tzinfo=UTC),
             end_time=datetime(2025, 2, 28, 23, 59, 59, tzinfo=UTC),
-            budget=Budget(total=5000.0, currency="USD", pacing="even"),
+            # AdCP spec has no top-level budget on UpdateMediaBuyRequest;
+            # salesagent carries it via ext until RFC #4241 lands.
+            ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD", pacing="even").model_dump()}},
             packages=[AdCPPackageUpdate(package_id="pkg_123", paused=False, budget=2500.0)],  # adcp 2.12.0+
         )
 
@@ -2506,11 +2508,19 @@ class TestAdCPContract:
         assert "media_buy_id" in adcp_response_id, "media_buy_id must be present"
         assert adcp_response_id["media_buy_id"] is not None, "media_buy_id must not be None"
 
-        # ✅ VERIFY ADCP COMPLIANCE: Optional fields present when provided
-        optional_fields = ["paused", "start_time", "end_time", "budget", "packages"]  # adcp 2.12.0+
+        # ✅ VERIFY ADCP COMPLIANCE: Optional fields present when provided.
+        # ``budget`` is intentionally NOT a wire field — spec has no top-level
+        # media-buy budget update (RFC #4241). Salesagent reads it from
+        # ext.salesagent.budget; the dumped response should carry it under
+        # ``ext``, not at the top level.
+        optional_fields = ["paused", "start_time", "end_time", "packages"]
         for field in optional_fields:
             if getattr(adcp_request_id, field) is not None:
                 assert field in adcp_response_id, f"Optional AdCP field '{field}' missing from response"
+        assert "budget" not in adcp_response_id, "budget must not appear at top level (spec violation)"
+        assert adcp_response_id.get("ext", {}).get("salesagent", {}).get("budget") is not None, (
+            "budget should be carried under ext.salesagent.budget"
+        )
 
         # ✅ VERIFY start_time/end_time are datetime (not date)
         if adcp_response_id.get("start_time"):

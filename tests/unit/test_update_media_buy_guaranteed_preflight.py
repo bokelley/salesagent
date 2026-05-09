@@ -75,7 +75,7 @@ class TestGuaranteedTypesBlockReservationFields:
         assert result.errors[0].details["blocked_fields"] == ["end_time"]
 
     def test_standard_blocks_budget_change(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", budget=5000.0)
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", ext={"salesagent": {"budget": 5000.0}})
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "STANDARD")])
 

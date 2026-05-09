@@ -131,7 +131,11 @@ def _check_guaranteed_immutable(
     Default-allow on unknown ``line_item_type`` so this never blocks new
     GAM types Google introduces later.
     """
+    # ``budget`` is no longer a real Pydantic field — it's a property reading
+    # from ``ext.salesagent.budget``. Detect it explicitly via the property.
     requested = set(req.model_dump(exclude_unset=True).keys()) & _RESERVATION_FIELDS
+    if req.budget is not None:
+        requested.add("budget")
     if not requested:
         return None
 

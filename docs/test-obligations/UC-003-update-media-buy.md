@@ -246,11 +246,17 @@ Source: UC-003-alt-timing.md
 ### Alt: Campaign-Level Budget
 Source: UC-003-alt-budget.md
 
+> **Note (cycle-5 cleanup):** AdCP spec has no top-level `budget` field on
+> `UpdateMediaBuyRequest`. Buyers carry the field via
+> `ext.salesagent.budget` until adcp RFC #4241 lands a spec-native
+> `total_budget` field. Sending `budget=` at the top level is rejected
+> with a clear migration message.
+
 #### Scenario: Update campaign-level budget
 **Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-01
 **Layer** behavioral
 **Given** a media buy with campaign budget=$10,000
-**When** the buyer sends `update_media_buy` with top-level `budget=15000`
+**When** the buyer sends `update_media_buy` with `ext.salesagent.budget=15000`
 **Then** the campaign budget is updated to $15,000 and the response has status `completed`
 **Business Rule** BR-RULE-008 (budget > 0), BR-RULE-018
 **Priority** P1
@@ -259,7 +265,7 @@ Source: UC-003-alt-budget.md
 **Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-02
 **Layer** behavioral
 **Given** an authenticated buyer who owns a media buy
-**When** the buyer sends `update_media_buy` with `budget=0`
+**When** the buyer sends `update_media_buy` with `ext.salesagent.budget=0`
 **Then** the system rejects with `invalid_budget`
 **Business Rule** BR-RULE-008 (INV-2: budget <= 0 rejected)
 **Priority** P1
@@ -268,10 +274,19 @@ Source: UC-003-alt-budget.md
 **Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-03
 **Layer** behavioral
 **Given** an authenticated buyer who owns a media buy
-**When** the buyer sends `update_media_buy` with `budget=-100`
+**When** the buyer sends `update_media_buy` with `ext.salesagent.budget=-100`
 **Then** the system rejects with `invalid_budget`
 **Business Rule** BR-RULE-008 (INV-2)
 **Priority** P2
+
+#### Scenario: Legacy top-level budget rejected with migration message
+**Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-99
+**Layer** behavioral
+**Given** an authenticated buyer using the pre-cycle-5 wire shape
+**When** the buyer sends `update_media_buy` with top-level `budget=15000`
+**Then** the request is rejected with a clear migration message pointing at `ext.salesagent.budget` and adcp RFC #4241
+**Business Rule** Migration safety
+**Priority** P1
 
 #### Scenario: Campaign budget update recalculates daily spend
 **Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-04

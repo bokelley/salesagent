@@ -186,7 +186,7 @@ def test_combined_campaign_and_package_update(standard_mocks):
     identity = _make_identity()
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_combined",
-        budget=Budget(total=5000.0, currency="USD", pacing="even"),
+        ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD", pacing="even").model_dump()}},
         packages=[{"package_id": "pkg_A", "budget": 2500.0}],
     )
     result = _update_media_buy_impl(req=req, identity=identity)
@@ -461,7 +461,7 @@ class TestCampaignBudgetValidationAndPersistence:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_budget",
-            budget=Budget(total=10000.0, currency="USD", pacing="even"),
+            ext={"salesagent": {"budget": Budget(total=10000.0, currency="USD", pacing="even").model_dump()}},
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1103,7 +1103,7 @@ class TestUC003CampaignLevelBudget:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_no_sync",
-            budget=Budget(total=5000.0, currency="USD", pacing="even"),
+            ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD", pacing="even").model_dump()}},
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 

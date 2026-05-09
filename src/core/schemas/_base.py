@@ -1603,10 +1603,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # omission must mean "not a cancellation request", not "default to
     # canceled". (#155)
     canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
-    # Campaign-level budget (not in library spec — convenience field)
-    # Bare float is accepted so transport wrappers can preserve existing DB currency
-    # when the caller updates only the amount.
-    budget: Budget | float | None = None
     # Library v4.4.0 made account + idempotency_key required. Salesagent
     # resolves identity at the transport boundary (ResolvedIdentity), not from
     # the request payload, so account stays optional. idempotency_key is
@@ -1646,6 +1642,19 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
             if isinstance(end_time, str):
                 values["end_time"] = datetime.fromisoformat(end_time)
 
+        # Migration: top-level `budget` was a salesagent extension. AdCP spec
+        # has no media-buy-level budget update — buyers must enumerate
+        # packages or use ext.salesagent.budget while RFC #4241 is open.
+        # Reject the legacy shape with a clear migration message.
+        if "budget" in values:
+            raise ValueError(
+                "UpdateMediaBuyRequest.budget is no longer accepted at the top "
+                "level — AdCP spec has no media-buy-level budget update. "
+                "Use ext.salesagent.budget to set total budget while "
+                "adcontextprotocol/adcp#4241 is open, or enumerate per-package "
+                "updates via packages=[{package_id, budget: ...}]."
+            )
+
         return values
 
     @model_validator(mode="after")
@@ -1682,6 +1691,34 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
                 self.ext,
             )
         )
+
+    @property
+    def budget(self) -> "Budget | float | None":
+        """Total media-buy budget — read from ``ext.salesagent.budget``.
+
+        Spec has no top-level media-buy budget update; buyers carry it via
+        the ``ext`` namespace until adcp RFC #4241 lands. Accepts either
+        a bare number (preserves DB currency) or a Budget-shaped dict
+        with ``total`` + ``currency``.
+        """
+        if not self.ext:
+            return None
+        # ``ext`` is an ExtensionObject (Pydantic model with extra="allow"),
+        # not a dict — vendor namespaces appear as attributes.
+        ext_dict = self.ext.model_dump() if hasattr(self.ext, "model_dump") else self.ext
+        salesagent_ext = ext_dict.get("salesagent") if isinstance(ext_dict, dict) else None
+        if not isinstance(salesagent_ext, dict):
+            return None
+        raw = salesagent_ext.get("budget")
+        if raw is None:
+            return None
+        if isinstance(raw, int | float):
+            return float(raw)
+        if isinstance(raw, dict):
+            return Budget.model_validate(raw)
+        if isinstance(raw, Budget):
+            return raw
+        return None
 
     # Backward compatibility properties (deprecated)
     @property
