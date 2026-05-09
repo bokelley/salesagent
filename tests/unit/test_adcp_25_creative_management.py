@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -20,12 +20,13 @@ class TestSyncCreativesCreativeIdsFilter:
 
     def test_sync_creatives_request_accepts_creative_ids(self):
         """Test SyncCreativesRequest schema accepts creative_ids field."""
-        creative = Creative(
+        creative = CreativeAsset(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/banner.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # Should accept creative_ids parameter
@@ -40,12 +41,13 @@ class TestSyncCreativesCreativeIdsFilter:
 
     def test_sync_creatives_request_rejects_patch_parameter(self):
         """Test SyncCreativesRequest rejects deprecated patch parameter."""
-        creative = Creative(
+        creative = CreativeAsset(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/banner.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # Should reject patch parameter (removed in AdCP 2.5)
@@ -323,14 +325,15 @@ class TestSyncCreativesErrorCases:
         Spec behavior: creative_ids is a filter on the payload, not a fetch.
         If creative_ids contains IDs not in the creatives array, those are ignored.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = CreativeAsset(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/banner.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # Filter requests IDs that don't exist in payload
@@ -350,22 +353,24 @@ class TestSyncCreativesErrorCases:
         Spec behavior: Only creatives whose IDs appear in both the payload AND
         the creative_ids filter are processed.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
         creatives = [
-            Creative(
+            CreativeAsset(
                 creative_id="creative_1",
-                variants=[],
                 name="Creative 1",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-                assets={"banner": {"url": "https://example.com/1.png", "asset_type": "image"}},
+                assets={
+                    "banner": {"url": "https://example.com/1.png", "asset_type": "image", "width": 300, "height": 250}
+                },
             ),
-            Creative(
+            CreativeAsset(
                 creative_id="creative_2",
-                variants=[],
                 name="Creative 2",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-                assets={"banner": {"url": "https://example.com/2.png", "asset_type": "image"}},
+                assets={
+                    "banner": {"url": "https://example.com/2.png", "asset_type": "image", "width": 300, "height": 250}
+                },
             ),
         ]
 
@@ -389,14 +394,15 @@ class TestSyncCreativesErrorCases:
         """
         from pydantic import ValidationError
 
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = CreativeAsset(
             creative_id="creative_1",
-            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/banner.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # None = no filter, process all
@@ -435,7 +441,14 @@ class TestSyncCreativesErrorCases:
             Creative(
                 creative_id="test",
                 # name missing
-                assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+                assets={
+                    "banner": {
+                        "url": "https://example.com/banner.png",
+                        "asset_type": "image",
+                        "width": 300,
+                        "height": 250,
+                    }
+                },
             )
         assert "name" in str(exc_info.value).lower()
 
@@ -631,14 +644,15 @@ class TestDeleteMissingWithCreativeIdsFilter:
 
     def test_schema_accepts_both_parameters(self):
         """Schema should accept both delete_missing and creative_ids together."""
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = CreativeAsset(
             creative_id="creative_1",
-            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/banner.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # Both parameters together should be valid schema
@@ -662,16 +676,17 @@ class TestDeleteMissingWithCreativeIdsFilter:
         The second case is important: if creative_ids=["c1", "c2"] and payload
         only has c1, should c2 be deleted? This depends on interpretation.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
         # This test documents the expected behavior
         # Implementation should handle this consistently
-        creative = Creative(
+        creative = CreativeAsset(
             creative_id="c1",
-            variants=[],
             name="Creative 1",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/banner.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # Scoped delete: creative_ids filter with delete_missing
@@ -721,21 +736,23 @@ class TestUpsertSemantics:
         Request: creatives=[c1_updated, c2_updated], creative_ids=[c1]
         Result: Only c1 is updated, c2 in payload is ignored
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import CreativeAsset, FormatId, SyncCreativesRequest
 
-        c1 = Creative(
+        c1 = CreativeAsset(
             creative_id="c1",
-            variants=[],
             name="Creative 1 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/new.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/new.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
-        c2 = Creative(
+        c2 = CreativeAsset(
             creative_id="c2",
-            variants=[],
             name="Creative 2 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/new2.png", "asset_type": "image"}},
+            assets={
+                "banner": {"url": "https://example.com/new2.png", "asset_type": "image", "width": 300, "height": 250}
+            },
         )
 
         # Only c1 should be processed due to filter

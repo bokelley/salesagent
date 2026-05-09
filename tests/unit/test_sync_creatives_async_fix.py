@@ -11,10 +11,10 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import FormatId
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import FormatId
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
 from tests.harness import make_mock_uow

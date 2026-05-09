@@ -5,9 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from adcp.types import CreativeAsset
-
-from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
+from src.core.schemas import Creative, CreativeAsset, CreativePolicy, CreativeStatusEnum
 from src.core.validation_helpers import run_async_in_sync_context
 
 logger = logging.getLogger(__name__)

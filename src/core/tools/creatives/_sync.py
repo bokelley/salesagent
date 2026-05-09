@@ -6,14 +6,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import ContextObject, CreativeAction, CreativeAsset, Error
+from adcp.types import ContextObject, CreativeAction, Error
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
+from src.core.schemas import CreativeAsset, SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments

@@ -120,13 +120,14 @@ class CreativeSyncEnv(IntegrationEnv):
             fmt = env.setup_generative_build(format_id="gen_banner")
             creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
         """
-        from adcp.types import FormatId as LibraryFormatId
+        from src.core.schemas import FormatId
 
         agent = agent_url or self.DEFAULT_AGENT_URL
 
-        # Create format mock with matching FormatId
+        # Create format mock with FormatId matching the production registry's type
+        # (creative_agent_registry.py constructs local FormatId instances).
         mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=agent, id=format_id)
+        mock_format.format_id = FormatId(agent_url=agent, id=format_id)
         mock_format.agent_url = agent
         mock_format.output_format_ids = [format_id]  # Non-empty → generative
 

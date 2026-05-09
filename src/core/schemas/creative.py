@@ -17,6 +17,7 @@ from adcp.types import (
     Error,
 )
 from adcp.types import CreativeApproval as LibraryCreativeApproval
+from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -143,6 +144,58 @@ class CreativeStatusEnum(Enum):
     pending_review = "pending_review"
 
 
+def _upgrade_format_id_in_values(values: Any) -> Any:
+    """Upgrade ``format_id`` (or legacy ``format`` alias) to the AdCP namespaced FormatId.
+
+    Used by both ``Creative`` (listing shape) and ``CreativeAsset`` (sync shape) so
+    string format_ids, the legacy ``format`` key, and library-typed ``FormatReferenceStructuredObject``
+    instances are all normalized to the local ``FormatId`` subclass.
+    """
+    from pydantic import BaseModel
+
+    from src.core.format_cache import upgrade_legacy_format_id
+
+    # ``model_validate(other_model_instance, from_attributes=True)`` passes the
+    # source BaseModel here — dump it so the rest of the validator can mutate.
+    if isinstance(values, BaseModel):
+        values = values.model_dump()
+
+    if not isinstance(values, dict):
+        return values
+
+    format_val = values.get("format_id") or values.get("format")
+    if format_val is not None:
+        try:
+            values["format_id"] = upgrade_legacy_format_id(format_val)
+            values.pop("format", None)
+        except ValueError as e:
+            raise ValueError(f"Invalid format_id: {e}")
+    return values
+
+
+# --- Creative sync wire shape ---
+class CreativeAsset(LibraryCreativeAsset):
+    """Sync/create wire shape — extends library CreativeAsset.
+
+    AdCP's ``sync_creatives`` and ``create`` flows take ``CreativeAsset`` (provenance,
+    weight, placement_ids, industry_identifiers, inputs); the listing flow returns
+    the richer ``Creative`` (status, dates, account, assignments, etc.). Splitting
+    keeps each wire honest about which fields it actually carries.
+
+    Local extension: ``format_id`` accepts a plain string or legacy ``format`` alias
+    and upgrades to the structured FormatId for backward compatibility with pre-v2.4
+    callers.
+
+    Inherits ``extra="allow"`` from the library type — sync payloads commonly carry
+    forward-compat fields that should pass through silently.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_format_id(cls, values: Any) -> Any:
+        return _upgrade_format_id_in_values(values)
+
+
 # --- Creative Lifecycle ---
 class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
@@ -183,23 +236,13 @@ class Creative(LibraryCreative):
     @classmethod
     def validate_format_id(cls, values):
         """Validate and upgrade format_id to AdCP namespaced format."""
-        from src.core.format_cache import upgrade_legacy_format_id
-
-        # Handle both 'format' and 'format_id' keys
-        format_val = values.get("format_id") or values.get("format")
-        if format_val is not None:
-            try:
-                upgraded = upgrade_legacy_format_id(format_val)
-                values["format_id"] = upgraded
-                # Remove 'format' alias to avoid extra field rejection
-                values.pop("format", None)
-            except ValueError as e:
-                raise ValueError(f"Invalid format_id: {e}")
+        values = _upgrade_format_id_in_values(values)
 
         # Strip delivery-only fields that callers may still pass from old code.
         # These fields existed on the delivery Creative base but not on the listing base.
-        for field in ("variants", "variant_count", "totals", "media_buy_id"):
-            values.pop(field, None)
+        if isinstance(values, dict):
+            for field in ("variants", "variant_count", "totals", "media_buy_id"):
+                values.pop(field, None)
 
         return values
 
@@ -323,18 +366,18 @@ SubmitCreativesResponse = AddCreativeAssetsResponse
 
 
 class SyncCreativesRequest(LibrarySyncCreativesRequest):
-    """Extends library SyncCreativesRequest with local Creative type.
+    """Extends library SyncCreativesRequest.
 
     Library provides: account_id, assignments, context, creative_ids, creatives,
     delete_missing, dry_run, ext, push_notification_config, validation_mode — all
     inherited from AdCP spec.
 
     Local overrides:
-    - creatives: list[Creative] instead of list[CreativeAsset] (our Creative extends
-      LibraryCreative, which has a richer schema than CreativeAsset)
+    - creatives: list[CreativeAsset] re-typed against the local CreativeAsset
+      subclass so the format_id upgrade validator runs on the wire.
     - push_notification_config: kept as dict[str, Any] | None because the library's
       PushNotificationConfig requires 'authentication' and 'url' fields that aren't
-      enforced in our current implementation
+      enforced in our current implementation.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -348,7 +391,7 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     # natural-key dedup at the impl layer.
     idempotency_key: str | None = None  # type: ignore[assignment]
 
-    creatives: list[Creative] = Field(
+    creatives: list[CreativeAsset] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
     push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]

@@ -437,7 +437,7 @@ class TestStaticPreviewUpdate:
 
     def _setup_static_format(self, env):
         """Set up a static format in all_formats so preview_creative is called."""
-        from adcp.types import FormatId as LibraryFormatId
+        from src.core.schemas import FormatId as LibraryFormatId
 
         mock_format = MagicMock()
         mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
@@ -547,7 +547,7 @@ class TestStaticPreviewDimensionExtraction:
     """
 
     def _setup_static_format(self, env):
-        from adcp.types import FormatId as LibraryFormatId
+        from src.core.schemas import FormatId as LibraryFormatId
 
         mock_format = MagicMock()
         mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")

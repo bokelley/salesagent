@@ -1457,10 +1457,11 @@ class TestAdCPContract:
 
     def test_sync_creatives_request_adcp_compliance(self):
         """Test that SyncCreativesRequest model complies with AdCP v2.4 sync-creatives schema."""
-        # Create Creative objects with AdCP v1 spec-compliant format
-        creative = Creative(
+        from src.core.schemas import CreativeAsset
+
+        # SyncCreativesRequest carries CreativeAsset (sync wire shape) per AdCP spec
+        creative = CreativeAsset(
             creative_id="creative_123",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             assets={
@@ -1472,10 +1473,6 @@ class TestAdCPContract:
                 },
                 "click_url": {"url": "https://example.com/click", "url_type": "clickthrough"},
             },
-            # Internal fields (added by sales agent during processing)
-            principal_id="principal_456",
-            created_date=datetime.now(),
-            updated_date=datetime.now(),
         )
 
         # Test with spec-compliant fields only (adcp 3.9)
@@ -1521,22 +1518,19 @@ class TestAdCPContract:
         assert isinstance(adcp_response["creatives"], list), "Creatives must be an array"
         assert len(adcp_response["creatives"]) > 0, "Creatives array must not be empty"
 
-        # Test creative object structure
-        # Creative extends listing Creative: model_dump() contains listing fields
-        # (creative_id, format_id, name, status, created_date, updated_date, assets, tags)
-        # Only principal_id is internal/excluded
+        # Test creative object structure (sync wire shape — CreativeAsset)
+        # Sync carries CreativeAsset, not the listing Creative: required fields are
+        # creative_id, name, format_id, assets. Listing-only fields (status, dates)
+        # are not part of the sync payload.
         creative_obj = adcp_response["creatives"][0]
-        creative_public_fields = ["creative_id", "format_id", "name", "status", "created_date", "updated_date"]
+        creative_public_fields = ["creative_id", "format_id", "name", "assets"]
         for field in creative_public_fields:
-            assert field in creative_obj, f"Creative public field '{field}' missing"
-            assert creative_obj[field] is not None, f"Creative public field '{field}' is None"
+            assert field in creative_obj, f"CreativeAsset public field '{field}' missing"
+            assert creative_obj[field] is not None, f"CreativeAsset public field '{field}' is None"
 
-        # Delivery-only fields should NOT be present
-        for field in ["variants", "variant_count", "totals", "media_buy_id"]:
-            assert field not in creative_obj, f"Delivery field '{field}' should not be in listing response"
-
-        # Internal fields should NOT be in the response
-        assert "principal_id" not in creative_obj, "Internal field 'principal_id' exposed in response"
+        # Listing/delivery-only fields are not on the sync wire
+        for field in ["variants", "variant_count", "totals", "media_buy_id", "created_date", "updated_date"]:
+            assert field not in creative_obj, f"Field '{field}' should not be on sync (CreativeAsset) wire"
 
         # Verify assignments structure (adcp 3.9: list of Assignment objects)
         if adcp_response.get("assignments"):
