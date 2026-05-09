@@ -92,13 +92,14 @@ run_one() {
     echo "── ${protocol^^} ──"
     echo "→ ${url}"
 
-    # Capture both streams; the JSON summary lives on stderr (the always-on
-    # "STORYBOARD-FAIL" output the SDK promises), JSON output on stdout when
-    # --format json is set.
+    # Capture both streams; the always-on STORYBOARD-FAIL summary lives on
+    # stderr; --json puts the full ComplianceResult on stdout so we can
+    # post-process skip causes (which the always-on summary doesn't surface
+    # — see adcontextprotocol/adcp-client#1623).
     npx -y @adcp/sdk storyboard run "$url" "$STORYBOARD" \
         --auth "$AGENT_TOKEN" \
         --protocol "$protocol" \
-        --format json \
+        --json \
         --timeout "$TIMEOUT" \
         "${EXTRA_FLAGS[@]}" \
         >"$out" 2>"$err"
@@ -127,6 +128,63 @@ run_one() {
         # Truncate each line at 200 chars so the summary stays readable; full
         # output remains in the .json/.err files.
         echo "$failing" | sed 's/^/  /' | cut -c1-200
+    fi
+
+    # Skip causes (parsed from the --json output). The SDK's always-on summary
+    # only counts skips; this surfaces *why*, so a "30 skipped" line breaks down
+    # into "missing comply_test_controller (28), missing sync_accounts (2)" —
+    # actionable instead of opaque. See upstream issue
+    # adcontextprotocol/adcp-client#1623 for the eventual fix.
+    if [[ -s "$out" ]] && command -v python3 >/dev/null; then
+        local skip_summary
+        skip_summary=$(python3 - "$out" <<'PYEOF'
+import json, re, sys
+from collections import Counter, defaultdict
+try:
+    data = json.load(open(sys.argv[1]))
+except (json.JSONDecodeError, OSError):
+    sys.exit(0)
+
+# Collect (cause, scenario) tuples from skipped steps.
+causes = defaultdict(set)  # cause_key -> set(scenario_id)
+total = 0
+def walk(o, sc=None):
+    global total
+    if isinstance(o, dict):
+        if o.get('scenario'):
+            sc = o['scenario']
+        if o.get('skipped') and o.get('skip_reason'):
+            reason = o['skip_reason']
+            tool = None
+            for w in (o.get('warnings') or []):
+                m = re.search(r'did not advertise tool ["\']([^"\']+)["\']', str(w))
+                if m:
+                    tool = m.group(1); break
+            key = f"{reason}: {tool}" if tool else reason
+            causes[key].add(sc or '?')
+            total += 1
+        for v in o.values(): walk(v, sc)
+    elif isinstance(o, list):
+        for v in o: walk(v, sc)
+
+walk(data)
+if not causes:
+    sys.exit(0)
+
+print('  Skip causes:')
+for key, scenarios in sorted(causes.items(), key=lambda x: -len(x[1])):
+    print(f'    [{len(scenarios):3d}] {key}')
+    # Compact scenario list — strip the storyboard prefix.
+    short = sorted({s.split('/', 1)[-1].rsplit('/', 1)[0] if s.count('/') >= 2 else s for s in scenarios})
+    line = ', '.join(short)
+    if len(line) > 200:
+        line = line[:197] + '...'
+    print(f'         Affected: {line}')
+PYEOF
+)
+        if [[ -n "$skip_summary" ]]; then
+            echo "$skip_summary"
+        fi
     fi
 
     # passed=0 in summary == failure for our purposes
