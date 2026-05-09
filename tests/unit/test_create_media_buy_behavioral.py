@@ -40,8 +40,6 @@ from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPConflictError,
-    AdCPIdempotencyConflictError,
     AdCPNotFoundError,
     AdCPTermsRejectedError,
     AdCPValidationError,
@@ -354,9 +352,9 @@ class TestMaxDailySpendExceeded:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
                     # Validation errors must NOT be about daily spend
-                    assert (
-                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
-                    ), f"Daily spend validation should have passed but got: {e}"
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
+                        f"Daily spend validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend validation are fine
 
@@ -728,9 +726,9 @@ class TestInlineCreativesProcessedBeforeApproval:
 
         # Verify creatives were processed before the adapter (approval check) was accessed
         assert "creatives_processed" in call_order, "process_and_upload_package_creatives was not called"
-        assert call_order.index("creatives_processed") < call_order.index(
-            "approval_check"
-        ), f"Creatives must be processed before approval check. Order: {call_order}"
+        assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
+            f"Creatives must be processed before approval check. Order: {call_order}"
+        )
 
 
 class TestMultipleInvalidCreativesAccumulated:
@@ -1115,9 +1113,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert (
-                        "not found" not in str(e).lower() or "product" not in str(e).lower()
-                    ), f"Product validation should have passed but got: {e}"
+                    assert "not found" not in str(e).lower() or "product" not in str(e).lower(), (
+                        f"Product validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to product validation are fine
 
@@ -1143,9 +1141,9 @@ class TestMainFlowObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert (
-                        "currency" not in str(e).lower() or "not supported" not in str(e).lower()
-                    ), f"Currency validation should have passed but got: {e}"
+                    assert "currency" not in str(e).lower() or "not supported" not in str(e).lower(), (
+                        f"Currency validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to currency validation are fine
 
@@ -1415,9 +1413,9 @@ class TestAsapStartTimingObligations:
                 try:
                     result = await _create_media_buy_impl(req=req, identity=pc.identity)
                 except AdCPValidationError as e:
-                    assert (
-                        "daily" not in str(e).lower() or "exceeds" not in str(e).lower()
-                    ), f"Daily spend validation should have passed but got: {e}"
+                    assert "daily" not in str(e).lower() or "exceeds" not in str(e).lower(), (
+                        f"Daily spend validation should have passed but got: {e}"
+                    )
                 except Exception:
                     pass  # Downstream failures unrelated to daily spend are fine
 
@@ -2731,73 +2729,3 @@ class TestMeasurementTermsRejection:
                 except Exception:
                     # Downstream failures are unrelated to this gate.
                     pass
-
-
-# ===========================================================================
-# IdempotencyConflictError → IDEMPOTENCY_CONFLICT wire mapping
-# ===========================================================================
-
-
-class TestIdempotencyConflict:
-    """The salesagent ``AdCPIdempotencyConflictError`` declares the typed
-    contract that mirrors AdCP spec ``IDEMPOTENCY_CONFLICT`` (correctable
-    recovery, distinct from ``INTERNAL_ERROR``).
-
-    Per AdCP spec, when a buyer reuses an idempotency_key with a materially
-    different payload the seller must respond with ``IDEMPOTENCY_CONFLICT`` —
-    a *correctable* error so the buyer can either resend the exact original
-    payload or mint a fresh ``uuid.uuid4()`` key and retry. Conflating it with
-    ``INTERNAL_ERROR`` (terminal) breaks correctness: buyer agents either
-    abandon a recoverable replay or retry blindly without resetting their
-    keys.
-
-    The framework's :class:`adcp.server.idempotency.IdempotencyStore.wrap`
-    raises :class:`adcp.exceptions.IdempotencyConflictError` BEFORE the
-    platform method body runs. The translator decorator stacked OUTSIDE the
-    wrap (see ``core.idempotency.translate_idempotency_conflict``) catches
-    that exception and re-raises a wire-shaped framework
-    :class:`adcp.decisioning.AdcpError` with ``code="IDEMPOTENCY_CONFLICT"``
-    and ``recovery="correctable"``. End-to-end coverage of that flow lives
-    in ``core/tests/test_idempotency_conflict_translation.py``; the tests
-    below pin the salesagent-side exception class shape.
-
-    Pattern mirrors ``TestMeasurementTermsRejection`` (PR #133).
-    """
-
-    def test_adcp_idempotency_conflict_error_class_shape(self):
-        """:class:`AdCPIdempotencyConflictError` declares the wire-projection
-        contract: ``error_code="IDEMPOTENCY_CONFLICT"`` and
-        ``recovery="correctable"``. The 409 status_code matches the AdCP
-        spec's ``CONFLICT`` family (vs. 500 INTERNAL_ERROR).
-        """
-        exc = AdCPIdempotencyConflictError("idempotency_key reused with a different payload")
-
-        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
-        assert exc.recovery == "correctable"
-        assert exc.status_code == 409
-
-    def test_idempotency_conflict_inherits_from_conflict_base(self):
-        """:class:`AdCPIdempotencyConflictError` extends
-        :class:`AdCPConflictError` so generic conflict-handling code paths
-        catch it without requiring a special case.
-        """
-        exc = AdCPIdempotencyConflictError("conflict")
-
-        assert isinstance(exc, AdCPConflictError)
-
-    def test_idempotency_conflict_to_dict_serializes_for_wire(self):
-        """``to_dict()`` must preserve the spec-mandated ``error_code`` and
-        ``recovery`` so transport translators can project them onto the AdCP
-        error envelope without losing the correctable classification.
-        """
-        exc = AdCPIdempotencyConflictError(
-            "idempotency_key reused with a different payload",
-            details={"field": "idempotency_key"},
-        )
-
-        wire = exc.to_dict()
-
-        assert wire["error_code"] == "IDEMPOTENCY_CONFLICT"
-        assert wire["recovery"] == "correctable"
-        assert wire["message"] == "idempotency_key reused with a different payload"
-        assert wire["details"] == {"field": "idempotency_key"}

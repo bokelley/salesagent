@@ -148,26 +148,6 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     error_code = "ACCOUNT_AMBIGUOUS"
 
 
-class AdCPIdempotencyConflictError(AdCPConflictError):
-    """Idempotency key reused with a materially different payload (409, IDEMPOTENCY_CONFLICT).
-
-    Per AdCP spec, when a buyer reuses an idempotency_key but the
-    (post-JCS-canonicalization) payload differs from the original request, the
-    seller MUST reject with IDEMPOTENCY_CONFLICT rather than silently overwriting
-    the prior result or re-executing side effects. The error is correctable: the
-    buyer either resends the exact original payload (and gets the cached
-    response) or mints a fresh ``uuid.uuid4()`` key and retries.
-
-    Without this typed mapping the framework's idempotency wrap raises an
-    untyped exception that surfaces as INTERNAL_ERROR — which buyer agents
-    correctly classify as terminal, breaking the negotiation loop and
-    discarding the spec's distinction between replay-conflict (correctable)
-    and server failure (terminal).
-    """
-
-    error_code = "IDEMPOTENCY_CONFLICT"
-
-
 class AdCPGoneError(AdCPError):
     """Resource previously existed but is no longer available (410)."""
 
