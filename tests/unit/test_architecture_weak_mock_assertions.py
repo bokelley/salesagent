@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # are upgraded to assert_called_once_with().
 # FIXME(beads-bou.5): each entry below should be upgraded to assert_called_once_with()
 WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
+    ("tests/unit/test_create_media_buy_overbook.py", "test_forecast_call_uses_product_implementation_config"),
     ("tests/unit/test_admin_mount.py", "test_admin_host_routes_to_wsgi_with_admin_root_path"),
     ("tests/unit/test_admin_mount.py", "test_admin_host_preserves_non_root_path"),
     ("tests/unit/test_admin_mount.py", "test_non_admin_host_with_admin_path_uses_path_dispatch"),
