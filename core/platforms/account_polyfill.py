@@ -1,32 +1,32 @@
 """Polyfill: wire ``sync_accounts`` / ``list_accounts`` dispatch on
 :class:`adcp.decisioning.handler.PlatformHandler`.
 
-adcp 4.5.0 ships those handler methods as ``_not_supported`` stubs —
-the framework knows the spec defines the wire skills (their input
-schemas live in :mod:`adcp.server.mcp_tools`) but never wired the
-``_invoke_platform_method`` glue that the other ~40 dispatchers use.
-Result: a ``DecisioningPlatform`` that overrides ``sync_accounts`` /
-``list_accounts`` is invisible on the wire — every call returns
+adcp 4.5.0 / 4.6.0 ship those handler methods as ``_not_supported``
+stubs — the framework knows the spec defines the wire skills (their
+input schemas live in :mod:`adcp.server.mcp_tools`) but never wired
+the ``_invoke_platform_method`` glue that the other ~40 dispatchers
+use. Result: a ``DecisioningPlatform`` that exposes
+:class:`AccountStoreUpsert` / :class:`AccountStoreList` on its
+``accounts`` store is invisible on the wire — every call returns
 ``OPERATION_NOT_SUPPORTED``.
 
-This module:
-
-1. Rebinds ``PlatformHandler.sync_accounts`` and
-   ``PlatformHandler.list_accounts`` to call ``_invoke_platform_method``,
-   matching the pattern :meth:`PlatformHandler.provide_performance_feedback`
-   already uses (no ``account`` field on either request, so resolve via
-   auth only).
-2. Registers ``sync_accounts`` / ``list_accounts`` with
-   :func:`adcp.server.mcp_tools.register_handler_tools` so the
-   framework's ``tools/list`` filter advertises them on top of the
-   per-specialism set.
+This module rebinds ``PlatformHandler.sync_accounts`` and
+:meth:`PlatformHandler.list_accounts` to forward to
+``platform.accounts.upsert`` / ``.list``, then mutates
+``_HANDLER_TOOLS["PlatformHandler"]`` and every ``sales-*`` entry of
+``SPECIALISM_TO_ADVERTISED_TOOLS`` so the per-instance specialism
+filter inside ``get_tools_for_handler`` doesn't strip the two tools
+back out.
 
 Importing this module applies the patches as a side-effect. The import
 site lives in :mod:`core.main` (load-bearing) so the patch is in place
 before :func:`adcp.decisioning.serve` constructs the handler.
 
-Drop this module once the framework wires sync_accounts / list_accounts
-itself — track upstream at adcontextprotocol/adcp-client.
+**Removal path:** Filed upstream at
+https://github.com/adcontextprotocol/adcp-client-python/pull/609.
+Drop this module once we bump to the framework version that includes
+that fix (>= 4.6.1 most likely). Tracked at
+https://github.com/adcontextprotocol/adcp-client/issues/1631.
 """
 
 from __future__ import annotations
