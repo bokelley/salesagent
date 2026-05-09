@@ -147,9 +147,54 @@ class TestImplRaisesTypedNotFoundErrors:
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
 
-    def _stub_uow(self) -> Any:
+    def test_unknown_package_under_manual_approval_raises_package_not_found(self) -> None:
+        """When the publisher requires manual approval for update_media_buy,
+        a bogus package_id must still surface PACKAGE_NOT_FOUND -- not a
+        spurious "pending approval" success envelope with empty
+        affected_packages.
+
+        Regression for issue #251: live deployment was returning
+        ``{"affected_packages": [], "errors": []}`` because the manual-
+        approval branch short-circuited before the per-package gate from
+        PR #215 ran. The fix hoists the package-existence check above the
+        manual-approval gate so a buyer probing with a fake package_id
+        always gets PACKAGE_NOT_FOUND.
+        """
+        with self._stub_uow(manual_approval=True) as uow:
+            uow.media_buys.get_package.return_value = None
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_exists",
+                packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
+            )
+            with pytest.raises(AdCPPackageNotFoundError) as exc_info:
+                _update_media_buy_impl(req=req, identity=_identity())
+
+        assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
+        assert "pkg_does_not_exist" in str(exc_info.value)
+
+    def test_unknown_package_with_only_package_id_raises_package_not_found(self) -> None:
+        """A bare-reference package update (only ``package_id`` set, no
+        fields to mutate) referencing a non-existent package must surface
+        PACKAGE_NOT_FOUND. Previously fell through the per-package loop
+        silently and returned a 200 success with empty affected_packages
+        (issue #251)."""
+        with self._stub_uow() as uow:
+            uow.media_buys.get_package.return_value = None
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_exists",
+                packages=[{"package_id": "pkg_does_not_exist"}],
+            )
+            with pytest.raises(AdCPPackageNotFoundError) as exc_info:
+                _update_media_buy_impl(req=req, identity=_identity())
+
+        assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
+        assert "pkg_does_not_exist" in str(exc_info.value)
+
+    def _stub_uow(self, *, manual_approval: bool = False) -> Any:
         """Compose the patches that bypass DB / approval / audit."""
-        return _NotFoundFixture()
+        return _NotFoundFixture(manual_approval=manual_approval)
 
 
 class _NotFoundFixture:
@@ -158,6 +203,9 @@ class _NotFoundFixture:
 
     Yields the UoW mock instance so tests can configure repository returns.
     """
+
+    def __init__(self, *, manual_approval: bool = False) -> None:
+        self._manual_approval = manual_approval
 
     def __enter__(self) -> Any:
         self._patchers: list[Any] = []
@@ -179,8 +227,8 @@ class _NotFoundFixture:
         uow.__exit__ = Mock(return_value=False)
 
         adapter = MagicMock()
-        adapter.manual_approval_required = False
-        adapter.manual_approval_operations = []
+        adapter.manual_approval_required = self._manual_approval
+        adapter.manual_approval_operations = ["update_media_buy"] if self._manual_approval else []
 
         targets = {
             f"{MODULE}._verify_principal": MagicMock(return_value=None),

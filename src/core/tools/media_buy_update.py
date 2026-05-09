@@ -391,6 +391,28 @@ def _update_media_buy_impl(
                     return UpdateMediaBuyError.model_validate(cached)
                 return UpdateMediaBuySuccess.model_validate(cached)
 
+        # Pre-flight: every referenced package_id must exist on this media
+        # buy. Run before the manual-approval gate, workflow-step writes,
+        # and adapter dispatch so a bogus package_id surfaces
+        # PACKAGE_NOT_FOUND uniformly — regardless of which fields the
+        # buyer set on the package update or whether the publisher
+        # requires manual approval. Keeping the check inside the
+        # per-package mutation loop (PR #215) missed two paths:
+        # (1) manual-approval-required tenants short-circuit to a
+        # "pending approval" success before the loop runs, and
+        # (2) bare-reference package updates (only ``package_id`` set,
+        # no fields to mutate) fall through the loop silently.
+        # Issue #251.
+        if req.packages:
+            for pkg_update in req.packages:
+                if (
+                    pkg_update.package_id
+                    and uow.media_buys.get_package(media_buy_id_to_use, pkg_update.package_id) is None
+                ):
+                    raise AdCPPackageNotFoundError(
+                        f"Package '{pkg_update.package_id}' not found for media buy '{media_buy_id_to_use}'."
+                    )
+
         # Create or get persistent context and workflow step
         # Skip for dry_run mode (no side effects, no database writes)
         ctx_manager = get_context_manager()
@@ -729,21 +751,10 @@ def _update_media_buy_impl(
                 return success_response
 
         # Handle package-level updates
+        # (Package existence pre-validated above for issue #251 — every
+        # package_id has already been confirmed to exist on this buy.)
         if req.packages:
             for pkg_update in req.packages:
-                # Pre-validate package existence at the impl boundary so the
-                # spec-compliant PACKAGE_NOT_FOUND wire code surfaces uniformly
-                # regardless of which adapter handles the dispatch. Without
-                # this gate the adapter returns its own lowercase
-                # ``package_not_found`` error which the delegate cannot
-                # translate to AdCPPackageNotFoundError -> PACKAGE_NOT_FOUND
-                # on the wire (issue #73 invalid_transitions storyboard).
-                if pkg_update.package_id and (pkg_update.paused is not None or pkg_update.budget is not None):
-                    if uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id) is None:
-                        raise AdCPPackageNotFoundError(
-                            f"Package '{pkg_update.package_id}' not found for media buy '{req.media_buy_id}'."
-                        )
-
                 # Handle paused state
                 if pkg_update.paused is not None:
                     # adcp 2.12.0+: paused=True means pause, paused=False means resume
