@@ -2,7 +2,7 @@
 
 Issue #289: emit ``DeprecationWarning`` for the two buyer-facing legacy shapes
 on the sync/listing wire so callers see a migration signal in their own logs
-and test runs, not just our server-side log stream. Sunset target: v1.10.0.
+and test runs, not just our server-side log stream.
 Library-typed ``FormatReferenceStructuredObject`` conversion is intentionally
 not warned — that path is internal plumbing, not buyer-facing.
 
@@ -13,11 +13,13 @@ as a buyer compliance audit failure, not a test failure — so we pin the
 behavior explicitly.
 """
 
+import warnings
 from datetime import UTC, datetime
 
 import pytest
 from adcp.types import AiTool
 
+from src.core._deprecations import LEGACY_FORMAT_ID_SUNSET
 from src.core.schemas import Creative
 from src.core.schemas.creative import CreativeAsset, DigitalSourceType, Provenance
 
@@ -46,12 +48,12 @@ class TestLegacyFormatKey:
     """The legacy ``format`` key (instead of ``format_id``) is silently renamed."""
 
     def test_creative_legacy_format_key_emits_deprecation_warning(self):
-        with pytest.warns(DeprecationWarning, match=r"format.*deprecated.*format_id.*v1\.10\.0"):
+        with pytest.warns(DeprecationWarning, match=r"'format'.*deprecated"):
             Creative(**_base_creative_kwargs("display_300x250", key="format"))
 
     def test_creative_asset_legacy_format_key_emits_deprecation_warning(self):
         # CreativeAsset is the sync-wire shape — same upgrade helper, same warning
-        with pytest.warns(DeprecationWarning, match=r"format.*deprecated.*format_id.*v1\.10\.0"):
+        with pytest.warns(DeprecationWarning, match=r"'format'.*deprecated"):
             CreativeAsset.model_validate(
                 {
                     "creative_id": "c1",
@@ -68,20 +70,48 @@ class TestLegacyFormatKey:
                 }
             )
 
-    def test_format_id_key_does_not_warn(self):
-        """Sanity: the spec-shaped key path does not emit the legacy warning."""
-        import warnings
-
+    def test_format_id_key_with_structured_value_does_not_warn(self):
+        """Spec-shaped key + structured value path is silent."""
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
-            # String format_id still warns (covered in test_format_cache.py); the
-            # key-rename path must not fire when callers send the right key with
-            # a structured value.
             Creative(
                 **_base_creative_kwargs(
                     {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
                 )
             )
+
+    def test_warning_attributes_to_caller_not_to_validator_or_pydantic(self):
+        """``DeprecationWarning`` must blame the buyer's call site, not our validator.
+
+        The whole point of warning is to tell buyers *where in their code* to
+        fix the legacy shape. Without ``skip_file_prefixes``, warnings emitted
+        from inside a Pydantic ``model_validator`` blame the validator function
+        (in our package) or Pydantic internals — neither of which a buyer can
+        act on. Lock down the attribution so a future regression on the
+        ``skip_file_prefixes`` plumbing fails this test.
+        """
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", DeprecationWarning)
+            Creative(**_base_creative_kwargs("display_300x250", key="format"))
+
+        deprecation_warnings = [w for w in captured if issubclass(w.category, DeprecationWarning)]
+        assert deprecation_warnings, "expected a DeprecationWarning to be emitted"
+        for w in deprecation_warnings:
+            assert w.filename.endswith(__file__.split("/")[-1]), (
+                f"warning attributed to {w.filename}:{w.lineno} (should be this test file). "
+                f"skip_file_prefixes plumbing in src/core/_deprecations.py is not skipping "
+                f"the validator/pydantic frames."
+            )
+
+    def test_sunset_version_appears_in_warning_message(self):
+        """The warning message names the sunset version so buyers know the deadline."""
+        with pytest.warns(DeprecationWarning) as captured:
+            Creative(**_base_creative_kwargs("display_300x250", key="format"))
+
+        messages = [str(w.message) for w in captured]
+        assert any(LEGACY_FORMAT_ID_SUNSET in m for m in messages), (
+            f"sunset version {LEGACY_FORMAT_ID_SUNSET} should appear in at least one warning. Got: {messages}"
+        )
 
 
 def _build_listing_creative(provenance: Provenance) -> Creative:
@@ -171,6 +201,31 @@ class TestProvenanceRoundTrip:
         assert out["c2pa"] == "https://c2pa.example.com/manifest/abc123"
         assert "Composite produced" in out["disclosure"]
         assert out["verification"] == {"signature_valid": True, "trust_chain": "c2pa-v1"}
+
+    def test_provenance_round_trips_via_from_attributes_path(self):
+        """In-process conversion (``model_validate(creative, from_attributes=True)``) round-trips.
+
+        This exercises the ``BaseModel`` early-return branch in
+        ``_upgrade_format_id_in_values`` — distinct from the HTTP/dump path
+        covered by the other round-trip tests. If a future Pydantic upgrade
+        changes how ``model_validate`` dispatches ``BaseModel`` inputs through
+        the ``mode='before'`` validator, the dump path stays green while this
+        path silently drops provenance.
+        """
+        prov = Provenance(
+            digital_source_type=DigitalSourceType.digital_capture,
+            ai_tool=AiTool(name="gpt-image-1"),
+            created_time=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        listing = _build_listing_creative(prov)
+
+        sync = CreativeAsset.model_validate(listing, from_attributes=True)
+
+        assert sync.provenance is not None, "provenance dropped on from_attributes path"
+        assert sync.provenance.digital_source_type.value == "digital_capture"
+        assert sync.provenance.ai_tool is not None
+        assert sync.provenance.ai_tool.name == "gpt-image-1"
+        assert sync.provenance.created_time == datetime(2026, 4, 1, tzinfo=UTC)
 
     def test_shared_provenance_subset_round_trips_to_sync_wire(self):
         """Subset of provenance fields with matching shapes round-trips end-to-end.
