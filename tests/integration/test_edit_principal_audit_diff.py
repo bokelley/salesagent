@@ -21,26 +21,30 @@ _SAME_ORIGIN_HEADERS = {"Origin": "http://localhost"}
 
 
 def _seed_principal(tenant_id: str, principal_id: str, *, billing_enabled: bool) -> None:
-    """Persist a Principal under the existing tenant.
+    """Persist a Principal via factory-boy under the existing test tenant.
 
-    Uses raw construction (not the factory) because PrincipalFactory has a
-    ``tenant = SubFactory(TenantFactory)`` default that would create a
-    *new* tenant with a fresh id rather than attaching to the test tenant.
+    PrincipalFactory has ``tenant = SubFactory(TenantFactory)`` so we
+    must pass the existing Tenant ORM row explicitly; otherwise the
+    SubFactory creates a fresh tenant with a different id and the
+    Principal is orphaned from ``test_tenant_with_data``.
     """
-    from src.core.database.models import Principal as PrincipalRow
+    from src.core.database.models import Tenant
+    from tests.factories import ALL_FACTORIES, PrincipalFactory
 
     with get_db_session() as session:
-        session.add(
-            PrincipalRow(
-                tenant_id=tenant_id,
+        try:
+            for f in ALL_FACTORIES:
+                f._meta.sqlalchemy_session = session
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            assert tenant is not None, f"test fixture didn't create tenant {tenant_id!r}"
+            PrincipalFactory(
+                tenant=tenant,
                 principal_id=principal_id,
-                name=f"Test Advertiser {principal_id}",
-                access_token=f"token_{principal_id}",
-                platform_mappings={"mock": {"advertiser_id": "test_adv"}},
                 billing_enabled=billing_enabled,
             )
-        )
-        session.commit()
+        finally:
+            for f in ALL_FACTORIES:
+                f._meta.sqlalchemy_session = None
 
 
 def _latest_edit_principal_audit(tenant_id: str) -> AuditLog | None:
