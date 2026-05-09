@@ -72,6 +72,7 @@ def make_media_buy(
     budget=Decimal("10000"),
     currency="USD",
     raw_request=None,
+    status="",
 ):
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
@@ -87,6 +88,9 @@ def make_media_buy(
     buy.raw_request = raw_request or {}
     buy.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     buy.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    # Persisted MediaBuy.status — defaults to empty so _compute_status falls
+    # through to date-derived behavior unless a test sets a blocker explicitly.
+    buy.status = status
     return buy
 
 
@@ -133,6 +137,138 @@ class TestComputeStatus:
             end_time=datetime(2099, 12, 31, tzinfo=UTC),
         )
         assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
+
+
+class TestComputeStatusPersistedPrecedence:
+    """Persisted MediaBuy.status must win for blocker / terminal states.
+
+    Regression: ``_compute_status`` previously ignored ``buy.status`` and
+    re-derived from dates only, silently overwriting buyer-visible blockers
+    (``pending_creatives``, ``paused``, ``canceled``, ``rejected``) with
+    date-derived values on every read. This broke the storyboard step
+    ``pending_creatives_to_start/create_buy_no_creatives``: a buy persisted as
+    ``pending_creatives`` with a future start time was being read back as
+    ``pending_start``.
+    """
+
+    TODAY = date(2025, 6, 15)
+
+    def test_persisted_pending_creatives_survives_future_start(self):
+        """A buy persisted as ``pending_creatives`` with a future start is
+        blocked on creatives, not on the clock — must not be re-derived to
+        ``pending_start``."""
+        buy = make_media_buy(
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 12, 31),
+            status="pending_creatives",
+        )
+        assert _compute_status(buy, self.TODAY) == MediaBuyStatus.pending_creatives
+
+    def test_persisted_paused_survives_in_flight(self):
+        """A paused buy in its flight window must report ``paused``, not
+        ``active``. ``paused`` is an explicit operator action; no date can
+        resolve it."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="paused",
+        )
+        assert _compute_status(buy, self.TODAY) == MediaBuyStatus.paused
+
+    def test_persisted_canceled_survives_regardless_of_dates(self):
+        """``canceled`` is terminal; flight dates are irrelevant."""
+        buy_future = make_media_buy(
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 12, 31),
+            status="canceled",
+        )
+        buy_in_flight = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="canceled",
+        )
+        buy_past = make_media_buy(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 12, 31),
+            status="canceled",
+        )
+        assert _compute_status(buy_future, self.TODAY) == MediaBuyStatus.canceled
+        assert _compute_status(buy_in_flight, self.TODAY) == MediaBuyStatus.canceled
+        assert _compute_status(buy_past, self.TODAY) == MediaBuyStatus.canceled
+
+    def test_persisted_pending_start_is_recomputed_when_in_flight(self):
+        """``pending_start`` is itself date-derived, so a stale persisted value
+        must NOT win — once today >= start, the read returns ``active``. Proves
+        we don't blindly trust persisted values for date-derivable statuses."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="pending_start",
+        )
+        assert _compute_status(buy, self.TODAY) == MediaBuyStatus.active
+
+    def test_empty_persisted_status_falls_through_to_date_derived(self):
+        """Missing / empty persisted status is the legacy fall-through:
+        compute purely from flight dates."""
+        buy_active = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31), status="")
+        buy_none = make_media_buy(start_date=date(2099, 1, 1), end_date=date(2099, 12, 31), status=None)
+        assert _compute_status(buy_active, self.TODAY) == MediaBuyStatus.active
+        assert _compute_status(buy_none, self.TODAY) == MediaBuyStatus.pending_start
+
+
+class TestGetMediaBuysImplPersistedStatusPrecedence:
+    """End-to-end precedence: ``_get_media_buys_impl`` must not strip persisted
+    blocker statuses when reading buys back. The real precedence logic lives in
+    ``_compute_status``; we exercise it here against a mocked repo so a future
+    refactor that drops the persisted-status path won't silently regress.
+    """
+
+    def _run_with_buy(self, buy):
+        """Drive ``_get_media_buys_impl`` with one buy + a status_filter that
+        permits the expected outcome, return the response."""
+        with (
+            patch("src.core.tools.media_buy_list.MediaBuyUoW") as mock_uow_cls,
+            patch("src.core.tools.media_buy_list.get_principal_object") as mock_principal_obj,
+            patch("src.core.tools.media_buy_list._fetch_packages", return_value={}),
+            patch("src.core.tools.media_buy_list._fetch_creative_approvals", return_value={}),
+        ):
+            mock_principal_obj.return_value = MagicMock(principal_id="principal_1")
+            mock_repo = MagicMock()
+            mock_repo.get_by_principal.return_value = [buy]
+            mock_uow = MagicMock()
+            mock_uow.media_buys = mock_repo
+            mock_uow.session = MagicMock()
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+            # No GAM projection
+            with patch("src.core.tools.media_buy_list._project_gam_buys", return_value=([], {})):
+                # Allow any status through the filter so we observe the raw
+                # computed status rather than an empty list.
+                req = GetMediaBuysRequest(
+                    status_filter=[
+                        MediaBuyStatus.pending_creatives,
+                        MediaBuyStatus.pending_start,
+                        MediaBuyStatus.active,
+                        MediaBuyStatus.paused,
+                        MediaBuyStatus.completed,
+                        MediaBuyStatus.canceled,
+                        MediaBuyStatus.rejected,
+                    ]
+                )
+                return _get_media_buys_impl(req, identity=make_identity())
+
+    def test_pending_creatives_survives_future_start_through_full_impl(self):
+        """The storyboard regression: create_buy_no_creatives persists
+        ``pending_creatives`` with a future start; ``get_media_buys`` must
+        return ``pending_creatives``, not ``pending_start``."""
+        buy = make_media_buy(
+            media_buy_id="buy_pc",
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 12, 31),
+            status="pending_creatives",
+        )
+        response = self._run_with_buy(buy)
+        assert len(response.media_buys) == 1
+        assert response.media_buys[0].status == MediaBuyStatus.pending_creatives
 
 
 class TestResolveStatusFilter:

@@ -24,6 +24,7 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.feature_flags import is_creative_pre_approval_gate_enabled
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -646,6 +647,42 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
             else:
                 logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {error_msg}")
+
+        # Pre-approval gate retroactive push (#145):
+        # The buy-approval flow holds back pending_review creatives when
+        # the per-tenant gate is on. For buys that are already live in
+        # the ad server (status NOT in pending_creatives/draft — those
+        # were handled by the media_buy_actions loop above), push the
+        # newly-approved creative to the live line item now.
+        already_handled_buy_ids = {a["media_buy_id"] for a in media_buy_actions}
+        with AdminCreativeUoW(tenant_id) as uow_check:
+            assert uow_check.tenant_config is not None
+            tenant_for_flag = uow_check.tenant_config.get_tenant()
+        if is_creative_pre_approval_gate_enabled(tenant_for_flag):
+            from src.core.tools.media_buy_create import push_creative_to_existing_buy
+
+            for assignment in assignments:
+                if assignment.media_buy_id in already_handled_buy_ids:
+                    continue
+                with AdminCreativeUoW(tenant_id) as uow_buy:
+                    assert uow_buy.media_buys is not None
+                    mb = uow_buy.media_buys.get_by_id(assignment.media_buy_id)
+                if mb is None or mb.status in {"pending_creatives", "draft"}:
+                    continue
+                logger.info(
+                    f"[CREATIVE APPROVAL] Gate retroactive push: creative {creative_id} → "
+                    f"live media buy {assignment.media_buy_id} (status={mb.status})"
+                )
+                push_success, push_err = push_creative_to_existing_buy(
+                    creative_id=creative_id,
+                    media_buy_id=assignment.media_buy_id,
+                    tenant_id=tenant_id,
+                )
+                if not push_success:
+                    logger.error(
+                        f"[CREATIVE APPROVAL] Retroactive push failed for creative "
+                        f"{creative_id} → buy {assignment.media_buy_id}: {push_err}"
+                    )
 
         return jsonify({"success": True, "status": "approved"})
 

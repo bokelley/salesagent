@@ -38,7 +38,7 @@ class TestMCPContractValidation:
 
         Per AdCP spec, all fields are optional, including brief.
         """
-        request = GetProductsRequest(brand={"domain": "testbrand.com"})
+        request = GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"})
 
         assert request.brief is None  # Optional, defaults to None per spec
         # brand is BrandReference with required domain field
@@ -47,7 +47,9 @@ class TestMCPContractValidation:
 
     def test_get_products_with_brief(self):
         """Test get_products works with both brief and brand."""
-        request = GetProductsRequest(brief="pet supplies campaign", brand={"domain": "testbrand.com"})
+        request = GetProductsRequest(
+            buying_mode="wholesale", brief="pet supplies campaign", brand={"domain": "testbrand.com"}
+        )
 
         assert request.brief == "pet supplies campaign"
         # brand is BrandReference with required domain field
@@ -55,14 +57,15 @@ class TestMCPContractValidation:
         assert request.brand.domain == "testbrand.com"
 
     def test_get_products_accepts_brief_only(self):
-        """Test that GetProductsRequest accepts brief without brand per AdCP spec.
+        """Test that GetProductsRequest accepts brief without brand.
 
-        Per AdCP spec, all fields in GetProductsRequest are OPTIONAL.
+        Per AdCP 3.9+ spec, only ``buying_mode`` is required; everything else
+        (including ``brand``) is optional. A brief-only request with the mode
+        declared should succeed.
         """
         from src.core.schemas import GetProductsRequest as SchemaGetProductsRequest
 
-        # brand is optional per spec - brief-only request should succeed
-        request = SchemaGetProductsRequest(brief="just a brief")
+        request = SchemaGetProductsRequest(buying_mode="wholesale", brief="just a brief")
         assert request.brief == "just a brief"
         assert request.brand is None
 
@@ -222,7 +225,7 @@ class TestSchemaDefaultValues:
     def test_optional_fields_have_reasonable_defaults(self):
         """Test that optional fields have defaults that make sense."""
         # GetProductsRequest - per AdCP spec, all fields are optional and default to None
-        req = GetProductsRequest(brand={"domain": "testbrand.com"})
+        req = GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"})
         assert req.brief is None  # Optional, defaults to None per spec
 
         # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
@@ -267,7 +270,7 @@ class TestMCPToolMinimalCalls:
         # Test that GetProductsRequest can be created with just brand
         # (and actually, even empty per spec)
         try:
-            request = GetProductsRequest(brand={"domain": "testbrand.com"})
+            request = GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"})
             assert request.brief is None  # Optional, defaults to None per spec
             # brand is BrandReference with required domain field
             assert request.brand is not None
