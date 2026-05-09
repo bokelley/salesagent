@@ -611,12 +611,19 @@ class GAMInventoryService:
             key_mapping = {row.name: row.inventory_id for row in results}
 
             if key_mapping:
-                # Update adapter_config via repository
+                # Update adapter_config via repository.
+                # Inventory sync is a platform-level operation — set the management_api_caller
+                # flag so the embedded-tenant guard allows the write to AdapterConfig.
                 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                adapter_repo = AdapterConfigRepository(self.db, tenant_id)
-                adapter_repo.update_custom_targeting_keys(key_mapping)
-                self.db.commit()
+                prev_flag = self.db.info.get("management_api_caller", False)
+                self.db.info["management_api_caller"] = True
+                try:
+                    adapter_repo = AdapterConfigRepository(self.db, tenant_id)
+                    adapter_repo.update_custom_targeting_keys(key_mapping)
+                    self.db.commit()
+                finally:
+                    self.db.info["management_api_caller"] = prev_flag
                 logger.info(
                     f"Updated adapter_config.custom_targeting_keys with {len(key_mapping)} keys for tenant {tenant_id}"
                 )
