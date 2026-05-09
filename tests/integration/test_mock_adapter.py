@@ -140,7 +140,7 @@ mock_response = {
                     {"days": ["TUESDAY"], "start_hour": 6, "end_hour": 23},
                 ],
             },
-            "frequency_cap": {"suppress_minutes": 1440, "scope": "media_buy"},  # 24 hours
+            "frequency_cap": {"suppress_minutes": 1440},  # 24 hours
         },
         "implementation_config": {
             "gam": {
