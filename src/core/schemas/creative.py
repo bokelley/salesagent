@@ -150,7 +150,15 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
     Used by both ``Creative`` (listing shape) and ``CreativeAsset`` (sync shape) so
     string format_ids, the legacy ``format`` key, and library-typed ``FormatReferenceStructuredObject``
     instances are all normalized to the local ``FormatId`` subclass.
+
+    Buyer-facing legacy shapes emit ``DeprecationWarning`` with sunset v1.10.0:
+    - String ``format_id`` (warns inside ``upgrade_legacy_format_id``)
+    - Legacy ``format`` key in place of ``format_id`` (warned here)
+    Library-typed ``FormatReferenceStructuredObject`` conversion is silent because
+    it is internal plumbing, not buyer-facing.
     """
+    import warnings
+
     from pydantic import BaseModel
 
     from src.core.format_cache import upgrade_legacy_format_id
@@ -162,6 +170,13 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
 
     if not isinstance(values, dict):
         return values
+
+    if "format" in values and "format_id" not in values:
+        warnings.warn(
+            "Legacy creative key 'format' is deprecated; use 'format_id'. Will be removed in v1.10.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     format_val = values.get("format_id") or values.get("format")
     if format_val is not None:
@@ -224,8 +239,17 @@ class Creative(LibraryCreative):
     # Library 4.5.0 ships provenance on CreativeAsset (sync shape) but not on
     # the listing Creative we extend. Salesagent surfaces it on listings too
     # because sellers need to see disclosure metadata when reviewing — track
-    # spec inclusion in adcp issue (TBD).
-    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
+    # spec inclusion in adcp RFC #4282.
+    provenance: Provenance | None = Field(
+        default=None,
+        description=(
+            "AI provenance metadata per EU AI Act Article 50. "
+            "On the listing wire (list_creatives) this is a salesagent extension "
+            "surfacing the sync-side provenance back to sellers for review; the "
+            "canonical write path is sync_creatives. Becomes spec-native once "
+            "AdCP RFC #4282 lands upstream."
+        ),
+    )
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(

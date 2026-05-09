@@ -111,6 +111,7 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
     # Legacy string format - upgrade to namespaced format (DEPRECATED)
     if isinstance(format_id_value, str):
         import logging
+        import warnings
 
         logger = logging.getLogger(__name__)
 
@@ -127,11 +128,16 @@ def upgrade_legacy_format_id(format_id_value: str | dict | FormatId) -> FormatId
 
         agent_url = cache[format_id_value]
 
-        # Log deprecation warning
+        warnings.warn(
+            f"String format_id '{format_id_value}' is deprecated; send the structured shape "
+            f"{{'agent_url': '{agent_url}', 'id': '{format_id_value}'}}. "
+            "String format_ids will be removed in v1.10.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         logger.warning(
-            f"⚠️  DEPRECATED: String format_id '{format_id_value}' received. "
-            f"Use structured format: {{'agent_url': '{agent_url}', 'id': '{format_id_value}'}}. "
-            f"String format_ids will be removed in a future version."
+            f"DEPRECATED string format_id '{format_id_value}' (sunset v1.10.0); "
+            f"buyer should send {{'agent_url': '{agent_url}', 'id': '{format_id_value}'}}"
         )
 
         return FormatId(agent_url=url(agent_url), id=format_id_value)
