@@ -356,6 +356,73 @@ pre {
     background: var(--sa-header-rule);
 }
 
+/* sa-tenant-nav — persistent tenant subnav strip rendered by base.html
+   on every page with ``tenant`` in scope. Sits between the top header
+   (44px, sometimes hidden) and the breadcrumb sub-bar (when present).
+   Holds operational links (Media Buys/Products/Creatives/Workflows/Reports)
+   on the left and the Configure dropdown on the right. */
+.sa-tenant-nav {
+    height: 36px;
+    background: var(--sa-bg-surface);
+    border-bottom: 1px solid var(--sa-rule);
+    font-family: var(--sa-font-sans);
+    font-size: 12px;
+}
+.sa-tenant-nav__inner {
+    max-width: var(--sa-container-max, 1280px);
+    margin: 0 auto;
+    padding: 0 var(--sa-space-5);
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+/* Configure dropdown floats to the right edge of the strip. */
+.sa-tenant-nav__inner > .sa-menu { margin-left: auto; }
+
+.sa-nav-action {
+    color: var(--sa-ink-70);
+    font-family: var(--sa-font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 20px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    letter-spacing: 0.01em;
+    border-bottom: 2px solid transparent;
+    transition: color var(--sa-duration-fast) var(--sa-easing),
+                border-color var(--sa-duration-fast) var(--sa-easing);
+}
+.sa-nav-action:hover,
+.sa-nav-action:focus {
+    color: var(--sa-ink);
+    text-decoration: none;
+}
+/* Active state uses color shift + underline rail (not font-weight) — a
+   500→600 weight change reflows sibling labels because letters get wider,
+   so labels shift horizontally as the user navigates. The underline + ink
+   color shift is enough cue without the metric change. */
+.sa-nav-action.is-active {
+    color: var(--sa-ink);
+    border-bottom-color: var(--sa-ink);
+}
+/* Configure trigger gets the same color shift when the user is on any of
+   its sub-pages. No underline — the trigger is a button, not a tab. */
+.sa-menu__trigger.is-active {
+    color: var(--sa-ink);
+}
+/* Host-storefront link in embedded mode — separated from the local nav
+   by a thin divider so the host vs. salesagent boundary is visible. */
+.sa-nav-action--host {
+    padding-right: 18px;
+    margin-right: 4px;
+    border-right: 1px solid var(--sa-rule);
+    border-bottom: none;
+}
+.sa-nav-action--host.is-active { border-bottom: none; }
+
 /* sa-menu — Configure dropdown. Lives in the breadcrumb sub-bar so it
    renders in both embedded mode (where .header is hidden) and standalone.
    Quiet trigger; click toggles, outside-click + Escape close. */

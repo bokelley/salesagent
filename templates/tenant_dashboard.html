@@ -652,6 +652,13 @@
         border-top: 1px solid var(--sa-rule-soft);
     }
     .ld-attention-row:first-of-type { border-top: none; padding-top: 4px; }
+    a.ld-attention-row {
+        cursor: pointer;
+        text-decoration: none;
+        color: inherit;
+        transition: background 120ms ease;
+    }
+    a.ld-attention-row:hover { background: var(--sa-paper-warm, rgba(0,0,0,0.02)); }
     .ld-attention-mark {
         width: 14px;
         height: 14px;
@@ -815,7 +822,7 @@
             Offers waiting on you · <span class="total">${{ "{:,.0f}".format(inc.total_value) }} potential</span>
         </div>
         {% for r in inc.rows %}
-            <a class="sa-pipeline__row" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buys/{{ r.media_buy_id }}" style="text-decoration:none; color:inherit;">
+            <a class="sa-pipeline__row" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ r.media_buy_id }}" style="text-decoration:none; color:inherit;">
                 <span class="sa-pipeline__row-dot{{ ' sa-pipeline__row-dot--urgent' if r.urgent }}"></span>
                 <div class="sa-pipeline__row-meta">
                     <div class="sa-pipeline__row-who">{{ r.advertiser_name }}</div>
@@ -845,7 +852,7 @@
             Live deals delivering now · <span class="total">${{ "{:,.0f}".format(run.total_value) }} committed</span>
         </div>
         {% for r in run.rows %}
-            <a class="sa-pipeline__row" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buys/{{ r.media_buy_id }}" style="text-decoration:none; color:inherit;">
+            <a class="sa-pipeline__row" href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ r.media_buy_id }}" style="text-decoration:none; color:inherit;">
                 <div class="ld-pacing-mark" title="Delivery vs flight progress">
                     <div class="ld-pacing-track">
                         {# Filled bar = delivery progress; tick = flight progress #}
@@ -933,7 +940,11 @@
     <aside class="ld-attention-card">
         <div class="sa-label" style="margin-bottom: 12px;">Needs your attention</div>
         {% for item in ledger.needs_attention %}
+            {% if item.url %}
+            <a class="ld-attention-row" href="{{ script_name }}{{ item.url }}">
+            {% else %}
             <div class="ld-attention-row">
+            {% endif %}
                 <span class="ld-attention-mark{{ ' is-amber' if item.level == 'amber' }}">
                     {% if item.level == 'amber' %}
                         <i class="fas fa-exclamation-triangle" style="font-size:11px;"></i>
@@ -945,7 +956,11 @@
                     <div class="ld-attention-title{{ ' is-amber' if item.level == 'amber' }}">{{ item.title }}</div>
                     <div class="ld-attention-sub">{{ item.sub }}</div>
                 </div>
+            {% if item.url %}
+            </a>
+            {% else %}
             </div>
+            {% endif %}
         {% endfor %}
     </aside>
 </div>

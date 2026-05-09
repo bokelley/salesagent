@@ -208,11 +208,16 @@ class TestBuyerRoutingPageRenders:
         resp = client.get("/tenant/no_such_tenant/buyer-routing")
         assert resp.status_code == 404
 
-    def test_breadcrumb_present(self, client, standalone_tenant_id):
+    def test_subnav_present(self, client, standalone_tenant_id):
+        """The persistent tenant subnav (with Configure dropdown active)
+        replaces the old breadcrumb on this page."""
         resp = client.get(f"/tenant/{standalone_tenant_id}/buyer-routing")
         body = resp.get_data(as_text=True)
-        assert 'class="breadcrumb"' in body
-        assert "Buyer Routing" in body
+        assert 'class="sa-tenant-nav"' in body
+        # Configure trigger is active on configure-namespace pages.
+        assert 'class="sa-menu__trigger is-active"' in body
+        # Buyer Routing link is in the Configure dropdown panel.
+        assert "/buyer-routing" in body
 
     def test_three_section_headers_present(self, client, standalone_tenant_id):
         resp = client.get(f"/tenant/{standalone_tenant_id}/buyer-routing")

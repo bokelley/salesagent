@@ -331,9 +331,15 @@ def admin_client(admin_app):
 
 
 class TestEmbedBreadcrumbRendering:
+    """Embedded host link rendering. Breadcrumbs were dropped (replaced by
+    active-state highlighting in the persistent tenant subnav); the host
+    label + URL that used to be the first crumb now renders as the
+    leftmost item in the subnav, driven by the same ``embed_breadcrumb_root``
+    context (header > column precedence)."""
+
     def test_embedded_tenant_renders_configured_root(self, admin_client):
-        """Embedded tenant with a column override: rendered breadcrumb's
-        first crumb is the configured label + URL, not the dashboard."""
+        """Embedded tenant with a column override: subnav has the host
+        link with the configured label + URL."""
         tid = _insert_render_tenant(
             is_embedded=True,
             embed_breadcrumb_root={"label": "Customer 1000", "url": "https://host.example/customers/1000"},
@@ -342,14 +348,15 @@ class TestEmbedBreadcrumbRendering:
             resp = admin_client.get(f"/tenant/{tid}/users")
             assert resp.status_code == 200
             body = resp.get_data(as_text=True)
+            assert 'class="sa-tenant-nav"' in body
             assert 'href="https://host.example/customers/1000"' in body
             assert "Customer 1000" in body
         finally:
             _cleanup_render_tenant(tid)
 
     def test_open_instance_tenant_ignores_column(self, admin_client):
-        """Open-instance tenants ignore the override even if set — host
-        chrome only applies inside an embedded deployment."""
+        """Open-instance tenants ignore the override — host link only
+        appears inside an embedded deployment."""
         tid = _insert_render_tenant(
             is_embedded=False,
             embed_breadcrumb_root={"label": "Customer 1000", "url": "https://host.example/customers/1000"},
@@ -358,24 +365,23 @@ class TestEmbedBreadcrumbRendering:
             resp = admin_client.get(f"/tenant/{tid}/users")
             assert resp.status_code == 200
             body = resp.get_data(as_text=True)
+            assert 'class="sa-tenant-nav"' in body
             assert "Customer 1000" not in body
-            # Default first crumb is the tenant name (rendered as the
-            # dashboard link target).
-            assert "Render Test" in body
+            assert "host.example" not in body
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_no_override_renders_default_first_crumb(self, admin_client):
-        """Embedded tenant with no override + no header: default first
-        crumb is the tenant name (linking to the salesagent dashboard)."""
+    def test_no_override_renders_no_host_link(self, admin_client):
+        """Embedded tenant with no override + no header: subnav renders
+        without the host link (just the local tenant nav items)."""
         tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=None)
         try:
             resp = admin_client.get(f"/tenant/{tid}/users")
             assert resp.status_code == 200
             body = resp.get_data(as_text=True)
-            # No host override surface; tenant name still present as first crumb.
-            assert "Render Test" in body
+            assert 'class="sa-tenant-nav"' in body
             assert "host.example" not in body
+            assert "sa-nav-action--host" not in body
         finally:
             _cleanup_render_tenant(tid)
 
@@ -438,121 +444,115 @@ class TestEmbedBreadcrumbRendering:
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_last_crumb_has_no_link(self, admin_client):
-        """The leaf crumb (current page) renders as a span, not an <a>."""
-        tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
-        try:
-            resp = admin_client.get(f"/tenant/{tid}/users")
-            body = resp.get_data(as_text=True)
-            # Jinja HTML-escapes ``&`` to ``&amp;``; the leaf crumb
-            # ("Users & Access") renders as a styled span, not a link.
-            # The breadcrumb partial marks the leaf with aria-current="page".
-            leaf = '<span class="breadcrumb-current" aria-current="page">Users &amp; Access</span>'
-            assert leaf in body
-            # The crumb container ends with the leaf — no <a> tag immediately
-            # before it.
-            preceding = body.split(leaf)[0][-200:]
-            assert "<a " not in preceding[-50:]
-        finally:
-            _cleanup_render_tenant(tid)
-
 
 # ---------------------------------------------------------------------------
-# Sprint 4 follow-up: breadcrumb partial coverage across tenant pages.
-# Each page must render the partial in both standalone and embedded modes,
-# preserving an unbroken host-to-leaf trail in the iframe.
+# Subnav host-link coverage across tenant pages. The persistent subnav
+# (rendered by base.html) must render the host link in embedded mode and
+# omit it in standalone mode — on every tenant-scoped page, not just ones
+# that opted into the old breadcrumb partial.
 # ---------------------------------------------------------------------------
 
 
 HOST_ROOT = {"label": "Storefront", "url": "https://host.example/store"}
 
 
-def _assert_first_crumb_is_host(body: str) -> None:
-    """The override label + URL appear inside a breadcrumb container."""
-    assert 'class="breadcrumb"' in body
+def _assert_subnav_has_host_link(body: str) -> None:
+    """Embedded mode: subnav renders the host link (label + URL)."""
+    assert 'class="sa-tenant-nav"' in body
+    assert "sa-nav-action--host" in body
     assert "Storefront" in body
     assert 'href="https://host.example/store"' in body
 
 
-def _assert_first_crumb_is_tenant(body: str) -> None:
-    """Standalone mode: tenant name appears as the first crumb."""
-    assert 'class="breadcrumb"' in body
-    assert "Render Test" in body
+def _assert_subnav_has_no_host_link(body: str) -> None:
+    """Standalone mode: subnav still renders, but without the host link."""
+    assert 'class="sa-tenant-nav"' in body
+    assert "sa-nav-action--host" not in body
     assert "host.example" not in body
 
 
-class TestBreadcrumbsAcrossTenantPages:
-    """Each major tenant page renders the embed-aware breadcrumb partial.
+class TestSubnavHostLinkAcrossTenantPages:
+    """Every major tenant page must render the subnav with the right
+    host-link state — embedded → host link present, standalone → absent.
 
     Pages without DB scaffolding (products list, media buys list, etc.)
-    only need a tenant + USD currency limit — render paths that need
+    only need a tenant + USD currency limit; render paths that need
     extra rows fail open with empty lists.
     """
 
-    def test_dashboard_embedded_prepends_host(self, admin_client):
-        """Dashboard has a single tenant-name crumb. In embed mode the
-        host root is *prepended* (not replaced) so the iframe still
-        shows where the user is inside the tenant."""
+    def test_dashboard_embedded_shows_host_link(self, admin_client):
         tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
         try:
             resp = admin_client.get(f"/tenant/{tid}/")
             assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            _assert_first_crumb_is_host(body)
-            # Tenant name is still the leaf — prepending preserved it.
-            assert "Render Test" in body
+            _assert_subnav_has_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_dashboard_standalone_shows_tenant_only(self, admin_client):
+    def test_dashboard_standalone_omits_host_link(self, admin_client):
         tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
         try:
             resp = admin_client.get(f"/tenant/{tid}/")
             assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            _assert_first_crumb_is_tenant(body)
+            _assert_subnav_has_no_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_products_list_embedded_shows_host(self, admin_client):
+    def test_products_list_embedded_shows_host_link(self, admin_client):
         tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
         try:
             resp = admin_client.get(f"/tenant/{tid}/products/")
             assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            _assert_first_crumb_is_host(body)
-            assert "Products" in body
+            _assert_subnav_has_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_products_list_standalone_shows_tenant(self, admin_client):
+    def test_products_list_standalone_omits_host_link(self, admin_client):
         tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
         try:
             resp = admin_client.get(f"/tenant/{tid}/products/")
             assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            _assert_first_crumb_is_tenant(body)
+            _assert_subnav_has_no_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_media_buys_list_embedded_shows_host(self, admin_client):
+    def test_media_buys_list_embedded_shows_host_link(self, admin_client):
         tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
         try:
             resp = admin_client.get(f"/tenant/{tid}/media-buys")
             assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            _assert_first_crumb_is_host(body)
-            assert "Media Buys" in body
+            _assert_subnav_has_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
 
-    def test_media_buys_list_standalone_shows_tenant(self, admin_client):
+    def test_media_buys_list_standalone_omits_host_link(self, admin_client):
         tid = _insert_render_tenant(is_embedded=False, embed_breadcrumb_root=None)
         try:
             resp = admin_client.get(f"/tenant/{tid}/media-buys")
             assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            _assert_first_crumb_is_tenant(body)
+            _assert_subnav_has_no_host_link(resp.get_data(as_text=True))
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_creatives_review_embedded_shows_host_link(self, admin_client):
+        """Creatives review used to skip the breadcrumb partial entirely
+        — the subnav-in-base.html refactor fixed that gap, and the host
+        link must follow."""
+        tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/creatives/review")
+            assert resp.status_code == 200
+            _assert_subnav_has_host_link(resp.get_data(as_text=True))
+        finally:
+            _cleanup_render_tenant(tid)
+
+    def test_workflows_embedded_shows_host_link(self, admin_client):
+        """Workflows page also missed the old breadcrumb partial."""
+        tid = _insert_render_tenant(is_embedded=True, embed_breadcrumb_root=HOST_ROOT)
+        try:
+            resp = admin_client.get(f"/tenant/{tid}/workflows")
+            assert resp.status_code == 200
+            _assert_subnav_has_host_link(resp.get_data(as_text=True))
         finally:
             _cleanup_render_tenant(tid)
 

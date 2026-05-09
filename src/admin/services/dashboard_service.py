@@ -600,10 +600,16 @@ class DashboardService:
         return self._calculate_revenue_trend(session, days=days, repo=repo)
 
     def _needs_attention(self, session, repo: MediaBuyRepository) -> list[dict[str, Any]]:
-        """Bullet-list items for the right-rail attention panel."""
+        """Bullet-list items for the right-rail attention panel.
+
+        Each item includes a ``url`` (script_name-relative path) so the
+        template can wrap the row in an anchor — the rail is the operator's
+        entry point into the queue, so every row must lead somewhere.
+        """
         from sqlalchemy import func, select
 
         items = []
+        tenant_path = f"/tenant/{self.tenant_id}"
 
         pending_creatives_count = (
             session.scalar(
@@ -620,6 +626,7 @@ class DashboardService:
                     "level": "amber",
                     "title": f"{pending_creatives_count} creative{'s' if pending_creatives_count != 1 else ''} need approval",
                     "sub": "Creative review queue",
+                    "url": f"{tenant_path}/creatives/review",
                 }
             )
 
@@ -630,11 +637,18 @@ class DashboardService:
         tomorrow = today + timedelta(days=1)
         expiring = [b for b in active if b.end_date and today <= type_cast(date, b.end_date) <= tomorrow]
         if expiring:
+            # Single buy → deep-link to its detail; multiple → filtered list.
+            expiring_url = (
+                f"{tenant_path}/media-buy/{expiring[0].media_buy_id}"
+                if len(expiring) == 1
+                else f"{tenant_path}/media-buys?status=live"
+            )
             items.append(
                 {
                     "level": "amber" if len(expiring) > 1 else "neutral",
                     "title": f"{len(expiring)} deal{'s' if len(expiring) != 1 else ''} expiring in <24h",
                     "sub": ", ".join(b.advertiser_name or "Unknown" for b in expiring[:3]),
+                    "url": expiring_url,
                 }
             )
 
@@ -646,17 +660,19 @@ class DashboardService:
                 continue
             row = self._running_row(b, now)
             if row["pacing"] == "under":
-                under.append((b.advertiser_name or "Unknown", row["delivery_pct"], row["flight_pct"]))
-        for name, dpct, fpct in under[:2]:
+                under.append((b.media_buy_id, b.advertiser_name or "Unknown", row["delivery_pct"], row["flight_pct"]))
+        for buy_id, name, dpct, fpct in under[:2]:
             items.append(
                 {
                     "level": "amber",
                     "title": f"{name} pacing under",
                     "sub": f"{int(dpct * 100)}% delivered · should be {int(fpct * 100)}%",
+                    "url": f"{tenant_path}/media-buy/{buy_id}",
                 }
             )
 
         if not items:
+            # No url — the empty-state row is informational, not a link.
             items.append(
                 {
                     "level": "neutral",

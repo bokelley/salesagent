@@ -69,6 +69,91 @@
         </div>
     </div>
     {% endif %}
+    {# Persistent tenant subnav. Renders on every page where ``tenant`` is in
+       scope (auto-injected by the inject_context processor for tenant-scoped
+       routes). NOT gated on embedded — the subnav is what the operator
+       navigates by; the upstream proxy hides only ``.header``, not this.
+
+       Active state: each link is bolded when the request path is inside its
+       section. Dashboard is exact-match on ``/tenant/<id>``; other sections
+       use a startswith prefix. Configure highlights when on any of its
+       dropdown sub-pages.
+
+       Embedded host link: when ``embed_breadcrumb_root`` is set (header or
+       tenant column, see src/admin/utils/breadcrumbs.py), the leftmost item
+       is a link back to the host's storefront — what the breadcrumb's first
+       crumb used to be before the IA cleanup. #}
+    {% if tenant %}
+    <nav class="sa-tenant-nav" aria-label="Tenant navigation">
+        <div class="sa-tenant-nav__inner">
+            {% set _path = request.path or '' %}
+            {% set _tprefix = script_name + '/tenant/' + tenant.tenant_id %}
+            {% if embed_breadcrumb_root %}
+            {# target=_top breaks out of the iframe — the host link points
+               at the upstream storefront, which is meant to replace the
+               whole page chrome, not load inside the iframe. noreferrer
+               minimizes leaking the salesagent admin URL (which contains
+               tenant_id) to the host's storefront via the Referer header. #}
+            <a class="sa-nav-action sa-nav-action--host" href="{{ embed_breadcrumb_root.url }}" target="_top" rel="noopener noreferrer">{{ embed_breadcrumb_root.label }}</a>
+            {% endif %}
+            {% set _navlinks = [
+                ('Dashboard',  '',                  ''),
+                ('Media Buys', '/media-buys',       '/media-buy'),
+                ('Products',   '/products/',        '/products'),
+                ('Creatives',  '/creatives/review', '/creatives'),
+                ('Workflows',  '/workflows',        '/workflows'),
+                ('Reports',    '/reporting',        '/reporting'),
+            ] %}
+            {% for label, href, active_prefix in _navlinks %}
+                {% set _href = _tprefix + href %}
+                {% set _is_active = (
+                    (active_prefix == '' and (_path == _tprefix or _path == _tprefix + '/'))
+                    or (active_prefix != '' and _path.startswith(_tprefix + active_prefix))
+                ) %}
+                <a class="sa-nav-action{% if _is_active %} is-active{% endif %}" href="{{ _href }}"{% if _is_active %} aria-current="page"{% endif %}>{{ label }}</a>
+            {% endfor %}
+            {# Configure is active on every tenant-scoped page that isn't
+               one of the primary nav sections — so Settings sub-pages
+               (/users, /authorized-properties, /property-tags, /signing-keys,
+               /publisher-partners, /policy/*) all light it up without
+               having to allowlist each one. #}
+            {% set _is_primary_section = (
+                _path == _tprefix
+                or _path == _tprefix + '/'
+                or _path.startswith(_tprefix + '/media-buy')
+                or _path.startswith(_tprefix + '/products')
+                or _path.startswith(_tprefix + '/creatives')
+                or _path.startswith(_tprefix + '/workflows')
+                or _path.startswith(_tprefix + '/reporting')
+            ) %}
+            {% set _configure_active = _path.startswith(_tprefix + '/') and not _is_primary_section %}
+            <div class="sa-menu" data-sa-menu>
+                <button type="button" class="sa-menu__trigger{% if _configure_active %} is-active{% endif %}" data-sa-menu-trigger aria-haspopup="true" aria-expanded="false">
+                    Configure
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div class="sa-menu__panel" role="menu">
+                    <div class="sa-menu__group-label">Inventory</div>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory/browse">Browse inventory</a>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory-profiles/">Inventory profiles</a>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/targeting">Targeting criteria</a>
+                    {% if not embedded_view %}
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory">Sync inventory</a>
+                    {% endif %}
+
+                    <div class="sa-menu__group-label">Buying</div>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/buyer-routing">Buyer routing</a>
+
+                    <div class="sa-menu__group-label">Delivery</div>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/webhooks">Webhooks</a>
+
+                    <div class="sa-menu__group-label">Workspace</div>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings">Settings</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
     <div class="container">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}

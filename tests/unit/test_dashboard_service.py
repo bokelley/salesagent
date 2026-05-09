@@ -2,6 +2,7 @@
 
 # ruff: noqa: PLR0913
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
@@ -166,6 +167,105 @@ class TestDashboardService:
         assert health["single_data_source"] == "audit_logs"
         assert "tasks" in health["deprecated_sources"]
         assert "human_tasks" in health["deprecated_sources"]
+
+    def test_needs_attention_items_carry_urls(self):
+        """Each attention-rail item must include a ``url`` so the dashboard
+        can wrap the row in an anchor — the rail is the operator's entry
+        point into the queue, so every actionable row leads somewhere.
+
+        Covers the IA fix for Configure-menu / ops-queue confusion: pending
+        creatives → /creatives/review; single expiring → that buy's detail;
+        multiple expiring → media-buys list; pacing-under → that buy.
+        """
+        service = DashboardService("test_tenant")
+
+        mock_session = Mock()
+        # Pending creatives count
+        mock_session.scalar.return_value = 3
+
+        # Two active buys: one expiring today (single), one pacing under
+        today = datetime.now(UTC).date()
+        expiring_buy = Mock()
+        expiring_buy.media_buy_id = "buy_expiring"
+        expiring_buy.advertiser_name = "Acme"
+        expiring_buy.end_date = today
+        expiring_buy.is_paused = False
+
+        pacing_buy = Mock()
+        pacing_buy.media_buy_id = "buy_pacing"
+        pacing_buy.advertiser_name = "Globex"
+        pacing_buy.end_date = today + timedelta(days=30)  # not expiring
+        pacing_buy.is_paused = False
+
+        mock_repo = Mock()
+        mock_repo.list_by_statuses.return_value = [expiring_buy, pacing_buy]
+
+        # _running_row decides pacing — mark expiring as on-pace, pacing_buy as under
+        def fake_running_row(buy, _now):
+            if buy is pacing_buy:
+                return {"pacing": "under", "delivery_pct": 0.4, "flight_pct": 0.7}
+            return {"pacing": "ok", "delivery_pct": 0.5, "flight_pct": 0.5}
+
+        with patch.object(service, "_running_row", side_effect=fake_running_row):
+            items = service._needs_attention(mock_session, mock_repo)
+
+        urls = [item.get("url") for item in items]
+        # Pending creatives → review queue
+        assert "/tenant/test_tenant/creatives/review" in urls
+        # Single expiring buy → deep-link to its detail page (singular
+        # /media-buy/<id> — registered by operations_bp).
+        assert "/tenant/test_tenant/media-buy/buy_expiring" in urls
+        # Pacing-under buy → deep-link to its detail page.
+        assert "/tenant/test_tenant/media-buy/buy_pacing" in urls
+
+    def test_needs_attention_multiple_expiring_links_to_list(self):
+        """Multiple deals expiring in the same window collapse into a single
+        rail row; the link goes to the filtered media-buys list rather than
+        an arbitrary buy detail."""
+        service = DashboardService("test_tenant")
+
+        mock_session = Mock()
+        mock_session.scalar.return_value = 0  # no pending creatives
+
+        today = datetime.now(UTC).date()
+        buys = []
+        for i in range(3):
+            b = Mock()
+            b.media_buy_id = f"buy_{i}"
+            b.advertiser_name = f"Adv {i}"
+            b.end_date = today
+            b.is_paused = False
+            buys.append(b)
+
+        mock_repo = Mock()
+        mock_repo.list_by_statuses.return_value = buys
+
+        with patch.object(
+            service,
+            "_running_row",
+            return_value={"pacing": "ok", "delivery_pct": 0.5, "flight_pct": 0.5},
+        ):
+            items = service._needs_attention(mock_session, mock_repo)
+
+        expiring_items = [i for i in items if "expiring" in i["title"]]
+        assert len(expiring_items) == 1
+        assert expiring_items[0]["url"] == "/tenant/test_tenant/media-buys?status=live"
+
+    def test_needs_attention_empty_state_has_no_url(self):
+        """The fallback "nothing needs your attention" row is informational —
+        it should not render as a link, so it omits the ``url`` field
+        (template renders unwrapped row when url is falsy/missing)."""
+        service = DashboardService("test_tenant")
+
+        mock_session = Mock()
+        mock_session.scalar.return_value = 0
+
+        mock_repo = Mock()
+        mock_repo.list_by_statuses.return_value = []
+
+        items = service._needs_attention(mock_session, mock_repo)
+        assert len(items) == 1
+        assert items[0].get("url") is None
 
     @patch("src.admin.services.dashboard_service.get_db_session")
     def test_health_check_unhealthy(self, mock_get_db):
