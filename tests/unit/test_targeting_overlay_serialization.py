@@ -50,6 +50,29 @@ class TestPublicDumpExcludesInternalFields:
         assert "tenant_id" not in payload
         assert "key_value_pairs" not in payload
 
+    def test_excluded_when_nested_inside_parent(self):
+        """Per-field ``exclude=True`` must fire even when the parent does the dumping.
+
+        This is the regression that the prior custom ``model_dump`` override
+        missed: it only ran when ``Targeting.model_dump()`` was called directly,
+        so internal fields could leak through ``PackageRequest.model_dump()``.
+        """
+        from src.core.schemas import PackageRequest
+
+        pkg = PackageRequest(
+            product_id="prod_1",
+            budget=1000.0,
+            pricing_option_id="cpm_default",
+            targeting_overlay=TargetingOverlay(
+                geo_countries=["US"],
+                tenant_id="t1",
+                key_value_pairs={"aee_segment": "high"},
+            ),
+        )
+        nested = pkg.model_dump()["targeting_overlay"]
+        assert "tenant_id" not in nested
+        assert "key_value_pairs" not in nested
+
 
 class TestInternalDumpPreservesAllFields:
     """``model_dump_internal()`` must round-trip everything for DB storage."""
@@ -62,12 +85,25 @@ class TestInternalDumpPreservesAllFields:
         t = TargetingOverlay(key_value_pairs={"aee_segment": "high"})
         assert t.model_dump_internal()["key_value_pairs"] == {"aee_segment": "high"}
 
-    def test_internal_dump_serializes_datetimes_as_iso(self):
+    def test_internal_dump_serializes_datetime_as_iso(self):
+        """Default mode is ``json`` so callers can ``json.dumps()`` the result —
+        this is the existing DB-storage contract (see test_v3_targeting_roundtrip)."""
         t = TargetingOverlay(created_at=datetime(2026, 1, 1, 12, 0, 0))
         assert t.model_dump_internal()["created_at"] == "2026-01-01T12:00:00"
 
-    def test_internal_dump_handles_none_timestamps(self):
+    def test_internal_dump_default_keeps_none_internal_fields(self):
+        """Default behavior preserves explicit ``None`` so DB writes can null them out."""
         t = TargetingOverlay(geo_countries=["US"])
         result = t.model_dump_internal()
+        assert result["tenant_id"] is None
         assert result["created_at"] is None
-        assert result["updated_at"] is None
+        assert result["key_value_pairs"] is None
+
+    def test_internal_dump_honors_exclude_none(self):
+        """When the caller asks for exclude_none, internal fields skip None too —
+        matches the existing JSON-roundtrip contract in test_v3_targeting_roundtrip."""
+        t = TargetingOverlay(geo_countries=["US"])
+        result = t.model_dump_internal(exclude_none=True)
+        assert "tenant_id" not in result
+        assert "created_at" not in result
+        assert "key_value_pairs" not in result

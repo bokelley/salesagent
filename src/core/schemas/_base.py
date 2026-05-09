@@ -1013,19 +1013,31 @@ class TargetingOverlay(LibraryTargetingOverlay):
         """Dump including internal and managed fields for database storage and internal processing.
 
         Per-field ``exclude=True`` cannot be overridden via kwargs, so internal
-        fields are re-added manually after serialization.
+        fields are re-added manually after serialization. Mode defaults to
+        ``json`` so callers can pass the result straight to ``json.dumps()``
+        (the existing DB-storage contract — see test_v3_targeting_roundtrip).
         """
         kwargs.setdefault("mode", "json")
         result = super().model_dump(**kwargs)
-        result["tenant_id"] = self.tenant_id
-        result["created_at"] = self.created_at.isoformat() if self.created_at else None
-        result["updated_at"] = self.updated_at.isoformat() if self.updated_at else None
-        result["metadata"] = self.metadata
-        result["key_value_pairs"] = self.key_value_pairs
+        skip_none = kwargs.get("exclude_none", False)
+        # Re-add per-field exclude=True fields, mirroring the JSON-mode
+        # serialization the rest of the dump uses (datetime → ISO string).
+        for name in ("tenant_id", "created_at", "updated_at", "metadata", "key_value_pairs"):
+            value = getattr(self, name)
+            if value is None:
+                if not skip_none:
+                    result[name] = None
+                continue
+            if isinstance(value, datetime):
+                result[name] = value.isoformat()
+            else:
+                result[name] = value
         return result
 
 
 # Back-compat alias — many adapters and tests import ``Targeting`` directly.
+# Removal tracked in #280 (Phase 2 cleanup — drop once non-spec dimensions
+# are migrated/removed and call sites have moved to the spec name).
 Targeting = TargetingOverlay
 
 
