@@ -57,6 +57,15 @@ def translate_idempotency_conflict(handler: _F) -> _F:
     correctable classification and breaking buyer-side retry-with-fresh-key
     recovery.
 
+    Spec invariant — do NOT special-case correctable-rejection caching: the
+    framework caches by ``(caller_identity, key, JCS(payload))``, and AdCP
+    treats the idempotency_key as identifying an *attempt*, not an *intent*.
+    After any non-success response (including correctable rejections like
+    ``TERMS_REJECTED``), the spec answer is for the buyer to mint a fresh
+    ``uuid.uuid4()`` and retry — not for the seller to invalidate cache
+    entries based on the response classification. Trying to "fix" that
+    breaks the JCS-payload-equality invariant.
+
     Apply this decorator OUTSIDE the ``@_IDEMPOTENCY.wrap`` decorator on every
     platform method that uses idempotency caching::
 

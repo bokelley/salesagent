@@ -15,10 +15,12 @@ wire-shaped ``AdcpError`` with ``code="IDEMPOTENCY_CONFLICT"`` and
 ``recovery="correctable"`` so buyers can either resend the original payload
 or rotate the key and retry.
 
-End-to-end coverage through ``MockSellerPlatform.create_media_buy`` is
-tracked separately — the platform now delegates to DB-backed ``_impl``
-functions, so a proper end-to-end test needs the harness/factory pattern
-rather than the in-memory ``_MEDIA_BUYS`` store the original test relied on.
+End-to-end coverage of the dispatcher → wire envelope projection (verifying
+that buyers actually see ``code="IDEMPOTENCY_CONFLICT"`` on the wire, not
+just that the decorator translates the exception) is tracked in #295 — the
+platform now delegates to DB-backed ``_impl`` functions, so a proper
+end-to-end test needs the harness/factory pattern rather than the in-memory
+``_MEDIA_BUYS`` store the original test relied on.
 """
 
 from __future__ import annotations
