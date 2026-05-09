@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 # Default budget for ``run_async_in_sync_context`` — kept under the typical
 # 30s SDK tool-call deadline so a hung worker thread is reaped before the
 # transport layer's own timeout fires (which would discard the typed error).
-DEFAULT_ASYNC_BRIDGE_TIMEOUT_SECONDS = 25.0
+# Pegged to 28s (not lower) to give creative-agent build/preview calls
+# enough headroom — those legitimately push past 25s under load.
+DEFAULT_ASYNC_BRIDGE_TIMEOUT_SECONDS = 28.0
 
 
 def resolve_enum_value(value: str | Enum) -> str:
