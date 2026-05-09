@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.database.models import MediaPackage
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -76,6 +77,13 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             },
         )
         session.add(media_buy)
+        session.add(
+            MediaPackage(
+                media_buy_id="test_buy_123",
+                package_id="pkg_default",
+                package_config={"product_id": "test_product", "impressions": 100000},
+            )
+        )
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -236,6 +244,14 @@ def test_update_media_buy_replaces_creatives(integration_db):
         )
         session.add(media_buy)
         session.flush()  # Ensure media_buy exists before creating assignments
+        session.add(
+            MediaPackage(
+                media_buy_id="test_buy_456",
+                package_id="pkg_default",
+                package_config={"product_id": "test_product", "impressions": 100000},
+            )
+        )
+        session.flush()
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -409,6 +425,13 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
             },
         )
         session.add(media_buy)
+        session.add(
+            MediaPackage(
+                media_buy_id="test_buy_789",
+                package_id="pkg_default",
+                package_config={"product_id": "test_product", "impressions": 100000},
+            )
+        )
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
@@ -525,6 +548,13 @@ def test_creative_assignments_with_weights(integration_db):
             },
         )
         session.add(media_buy)
+        session.add(
+            MediaPackage(
+                media_buy_id="test_buy_weights",
+                package_id="pkg_default",
+                package_config={"product_id": "test_product", "impressions": 100000},
+            )
+        )
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -669,6 +699,13 @@ def test_creative_assignments_replaces_all(integration_db):
             },
         )
         session.add(media_buy)
+        session.add(
+            MediaPackage(
+                media_buy_id="test_buy_replace",
+                package_id="pkg_default",
+                package_config={"product_id": "test_product", "impressions": 100000},
+            )
+        )
 
         # Create three creatives
         for cid in ["c1", "c2", "c3"]:
