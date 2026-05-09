@@ -14,37 +14,79 @@
     const root = document.getElementById('sa-toast-root');
     if (!root) return;
 
+    const ICONS = { success: '✓', error: '✕', warning: '!', info: 'i' };
+
     function dismiss(el) {
+        if (el.dataset.saLeaving) return;
+        el.dataset.saLeaving = '1';
+        if (el._saTimer) {
+            clearTimeout(el._saTimer);
+            el._saTimer = null;
+        }
         el.classList.add('is-leaving');
         setTimeout(() => el.remove(), 240);
     }
 
     window.saToast = function (message, type) {
-        type = type || 'info';
+        type = ICONS[type] ? type : 'info';
         const el = document.createElement('div');
         el.className = 'sa-toast sa-toast-' + type;
+        // Assertive for errors so SR users hear them immediately; the root
+        // is polite, and per-element live overrides the ancestor region.
         el.setAttribute('role', type === 'error' ? 'alert' : 'status');
-        const icons = { success: '✓', error: '✕', warning: '!', info: 'i' };
-        el.innerHTML =
-            '<span class="sa-toast__icon" aria-hidden="true">' + (icons[type] || '') + '</span>' +
-            '<span class="sa-toast__msg">' + (message || '') + '</span>' +
-            '<button type="button" class="sa-toast__close" aria-label="Dismiss">×</button>';
-        el.querySelector('.sa-toast__close').addEventListener('click', () => dismiss(el));
+        el.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+
+        const icon = document.createElement('span');
+        icon.className = 'sa-toast__icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = ICONS[type];
+
+        // textContent on the message span — never innerHTML — so server-derived
+        // strings (saFetchAction body.error, mirrored flash text) cannot inject
+        // markup. This is the security-critical line; do not change to innerHTML.
+        const msg = document.createElement('span');
+        msg.className = 'sa-toast__msg';
+        msg.textContent = message == null ? '' : String(message);
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'sa-toast__close';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.textContent = '×';
+        close.addEventListener('click', () => dismiss(el));
+
+        el.appendChild(icon);
+        el.appendChild(msg);
+        el.appendChild(close);
         root.appendChild(el);
-        setTimeout(() => { if (el.isConnected) dismiss(el); }, 4000);
+
+        el._saTimer = setTimeout(() => { if (el.isConnected) dismiss(el); }, 4000);
         return el;
     };
 
+    // Esc dismisses the most recent toast — keyboard users get parity with
+    // mouse users who can click the × button.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        const toasts = root.querySelectorAll('.sa-toast:not(.is-leaving)');
+        const last = toasts[toasts.length - 1];
+        if (last) dismiss(last);
+    });
+
     // saFetchAction(button, fetchFn, opts)
-    //   button: HTMLElement — disabled + " …" suffix while in flight
-    //   fetchFn: async () => Response — caller does the fetch
+    //   button: HTMLButtonElement — disabled + " …" suffix while in flight.
+    //   fetchFn: async () => Response — caller does the fetch.
     //   opts: { successMessage?, errorPrefix?, reloadOnSuccess?, onSuccess? }
     window.saFetchAction = async function (button, fetchFn, opts) {
         opts = opts || {};
-        const orig = button.innerHTML;
+        if (button.dataset.saInFlight === '1') {
+            // Re-entry guard — covers anchors and divs that ignore `disabled`.
+            return { ok: false, error: new Error('action already in flight') };
+        }
+        const origText = button.textContent;
         button.disabled = true;
         button.dataset.saInFlight = '1';
-        button.innerHTML = orig + ' …';
+        button.textContent = origText + ' …';
         try {
             const res = await fetchFn();
             let body = null;
@@ -65,14 +107,14 @@
             return { ok: false, error: err };
         } finally {
             button.disabled = false;
-            button.innerHTML = orig;
+            button.textContent = origText;
             delete button.dataset.saInFlight;
         }
     };
 
-    // Mirror Flask flash messages into toasts so the same UX surface
-    // covers both code paths. The server-rendered banner stays for
-    // accessibility + no-JS fallback; the toast is an additional cue.
+    // Mirror Flask flash messages into toasts so the same UX surface covers
+    // both code paths. textContent on read AND on render (saToast uses
+    // textContent for the message span) — no HTML round-trip.
     document.querySelectorAll('.flash-messages .alert').forEach((el) => {
         const text = (el.textContent || '').replace(/×\s*$/, '').trim();
         if (!text) return;
