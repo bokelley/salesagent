@@ -237,6 +237,17 @@ class TestSchemaInheritance:
             # Schema overrides for partial-construction tolerance / wider types
             ("Creative", "variants"),
             ("SyncCreativeResult", "status"),
+            # TargetingOverlay overrides:
+            # - frequency_cap: Pattern #4, override to use local FrequencyCap subclass
+            # - geo_*_exclude: widen from library's *ExcludeItem subclass to the include-side
+            #   type (e.g. GeoCountry instead of GeoCountriesExcludeItem) so adapters can
+            #   use a single helper for both include and exclude. The library exclude types
+            #   are bare subclasses of the include types — same wire shape, same root values.
+            ("TargetingOverlay", "frequency_cap"),
+            ("TargetingOverlay", "geo_countries_exclude"),
+            ("TargetingOverlay", "geo_regions_exclude"),
+            ("TargetingOverlay", "geo_metros_exclude"),
+            ("TargetingOverlay", "geo_postal_areas_exclude"),
         }
 
         violations = []

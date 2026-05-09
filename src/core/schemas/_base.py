@@ -61,7 +61,6 @@ from adcp.types import (
     GeoMetro,
     GeoPostalArea,
     GeoRegion,
-    TargetingOverlay,
     VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
 )
 
@@ -75,6 +74,7 @@ from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
+from adcp.types import TargetingOverlay as LibraryTargetingOverlay
 from pydantic import (
     AnyUrl,
     BaseModel,
@@ -868,8 +868,8 @@ _PLATFORM_TO_FORM_FACTORS: dict[str, list[str]] = {
 }
 
 
-class Targeting(TargetingOverlay):
-    """Targeting extending AdCP TargetingOverlay with internal dimensions.
+class TargetingOverlay(LibraryTargetingOverlay):
+    """Targeting overlay extending AdCP TargetingOverlay with internal dimensions.
 
     Inherits v3 structured geo fields from library:
     - geo_countries, geo_regions, geo_metros, geo_postal_areas
@@ -936,15 +936,19 @@ class Targeting(TargetingOverlay):
     # Platform-specific custom targeting
     custom: dict[str, Any] | None = None  # Platform-specific targeting options
 
-    # Key-value targeting (managed-only for AXE signals)
-    # These are not exposed in overlay - only set by orchestrator/AXE
-    key_value_pairs: dict[str, str] | None = None  # e.g., {"aee_segment": "high_value", "aee_score": "0.85"}
+    # Key-value targeting (managed-only for AXE signals).
+    # Excluded from API responses — only set by orchestrator/AXE, never exposed in overlay.
+    key_value_pairs: dict[str, str] | None = Field(
+        None,
+        description="Managed-only: key-value pairs set by orchestrator/AXE (not exposed in overlay)",
+        exclude=True,
+    )
 
-    # Internal fields (not in AdCP spec)
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy")
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp")
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp")
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata")
+    # Internal fields (not in AdCP spec) — excluded from API responses.
+    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
+    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
+    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
+    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
 
     # Transient normalizer signal: set by normalize_legacy_geo when city targeting
     # fields are encountered in legacy data. Consumed by adapters (e.g. GAM
@@ -997,38 +1001,32 @@ class Targeting(TargetingOverlay):
         return values
 
     def model_dump(self, **kwargs):
-        """Override to provide AdCP-compliant responses while preserving internal fields."""
-        kwargs.setdefault("mode", "json")
-        # Default to excluding internal and managed fields for AdCP compliance
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Add internal and managed fields to exclude by default
-            exclude.update(
-                {
-                    "key_value_pairs",  # Managed-only field
-                    "tenant_id",
-                    "created_at",
-                    "updated_at",
-                    "metadata",  # Internal fields
-                }
-            )
-            kwargs["exclude"] = exclude
+        """Override to ensure JSON-mode serialization for AdCP wire compliance.
 
+        Internal and managed fields (tenant_id, created_at, updated_at, metadata,
+        key_value_pairs) are excluded via per-field ``exclude=True``.
+        """
+        kwargs.setdefault("mode", "json")
         return super().model_dump(**kwargs)
 
     def model_dump_internal(self, **kwargs):
-        """Dump including internal and managed fields for database storage and internal processing."""
-        kwargs.setdefault("mode", "json")
-        # Don't exclude internal fields or managed fields
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
+        """Dump including internal and managed fields for database storage and internal processing.
 
-    def dict(self, **kwargs):
-        """Override dict to always exclude managed fields (for backward compat)."""
-        kwargs["exclude"] = kwargs.get("exclude", set())
-        if isinstance(kwargs["exclude"], set):
-            kwargs["exclude"].add("key_value_pairs")
-        return super().dict(**kwargs)
+        Per-field ``exclude=True`` cannot be overridden via kwargs, so internal
+        fields are re-added manually after serialization.
+        """
+        kwargs.setdefault("mode", "json")
+        result = super().model_dump(**kwargs)
+        result["tenant_id"] = self.tenant_id
+        result["created_at"] = self.created_at.isoformat() if self.created_at else None
+        result["updated_at"] = self.updated_at.isoformat() if self.updated_at else None
+        result["metadata"] = self.metadata
+        result["key_value_pairs"] = self.key_value_pairs
+        return result
+
+
+# Back-compat alias — many adapters and tests import ``Targeting`` directly.
+Targeting = TargetingOverlay
 
 
 class Budget(SalesAgentBaseModel):
@@ -2325,7 +2323,11 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
     start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
     end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
     paused: bool | None = Field(default=None, description="Whether this package is paused")
-    targeting_overlay: TargetingOverlay | None = Field(
+    # Pinned to the bare library type — this is an outbound response echo with
+    # no need for legacy-geo normalization, and using LibraryTargetingOverlay
+    # guarantees the wire shape stays strictly spec-compliant regardless of any
+    # future drift in our local TargetingOverlay subclass.
+    targeting_overlay: LibraryTargetingOverlay | None = Field(
         default=None,
         description=(
             "Targeting overlay echoed from the most recent create_media_buy or "
