@@ -101,16 +101,17 @@ class TestTargetingOverlayRoundtrip:
             ), f"collection_list.list_id missing from persisted package_config: got {persisted_overlay!r}"
 
         # Read-path assertion — get_media_buys must echo the references back.
-        # status_filter must cover any blocker the buy may land in:
-        # - pending_start: future start_time, no other blocker
-        # - pending_creatives: PR #249's pre-approval gate persists this when
-        #   the create lands without creatives (this test attaches none)
-        # - active: would only happen if start_time were already in the past
+        # status_filter must include both pending_creatives (the variant-1
+        # status emitted when create_media_buy is called without creatives;
+        # see PR #196) and pending_start (used once creatives are synced and
+        # the buy is waiting on its future start_time). Without the
+        # pending_creatives entry the filter rejects the freshly-created
+        # buy and the assertion below sees ``media_buys=[]``.
         list_req = GetMediaBuysRequest(
             media_buy_ids=[media_buy_id],
             status_filter=[
-                MediaBuyStatus.pending_start,
                 MediaBuyStatus.pending_creatives,
+                MediaBuyStatus.pending_start,
                 MediaBuyStatus.active,
             ],
         )
