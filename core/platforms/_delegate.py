@@ -143,16 +143,26 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
 
 def _coerce_to_request_model(req: Any, model_cls: type) -> Any:
     """Coerce ``req`` (dict OR Pydantic model OR generated model) into
-    the Pydantic model class the impl expects."""
+    the Pydantic model class the impl expects.
+
+    When ``req`` is a different Pydantic model (e.g. the framework's
+    library type) we dump it and filter to fields ``model_cls`` actually
+    declares. The framework can inject default-valued fields that are
+    in the spec but our impl-local schema deliberately doesn't expose
+    (``include_snapshot``, ``include_history``, ``adcp_major_version``
+    on ``GetMediaBuysRequest``) — those defaults would otherwise blow
+    up dev-mode ``extra='forbid'`` validation and surface as
+    INTERNAL_ERROR (#273).
+    """
     if isinstance(req, model_cls):
         return req
     if isinstance(req, dict):
         return model_cls(**req)
     if hasattr(req, "model_dump"):
-        # Different but related model type (e.g. another version of
-        # GetProductsRequest from a sibling module). Round-trip
-        # through dict to coerce.
-        return model_cls(**req.model_dump(exclude_none=True))
+        dumped = req.model_dump(exclude_none=True)
+        allowed = set(model_cls.model_fields.keys())
+        filtered = {k: v for k, v in dumped.items() if k in allowed}
+        return model_cls(**filtered)
     return model_cls.model_validate(req)
 
 
