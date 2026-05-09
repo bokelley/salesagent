@@ -211,6 +211,15 @@ class Tenant(Base, JSONValidatorMixin):
     # native to the host.
     embed_breadcrumb_root: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
+    # Per-tenant gate (#145). When True, creatives at status='pending_review'
+    # are held back from the ad-server upload until a human flips them to
+    # 'approved' — closing the auto-create-path window where the local
+    # pending_review flag was informational only. Default False preserves
+    # today's behavior byte-for-byte.
+    creative_pre_approval_gate_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
     principals = relationship("Principal", back_populates="tenant", cascade="all, delete-orphan")

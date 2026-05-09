@@ -484,6 +484,10 @@ class ProductMixin:
         if brand is None:
             brand = {"domain": "test.com"}
 
+        # ``buying_mode`` is required per AdCP spec — default to "wholesale"
+        # so harness callers don't have to pass it explicitly. Tests that
+        # exercise brief mode can pass ``buying_mode="brief"`` via ``**extra``.
+        extra.setdefault("buying_mode", "wholesale")
         req = GetProductsRequestGenerated(
             brief=brief,
             brand=brand,

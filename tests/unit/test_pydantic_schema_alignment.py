@@ -102,6 +102,10 @@ def load_json_schema(schema_ref: str) -> dict[str, Any]:
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
     """Generate a reasonable example value for a JSON schema type."""
+    # Inline enum (string with enum values declared on the field itself)
+    if field_spec and "enum" in field_spec:
+        return field_spec["enum"][0]
+
     # Handle $ref fields (complex nested objects)
     if field_spec and "$ref" in field_spec:
         # Generate sensible defaults for known $ref types
@@ -587,6 +591,7 @@ class TestSpecificFieldValidation:
     def test_get_products_accepts_filters(self):
         """REGRESSION TEST: filters must be accepted (PR #195 issue)."""
         request = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "testproduct.com"},
             filters={
                 "delivery_type": "guaranteed",
@@ -604,13 +609,14 @@ class TestSpecificFieldValidation:
         adcp 3.6.0: brand replaced brand_manifest.
         """
         # Empty request is valid
-        empty_request = GetProductsRequest()
+        empty_request = GetProductsRequest(buying_mode="wholesale")
         assert empty_request.brand is None
         assert empty_request.brief is None
         assert empty_request.filters is None
 
         # With brand only
         request = GetProductsRequest(
+            buying_mode="wholesale",
             brand={"domain": "testproduct.com"},
         )
         assert request.brand is not None

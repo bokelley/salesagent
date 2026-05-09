@@ -42,7 +42,7 @@ class TestPgBouncerDetection:
             # Verify PgBouncer-optimized settings
             assert call_kwargs["pool_size"] == 2  # Small pool for PgBouncer
             assert call_kwargs["max_overflow"] == 5  # Limited overflow
-            assert call_kwargs["pool_pre_ping"] is False  # Disabled for PgBouncer
+            assert call_kwargs["pool_pre_ping"] is True  # SELECT 1 round-trip detects PgBouncer idle eviction
             assert call_kwargs["pool_recycle"] == 300  # 5 minutes
 
     def test_pgbouncer_detected_by_env_var(self):
@@ -72,7 +72,7 @@ class TestPgBouncerDetection:
             # Verify PgBouncer-optimized settings
             call_kwargs = mock_create_engine.call_args[1]
             assert call_kwargs["pool_size"] == 2
-            assert call_kwargs["pool_pre_ping"] is False
+            assert call_kwargs["pool_pre_ping"] is True
 
     def test_direct_postgres_without_pgbouncer(self):
         """Test that direct PostgreSQL settings are used without PgBouncer."""
@@ -128,7 +128,7 @@ class TestPgBouncerDetection:
 
                 call_kwargs = mock_create_engine.call_args[1]
                 assert call_kwargs["pool_size"] == 2, f"Failed for URL: {url}"
-                assert call_kwargs["pool_pre_ping"] is False, f"Failed for URL: {url}"
+                assert call_kwargs["pool_pre_ping"] is True, f"Failed for URL: {url}"
 
     def test_use_pgbouncer_env_var_case_insensitive(self):
         """Test that USE_PGBOUNCER environment variable is case-insensitive."""
@@ -184,6 +184,44 @@ class TestPgBouncerDetection:
             call_kwargs = mock_create_engine.call_args[1]
             assert call_kwargs["pool_size"] == 10  # Direct PostgreSQL settings
             assert call_kwargs["pool_pre_ping"] is True
+
+
+class TestKeepaliveConnectArgs:
+    """Verify TCP keepalive settings are passed to libpq for both pool flavors.
+
+    Without keepalives, a half-open socket (PgBouncer client_idle_timeout
+    eviction or NAT idle timeout) is invisible to the application until
+    something tries to use it — at which point the operation hangs forever.
+    These settings let the OS detect the dead socket within ~60s.
+    """
+
+    def _get_connect_args(self, url: str, env: dict[str, str] | None = None) -> dict:
+        from src.core.database.database_session import get_engine, reset_engine
+
+        reset_engine()
+        full_env = {"DATABASE_URL": url, **(env or {})}
+        with (
+            patch.dict(os.environ, full_env),
+            patch("src.core.database.database_session.create_engine") as mock_create_engine,
+            patch("src.core.database.database_session.event.listens_for", side_effect=_mock_event_listener),
+        ):
+            mock_create_engine.return_value = MagicMock()
+            get_engine()
+            return mock_create_engine.call_args[1]["connect_args"]
+
+    def test_keepalives_set_for_pgbouncer(self):
+        connect_args = self._get_connect_args("postgresql://user:pass@localhost:6543/db")
+        assert connect_args["keepalives"] == 1
+        assert connect_args["keepalives_idle"] == 30
+        assert connect_args["keepalives_interval"] == 10
+        assert connect_args["keepalives_count"] == 3
+
+    def test_keepalives_set_for_direct_postgres(self):
+        connect_args = self._get_connect_args("postgresql://user:pass@localhost:5432/db")
+        assert connect_args["keepalives"] == 1
+        assert connect_args["keepalives_idle"] == 30
+        assert connect_args["keepalives_interval"] == 10
+        assert connect_args["keepalives_count"] == 3
 
 
 class TestPgBouncerConnectionDetectionFunction:

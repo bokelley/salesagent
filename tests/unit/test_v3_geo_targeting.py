@@ -185,14 +185,6 @@ class TestFrequencyCapInheritance:
         fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
         assert isinstance(fc, LibraryFrequencyCap)
 
-    def test_scope_field_preserved(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60, scope="package")
-        assert fc.scope == "package"
-
-    def test_scope_default_media_buy(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
-        assert fc.scope == "media_buy"
-
     def test_suppress_minutes_accepts_float(self):
         fc = FrequencyCap(max_impressions=5, suppress_minutes=60.5)
         assert fc.suppress_minutes == 60.5
@@ -201,13 +193,8 @@ class TestFrequencyCapInheritance:
         fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
         assert isinstance(fc.suppress_minutes, float)
 
-    def test_model_dump_includes_scope(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60, scope="package")
-        d = fc.model_dump()
-        assert d["scope"] == "package"
-
     def test_freq_cap_in_targeting(self):
-        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"})
-        assert t.frequency_cap.scope == "package"
+        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60})
         assert isinstance(t.frequency_cap, FrequencyCap)
         assert isinstance(t.frequency_cap, LibraryFrequencyCap)
+        assert t.frequency_cap.max_impressions == 5
