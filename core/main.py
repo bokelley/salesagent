@@ -70,6 +70,7 @@ from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.middleware.spec_defaults import SpecDefaultsMiddleware
 from core.middleware.transport_detect import TransportDetectMiddleware
+from core.middleware.well_known_agent_json_redirect import WellKnownAgentJsonRedirectMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -439,6 +440,16 @@ def _serve_kwargs(
         # the SDK validation boundary so the defaults land before the
         # typed-dispatcher rejects the payload.
         (SpecDefaultsMiddleware, {}),
+        # WellKnownAgentJsonRedirectMiddleware 308-redirects the 0.3-era
+        # alias /.well-known/agent.json to /.well-known/agent-card.json.
+        # The framework only registers a handler for the canonical path,
+        # so without this redirect the alias falls through to no handler
+        # and Fly's edge returns 503 to SDK clients still probing the
+        # alias for transport auto-detection (#267). Sits before
+        # AgentCardPublicUrlMiddleware so the alias short-circuits with a
+        # redirect rather than attempting a body rewrite on an empty
+        # response.
+        (WellKnownAgentJsonRedirectMiddleware, {}),
         # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
         # /.well-known/agent-card.json response with the request's public
         # host (X-Forwarded-Host / Host). The framework hardcodes

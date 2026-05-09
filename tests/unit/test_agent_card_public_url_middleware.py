@@ -11,73 +11,41 @@ the public URL instead of the container's internal socket.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _scope(path: str, headers: list[tuple[str, str]] | None = None, scheme: str = "http") -> dict[str, Any]:
-    return {
-        "type": "http",
-        "method": "GET",
-        "path": path,
-        "scheme": scheme,
-        "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in (headers or [])],
-    }
+from tests.unit._asgi_helpers import capture_asgi_response, http_scope
 
 
 async def _drive(
     middleware: AgentCardPublicUrlMiddleware,
-    scope: dict[str, Any],
+    scope: dict,
     inner_body: bytes,
     inner_status: int = 200,
     inner_headers: list[tuple[bytes, bytes]] | None = None,
 ) -> tuple[int, dict[bytes, bytes], bytes]:
-    """Drive the middleware against a fake inner ASGI app and return what it sent.
+    """Drive the rewrite middleware against a stub inner app.
 
-    The inner app is replaced with a stub that emits ``inner_body`` with the
-    given status. The captured ``send`` calls are reassembled into
-    ``(status, header_dict, body)`` for assertion.
+    Thin wrapper over the shared :func:`capture_asgi_response` that
+    discards the ``inner_called`` flag (irrelevant here — we always
+    care about the rewritten body, not whether the inner app ran).
+    The middleware factory ignores its app arg because the test
+    pre-assigned ``middleware.app`` to keep the original stub
+    semantics; we re-bind via the factory pattern instead.
     """
-    captured_status = {"code": 0}
-    captured_headers: dict[bytes, bytes] = {}
-    captured_body = bytearray()
+    status, headers, body, _inner_called = await capture_asgi_response(
+        lambda inner: type(middleware)(inner),
+        scope,
+        inner_status=inner_status,
+        inner_body=inner_body,
+        inner_headers=inner_headers,
+    )
+    return status, headers, body
 
-    async def mock_inner_app(scope, receive, send):
-        await send(
-            {
-                "type": "http.response.start",
-                "status": inner_status,
-                "headers": inner_headers
-                or [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(inner_body)).encode("latin-1")),
-                ],
-            }
-        )
-        await send({"type": "http.response.body", "body": inner_body, "more_body": False})
 
-    middleware.app = mock_inner_app
-
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(message):
-        if message["type"] == "http.response.start":
-            captured_status["code"] = message["status"]
-            for k, v in message.get("headers", []):
-                captured_headers[k.lower()] = v
-        elif message["type"] == "http.response.body":
-            captured_body.extend(message.get("body") or b"")
-
-    await middleware(scope, receive, send)
-    return captured_status["code"], captured_headers, bytes(captured_body)
+def _scope(path: str, headers: list[tuple[str, str]] | None = None, scheme: str = "http") -> dict:
+    return http_scope(path, headers=headers, scheme=scheme)
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +168,10 @@ class TestAgentCardRewrite:
         assert out == body
 
     @pytest.mark.asyncio
-    async def test_handles_legacy_agent_json_alias(self) -> None:
-        """The 0.3 alias /.well-known/agent.json must rewrite the same way."""
+    async def test_legacy_agent_json_alias_passes_through_unchanged(self) -> None:
+        """The 0.3 alias /.well-known/agent.json is handled by the upstream
+        redirect middleware, not this one — it must pass through here
+        without buffering."""
         middleware = AgentCardPublicUrlMiddleware(app=None)
         scope = _scope(
             "/.well-known/agent.json",
@@ -210,8 +180,8 @@ class TestAgentCardRewrite:
 
         body = json.dumps(CARD_LOOPBACK).encode("utf-8")
         _status, _headers, out = await _drive(middleware, scope, body)
-        payload = json.loads(out)
-        assert payload["url"] == "https://agent.example.com/"
+        # Body is forwarded unchanged — no rewrite happens on this path.
+        assert out == body
 
     @pytest.mark.asyncio
     async def test_updates_content_length_header(self) -> None:

@@ -38,12 +38,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 logger = logging.getLogger(__name__)
 
 
-_AGENT_CARD_PATHS = frozenset(
-    {
-        "/.well-known/agent-card.json",
-        "/.well-known/agent.json",  # 0.3-compat alias the SDK retains
-    }
-)
+_AGENT_CARD_PATHS = frozenset({"/.well-known/agent-card.json"})
 
 
 def _public_base_url(scope: Scope) -> str | None:
@@ -106,8 +101,10 @@ def _is_loopback_url(value: Any) -> bool:
 class AgentCardPublicUrlMiddleware:
     """ASGI middleware that rewrites localhost URLs in the agent card response.
 
-    Only acts on GET requests to ``/.well-known/agent-card.json`` (and the
-    0.3 alias). Other requests pass through with no buffering overhead.
+    Only acts on GET requests to ``/.well-known/agent-card.json``. The 0.3
+    alias ``/.well-known/agent.json`` is handled upstream by
+    :class:`WellKnownAgentJsonRedirectMiddleware`. Other requests pass
+    through with no buffering overhead.
     """
 
     def __init__(self, app: ASGIApp) -> None:
