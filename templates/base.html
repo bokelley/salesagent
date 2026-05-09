@@ -155,6 +155,12 @@
             }
         });
     </script>
+    {# Toast container — sa-toast.js attaches to this on load. Lives
+       outside the main container so position: fixed children don't
+       clip on narrow viewports. Pointer events disabled on the root
+       so empty space doesn't block clicks underneath. #}
+    <div id="sa-toast-root" aria-live="polite" aria-atomic="true"></div>
+    <script src="{{ script_name }}/static/js/sa-toast.js"></script>
     <script src="{{ script_name }}/static/validation.js"></script>
     <!-- Bootstrap Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>

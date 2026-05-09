@@ -1247,3 +1247,61 @@ body.sa-embedded > .container {
     }
     .sa-pipeline__col:last-child { border-bottom: none; }
 }
+
+/* Toast notifications — corner-of-screen feedback for AJAX actions.
+   Palette mirrors the Ledger intent tokens: neutral ink for success
+   (a "done" state isn't celebratory), amber for warning, red for error. */
+#sa-toast-root {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: 380px;
+    pointer-events: none;
+}
+.sa-toast {
+    pointer-events: auto;
+    background: var(--sa-bg-surface);
+    color: var(--sa-text-strong);
+    border: 1px solid var(--sa-border);
+    border-left: 3px solid var(--sa-ink);
+    border-radius: 4px;
+    padding: 0.625rem 0.75rem;
+    box-shadow: 0 4px 16px rgba(26, 24, 21, 0.12);
+    font-size: var(--sa-text-sm);
+    line-height: var(--sa-leading-snug);
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    animation: sa-toast-in 0.18s ease-out;
+}
+.sa-toast.is-leaving { animation: sa-toast-out 0.25s ease-in forwards; }
+.sa-toast-success { border-left-color: var(--sa-success); }
+.sa-toast-warning { border-left-color: var(--sa-warning); background: var(--sa-warning-tint); }
+.sa-toast-error   { border-left-color: var(--sa-danger);  background: var(--sa-danger-tint); }
+.sa-toast-info    { border-left-color: var(--sa-info); }
+.sa-toast__icon {
+    font-family: var(--sa-font-mono);
+    font-weight: 600;
+    width: 1rem;
+    text-align: center;
+    flex-shrink: 0;
+    line-height: 1.4;
+}
+.sa-toast__msg { flex: 1; }
+.sa-toast__close {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font-size: 1.1em;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.5;
+    padding: 0;
+}
+.sa-toast__close:hover { opacity: 1; }
+@keyframes sa-toast-in  { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes sa-toast-out { to   { transform: translateX(20px); opacity: 0; } }
