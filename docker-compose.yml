@@ -54,7 +54,11 @@ services:
     volumes:
       - .:/app
       - /app/.venv
-    command: ["python", "scripts/ops/migrate.py"]
+    # ``migrate.py`` then ``seed_demo_data.py``: the second step is dev-only —
+    # the seed is idempotent so re-runs are safe, and the env-gated mock-adapter
+    # setup it relies on (``ADCP_TESTING``/``ADCP_MULTI_TENANT``) is set on the
+    # adcp-server below. Production deployments should override the command.
+    command: ["sh", "-c", "python scripts/ops/migrate.py && python scripts/ops/seed_demo_data.py"]
 
   proxy:
     image: nginx:stable
@@ -87,6 +91,10 @@ services:
       ADCP_SALES_PORT: "8080"
       # Enable test login mode for development
       ADCP_AUTH_TEST_MODE: "true"
+      # Allow mock-adapter setup to satisfy the "Ad Server Configured" gate.
+      # Skip the SSO gate (multi-tenant deployments treat auth as platform-managed).
+      ADCP_TESTING: "true"
+      ADCP_MULTI_TENANT: "true"
       # Development settings
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"

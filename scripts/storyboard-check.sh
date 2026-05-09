@@ -17,6 +17,10 @@
 #   # Or production-path mode (no sandbox routing):
 #   NO_SANDBOX=1 ./scripts/storyboard-check.sh
 #
+#   # Local dev (non-HTTPS agent — production must terminate TLS):
+#   AGENT_URL=http://localhost:8000 AGENT_TOKEN=ci-test-token \
+#   ALLOW_HTTP=1 ./scripts/storyboard-check.sh
+#
 # Outputs:
 #   - One-line summary per transport: passed/failed/skipped + duration
 #   - List of failing step IDs with truncated error messages
@@ -38,6 +42,10 @@ AGENT_TOKEN="${AGENT_TOKEN:-}"
 STORYBOARD="${STORYBOARD:-media_buy_seller}"
 TIMEOUT="${TIMEOUT:-180}"
 NO_SANDBOX="${NO_SANDBOX:-0}"
+# ALLOW_HTTP="1" lets you run against a non-HTTPS local agent (e.g.
+# http://localhost:8000). The SDK refuses HTTP by default — production
+# agents must terminate TLS. Only use this for local dev validation.
+ALLOW_HTTP="${ALLOW_HTTP:-0}"
 
 if [[ -z "$AGENT_URL" || -z "$AGENT_TOKEN" ]]; then
     cat <<EOF >&2
@@ -62,9 +70,12 @@ for cmd in npx jq; do
     fi
 done
 
-NO_SANDBOX_FLAG=()
+EXTRA_FLAGS=()
 if [[ "$NO_SANDBOX" == "1" ]]; then
-    NO_SANDBOX_FLAG=(--no-sandbox)
+    EXTRA_FLAGS+=(--no-sandbox)
+fi
+if [[ "$ALLOW_HTTP" == "1" ]]; then
+    EXTRA_FLAGS+=(--allow-http)
 fi
 
 # ─── Per-transport runner ────────────────────────────────────────────────────
@@ -89,7 +100,7 @@ run_one() {
         --protocol "$protocol" \
         --format json \
         --timeout "$TIMEOUT" \
-        "${NO_SANDBOX_FLAG[@]}" \
+        "${EXTRA_FLAGS[@]}" \
         >"$out" 2>"$err"
     local exit_code=$?
 
