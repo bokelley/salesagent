@@ -751,15 +751,17 @@ class MockAdServer(AdServerAdapter):
                 budget_amount, _ = extract_budget_amount(p.budget)
                 total_budget += budget_amount
             elif p.delivery_type == "guaranteed":
-                # Fallback: calculate from CPM * impressions (legacy)
-                # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
-                pricing_info = package_pricing_info.get(p.package_id) if package_pricing_info else None
-                if pricing_info:
-                    # Use rate from pricing option (fixed) or bid_price (auction)
-                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", p.cpm)
-                else:
-                    # Fallback to legacy package.cpm
-                    rate = p.cpm
+                # Fallback: calculate from rate * impressions when package.budget is absent.
+                # package_pricing_info is guaranteed populated by media_buy_create.
+                pricing_info = (package_pricing_info or {}).get(p.package_id)
+                if not pricing_info:
+                    raise ValueError(
+                        f"Missing pricing info for package {p.package_id!r}; "
+                        "media_buy_create must populate package_pricing_info."
+                    )
+                rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price")
+                if rate is None:
+                    raise ValueError(f"Package {p.package_id!r} uses auction pricing but has no bid_price.")
                 total_budget += rate * p.impressions / 1000
 
         # Apply strategy-based bid adjustment

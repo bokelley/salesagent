@@ -1056,7 +1056,7 @@ class GAMOrdersManager:
                 log(f"  Package: {package.name}")
                 log(f"  Line Item Type: {impl_config.get('line_item_type', 'STANDARD')}")
                 log(f"  Priority: {impl_config.get('priority', 8)}")
-                log(f"  CPM: ${package.cpm}")
+                log(f"  Rate: ${rate:,.2f} ({pricing_model.upper()})")
                 log(f"  Impressions Goal: {package.impressions:,}")
                 log(f"  Creative Placeholders: {len(creative_placeholders)} sizes")
                 for cp in creative_placeholders[:3]:

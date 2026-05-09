@@ -287,7 +287,6 @@ class BaseWorkflowManager:
             {
                 "name": pkg.name,
                 "impressions": pkg.impressions,
-                "cpm": pkg.cpm,
             }
             for pkg in packages
         ]

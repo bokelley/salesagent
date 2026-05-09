@@ -346,22 +346,27 @@ class AdServerAdapter(ABC):
         *,
         default_rate_type: str = "CPM",
     ) -> tuple[float, str]:
-        """Return ``(rate, rate_type)`` for a package, preferring validated pricing info.
+        """Return ``(rate, rate_type)`` for a package from validated pricing info.
 
         Adapters use this when translating a ``MediaPackage`` into their ad
         server's flight/line-item payload. ``package_pricing_info`` (AdCP PR #88)
-        carries ``{rate, is_fixed, bid_price, pricing_model}`` per package; if
-        unavailable the adapter falls back to ``package.cpm`` with the default
-        rate type.
+        carries ``{rate, is_fixed, bid_price, pricing_model}`` per package and
+        is populated by ``media_buy_create`` before adapter dispatch.
         """
-        rate_type = default_rate_type
-        if package_pricing_info and package.package_id in package_pricing_info:
-            pricing = package_pricing_info[package.package_id]
-            rate = pricing["rate"] if pricing.get("is_fixed") else pricing.get("bid_price", package.cpm)
-            if str(pricing.get("pricing_model", "")).lower() == "flat_rate":
-                rate_type = "FLAT_RATE"
-            return float(rate), rate_type
-        return float(package.cpm), rate_type
+        if not package_pricing_info or package.package_id not in package_pricing_info:
+            raise ValueError(
+                f"Missing pricing info for package {package.package_id!r}; "
+                "media_buy_create must populate package_pricing_info before adapter dispatch."
+            )
+        pricing = package_pricing_info[package.package_id]
+        if pricing.get("is_fixed"):
+            rate = pricing["rate"]
+        else:
+            rate = pricing.get("bid_price")
+            if rate is None:
+                raise ValueError(f"Package {package.package_id!r} uses auction pricing but has no bid_price.")
+        rate_type = "FLAT_RATE" if str(pricing.get("pricing_model", "")).lower() == "flat_rate" else default_rate_type
+        return float(rate), rate_type
 
     @staticmethod
     def _validate_targeting_or_error(

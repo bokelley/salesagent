@@ -1516,7 +1516,6 @@ class MediaPackage(SalesAgentBaseModel):
     package_id: str
     name: str
     delivery_type: Literal["guaranteed", "non_guaranteed"]
-    cpm: float
     impressions: int
     # Accept library FormatId (not our extended FormatId) to avoid validation errors
     # when Product from library returns LibraryFormatId instances

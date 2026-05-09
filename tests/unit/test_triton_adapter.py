@@ -45,7 +45,6 @@ def sample_packages():
             name="Morning Drive",
             delivery_type="guaranteed",
             impressions=100_000,
-            cpm=12.0,
             format_ids=[FormatId(agent_url="https://test.com", id="audio_30s")],
         )
     ]

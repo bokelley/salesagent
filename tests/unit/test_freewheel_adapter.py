@@ -46,7 +46,6 @@ def sample_packages():
             name="Pre-roll Bundle",
             delivery_type="guaranteed",
             impressions=500_000,
-            cpm=18.0,
             format_ids=[FormatId(agent_url="https://test.com", id="video_15s")],
         )
     ]

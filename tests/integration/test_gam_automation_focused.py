@@ -160,7 +160,6 @@ class TestGAMPackageTypes:
             name="Network Package",
             delivery_type="non_guaranteed",
             impressions=10000,
-            cpm=2.50,
             format_ids=[make_format_id("display_300x250")],
         )
 
@@ -172,7 +171,6 @@ class TestGAMPackageTypes:
             name="Standard Package",
             delivery_type="guaranteed",
             impressions=50000,
-            cpm=5.00,
             format_ids=[make_format_id("display_300x250")],
         )
 

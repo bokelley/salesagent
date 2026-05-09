@@ -24,7 +24,6 @@ def sample_packages():
             package_id="pkg_1",
             name="Guaranteed Banner",
             delivery_type="guaranteed",
-            cpm=15.0,
             impressions=333333,  # 5000 budget / 15 CPM * 1000
             budget=5000.0,  # Budget as float in MediaPackage (internal adapter format)
             format_ids=[
@@ -89,3 +88,67 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     assert internal_buy["total_budget"] == 5000
     assert len(internal_buy["packages"]) == 1
     assert internal_buy["packages"][0].package_id == "pkg_1"
+
+
+class TestResolvePricingRate:
+    """Regression tests for AdServerAdapter._resolve_pricing_rate hard-fail behavior.
+
+    Replaces the previous package.cpm fallback (dropped with MediaPackage.cpm).
+    """
+
+    @staticmethod
+    def _pkg(package_id: str = "pkg_1") -> MediaPackage:
+        return MediaPackage(
+            package_id=package_id,
+            name="Test",
+            delivery_type="guaranteed",
+            impressions=1000,
+            format_ids=[make_format_id("display_300x250")],
+        )
+
+    def test_resolves_fixed_rate_from_pricing_info(self):
+        from src.adapters.base import AdServerAdapter
+
+        rate, rate_type = AdServerAdapter._resolve_pricing_rate(
+            self._pkg(),
+            {"pkg_1": {"pricing_model": "cpm", "rate": 12.5, "is_fixed": True, "bid_price": None}},
+        )
+        assert rate == 12.5
+        assert rate_type == "CPM"
+
+    def test_resolves_auction_rate_from_bid_price(self):
+        from src.adapters.base import AdServerAdapter
+
+        rate, rate_type = AdServerAdapter._resolve_pricing_rate(
+            self._pkg(),
+            {"pkg_1": {"pricing_model": "cpm", "rate": None, "is_fixed": False, "bid_price": 7.25}},
+        )
+        assert rate == 7.25
+        assert rate_type == "CPM"
+
+    def test_flat_rate_pricing_returns_flat_rate_type(self):
+        from src.adapters.base import AdServerAdapter
+
+        _rate, rate_type = AdServerAdapter._resolve_pricing_rate(
+            self._pkg(),
+            {"pkg_1": {"pricing_model": "flat_rate", "rate": 5000.0, "is_fixed": True, "bid_price": None}},
+        )
+        assert rate_type == "FLAT_RATE"
+
+    def test_raises_when_pricing_info_missing(self):
+        from src.adapters.base import AdServerAdapter
+
+        with pytest.raises(ValueError, match="Missing pricing info"):
+            AdServerAdapter._resolve_pricing_rate(self._pkg(), None)
+
+        with pytest.raises(ValueError, match="Missing pricing info"):
+            AdServerAdapter._resolve_pricing_rate(self._pkg(), {})
+
+    def test_raises_when_auction_pricing_has_no_bid_price(self):
+        from src.adapters.base import AdServerAdapter
+
+        with pytest.raises(ValueError, match="auction pricing but has no bid_price"):
+            AdServerAdapter._resolve_pricing_rate(
+                self._pkg(),
+                {"pkg_1": {"pricing_model": "cpm", "rate": None, "is_fixed": False, "bid_price": None}},
+            )

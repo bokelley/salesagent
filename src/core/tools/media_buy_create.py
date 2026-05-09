@@ -920,7 +920,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         package_id=package_id,
                         name=package_config.get("name") or product.name,
                         delivery_type=delivery_type_str,
-                        cpm=cpm,
                         impressions=impressions,
                         format_ids=cast(list[Any], format_ids_list),
                         targeting_overlay=targeting_overlay,
@@ -931,7 +930,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     logger.info(
                         f"[APPROVAL] Reconstructed MediaPackage {package_id}: "
-                        f"name={media_package.name}, cpm={cpm}, impressions={impressions}"
+                        f"name={media_package.name}, rate={cpm}, impressions={impressions}"
                     )
 
                 except ValidationError as ve:
@@ -3178,9 +3177,9 @@ async def _create_media_buy_impl(
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]] = (
-                    {}
-                )
+                product_format_dimensions: dict[
+                    tuple[str | None, str], tuple[int | None, int | None, float | None]
+                ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
@@ -3305,7 +3304,6 @@ async def _create_media_buy_impl(
                     package_id=package_id,
                     name=pkg_product.name,
                     delivery_type=delivery_type_value,
-                    cpm=cpm,
                     impressions=int(total_budget / cpm * 1000),
                     format_ids=cast(list[Any], format_ids_to_use),
                     targeting_overlay=cast(

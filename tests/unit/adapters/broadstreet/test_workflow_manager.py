@@ -256,11 +256,10 @@ class TestBaseWorkflowManagerIntegration:
         pkg = MagicMock()
         pkg.name = "Test Package"
         pkg.impressions = 100000
-        pkg.cpm = 5.0
 
         summary = manager.build_packages_summary([pkg])
 
         assert len(summary) == 1
         assert summary[0]["name"] == "Test Package"
         assert summary[0]["impressions"] == 100000
-        assert summary[0]["cpm"] == 5.0
+        assert "cpm" not in summary[0]

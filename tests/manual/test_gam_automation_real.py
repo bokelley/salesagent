@@ -276,7 +276,6 @@ class GAMAutomationTester:
             package_id="gam_test_auto",
             name="Auto Activation Test Package",
             impressions=1000,  # Small test amount
-            cpm=1.00,
             format="display",
         )
 
@@ -335,7 +334,7 @@ class GAMAutomationTester:
         )
 
         package = MediaPackage(
-            package_id="gam_test_confirm", name="Confirmation Test Package", impressions=500, cpm=0.50, format="display"
+            package_id="gam_test_confirm", name="Confirmation Test Package", impressions=500, format="display"
         )
 
         request = CreateMediaBuyRequest(
@@ -394,7 +393,7 @@ class GAMAutomationTester:
         )
 
         package = MediaPackage(
-            package_id="gam_test_manual", name="Manual Test Package", impressions=750, cpm=0.75, format="display"
+            package_id="gam_test_manual", name="Manual Test Package", impressions=750, format="display"
         )
 
         request = CreateMediaBuyRequest(
@@ -455,7 +454,6 @@ class GAMAutomationTester:
             package_id="gam_test_guaranteed",
             name="Guaranteed Test Package",
             impressions=10000,
-            cpm=5.00,
             format="display",
         )
 
@@ -518,7 +516,6 @@ class GAMAutomationTester:
             package_id="gam_test_lifecycle_network",
             name="Lifecycle Activate Test Package",
             impressions=500,
-            cpm=1.50,
             format="display",
         )
 
@@ -587,7 +584,6 @@ class GAMAutomationTester:
             package_id="gam_test_lifecycle_standard",
             name="Lifecycle Approval Test Package",
             impressions=1000,
-            cpm=2.00,
             format="display",
         )
 
@@ -654,7 +650,6 @@ class GAMAutomationTester:
             package_id="gam_test_lifecycle_standard_block",
             name="Lifecycle Blocking Test Package",
             impressions=500,
-            cpm=3.00,
             format="display",
         )
 
@@ -725,7 +720,6 @@ class GAMAutomationTester:
             package_id="gam_test_lifecycle_archive",
             name="Lifecycle Archive Test Package",
             impressions=100,
-            cpm=1.00,
             format="display",
         )
 

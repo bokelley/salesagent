@@ -68,7 +68,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
                 "Once verified, approve this task to automatically activate the order and line items",
             ],
             "gam_order_url": f"https://admanager.google.com/orders/{media_buy_id}",
-            "packages": [{"name": pkg.name, "impressions": pkg.impressions, "cpm": pkg.cpm} for pkg in packages],
+            "packages": [{"name": pkg.name, "impressions": pkg.impressions} for pkg in packages],
             "next_action_after_approval": "automatic_activation",
         }
 
@@ -198,8 +198,6 @@ class GAMWorkflowManager(BaseWorkflowManager):
                 {
                     "name": pkg.name,
                     "impressions": pkg.impressions,
-                    "cpm": pkg.cpm,
-                    "total_budget": (pkg.impressions / 1000) * pkg.cpm,
                     "targeting": pkg.targeting_overlay if pkg.targeting_overlay else {},
                 }
                 for pkg in packages
@@ -371,7 +369,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
                 "Webhook notification will be sent when approval completes",
             ],
             "gam_order_url": f"https://admanager.google.com/orders/{media_buy_id}",
-            "packages": [{"name": pkg.name, "impressions": pkg.impressions, "cpm": pkg.cpm} for pkg in packages],
+            "packages": [{"name": pkg.name, "impressions": pkg.impressions} for pkg in packages],
             "next_action": "automatic_approval_when_ready",
             "polling_interval_seconds": 30,
             "max_polling_duration_minutes": 15,

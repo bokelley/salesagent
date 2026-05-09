@@ -422,7 +422,6 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
         name=f"E2E Test Package ({product_id})",
         delivery_type=delivery_type,
         impressions=1000,
-        cpm=1.00,
         format_ids=[],
     )
 
@@ -700,6 +699,6 @@ class TestGAMLifecycle:
             assert update_response.workflow_step_id is not None, "Guaranteed activation should produce a workflow step"
         else:
             # Error path: activation blocked because of guaranteed items
-            assert any(
-                "guaranteed" in str(e.message).lower() for e in update_response.errors
-            ), f"Error should mention guaranteed items: {update_response.errors}"
+            assert any("guaranteed" in str(e.message).lower() for e in update_response.errors), (
+                f"Error should mention guaranteed items: {update_response.errors}"
+            )

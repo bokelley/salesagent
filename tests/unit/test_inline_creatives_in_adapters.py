@@ -33,7 +33,6 @@ class TestInlineCreativesInAdapters:
             package_id="pkg_test_123_1",
             name="Test Package",
             delivery_type="guaranteed",
-            cpm=10.0,
             impressions=10000,
             format_ids=[{"agent_url": "https://creative.test", "id": "display_300x250"}],
             product_id="prod_test_123",
@@ -88,7 +87,6 @@ class TestInlineCreativesInAdapters:
             "product_id": package.product_id,
             "name": package.name,
             "delivery_type": package.delivery_type,
-            "cpm": package.cpm,
             "impressions": package.impressions,
             "status": "active",  # Required by AdCP Package schema
             "platform_line_item_id": "line_item_123",
@@ -139,6 +137,15 @@ class TestInlineCreativesInAdapters:
             packages=[mock_package_with_creatives],
             start_time=start_time,
             end_time=end_time,
+            package_pricing_info={
+                mock_package_with_creatives.package_id: {
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,
+                    "bid_price": None,
+                }
+            },
         )
 
         # Mock adapter returns AdCP-compliant Package objects

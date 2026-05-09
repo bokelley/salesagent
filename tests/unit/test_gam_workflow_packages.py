@@ -61,7 +61,6 @@ def sample_packages():
             name="Package 1",
             delivery_type="guaranteed",
             impressions=10000,
-            cpm=5.0,
             format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
         ),
         MediaPackage(
@@ -69,7 +68,6 @@ def sample_packages():
             name="Package 2",
             delivery_type="guaranteed",
             impressions=20000,
-            cpm=7.5,
             format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
         ),
     ]
@@ -124,9 +122,9 @@ class TestGAMManualApprovalPath:
                 # Assert - Package IDs must match input packages
                 returned_ids = {pkg.package_id for pkg in response.packages}
                 expected_ids = {pkg.package_id for pkg in sample_packages}
-                assert (
-                    returned_ids == expected_ids
-                ), f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
+                assert returned_ids == expected_ids, (
+                    f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
+                )
 
                 # Assert - Other required fields
                 # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12

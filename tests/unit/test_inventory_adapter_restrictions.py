@@ -74,7 +74,6 @@ class TestInventoryAdapterRestrictions:
             package_id="pkg_1",
             name="Test Package",
             delivery_type="guaranteed",
-            cpm=10.0,
             impressions=100000,
             format_ids=[],
             targeting_overlay=None,  # No targeting at all — Run of Site

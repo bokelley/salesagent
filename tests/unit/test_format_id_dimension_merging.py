@@ -69,7 +69,6 @@ class TestFormatIdWithDimensions:
             package_id="test_pkg",
             name="Test Package",
             delivery_type="guaranteed",
-            cpm=10.0,
             impressions=1000,
             format_ids=[format_id],
         )
