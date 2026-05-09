@@ -555,16 +555,22 @@ class PricingOption(SalesAgentBaseModel):
         None, ge=0, description="Minimum spend requirement per package using this pricing option"
     )
 
-    # Internal fields - not in AdCP spec, used for adapter capability tracking
+    # Internal fields - not in AdCP spec, used for adapter capability tracking.
+    # exclude=True keeps these out of model_dump() (and therefore wire output).
     is_fixed: bool | None = Field(
         None,
+        exclude=True,
         description="Internal: Whether this is a fixed rate (true) or auction-based (false). Computed from fixed_price presence.",
     )
     supported: bool | None = Field(
-        None, description="Whether this pricing model is supported by the current adapter (populated at discovery time)"
+        None,
+        exclude=True,
+        description="Whether this pricing model is supported by the current adapter (populated at discovery time)",
     )
     unsupported_reason: str | None = Field(
-        None, description="Reason why this pricing model is not supported (if supported=false)"
+        None,
+        exclude=True,
+        description="Reason why this pricing model is not supported (if supported=false)",
     )
 
     @model_validator(mode="after")
@@ -582,36 +588,6 @@ class PricingOption(SalesAgentBaseModel):
         # Auto-compute is_fixed for internal use
         object.__setattr__(self, "is_fixed", has_fixed)
         return self
-
-    def model_dump(self, **kwargs):
-        """Override to exclude internal fields for AdCP V3 compliance.
-
-        V3 uses separate schemas (cpm-pricing-option, vcpm-pricing-option, etc.)
-        determined by which pricing fields are present:
-        - fixed_price present = fixed-rate pricing
-        - floor_price present = auction pricing with floor
-
-        Excludes internal fields (is_fixed, supported, unsupported_reason) from
-        external responses. Also excludes None values to match AdCP spec where
-        optional fields should be omitted rather than set to null.
-        """
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Exclude internal fields that aren't in AdCP spec
-            exclude.update({"is_fixed", "supported", "unsupported_reason"})
-            kwargs["exclude"] = exclude
-
-        # Set exclude_none=True by default for AdCP compliance
-        # This ensures nested models (PriceGuidance) also exclude None values
-        if "exclude_none" not in kwargs:
-            kwargs["exclude_none"] = True
-
-        return super().model_dump(**kwargs)
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including all fields for database storage and internal processing."""
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
 
 
 class AssetRequirement(SalesAgentBaseModel):
