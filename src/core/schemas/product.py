@@ -4,7 +4,6 @@ Extracted from src/core/schemas/__init__.py to reduce file size.
 All classes are re-exported from src.core.schemas for backward compatibility.
 """
 
-from adcp.types import Catalog as LibraryCatalog
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import Placement as LibraryPlacement
@@ -83,32 +82,9 @@ class ProductFilters(LibraryFilters):
         return _upgrade_legacy_format_ids(values)
 
 
-class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
-
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
-
-    Library provides: account, brand, brief, buyer_campaign_ref, catalog,
-    context, ext, fields, filters, pagination, property_list, refine.
-
-    Internal-only: product_selectors (excluded from external serialization).
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
-    buying_mode: str | None = Field(  # type: ignore[assignment]
-        None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
-    )
-
-    # Internal-only field — excluded from external serialization.
-    product_selectors: LibraryCatalog | None = Field(
-        None,
-        description="Selectors to filter the brand manifest product catalog for product discovery",
-        exclude=True,
-    )
+# Wire-shape GetProductsRequest is the AdCP library type. Callers must provide
+# buying_mode ('brief' or 'wholesale') per spec — no widening or local fields.
+GetProductsRequest = LibraryGetProductsRequest
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

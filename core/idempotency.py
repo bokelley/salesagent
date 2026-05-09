@@ -138,10 +138,18 @@ def _build_pool():
             "DATABASE_URL must be set to use PgBackend for idempotency. "
             "Set CORE_IDEMPOTENCY_BACKEND=memory for single-process tests."
         )
+    # ``check=AsyncConnectionPool.check_connection`` runs a tiny round-trip
+    # (an empty query under autocommit) before handing a pooled connection to
+    # the caller. Without it, a PgBouncer ``client_idle_timeout`` eviction
+    # silently closes the underlying socket and the next acquire returns a
+    # dead connection — surfaced as ``ProtocolViolation`` mid-operation. The
+    # check costs one round-trip per acquire but keeps the pool resilient to
+    # idle eviction.
     return AsyncConnectionPool(
         url,
         min_size=1,
         max_size=4,
+        check=AsyncConnectionPool.check_connection,
         open=False,  # opened on first use; create_schema() triggers it
     )
 

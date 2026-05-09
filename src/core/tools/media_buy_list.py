@@ -36,6 +36,10 @@ class _MediaBuyData:
     raw_request: dict | None
     created_at: datetime | None
     updated_at: datetime | None
+    # Persisted MediaBuy.status from the DB. Honored by ``_compute_status``
+    # for blocker / terminal states (pending_creatives, paused, rejected,
+    # canceled) that no clock can resolve.
+    status: str | None = None
     # Pre-computed status for projected GAM buys (whose state comes from
     # GAM, not just flight dates). None means use the date-derived status.
     projected_status: object | None = None
@@ -266,6 +270,7 @@ def _fetch_target_media_buys(
             raw_request=buy.raw_request,
             created_at=buy.created_at,
             updated_at=buy.updated_at,
+            status=buy.status,
         )
         for buy in buys
         if _compute_status(buy, today) in filter_statuses
@@ -289,10 +294,39 @@ def _resolve_status_filter(
     return {status_filter}
 
 
+# Statuses no clock can resolve: blockers awaiting a buyer / operator action,
+# and terminal explicit states. ``_compute_status`` returns these verbatim from
+# the persisted ``MediaBuy.status`` rather than overwriting them with a
+# date-derived value.
+_BLOCKER_STATUSES: frozenset[str] = frozenset(
+    {
+        MediaBuyStatus.pending_creatives.value,
+        MediaBuyStatus.paused.value,
+        MediaBuyStatus.rejected.value,
+        MediaBuyStatus.canceled.value,
+    }
+)
+
+
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
-    """Compute the current AdCP status of a media buy based on its dates."""
+    """Compute the current AdCP status of a media buy.
+
+    Precedence:
+    1. Projected GAM status (set by ``_project_gam_buys``) wins — GAM is the
+       source of truth for adapter-managed buys.
+    2. Persisted blocker / terminal statuses (``pending_creatives``, ``paused``,
+       ``rejected``, ``canceled``) win over date math — no clock can resolve a
+       missing creative or an explicit operator action.
+    3. Otherwise derive from flight dates: ``pending_start`` / ``active`` /
+       ``completed``.
+    """
     if isinstance(buy, _MediaBuyData) and buy.projected_status is not None:
         return cast(MediaBuyStatus, buy.projected_status)
+
+    persisted = (buy.status or "").lower()
+    if persisted in _BLOCKER_STATUSES:
+        return MediaBuyStatus(persisted)
+
     start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
     end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
 

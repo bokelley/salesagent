@@ -12,7 +12,17 @@ from enum import Enum
 
 from pydantic import ValidationError
 
+from src.core.exceptions import AdCPServiceUnavailableError
+
 logger = logging.getLogger(__name__)
+
+
+# Default budget for ``run_async_in_sync_context`` — kept under the typical
+# 30s SDK tool-call deadline so a hung worker thread is reaped before the
+# transport layer's own timeout fires (which would discard the typed error).
+# Pegged to 28s (not lower) to give creative-agent build/preview calls
+# enough headroom — those legitimately push past 25s under load.
+DEFAULT_ASYNC_BRIDGE_TIMEOUT_SECONDS = 28.0
 
 
 def resolve_enum_value(value: str | Enum) -> str:
@@ -22,7 +32,11 @@ def resolve_enum_value(value: str | Enum) -> str:
     return str(value)
 
 
-def run_async_in_sync_context(coroutine):
+def run_async_in_sync_context(
+    coroutine,
+    *,
+    timeout_seconds: float | None = DEFAULT_ASYNC_BRIDGE_TIMEOUT_SECONDS,
+):
     """
     Helper to run async coroutines from sync code, handling event loop conflicts.
 
@@ -32,10 +46,20 @@ def run_async_in_sync_context(coroutine):
     called from a running event loop" errors.
 
     Args:
-        coroutine: The async coroutine to run
+        coroutine: The async coroutine to run.
+        timeout_seconds: Maximum wall-clock time to wait for the coroutine.
+            Defaults to ``DEFAULT_ASYNC_BRIDGE_TIMEOUT_SECONDS`` so a hung
+            worker (e.g. a database call blocked on a half-open socket) is
+            reaped before the transport layer's own deadline fires. Pass
+            ``None`` to wait indefinitely.
 
     Returns:
-        The result of the coroutine
+        The result of the coroutine.
+
+    Raises:
+        AdCPServiceUnavailableError: if the coroutine does not complete within
+            ``timeout_seconds``. Recovery is ``transient`` so buyer agents will
+            retry.
     """
     # Check if coroutine is actually a coroutine object
     if not asyncio.iscoroutine(coroutine):
@@ -57,13 +81,38 @@ def run_async_in_sync_context(coroutine):
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(run_in_thread)
-            return future.result()
+            try:
+                return future.result(timeout=timeout_seconds)
+            except concurrent.futures.TimeoutError as exc:
+                # The worker thread is stuck (typically on a database call to a
+                # half-open socket). We can't kill it cleanly — Python threads
+                # don't support cancellation — so we let the executor's
+                # context-manager exit reap it after this scope. Raise a typed
+                # AdCPError so the transport layer translates it to a
+                # SERVICE_UNAVAILABLE response instead of letting the SDK's
+                # generic timeout discard the failure mode.
+                raise AdCPServiceUnavailableError(
+                    f"Async operation exceeded {timeout_seconds}s budget; "
+                    "the request was abandoned. This is usually a transient "
+                    "infrastructure issue (database connection pool, upstream "
+                    "service); retry with the same idempotency_key.",
+                ) from exc
     except RuntimeError:
         # No running loop, safe to create one
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(coroutine)
+            if timeout_seconds is None:
+                return loop.run_until_complete(coroutine)
+            try:
+                return loop.run_until_complete(asyncio.wait_for(coroutine, timeout=timeout_seconds))
+            except TimeoutError as exc:
+                raise AdCPServiceUnavailableError(
+                    f"Async operation exceeded {timeout_seconds}s budget; "
+                    "the request was abandoned. This is usually a transient "
+                    "infrastructure issue (database connection pool, upstream "
+                    "service); retry with the same idempotency_key.",
+                ) from exc
         finally:
             loop.close()
 

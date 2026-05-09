@@ -304,7 +304,7 @@ class TestGAMRealMediaBuyLifecycle:
 
             # ───── Phase 1: get_products ─────
             products_resp = await _get_products_impl(
-                GetProductsRequest(brand={"domain": "testbrand.com"}, brief="display"),
+                GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"}, brief="display"),
                 identity,
             )
             product_ids = [p.product_id for p in products_resp.products]
@@ -368,9 +368,9 @@ class TestGAMRealMediaBuyLifecycle:
                 assignments={creative_id: [first_package_id]},
                 identity=identity,
             )
-            assert any(
-                c.creative_id == creative_id for c in (sync_resp.creatives or [])
-            ), f"Synced creative {creative_id} missing from response: {sync_resp}"
+            assert any(c.creative_id == creative_id for c in (sync_resp.creatives or [])), (
+                f"Synced creative {creative_id} missing from response: {sync_resp}"
+            )
 
             with get_db_session() as session:
                 cr = session.scalars(
@@ -460,9 +460,9 @@ class TestGAMOrderProgressesPastDraft:
                 ),
                 identity=identity,
             )
-            assert create_result.status not in (
-                "failed",
-            ), f"create_media_buy failed: errors={getattr(create_result.response, 'errors', None)}"
+            assert create_result.status not in ("failed",), (
+                f"create_media_buy failed: errors={getattr(create_result.response, 'errors', None)}"
+            )
             order_id = create_result.response.media_buy_id
             assert order_id
             gam_order_archive_cleanup.append(order_id)
@@ -603,9 +603,9 @@ class TestGAMRealDeliveryWebhook:
                     ),
                     identity=identity,
                 )
-                assert create_result.status not in (
-                    "failed",
-                ), f"create_media_buy failed: {getattr(create_result.response, 'errors', None)}"
+                assert create_result.status not in ("failed",), (
+                    f"create_media_buy failed: {getattr(create_result.response, 'errors', None)}"
+                )
                 order_id = create_result.response.media_buy_id
                 assert order_id
                 gam_order_archive_cleanup.append(order_id)
@@ -852,6 +852,6 @@ class TestGAMRealCreativeApprovalAsync:
             # Each association has a creativeId — one of them should map to our
             # creative. The GAM creative id is set by the adapter; we don't know
             # it directly, but verifying associations exist proves the flow ran.
-            assert all(
-                getattr(a, "creativeId", None) for a in associations
-            ), f"associations missing creativeId: {associations}"
+            assert all(getattr(a, "creativeId", None) for a in associations), (
+                f"associations missing creativeId: {associations}"
+            )
