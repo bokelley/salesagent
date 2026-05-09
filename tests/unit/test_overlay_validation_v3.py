@@ -79,9 +79,9 @@ class TestSuffixStrippingRemoved:
         violations = validate_overlay_targeting(Targeting(device_type_any_of=["mobile"]))
         assert violations == []
 
-    def test_os_none_of_no_violation(self):
+    def test_audiences_none_of_no_violation(self):
         """Fields using _none_of suffix should work via explicit mapping."""
-        violations = validate_overlay_targeting(Targeting(os_none_of=["android"]))
+        violations = validate_overlay_targeting(Targeting(audiences_none_of=["seg_a"]))
         assert violations == []
 
 

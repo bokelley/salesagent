@@ -161,14 +161,10 @@ FIELD_TO_DIMENSION: dict[str, str] = {
     "audiences_any_of": "audience_segment",
     "audiences_none_of": "audience_segment",
     "content_cat_any_of": "content_category",
-    "content_cat_none_of": "content_category",
     # ── Salesagent-only dimensions (no AdCP spec field) ──────────────────
     "os_any_of": "os",
-    "os_none_of": "os",
     "browser_any_of": "browser",
-    "browser_none_of": "browser",
     "media_type_any_of": "media_type",
-    "media_type_none_of": "media_type",
     "custom": "custom",
     "key_value_pairs": "key_value_pairs",
     # ── Removed dimensions ───────────────────────────────────────────────

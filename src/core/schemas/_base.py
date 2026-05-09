@@ -884,17 +884,13 @@ class TargetingOverlay(LibraryTargetingOverlay):
     device_type_none_of: list[str] | None = None
 
     os_any_of: list[str] | None = None  # Operating systems: ["iOS", "Android", "Windows"]
-    os_none_of: list[str] | None = None
 
     browser_any_of: list[str] | None = None  # Browsers: ["Chrome", "Safari", "Firefox"]
-    browser_none_of: list[str] | None = None
 
     # Content and contextual targeting
     content_cat_any_of: list[str] | None = None  # IAB content categories
-    content_cat_none_of: list[str] | None = None
 
     keywords_any_of: list[str] | None = None  # Keyword targeting
-    keywords_none_of: list[str] | None = None
 
     # Audience targeting
     audiences_any_of: list[str] | None = None  # Audience segments
@@ -905,11 +901,6 @@ class TargetingOverlay(LibraryTargetingOverlay):
 
     # Media type targeting
     media_type_any_of: list[str] | None = None  # ["video", "audio", "display", "native"]
-    media_type_none_of: list[str] | None = None
-
-    # Connection type targeting
-    connection_type_any_of: list[int] | None = None  # OpenRTB connection types
-    connection_type_none_of: list[int] | None = None
 
     # Platform-specific custom targeting
     custom: dict[str, Any] | None = None  # Platform-specific targeting options
