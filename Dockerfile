@@ -32,11 +32,19 @@ ENV UV_PYTHON_PREFERENCE=only-system
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
+# Layer-cache key for the install step. Pass at build time:
+#   --build-arg LOCKFILE_HASH=$(sha256sum uv.lock | awk '{print $1}')
+# Without this, ``compose build --build`` (no ``--no-cache``) sometimes
+# reused a stale install layer when uv.lock content changed but Docker's
+# COPY layer hash short-circuited (BuildKit edge case with mount caches).
+# ``make compose-build`` wraps this for the dev workflow.
+ARG LOCKFILE_HASH=unset
+
 # Install dependencies with caching and increased timeout
-# This layer will be cached as long as pyproject.toml and uv.lock don't change
 ENV UV_HTTP_TIMEOUT=300
 RUN --mount=type=cache,target=/cache/uv \
     --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing dependencies for lockfile=${LOCKFILE_HASH}" && \
     uv sync --frozen
 
 # Runtime stage

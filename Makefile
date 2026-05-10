@@ -87,6 +87,20 @@ ifndef TARGET
 endif
 	scripts/run-test.sh --stack $(TARGET) $(ARGS)
 
+# ─── Docker dev stack rebuild ──────────────────────────────────
+# Bypasses a BuildKit cache-mount edge case where ``compose build``
+# can reuse a stale install layer after ``uv.lock`` changes — passes
+# the lockfile content hash as a build arg so the install step's
+# layer key changes whenever lockfile content changes. Use after any
+# dependency bump (``uv lock`` / ``uv add`` / ``uv sync``).
+compose-build:
+	LOCKFILE_HASH=$$(shasum -a 256 uv.lock | awk '{print $$1}') \
+		docker compose build adcp-server
+
+compose-up: compose-build
+	LOCKFILE_HASH=$$(shasum -a 256 uv.lock | awk '{print $$1}') \
+		docker compose up -d --force-recreate adcp-server
+
 # ─── Entity-scoped test runs ────────────────────────────────────
 # Usage: make test-entity ENTITY=delivery
 #        make test-entity ENTITY="creative and unit"
