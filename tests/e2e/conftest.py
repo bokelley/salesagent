@@ -144,6 +144,19 @@ def docker_services_e2e(request):
         if not env.get("SUPER_ADMIN_EMAILS"):
             env["SUPER_ADMIN_EMAILS"] = "e2e-test@example.com"
 
+        # ``LOCKFILE_HASH`` invalidates the Dockerfile uv install layer when
+        # ``uv.lock`` changes — otherwise a BuildKit cache-mount edge case can
+        # reuse a stale venv across dep bumps. Compute the lockfile hash on
+        # the runner so the install layer's cache key changes whenever
+        # lockfile content does. See CLAUDE.md / Makefile for the full why.
+        if "LOCKFILE_HASH" not in env:
+            import hashlib
+            from pathlib import Path
+
+            lockfile = Path(__file__).resolve().parents[2] / "uv.lock"
+            if lockfile.exists():
+                env["LOCKFILE_HASH"] = hashlib.sha256(lockfile.read_bytes()).hexdigest()
+
         print("Building and starting Docker services with dynamic ports...")
         print("This may take 2-3 minutes for initial build...")
 

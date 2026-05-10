@@ -378,7 +378,7 @@ class DeliveryWebhookScheduler:
             mcp_payload_dict = create_mcp_webhook_payload(
                 task_id=media_buy.media_buy_id,  # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
                 task_type="media_buy_delivery",
-                result=delivery_response,  # type: ignore[arg-type]  # library handles BaseModel via hasattr(result, "model_dump")
+                result=delivery_response,
                 status=AdcpTaskStatus.completed,
             )
             media_buy_delivery_payload = McpWebhookPayload.model_construct(**mcp_payload_dict)

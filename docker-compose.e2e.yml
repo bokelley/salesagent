@@ -30,7 +30,13 @@ services:
       retries: 5
 
   adcp-server:
-    build: .
+    build:
+      context: .
+      # ``LOCKFILE_HASH`` invalidates the Dockerfile uv install layer
+      # when uv.lock changes. ``tests/e2e/conftest.py`` computes and
+      # exports the hash before invoking docker-compose. See CLAUDE.md.
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       SKIP_NGINX: "true"
