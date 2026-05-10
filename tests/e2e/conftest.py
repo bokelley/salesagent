@@ -5,6 +5,7 @@ These fixtures are for complete system tests that exercise the full AdCP protoco
 Implements testing hooks from https://github.com/adcontextprotocol/adcp/pull/34
 """
 
+import hashlib
 import os
 import socket
 import subprocess
@@ -149,10 +150,11 @@ def docker_services_e2e(request):
         # reuse a stale venv across dep bumps. Compute the lockfile hash on
         # the runner so the install layer's cache key changes whenever
         # lockfile content does. See CLAUDE.md / Makefile for the full why.
+        # NOTE: keep imports at module level — a nested ``from pathlib
+        # import Path`` here would shadow the module-level binding for the
+        # entire function (Python scoping), and the earlier
+        # ``Path(".env")`` call would UnboundLocalError.
         if "LOCKFILE_HASH" not in env:
-            import hashlib
-            from pathlib import Path
-
             lockfile = Path(__file__).resolve().parents[2] / "uv.lock"
             if lockfile.exists():
                 env["LOCKFILE_HASH"] = hashlib.sha256(lockfile.read_bytes()).hexdigest()
