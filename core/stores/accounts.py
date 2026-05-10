@@ -149,13 +149,30 @@ class SalesagentAccountStore:
     # ``PlatformHandler.sync_accounts`` / ``list_accounts`` stubs onto
     # these methods so the wire skill calls actually reach our impl.
 
+    # The argument shape changes once we bump to the adcp release that
+    # carries adcontextprotocol/adcp-client-python#610 — the framework
+    # will call ``upsert(refs=list[AccountReference], ctx=...)`` and
+    # ``list(filter=dict|None, ctx=...)`` instead of passing the full
+    # parsed request. Both branches accept either shape so the bump is
+    # a one-line ``adcp >= X.Y`` requirement bump rather than a code
+    # rewrite. The legacy SyncAccountsRequest / ListAccountsRequest
+    # branches also keep ``core.platforms.account_polyfill`` working in
+    # the meantime — that polyfill forwards the parsed request as
+    # ``params``.
+
     async def upsert(
         self,
-        params: SyncAccountsRequest | dict[str, Any],
+        payload: Any,
         ctx: Any | None = None,
     ) -> Any:
-        """Forward ``sync_accounts`` to ``src/core/tools/accounts._sync_accounts_impl``."""
-        req = self._coerce_to_model(params, SyncAccountsRequest)
+        """Forward ``sync_accounts`` to ``_sync_accounts_impl``.
+
+        Accepts either:
+        * a ``SyncAccountsRequest`` / dict (today's polyfill path), or
+        * a ``list[AccountReference]`` (the framework's contract once
+          adcp-client-python#610 lands).
+        """
+        req = self._coerce_sync_accounts_payload(payload)
         identity = self._identity_from_ctx(ctx)
         try:
             return await _sync_accounts_impl(req=req, identity=identity)
@@ -164,11 +181,19 @@ class SalesagentAccountStore:
 
     async def list(
         self,
-        params: ListAccountsRequest | dict[str, Any] | None = None,
+        payload: Any = None,
         ctx: Any | None = None,
     ) -> Any:
-        """Forward ``list_accounts`` to ``src/core/tools/accounts._list_accounts_impl``."""
-        req = self._coerce_to_model(params, ListAccountsRequest) if params is not None else None
+        """Forward ``list_accounts`` to ``_list_accounts_impl``.
+
+        Accepts either:
+        * a ``ListAccountsRequest`` / dict carrying the full request
+          (today's polyfill path), or
+        * a flat filter dict ``{status, sandbox, pagination}`` (the
+          framework's contract once adcp-client-python#610 lands), or
+        * ``None`` for the no-filter case.
+        """
+        req = self._coerce_list_accounts_payload(payload)
         identity = self._identity_from_ctx(ctx)
         try:
             return await asyncio.to_thread(_list_accounts_impl, req, identity)
@@ -176,14 +201,42 @@ class SalesagentAccountStore:
             raise self._translate(exc) from exc
 
     @staticmethod
-    def _coerce_to_model(payload: Any, model_cls: Any) -> Any:
-        if isinstance(payload, model_cls):
+    def _coerce_sync_accounts_payload(payload: Any) -> SyncAccountsRequest:
+        """Normalise the framework's ``upsert`` argument into a
+        :class:`SyncAccountsRequest` for the impl. ``list`` is the
+        post-#610 ``refs`` shape; everything else is treated as the
+        full request."""
+        if isinstance(payload, SyncAccountsRequest):
+            return payload
+        if isinstance(payload, list):
+            # Framework projected ``params.accounts`` to a list of refs;
+            # rebuild the request with a synthesised idempotency_key.
+            return SyncAccountsRequest.model_construct(
+                accounts=payload,
+                idempotency_key=f"polyfill-{id(payload):x}",
+            )
+        if hasattr(payload, "model_dump"):
+            return SyncAccountsRequest(**payload.model_dump(exclude_none=True))
+        if isinstance(payload, dict):
+            return SyncAccountsRequest(**payload)
+        return SyncAccountsRequest.model_validate(payload)
+
+    @staticmethod
+    def _coerce_list_accounts_payload(payload: Any) -> ListAccountsRequest | None:
+        """Normalise the framework's ``list`` argument into a
+        :class:`ListAccountsRequest`. ``None`` and an empty filter dict
+        both map to ``None`` (the impl's no-filter path)."""
+        if payload is None:
+            return None
+        if isinstance(payload, ListAccountsRequest):
             return payload
         if hasattr(payload, "model_dump"):
-            return model_cls(**payload.model_dump(exclude_none=True))
+            return ListAccountsRequest(**payload.model_dump(exclude_none=True))
         if isinstance(payload, dict):
-            return model_cls(**payload)
-        return model_cls.model_validate(payload)
+            if not payload:
+                return None
+            return ListAccountsRequest(**payload)
+        return ListAccountsRequest.model_validate(payload)
 
     def _identity_from_ctx(self, ctx: Any | None) -> ResolvedIdentity:
         """Build a :class:`ResolvedIdentity` from the framework

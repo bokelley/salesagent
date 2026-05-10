@@ -22,10 +22,15 @@ Importing this module applies the patches as a side-effect. The import
 site lives in :mod:`core.main` (load-bearing) so the patch is in place
 before :func:`adcp.decisioning.serve` constructs the handler.
 
-**Removal path:** Filed upstream at
-https://github.com/adcontextprotocol/adcp-client-python/pull/609.
-Drop this module once we bump to the framework version that includes
-that fix (>= 4.6.1 most likely). Tracked at
+**Removal path:** Filed upstream as
+https://github.com/adcontextprotocol/adcp-client-python/pull/610
+(supersedes the earlier #609). Drop this module once we bump to the
+framework version that includes #610. The store-side ``upsert`` /
+``list`` methods on :class:`SalesagentAccountStore` already accept
+both the polyfill argument shape (``params: SyncAccountsRequest``) and
+the post-#610 framework shape (``refs: list[AccountReference]`` /
+``filter: dict``), so the bump is a requirement-version change with no
+code rewrite. Tracked at
 https://github.com/adcontextprotocol/adcp-client/issues/1631.
 """
 
