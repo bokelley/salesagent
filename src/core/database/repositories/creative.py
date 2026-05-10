@@ -81,7 +81,10 @@ class CreativeRepository:
         principal_id: str,
         *,
         status: str | None = None,
+        statuses: list[str] | None = None,
         format: str | None = None,
+        format_ids: list[str] | None = None,
+        creative_ids: list[str] | None = None,
         tags: list[str] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
@@ -112,11 +115,20 @@ class CreativeRepository:
                 Creative.creative_id == CreativeAssignment.creative_id,
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
+        if creative_ids:
+            stmt = stmt.where(Creative.creative_id.in_(creative_ids))
+
         if status:
             stmt = stmt.where(Creative.status == status)
 
+        if statuses:
+            stmt = stmt.where(Creative.status.in_(statuses))
+
         if format:
             stmt = stmt.where(Creative.format == format)
+
+        if format_ids:
+            stmt = stmt.where(Creative.format.in_(format_ids))
 
         if tags:
             for tag in tags:
