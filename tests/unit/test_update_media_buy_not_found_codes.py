@@ -20,8 +20,7 @@ These tests pin both layers:
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,23 +28,14 @@ from src.core.exceptions import (
     AdCPMediaBuyNotFoundError,
     AdCPPackageNotFoundError,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl, _verify_principal
-
-MODULE = "src.core.tools.media_buy_update"
-
-
-def _identity(principal_id: str = "principal_a", tenant_id: str = "tenant_a") -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id, "name": "Test"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(),
-    )
-
+from tests.unit._update_media_buy_helpers import (
+    UpdateMediaBuyImplFixture,
+    make_delegate_ctx,
+    make_identity,
+    run_delegate_coro,
+)
 
 # ---------------------------------------------------------------------------
 # Layer 1: _impl raises AdCPMediaBuyNotFoundError / AdCPPackageNotFoundError
@@ -62,7 +52,7 @@ class TestImplRaisesTypedNotFoundErrors:
         repo.get_by_id.return_value = None
 
         with pytest.raises(AdCPMediaBuyNotFoundError) as exc_info:
-            _verify_principal("mb_does_not_exist", _identity(), repo)
+            _verify_principal("mb_does_not_exist", make_identity(), repo)
 
         assert exc_info.value.error_code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_does_not_exist" in str(exc_info.value)
@@ -78,7 +68,7 @@ class TestImplRaisesTypedNotFoundErrors:
         repo.get_by_id.return_value = None
 
         with pytest.raises(AdCPMediaBuyNotFoundError) as exc_info:
-            _verify_principal("mb_exists_on_other_tenant", _identity(tenant_id="tenant_a"), repo)
+            _verify_principal("mb_exists_on_other_tenant", make_identity(tenant_id="tenant_a"), repo)
 
         # Critically NOT AdCPAuthorizationError / AUTHORIZATION_ERROR.
         assert exc_info.value.error_code == "MEDIA_BUY_NOT_FOUND"
@@ -86,7 +76,7 @@ class TestImplRaisesTypedNotFoundErrors:
     def test_unknown_package_in_targeting_overlay_raises_package_not_found(self) -> None:
         """Updating targeting on a package_id that doesn't exist on this media buy
         raises AdCPPackageNotFoundError (wire code PACKAGE_NOT_FOUND)."""
-        with self._stub_uow() as uow:
+        with UpdateMediaBuyImplFixture() as uow:
             # Media buy exists, package does not.
             uow.media_buys.get_package.return_value = None
 
@@ -100,7 +90,7 @@ class TestImplRaisesTypedNotFoundErrors:
                 ],
             )
             with pytest.raises(AdCPPackageNotFoundError) as exc_info:
-                _update_media_buy_impl(req=req, identity=_identity())
+                _update_media_buy_impl(req=req, identity=make_identity())
 
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
@@ -115,7 +105,7 @@ class TestImplRaisesTypedNotFoundErrors:
         like ``package_not_found`` (lowercase) which surfaces as opaque
         INTERNAL_ERROR after delegate translation.
         """
-        with self._stub_uow() as uow:
+        with UpdateMediaBuyImplFixture() as uow:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
@@ -123,7 +113,7 @@ class TestImplRaisesTypedNotFoundErrors:
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
             with pytest.raises(AdCPPackageNotFoundError) as exc_info:
-                _update_media_buy_impl(req=req, identity=_identity())
+                _update_media_buy_impl(req=req, identity=make_identity())
 
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
@@ -131,18 +121,18 @@ class TestImplRaisesTypedNotFoundErrors:
     def test_unknown_package_with_budget_raises_package_not_found(self) -> None:
         """Budget update on a package_id that doesn't exist on this media buy
         raises AdCPPackageNotFoundError."""
-        with self._stub_uow() as uow:
+        existing_mb = MagicMock()
+        existing_mb.currency = "USD"
+
+        with UpdateMediaBuyImplFixture(existing_media_buy=existing_mb) as uow:
             uow.media_buys.get_package.return_value = None
-            existing_mb = MagicMock()
-            existing_mb.currency = "USD"
-            uow.media_buys.get_by_id.return_value = existing_mb
 
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "budget": 1000.0}],
             )
             with pytest.raises(AdCPPackageNotFoundError) as exc_info:
-                _update_media_buy_impl(req=req, identity=_identity())
+                _update_media_buy_impl(req=req, identity=make_identity())
 
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
@@ -160,7 +150,7 @@ class TestImplRaisesTypedNotFoundErrors:
         manual-approval gate so a buyer probing with a fake package_id
         always gets PACKAGE_NOT_FOUND.
         """
-        with self._stub_uow(manual_approval=True) as uow:
+        with UpdateMediaBuyImplFixture(manual_approval=True) as uow:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
@@ -168,7 +158,7 @@ class TestImplRaisesTypedNotFoundErrors:
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
             with pytest.raises(AdCPPackageNotFoundError) as exc_info:
-                _update_media_buy_impl(req=req, identity=_identity())
+                _update_media_buy_impl(req=req, identity=make_identity())
 
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
@@ -179,7 +169,7 @@ class TestImplRaisesTypedNotFoundErrors:
         PACKAGE_NOT_FOUND. Previously fell through the per-package loop
         silently and returned a 200 success with empty affected_packages
         (issue #251)."""
-        with self._stub_uow() as uow:
+        with UpdateMediaBuyImplFixture() as uow:
             uow.media_buys.get_package.return_value = None
 
             req = UpdateMediaBuyRequest(
@@ -187,70 +177,10 @@ class TestImplRaisesTypedNotFoundErrors:
                 packages=[{"package_id": "pkg_does_not_exist"}],
             )
             with pytest.raises(AdCPPackageNotFoundError) as exc_info:
-                _update_media_buy_impl(req=req, identity=_identity())
+                _update_media_buy_impl(req=req, identity=make_identity())
 
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg_does_not_exist" in str(exc_info.value)
-
-    def _stub_uow(self, *, manual_approval: bool = False) -> Any:
-        """Compose the patches that bypass DB / approval / audit."""
-        return _NotFoundFixture(manual_approval=manual_approval)
-
-
-class _NotFoundFixture:
-    """Context manager wiring up just enough mocks for _impl to reach the
-    package-lookup branch without touching real DB code paths.
-
-    Yields the UoW mock instance so tests can configure repository returns.
-    """
-
-    def __init__(self, *, manual_approval: bool = False) -> None:
-        self._manual_approval = manual_approval
-
-    def __enter__(self) -> Any:
-        self._patchers: list[Any] = []
-
-        ctx_mgr = MagicMock()
-        ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_001")
-        ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_001")
-
-        mock_session = MagicMock()
-        uow = MagicMock()
-        uow.session = mock_session
-        uow.media_buys = MagicMock()
-        uow.currency_limits = MagicMock()
-        cl = MagicMock()
-        cl.max_daily_package_spend = None
-        cl.min_package_budget = 0
-        uow.currency_limits.get_for_currency.return_value = cl
-        uow.__enter__ = Mock(return_value=uow)
-        uow.__exit__ = Mock(return_value=False)
-
-        adapter = MagicMock()
-        adapter.manual_approval_required = self._manual_approval
-        adapter.manual_approval_operations = ["update_media_buy"] if self._manual_approval else []
-
-        targets = {
-            f"{MODULE}._verify_principal": MagicMock(return_value=None),
-            f"{MODULE}.get_principal_object": MagicMock(
-                return_value=MagicMock(principal_id="principal_a", name="P", platform_mappings={})
-            ),
-            f"{MODULE}.get_context_manager": MagicMock(return_value=ctx_mgr),
-            f"{MODULE}.MediaBuyUoW": MagicMock(return_value=uow),
-            f"{MODULE}.get_adapter": MagicMock(return_value=adapter),
-            f"{MODULE}.get_audit_logger": MagicMock(return_value=MagicMock()),
-        }
-        for target, value in targets.items():
-            p = patch(target, value)
-            p.start()
-            self._patchers.append(p)
-        self._uow = uow
-        return uow
-
-    def __exit__(self, *exc: object) -> bool:
-        for p in reversed(self._patchers):
-            p.stop()
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -268,14 +198,14 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
 
         from core.platforms._delegate import _delegate_update_media_buy
 
-        ctx = self._make_ctx()
+        ctx = make_delegate_ctx()
 
         with patch(
             "core.platforms._delegate._update_media_buy_impl",
             side_effect=AdCPMediaBuyNotFoundError("Media buy 'mb_x' not found."),
         ):
             with pytest.raises(AdcpError) as exc_info:
-                self._run(_delegate_update_media_buy("mb_x", {}, ctx))
+                run_delegate_coro(_delegate_update_media_buy("mb_x", {}, ctx))
 
         assert exc_info.value.code == "MEDIA_BUY_NOT_FOUND"
         assert exc_info.value.recovery == "correctable"
@@ -286,14 +216,14 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
 
         from core.platforms._delegate import _delegate_update_media_buy
 
-        ctx = self._make_ctx()
+        ctx = make_delegate_ctx()
 
         with patch(
             "core.platforms._delegate._update_media_buy_impl",
             side_effect=AdCPPackageNotFoundError("Package 'pkg_z' not found"),
         ):
             with pytest.raises(AdcpError) as exc_info:
-                self._run(
+                run_delegate_coro(
                     _delegate_update_media_buy(
                         "mb_x",
                         {"packages": [{"package_id": "pkg_z", "paused": True}]},
@@ -303,23 +233,3 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
 
         assert exc_info.value.code == "PACKAGE_NOT_FOUND"
         assert exc_info.value.recovery == "correctable"
-
-    def _make_ctx(self) -> Any:
-        """Minimal ctx that satisfies _build_identity()."""
-        ctx = MagicMock()
-        ctx.account.metadata.get.return_value = "tenant_a"
-        return ctx
-
-    def _run(self, coro: Any) -> Any:
-        import asyncio
-
-        # Patch get_tenant_by_id so we don't hit the DB.
-        with patch(
-            "core.platforms._delegate.get_tenant_by_id",
-            return_value={"tenant_id": "tenant_a", "name": "Test"},
-        ):
-            with patch(
-                "core.platforms._delegate.current_principal",
-                MagicMock(get=MagicMock(return_value="principal_a")),
-            ):
-                return asyncio.run(coro)

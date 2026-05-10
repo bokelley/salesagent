@@ -29,6 +29,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPMediaBuyNotFoundError,
+    AdCPNotCancellableError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -663,24 +664,19 @@ def _update_media_buy_impl(
         if canceled_in_request and req.canceled is True:
             current_mb = uow.media_buys.get_by_id(req.media_buy_id)
             if current_mb and str(current_mb.status) == "canceled":
-                error_response = UpdateMediaBuyError(
-                    errors=[
-                        Error(
-                            code="NOT_CANCELLABLE",
-                            message=(
-                                f"media_buy_id={req.media_buy_id!r} is already canceled — cannot cancel a terminal buy"
-                            ),
-                        )
-                    ],
-                    context=req.context,
-                )
+                # Pre-validation: re-cancel of a terminal buy raises the typed
+                # AdCPNotCancellableError BEFORE adapter dispatch. Idempotency-spec
+                # friendly: same key + same payload yields the same wire code
+                # regardless of which adapter would have been called. The delegate
+                # translates this into the wire NOT_CANCELLABLE envelope with
+                # recovery="correctable".
+                error_msg = f"media_buy_id={req.media_buy_id!r} is already canceled — cannot cancel a terminal buy"
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=serialize_for_workflow_step(error_response),
                     error_message="already canceled",
                 )
-                return error_response
+                raise AdCPNotCancellableError(error_msg)
 
             # MediaBuy ORM has no cancellation_reason column today —
             # echoing the reason back on the response (via the SDK's
