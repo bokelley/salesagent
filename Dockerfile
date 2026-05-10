@@ -32,18 +32,27 @@ ENV UV_PYTHON_PREFERENCE=only-system
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
-# Layer-cache key for the install step. Pass at build time:
-#   --build-arg LOCKFILE_HASH=$(sha256sum uv.lock | awk '{print $1}')
-# Without this, ``compose build --build`` (no ``--no-cache``) sometimes
-# reused a stale install layer when uv.lock content changed but Docker's
-# COPY layer hash short-circuited (BuildKit edge case with mount caches).
-# ``make compose-build`` wraps this for the dev workflow.
-ARG LOCKFILE_HASH=unset
+# Layer-cache key for the install step. ``make compose-build`` /
+# ``make compose-up`` set this to the current ``shasum -a 256 uv.lock``;
+# bare ``docker compose build`` callers must pass it explicitly:
+#   --build-arg LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}')
+# Why: BuildKit's COPY layer hash on ``uv.lock`` can short-circuit even
+# when content changed (cache-mount edge case), so the install layer
+# silently reuses a stale venv. Threading the lockfile hash as an ARG
+# changes the layer cache key whenever lockfile content changes.
+# Default value forces an explicit build — no silent regression on CI.
+ARG LOCKFILE_HASH=set-this-build-arg
 
 # Install dependencies with caching and increased timeout
 ENV UV_HTTP_TIMEOUT=300
 RUN --mount=type=cache,target=/cache/uv \
     --mount=type=cache,target=/root/.cache/pip \
+    if [ "${LOCKFILE_HASH}" = "set-this-build-arg" ]; then \
+        echo "ERROR: build arg LOCKFILE_HASH not set." >&2; \
+        echo "Use 'make compose-build' (or pass --build-arg LOCKFILE_HASH=\$(shasum -a 256 uv.lock | awk '{print \$1}'))" >&2; \
+        echo "Skipping the arg silently regresses dependency bumps — see CLAUDE.md." >&2; \
+        exit 1; \
+    fi && \
     echo "Installing dependencies for lockfile=${LOCKFILE_HASH}" && \
     uv sync --frozen
 

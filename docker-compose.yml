@@ -79,12 +79,12 @@ services:
       context: .
       dockerfile: Dockerfile
       # Force the install layer to invalidate when uv.lock changes.
-      # ``make compose-build`` (or ``make compose-up``) sets this to the
-      # current uv.lock hash; bare ``docker compose build`` falls back to
-      # ``unset`` and may reuse a stale layer (BuildKit cache-mount edge
-      # case). Always go through the make target after a dependency bump.
+      # ``make compose-build`` / ``make compose-up`` set this to the
+      # current uv.lock content hash. Bare ``docker compose build``
+      # without the env var fails fast inside the Dockerfile — silently
+      # regressing dependency bumps is worse than a build error.
       args:
-        LOCKFILE_HASH: ${LOCKFILE_HASH:-unset}
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
     entrypoint: [] # Override image entrypoint for local dev
     env_file:
       - path: .env

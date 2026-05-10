@@ -245,6 +245,10 @@ jobs:
 
     - name: Start services with docker compose
       run: |
+        # ``LOCKFILE_HASH`` invalidates the uv install layer when uv.lock
+        # changes — otherwise a BuildKit cache-mount edge case can reuse
+        # a stale venv across dep bumps. See CLAUDE.md / Makefile.
+        export LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}')
         docker compose up -d --wait --wait-timeout 120
         echo "Services started, checking logs..."
 

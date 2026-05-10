@@ -18,15 +18,16 @@ The resolved Account's ``metadata['tenant_id']`` is what
 
 This store also implements the framework's optional
 :class:`AccountStoreUpsert` / :class:`AccountStoreList` Protocols so
-``sync_accounts`` / ``list_accounts`` work on the wire — the framework's
-stub :class:`PlatformHandler` dispatchers are rebound onto these methods
-by :mod:`core.platforms.account_polyfill`.
+``sync_accounts`` / ``list_accounts`` work on the wire — adcp >= 4.6.1's
+:class:`PlatformHandler` dispatchers route the wire skill calls through
+these methods.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Literal
 
 from adcp.decisioning import AdcpError
@@ -37,6 +38,7 @@ from adcp.server.auth import current_principal
 from adcp.server.auth import current_tenant as auth_current_tenant
 from sqlalchemy import select
 
+from core.middleware.transport_detect import current_transport
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant
@@ -200,11 +202,14 @@ class SalesagentAccountStore:
         if isinstance(payload, SyncAccountsRequest):
             return payload
         if isinstance(payload, list):
-            # Framework projected ``params.accounts`` to a list of refs;
-            # rebuild the request with a synthesised idempotency_key.
+            # Framework projected ``params.accounts`` to a list of refs
+            # (the wire-side ``idempotency_key`` is consumed by the
+            # framework before reaching us). Synthesise a fresh uuid4
+            # for the impl's contract: collision-safe under concurrent
+            # retries that happen to hit a recycled list address.
             return SyncAccountsRequest.model_construct(
                 accounts=payload,
-                idempotency_key=f"polyfill-{id(payload):x}",
+                idempotency_key=f"framework-{uuid.uuid4()}",
             )
         if hasattr(payload, "model_dump"):
             return SyncAccountsRequest(**payload.model_dump(exclude_none=True))
@@ -230,16 +235,24 @@ class SalesagentAccountStore:
         return ListAccountsRequest.model_validate(payload)
 
     def _identity_from_ctx(self, ctx: Any | None) -> ResolvedIdentity:
-        """Build a :class:`ResolvedIdentity` from the framework
-        :class:`ResolveContext` (or fall back to the request-scope
-        ContextVars when called outside the dispatch shim)."""
+        """Build a :class:`ResolvedIdentity` from the request-scope
+        ContextVars populated by :class:`BearerTokenAuthMiddleware`.
+
+        The ``ctx`` argument is the framework's :class:`ResolveContext`;
+        it carries ``auth_info`` / ``agent`` for adopters that key gates
+        off the verified principal, but salesagent's tenant resolution
+        is owned by ``BearerTokenAuthMiddleware`` (writes
+        ``auth_current_tenant`` and ``current_principal`` in lockstep).
+        We deliberately don't read ``ctx.agent.tenant_id`` as a
+        fallback — the framework's :class:`BuyerAgent` doesn't carry
+        ``tenant_id`` today, and accepting that attribute as authoritative
+        would widen the trust boundary the moment a custom
+        :class:`BuyerAgentRegistry` started populating it.
+        """
         from src.core.config_loader import get_tenant_by_id
 
         principal_id = current_principal.get()
         tenant_id = auth_current_tenant.get()
-        if not tenant_id and ctx is not None:
-            agent = getattr(ctx, "agent", None)
-            tenant_id = getattr(agent, "tenant_id", None)
         if not tenant_id:
             raise AdcpError(
                 "ACCOUNT_NOT_FOUND",
@@ -251,11 +264,19 @@ class SalesagentAccountStore:
                 field="account",
             )
         tenant_dict = get_tenant_by_id(tenant_id)
+        # Mirror ``core/platforms/_delegate.py:_build_identity`` — read
+        # the actual transport from the ``current_transport`` ContextVar
+        # populated by ``TransportDetectMiddleware``. Hard-coding ``mcp``
+        # would silently misroute future protocol-aware behavior (webhook
+        # payload shape, transport-specific status messaging) for A2A
+        # callers reaching account dispatch.
+        detected = current_transport.get()
+        protocol: str = detected if detected in ("mcp", "a2a") else "mcp"
         return ResolvedIdentity(
             principal_id=principal_id,
             tenant_id=tenant_id,
             tenant=tenant_dict,
-            protocol="mcp",
+            protocol=protocol,
             testing_context=AdCPTestContext(),
         )
 

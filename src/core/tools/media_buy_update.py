@@ -1306,6 +1306,20 @@ def _update_media_buy_impl(
                             # Clear the blocker so date-based status (pending_start/active)
                             # takes over. Persist the date-derived value rather than
                             # nulling out, so get_media_buys / response status agree.
+                            #
+                            # Per AdCP 3.0.6 spec text: ``pending_creatives`` is "media buy
+                            # is approved but has *no creatives assigned*" — the gate
+                            # clears on assignment, not on review approval. So the call
+                            # below intentionally hard-codes ``creatives_approved=True``;
+                            # creative review state is captured separately on
+                            # ``creative_approvals[*].approval_status`` in the read path.
+                            # Storyboard ``pending_creatives_to_start/assign_creative_to_package``
+                            # tests this exact transition.
+                            #
+                            # Note: ``_determine_media_buy_status`` (used on create) keeps
+                            # the buy at ``pending_creatives`` until creatives are
+                            # *approved* — that's the create-path's older read of the
+                            # spec, tracked as a follow-up to align with this transition.
                             from src.core.tools.media_buy_create import _determine_media_buy_status
 
                             media_buy_obj.status = _determine_media_buy_status(
@@ -1588,18 +1602,30 @@ def _update_media_buy_impl(
         # Without this, the response's ``status`` is None and the storyboard
         # ``pending_creatives_to_start/assign_creative_to_package`` step can't
         # observe the transition we just performed.
+        from sqlalchemy.exc import SQLAlchemyError
+
         from src.core.tools.media_buy_list import _compute_status
 
         response_status: str | None = None
-        # The status field on UpdateMediaBuySuccess is best-effort — we want it
+        # ``status`` on UpdateMediaBuySuccess is best-effort — we want it
         # populated when we can read the buy back, but a fetch/parse failure
-        # MUST NOT regress the rest of the response. Wrap the whole thing.
+        # MUST NOT regress the rest of the response. Catch the narrow set of
+        # exceptions the read-back can plausibly throw:
+        #   * ``SQLAlchemyError`` — DB I/O / session state failures (prod)
+        #   * ``ValueError`` — date math / enum coercion on corrupt rows (prod)
+        #   * ``TypeError`` — comparison failures from unit-test fixtures that
+        #     mock ``start_time`` / ``end_time`` as ``MagicMock`` (test-only;
+        #     real prod rows always carry typed datetimes)
+        #   * ``StopIteration`` — exhausted ``side_effect`` lists on
+        #     repository mocks (test-only)
+        # Programming errors (``AttributeError``, ``KeyError``, enum drift
+        # in ``_compute_status``) intentionally bubble so tests surface them.
         try:
             post_update_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
             if post_update_buy is not None:
                 today = datetime.now(UTC).date()
                 response_status = _compute_status(post_update_buy, today).value
-        except Exception as exc:
+        except (SQLAlchemyError, ValueError, TypeError, StopIteration) as exc:
             logger.warning(f"[update_media_buy] could not compute status for {req.media_buy_id}: {exc}")
 
         final_response = UpdateMediaBuySuccess(

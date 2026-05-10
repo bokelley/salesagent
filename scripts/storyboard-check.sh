@@ -139,7 +139,7 @@ run_one() {
         local skip_summary
         skip_summary=$(python3 - "$out" <<'PYEOF'
 import json, re, sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 try:
     data = json.load(open(sys.argv[1]))
 except (json.JSONDecodeError, OSError):
