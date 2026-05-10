@@ -60,13 +60,6 @@ from adcp.server import (
 )
 from sqlalchemy import select
 
-# Import for side-effect: rebinds PlatformHandler.sync_accounts and
-# .list_accounts from the framework's _not_supported stubs to delegate
-# into _invoke_platform_method, matching the pattern other tool
-# dispatchers already use. Must run before serve() builds the handler.
-# Drop once adcp >= 4.6 wires these dispatchers itself.
-import core.platforms.account_polyfill  # noqa: F401
-
 # Import for side-effect: registers the SQLAlchemy session listener that
 # evicts the webhook-signing credential cache on commit. Must run before
 # any session opens so rotations observed via the ORM trigger eviction.

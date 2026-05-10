@@ -452,6 +452,4 @@ async def _delegate_list_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
 # Account dispatch (sync_accounts / list_accounts) lives on the
 # ``SalesagentAccountStore`` instance via the framework's
 # AccountStoreUpsert / AccountStoreList Protocols, not in this delegate
-# module. The polyfill at ``core.platforms.account_polyfill`` rebinds
-# the framework's stub PlatformHandler dispatchers onto those store
-# methods. Drop the polyfill once adcp >= 4.6 wires this natively.
+# module — adcp >= 4.6.1 wires the framework dispatchers natively.

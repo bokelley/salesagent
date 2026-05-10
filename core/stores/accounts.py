@@ -143,36 +143,28 @@ class SalesagentAccountStore:
 
     # ----- AccountStoreUpsert / AccountStoreList Protocols -----------
     #
-    # Account dispatch on the wire flows through the AccountStore's
-    # ``upsert`` / ``list`` methods (see ``adcp.decisioning.accounts``).
-    # ``core.platforms.account_polyfill`` wires the framework's
-    # ``PlatformHandler.sync_accounts`` / ``list_accounts`` stubs onto
-    # these methods so the wire skill calls actually reach our impl.
-
-    # The argument shape changes once we bump to the adcp release that
-    # carries adcontextprotocol/adcp-client-python#610 — the framework
-    # will call ``upsert(refs=list[AccountReference], ctx=...)`` and
-    # ``list(filter=dict|None, ctx=...)`` instead of passing the full
-    # parsed request. Both branches accept either shape so the bump is
-    # a one-line ``adcp >= X.Y`` requirement bump rather than a code
-    # rewrite. The legacy SyncAccountsRequest / ListAccountsRequest
-    # branches also keep ``core.platforms.account_polyfill`` working in
-    # the meantime — that polyfill forwards the parsed request as
-    # ``params``.
+    # The framework (adcp >= 4.6.1) routes ``sync_accounts`` through
+    # ``upsert(refs, ctx)`` and ``list_accounts`` through
+    # ``list(filter, ctx)`` — see ``adcp.decisioning.accounts``. Our
+    # ``_sync_accounts_impl`` / ``_list_accounts_impl`` operate on the
+    # parsed request models, so we coerce the framework's narrower
+    # arguments back to those models inside ``_coerce_*`` below.
 
     async def upsert(
         self,
-        payload: Any,
+        refs: Any,
         ctx: Any | None = None,
     ) -> Any:
-        """Forward ``sync_accounts`` to ``_sync_accounts_impl``.
+        """Forward ``sync_accounts`` (the framework's
+        :class:`AccountStoreUpsert.upsert` Protocol method) to
+        ``_sync_accounts_impl``.
 
-        Accepts either:
-        * a ``SyncAccountsRequest`` / dict (today's polyfill path), or
-        * a ``list[AccountReference]`` (the framework's contract once
-          adcp-client-python#610 lands).
+        ``refs`` is the ``list[AccountReference]`` projected from
+        ``params.accounts`` by the framework dispatcher; we rebuild a
+        :class:`SyncAccountsRequest` with a synthesised idempotency_key
+        so the impl's existing model contract is preserved.
         """
-        req = self._coerce_sync_accounts_payload(payload)
+        req = self._coerce_sync_accounts_payload(refs)
         identity = self._identity_from_ctx(ctx)
         try:
             return await _sync_accounts_impl(req=req, identity=identity)
@@ -181,19 +173,18 @@ class SalesagentAccountStore:
 
     async def list(
         self,
-        payload: Any = None,
+        filter_: Any = None,
         ctx: Any | None = None,
     ) -> Any:
-        """Forward ``list_accounts`` to ``_list_accounts_impl``.
+        """Forward ``list_accounts`` (the framework's
+        :class:`AccountStoreList.list` Protocol method) to
+        ``_list_accounts_impl``.
 
-        Accepts either:
-        * a ``ListAccountsRequest`` / dict carrying the full request
-          (today's polyfill path), or
-        * a flat filter dict ``{status, sandbox, pagination}`` (the
-          framework's contract once adcp-client-python#610 lands), or
-        * ``None`` for the no-filter case.
+        ``filter_`` is the flat filter dict projected from
+        :class:`ListAccountsRequest` by the framework dispatcher
+        (``status`` / ``sandbox`` / ``pagination``, ``None``-stripped).
         """
-        req = self._coerce_list_accounts_payload(payload)
+        req = self._coerce_list_accounts_payload(filter_)
         identity = self._identity_from_ctx(ctx)
         try:
             return await asyncio.to_thread(_list_accounts_impl, req, identity)

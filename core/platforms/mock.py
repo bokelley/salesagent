@@ -170,5 +170,5 @@ class MockSellerPlatform(DecisioningPlatform):
     # the platform — the framework's LazyPlatformRouter explicitly
     # excludes account methods from per-tenant delegation. The
     # ``upsert`` / ``list`` methods on SalesagentAccountStore handle the
-    # wire flow; ``core.platforms.account_polyfill`` rebinds the
-    # framework's stub PlatformHandler dispatch onto those store methods.
+    # wire flow; adcp >= 4.6.1's PlatformHandler dispatchers wire those
+    # store methods to the wire skill calls.

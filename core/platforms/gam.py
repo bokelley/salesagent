@@ -160,4 +160,6 @@ class GamPlatform(DecisioningPlatform):
 
     # sync_accounts / list_accounts dispatch lives on the shared
     # SalesagentAccountStore (accounts attribute), not as platform
-    # methods — see core.platforms.account_polyfill.
+    # methods — adcp >= 4.6.1's PlatformHandler dispatchers route the
+    # wire skills through the AccountStoreUpsert / AccountStoreList
+    # Protocols on that store.
