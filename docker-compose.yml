@@ -41,6 +41,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Same image as adcp-server (rebuilt independently by Compose
+      # for db-init's own service). Thread the lockfile hash through
+      # so the install layer's cache key invalidates on uv.lock change
+      # — see the comment on adcp-server.build.args for the full why.
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
     entrypoint: []
     env_file:
       - path: .env
