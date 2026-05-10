@@ -13,17 +13,18 @@ to True. The same fix is applied at the package level (`AdCPPackageUpdate`).
 """
 
 from src.core.schemas import AdCPPackageUpdate, UpdateMediaBuyRequest
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestUpdateMediaBuyRequestCanceledDefault:
     def test_omitted_canceled_is_none(self):
         # Pre-fix this asserted `True` because the library declared
         # canceled: Literal[True] = True.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
         assert req.canceled is None
 
     def test_omitted_canceled_not_in_exclude_unset_dump(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
         dump = req.model_dump(exclude_unset=True)
         assert "canceled" not in dump, "Buyer omitted canceled — must not appear in exclude_unset dump."
 
@@ -33,14 +34,14 @@ class TestUpdateMediaBuyRequestCanceledDefault:
         # entirely. This is what gets persisted to
         # `workflow_steps.request_data`, so the time bomb is defused on
         # the persistence path too — not just at replay (#155).
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
         dump = req.model_dump()
         assert "canceled" not in dump
 
     def test_explicit_canceled_true_preserved(self):
         # Buyer explicitly cancels — the field is preserved verbatim and
         # `cancellation_reason` can ride along per spec.
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             canceled=True,
             cancellation_reason="campaign goal achieved",
@@ -56,6 +57,8 @@ class TestUpdateMediaBuyRequestCanceledDefault:
         buyer_payload = {
             "media_buy_id": "mb_1",
             "end_time": "2026-06-01T00:00:00Z",
+            "account": {"account_id": "test-acct"},
+            "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
         }
         req = UpdateMediaBuyRequest.model_validate(buyer_payload)
         round_tripped = UpdateMediaBuyRequest.model_validate(req.model_dump(exclude_unset=True))

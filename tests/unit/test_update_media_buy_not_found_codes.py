@@ -33,6 +33,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl, _verify_principal
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 MODULE = "src.core.tools.media_buy_update"
 
@@ -90,7 +91,7 @@ class TestImplRaisesTypedNotFoundErrors:
             # Media buy exists, package does not.
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
                 media_buy_id="mb_exists",
                 packages=[
                     {
@@ -118,7 +119,7 @@ class TestImplRaisesTypedNotFoundErrors:
         with self._stub_uow() as uow:
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
@@ -137,7 +138,7 @@ class TestImplRaisesTypedNotFoundErrors:
             existing_mb.currency = "USD"
             uow.media_buys.get_by_id.return_value = existing_mb
 
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "budget": 1000.0}],
             )
@@ -163,7 +164,7 @@ class TestImplRaisesTypedNotFoundErrors:
         with self._stub_uow(manual_approval=True) as uow:
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
@@ -182,7 +183,7 @@ class TestImplRaisesTypedNotFoundErrors:
         with self._stub_uow() as uow:
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist"}],
             )

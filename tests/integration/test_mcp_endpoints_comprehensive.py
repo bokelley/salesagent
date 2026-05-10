@@ -15,6 +15,7 @@ from src.core.database.models import Principal
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import create_test_product_with_pricing
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 def safe_get_content(result):
@@ -231,7 +232,7 @@ class TestMCPEndpointsComprehensive:
         from tests.helpers.adcp_factories import create_test_package_request
 
         # Test: Standard AdCP format with explicit packages
-        request = CreateMediaBuyRequest(
+        request = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             po_number="PO-V24-67890",
             packages=[

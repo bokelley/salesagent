@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
 from src.core.tools.media_buy_update import _check_guaranteed_immutable
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 def _make_uow(packages):
@@ -50,7 +51,7 @@ def _product(product_id, line_item_type):
 
 class TestGuaranteedTypesBlockReservationFields:
     def test_standard_blocks_start_time_change(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "STANDARD")])
 
@@ -64,7 +65,7 @@ class TestGuaranteedTypesBlockReservationFields:
         assert "STANDARD" in err.message
 
     def test_sponsorship_blocks_end_time_change(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "SPONSORSHIP")])
 
@@ -75,7 +76,7 @@ class TestGuaranteedTypesBlockReservationFields:
         assert result.errors[0].details["blocked_fields"] == ["end_time"]
 
     def test_standard_blocks_budget_change(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", ext={"salesagent": {"budget": 5000.0}})
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", ext={"salesagent": {"budget": 5000.0}})
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "STANDARD")])
 
@@ -85,7 +86,7 @@ class TestGuaranteedTypesBlockReservationFields:
         assert result.errors[0].details["blocked_fields"] == ["budget"]
 
     def test_multiple_reservation_fields_listed_alphabetically(self):
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             start_time="2026-06-01T00:00:00Z",
             end_time="2026-07-01T00:00:00Z",
@@ -98,7 +99,7 @@ class TestGuaranteedTypesBlockReservationFields:
         assert result.errors[0].details["blocked_fields"] == ["end_time", "start_time"]
 
     def test_one_guaranteed_package_blocks_even_if_others_non_guaranteed(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1"), _pkg("prod_2")])
         session = _make_session(
             [
@@ -116,7 +117,7 @@ class TestNonReservationFieldsAllowed:
     def test_paused_field_does_not_trigger_check(self):
         # `paused` is not in _RESERVATION_FIELDS — guaranteed buys can be
         # paused/resumed even though they can't have flight bounds changed.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", paused=True)
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "STANDARD")])
 
@@ -127,7 +128,7 @@ class TestNonReservationFieldsAllowed:
         uow.media_buys.get_packages.assert_not_called()
 
     def test_no_fields_requested_short_circuits(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "STANDARD")])
 
@@ -137,14 +138,14 @@ class TestNonReservationFieldsAllowed:
 
 class TestNonGuaranteedTypesPassThrough:
     def test_network_allows_start_time_change(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "NETWORK")])
 
         assert _check_guaranteed_immutable(req, "mb_1", uow, session, "t_1") is None
 
     def test_price_priority_allows_end_time_change(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "PRICE_PRIORITY")])
 
@@ -153,7 +154,7 @@ class TestNonGuaranteedTypesPassThrough:
     def test_unknown_type_default_allowed(self):
         # Default-allow on unknown types so future GAM additions don't
         # accidentally trip the guard.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "FUTURE_TYPE_GAM_ADDED")])
 
@@ -164,7 +165,7 @@ class TestEdgeCases:
     def test_no_packages_does_not_block(self):
         # Without packages we have nothing to look up — pass through and
         # let downstream code surface the inconsistency.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([])
         session = _make_session([])
 
@@ -174,14 +175,14 @@ class TestEdgeCases:
         # Package_config without a product_id is not actionable here.
         bad_pkg = MagicMock()
         bad_pkg.package_config = {}
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([bad_pkg])
         session = _make_session([])
 
         assert _check_guaranteed_immutable(req, "mb_1", uow, session, "t_1") is None
 
     def test_product_without_implementation_config_treated_as_unknown(self):
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="2026-06-01T00:00:00Z")
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", None)])
 

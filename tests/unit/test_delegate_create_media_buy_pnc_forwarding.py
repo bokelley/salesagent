@@ -44,6 +44,8 @@ async def test_delegate_forwards_push_notification_config_to_impl() -> None:
         },
     }
     req_body = {
+        "account": {"account_id": "test-acct"},
+        "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
         "brand": {"domain": "testbrand.com"},
         "packages": [
             {
@@ -95,6 +97,8 @@ async def test_delegate_passes_none_when_request_omits_pnc() -> None:
     from core.platforms._delegate import _delegate_create_media_buy
 
     req_body = {
+        "account": {"account_id": "test-acct"},
+        "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
         "brand": {"domain": "testbrand.com"},
         "packages": [
             {

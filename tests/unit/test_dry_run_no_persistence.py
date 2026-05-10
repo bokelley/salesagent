@@ -119,6 +119,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             mock_session = MagicMock()
             mock_uow.session = mock_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = Mock(return_value=mock_uow)
             mock_uow.__exit__ = Mock(return_value=False)
             mock_uow_cls.return_value = mock_uow

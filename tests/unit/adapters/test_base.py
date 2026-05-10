@@ -4,6 +4,7 @@ import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest, Principal
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = pytest.mark.unit
 
@@ -66,7 +67,7 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
         )
     ]
 
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "sports.example.com"},  # Required per AdCP spec
         packages=packages,  # AdCP v2.2.0: packages required
         start_time=start_time,

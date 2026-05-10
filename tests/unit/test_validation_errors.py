@@ -4,6 +4,7 @@ from pydantic import ValidationError
 
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import format_validation_error
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 def test_brand_target_audience_must_be_string():
@@ -35,7 +36,7 @@ def test_create_media_buy_request_invalid_brand_manifest():
     """Test that CreateMediaBuyRequest accepts brand field (adcp 3.6.0: brand replaced brand_manifest)."""
     # In adcp 3.6.0, brand is a BrandReference with optional domain field
     # Missing domain does not raise an error since domain is optional
-    req = CreateMediaBuyRequest(
+    req = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         end_time="2026-02-01T00:00:00Z",
         start_time="2026-01-01T00:00:00Z",

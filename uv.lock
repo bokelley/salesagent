@@ -74,7 +74,7 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "4.5.0"
+version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
@@ -90,9 +90,9 @@ dependencies = [
     { name = "sse-starlette" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/a1/9d101735f8cdddfee90845f3e6ead235b888c3e418c76d326e3e4748819b/adcp-4.5.0.tar.gz", hash = "sha256:2b2586d182a06182a45672ddca9de37f83046250384b3b8afe451644278bc86a", size = 2205306, upload-time = "2026-05-08T02:56:55.291Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/12/54c172661e990f3300c490d22b5064e1546788c3c5592847ee797ebd7ffa/adcp-5.0.0.tar.gz", hash = "sha256:75112e3b03e55600a3e29b1aacb794a771cbbad25a3244921a36b4ce45f1884a", size = 2254819, upload-time = "2026-05-10T17:33:15.642Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/10/05dae9cfc86004cc3a16ed3ccf77a119544ba6596a10680758fbd991515f/adcp-4.5.0-py3-none-any.whl", hash = "sha256:6fb1cac8418d2a2a02a09be1cb04867c3bf5fcb7f4246c56461256fbc4583cf9", size = 2173861, upload-time = "2026-05-08T02:56:53.426Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/26/d66e9a7ffd3671be07080dcb1ca44464d42ab870867d01eab1c4698bfa94/adcp-5.0.0-py3-none-any.whl", hash = "sha256:fa0d4dedf7b66ff71196bf8e52651da7feedfedbfd1886fe9c01074b7fb49f82", size = 2198691, upload-time = "2026-05-10T17:33:13.814Z" },
 ]
 
 [[package]]
@@ -208,7 +208,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.19" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", specifier = ">=4.5.0" },
+    { name = "adcp", specifier = ">=5.0.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },
@@ -2468,7 +2468,7 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "1.25.0"
+version = "1.27.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -2486,9 +2486,9 @@ dependencies = [
     { name = "typing-inspection" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/2d/649d80a0ecf6a1f82632ca44bec21c0461a9d9fc8934d38cb5b319f2db5e/mcp-1.25.0.tar.gz", hash = "sha256:56310361ebf0364e2d438e5b45f7668cbb124e158bb358333cd06e49e83a6802", size = 605387, upload-time = "2025-12-19T10:19:56.985Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/83/d1efe7c2980d8a3afa476f4e3d42d53dd54c0ab94c27bee5d755b45c8b73/mcp-1.27.1.tar.gz", hash = "sha256:0f47e1820f8f8f941466b39749eb1d1839a04caddca2bc60e9d46e8a99914924", size = 608458, upload-time = "2026-05-08T16:50:12.601Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/fc/6dc7659c2ae5ddf280477011f4213a74f806862856b796ef08f028e664bf/mcp-1.25.0-py3-none-any.whl", hash = "sha256:b37c38144a666add0862614cc79ec276e97d72aa8ca26d622818d4e278b9721a", size = 233076, upload-time = "2025-12-19T10:19:55.416Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/73/42d9596facebdb533b7f0b86c1b0364ef350d1f8ba78b1052e8a58b48b65/mcp-1.27.1-py3-none-any.whl", hash = "sha256:1af3c4203b329430fde7a87b4fcb6392a041f5cb851fd68fc674016ab4e7c06f", size = 216260, upload-time = "2026-05-08T16:50:10.547Z" },
 ]
 
 [[package]]

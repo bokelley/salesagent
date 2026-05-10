@@ -11,6 +11,7 @@ from src.core.database.database_session import get_db_session
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 def set_tenant_approval_mode(tenant_id: str, mode: str) -> None:
@@ -102,6 +103,7 @@ def _future(days: int = 1) -> datetime:
 def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest."""
     defaults: dict[str, Any] = {
+        **required_request_kwargs(),
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),

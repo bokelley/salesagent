@@ -23,6 +23,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest, UpdateMediaBuySuccess
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 MODULE = "src.core.tools.media_buy_update"
 
@@ -40,6 +41,7 @@ def _make_uow(media_buy):
     mock_uow = MagicMock()
     mock_uow.session = MagicMock()
     mock_uow.media_buys = MagicMock()
+    mock_uow.media_buys.find_by_idempotency_key.return_value = None
     mock_uow.media_buys.get_by_id.return_value = media_buy
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
@@ -96,10 +98,10 @@ class TestIdempotencyReplaySuccess:
         ):
             m_repo.return_value.find_by_idempotency_key.return_value = existing_step
 
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), 
                 media_buy_id="mb_1",
                 end_time="2026-06-01T00:00:00Z",
-                idempotency_key="key-abc-123",
+                
             )
             result = _update_media_buy_impl(req=req, identity=_make_identity())
 
@@ -130,7 +132,7 @@ class TestIdempotencyReplayError:
         ):
             m_repo.return_value.find_by_idempotency_key.return_value = existing_step
 
-            req = UpdateMediaBuyRequest(media_buy_id="mb_1", idempotency_key="key-abc-123")
+            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), media_buy_id="mb_1", )
             result = _update_media_buy_impl(req=req, identity=_make_identity())
 
         assert isinstance(result, UpdateMediaBuyError)
@@ -146,7 +148,7 @@ class TestIdempotencyReplaySkippedConditions:
             patch(f"{MODULE}.MediaBuyUoW", return_value=uow),
             patch("src.core.database.repositories.workflow.WorkflowRepository") as m_repo,
         ):
-            req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
             _update_media_buy_impl(req=req, identity=_make_identity())
 
         # Without a key the lookup never runs — no DB load on every call.
@@ -159,10 +161,10 @@ class TestIdempotencyReplaySkippedConditions:
             patch(f"{MODULE}.MediaBuyUoW", return_value=uow),
             patch("src.core.database.repositories.workflow.WorkflowRepository") as m_repo,
         ):
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), 
                 media_buy_id="mb_1",
                 end_time="2026-06-01T00:00:00Z",
-                idempotency_key="key-abc-123",
+                
             )
             _update_media_buy_impl(req=req, identity=_make_identity(dry_run=True))
 
@@ -181,7 +183,7 @@ class TestIdempotencyReplaySkippedConditions:
         ):
             m_repo.return_value.find_by_idempotency_key.return_value = in_flight_step
 
-            req = UpdateMediaBuyRequest(media_buy_id="mb_1", idempotency_key="key-abc-123")
+            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), media_buy_id="mb_1", )
             _update_media_buy_impl(req=req, identity=_make_identity())
 
         # Replay was NOT taken (no early return); impl proceeded and
@@ -189,8 +191,14 @@ class TestIdempotencyReplaySkippedConditions:
         patches["ctx_manager"].create_workflow_step.assert_called()
 
 
+@pytest.mark.no_default_workflow_repo
 class TestRepositoryQuery:
-    """`WorkflowRepository.find_by_idempotency_key` query construction."""
+    """`WorkflowRepository.find_by_idempotency_key` query construction.
+
+    Marked ``no_default_workflow_repo`` to opt out of the autouse fixture
+    in ``tests/unit/conftest.py`` that replaces the class with a MagicMock —
+    these tests inspect the real class.
+    """
 
     def test_method_signature(self):
         import inspect

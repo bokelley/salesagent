@@ -399,29 +399,15 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     Local overrides:
     - creatives: list[CreativeAsset] re-typed against the local CreativeAsset
       subclass so the format_id upgrade validator runs on the wire.
-    - push_notification_config: kept as dict[str, Any] | None because the library's
-      PushNotificationConfig requires 'authentication' and 'url' fields that aren't
-      enforced in our current implementation.
+    - push_notification_config inherited from library; buyers send the typed
+      PushNotificationConfig shape (authentication + url required per spec).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-
-    # adcp v4.4.0 made idempotency_key required. Salesagent allows it
-    # optional — buyers that don't send one fall through to per-creative
-    # natural-key dedup at the impl layer.
-    idempotency_key: str | None = None  # type: ignore[assignment]
-
     creatives: list[CreativeAsset] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
-    push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]
-        None,
-        description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
-    )
 
 
 class SyncSummary(SalesAgentBaseModel):
@@ -443,14 +429,18 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     expires_at, preview_url.
 
     Local overrides:
-    - status, review_feedback: Internal fields excluded from responses
+    - internal_status, review_feedback: Internal fields excluded from responses.
+      ``internal_status`` is named distinctly from the library's ``status`` field
+      (which is the spec's review-lifecycle CreativeStatus) to avoid shadowing.
     - changes, errors, warnings: Override to default=[] (library defaults to None)
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Internal-only fields — excluded from API responses.
-    status: str | None = Field(  # type: ignore[assignment]
+    # Internal-only fields — excluded from API responses. Named distinctly
+    # from the library ``status: CreativeStatus | None`` field (spec
+    # review-lifecycle indicator) to avoid spec collision.
+    internal_status: str | None = Field(
         None, exclude=True, description="Current approval status of the creative (INTERNAL - excluded from responses)"
     )
     review_feedback: str | None = Field(

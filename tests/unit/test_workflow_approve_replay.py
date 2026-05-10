@@ -41,7 +41,7 @@ def _make_db_with_context(principal_id):
 
 class TestReplayUpdateMediaBuySuccess:
     def test_success_calls_impl_with_reconstructed_identity(self):
-        step = _make_step({"media_buy_id": "mb_1", "end_time": "2026-06-01T00:00:00Z"})
+        step = _make_step({"account": {"account_id": "test-acct"}, "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx", "media_buy_id": "mb_1", "end_time": "2026-06-01T00:00:00Z"})
         db = _make_db_with_context(principal_id="p_1")
         success_response = UpdateMediaBuySuccess(media_buy_id="mb_1", affected_packages=[])
 
@@ -67,7 +67,7 @@ class TestReplayUpdateMediaBuySuccess:
 
 class TestReplayUpdateMediaBuyFailure:
     def test_impl_returns_error_surfaces_message(self):
-        step = _make_step({"media_buy_id": "mb_1"})
+        step = _make_step({"account": {"account_id": "test-acct"}, "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx", "media_buy_id": "mb_1"})
         db = _make_db_with_context(principal_id="p_1")
         error_response = UpdateMediaBuyError(errors=[Error(code="adapter_error", message="GAM rejected dates")])
 
@@ -84,7 +84,7 @@ class TestReplayUpdateMediaBuyFailure:
         assert err_msg == "GAM rejected dates"
 
     def test_impl_raises_surfaces_message(self):
-        step = _make_step({"media_buy_id": "mb_1"})
+        step = _make_step({"account": {"account_id": "test-acct"}, "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx", "media_buy_id": "mb_1"})
         db = _make_db_with_context(principal_id="p_1")
 
         with (
@@ -100,7 +100,7 @@ class TestReplayUpdateMediaBuyFailure:
         assert "connection lost" in err_msg
 
     def test_missing_principal_returns_error_without_calling_impl(self):
-        step = _make_step({"media_buy_id": "mb_1"})
+        step = _make_step({"account": {"account_id": "test-acct"}, "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx", "media_buy_id": "mb_1"})
         db = _make_db_with_context(principal_id=None)
 
         with patch("src.core.tools.media_buy_update._update_media_buy_impl") as mock_impl:
@@ -111,7 +111,7 @@ class TestReplayUpdateMediaBuyFailure:
         mock_impl.assert_not_called()
 
     def test_missing_tenant_returns_error_without_calling_impl(self):
-        step = _make_step({"media_buy_id": "mb_1"})
+        step = _make_step({"account": {"account_id": "test-acct"}, "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx", "media_buy_id": "mb_1"})
         db = _make_db_with_context(principal_id="p_1")
 
         with (
@@ -128,7 +128,7 @@ class TestReplayUpdateMediaBuyFailure:
         # `start_time` cannot be cast to an aware datetime — the schema
         # rejects on validate. Replay surfaces the validation error
         # instead of letting it crash the approve handler.
-        step = _make_step({"media_buy_id": "mb_1", "start_time": "not-a-date"})
+        step = _make_step({"account": {"account_id": "test-acct"}, "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx", "media_buy_id": "mb_1", "start_time": "not-a-date"})
         db = _make_db_with_context(principal_id="p_1")
 
         with (

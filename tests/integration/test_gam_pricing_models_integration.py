@@ -33,6 +33,7 @@ from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -379,7 +380,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
     """Test CPM guaranteed creates STANDARD line item with priority 8."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -426,7 +427,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
     """Test CPC creates PRICE_PRIORITY line item with CLICKS goal unit."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -474,7 +475,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
     """Test VCPM creates STANDARD line item with VIEWABLE_IMPRESSIONS goal."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -523,7 +524,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     # 10 day campaign: $5000 total = $500/day
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -571,7 +572,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
     """Test creating media buy with multiple packages using different pricing models."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -646,7 +647,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         session.add(pricing_auction)
         session.commit()
 
-    request = CreateMediaBuyRequest(
+    request = CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(

@@ -53,6 +53,7 @@ from src.core.schemas import (
     PricingOption,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # ---------------------------------------------------------------------------
 # Shared helpers for building mocks/fixtures
@@ -72,6 +73,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     Start 1 day ahead, end 8 days ahead.
     """
     defaults = {
+        **required_request_kwargs(),
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
@@ -215,6 +217,10 @@ class _PatchContext:
         mock_uow.session = self.db_session
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []  # no duplicate buyer_refs
+        # Default idempotency lookup misses — tests exercising the replay path
+        # override per-test. Bare MagicMock returns a truthy default and every
+        # request would otherwise look like an idempotency hit.
+        mock_media_buys.find_by_idempotency_key.return_value = None
         mock_uow.media_buys = mock_media_buys
 
         self._p_uow = patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow)
@@ -1999,7 +2005,7 @@ class TestProposalBasedObligations:
         fields for when the feature is built.
         """
         # proposal_id and total_budget coexist on the schema
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "test.com"},
             start_time=_future(1),
             end_time=_future(8),

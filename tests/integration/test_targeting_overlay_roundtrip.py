@@ -32,6 +32,7 @@ from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
 from tests.integration.media_buy_helpers import _get_tenant_dict, make_lifecycle_identity
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
 
@@ -53,7 +54,7 @@ class TestTargetingOverlayRoundtrip:
         collection_agent_url = "https://governance.pinnacle-agency.example/"
         collection_list_id = "acme_outdoor_collections_v1"
 
-        create_req = CreateMediaBuyRequest(
+        create_req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             start_time=_future(1),
             end_time=_future(8),

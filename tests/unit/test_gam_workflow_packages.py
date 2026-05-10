@@ -12,6 +12,7 @@ import pytest
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 @pytest.fixture
@@ -41,7 +42,7 @@ def sample_request():
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-    return CreateMediaBuyRequest(
+    return CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[
             PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing"),

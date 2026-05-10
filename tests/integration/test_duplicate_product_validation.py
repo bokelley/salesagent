@@ -20,6 +20,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_package_request
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 @pytest.mark.requires_db
@@ -78,7 +79,7 @@ class TestDuplicateProductValidation:
             end_time = start_time + timedelta(days=7)
 
             # Should return error response about duplicate products
-            req = CreateMediaBuyRequest(
+            req = CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -157,7 +158,7 @@ class TestDuplicateProductValidation:
             end_time = start_time + timedelta(days=7)
 
             # Should return error response listing both duplicate products
-            req = CreateMediaBuyRequest(
+            req = CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -226,7 +227,7 @@ class TestDuplicateProductValidation:
 
             # Should fail on currency validation (since we didn't set that up)
             # but NOT on duplicate product validation
-            req = CreateMediaBuyRequest(
+            req = CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,

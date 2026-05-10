@@ -48,6 +48,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -63,6 +64,7 @@ def _future(days: int = 7) -> str:
 def _make_request(**overrides) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest."""
     defaults = {
+        **required_request_kwargs(),
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
@@ -166,7 +168,7 @@ class TestCreateMediaBuySchemaCompliance:
         Covers: UC-002-MAIN-02
         """
         with pytest.raises(ValidationError):
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 start_time=_future(1),
                 end_time=_future(8),
                 packages=[{"product_id": "p1", "budget": 1000.0}],
@@ -180,7 +182,7 @@ class TestCreateMediaBuySchemaCompliance:
         Covers: UC-002-MAIN-02
         """
         with pytest.raises(ValidationError, match="buyer_ref"):
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 buyer_ref="test",
                 brand={"domain": "test.com"},
                 start_time=_future(1),
@@ -207,7 +209,7 @@ class TestCreateMediaBuySchemaCompliance:
         Covers: UC-002-EXT-C-06
         """
         with pytest.raises(ValidationError):
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand={"domain": "test.com"},
                 start_time="2026-03-01T00:00:00",  # no tz
                 end_time=_future(8),
@@ -396,6 +398,7 @@ class TestCreateMediaBuyValidation:
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []
         mock_uow.media_buys = mock_media_buys
+        mock_media_buys.find_by_idempotency_key.return_value = None
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -471,6 +474,7 @@ class TestCreateMediaBuyValidation:
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []
         mock_uow.media_buys = mock_media_buys
+        mock_media_buys.find_by_idempotency_key.return_value = None
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -612,7 +616,7 @@ class TestCreateMediaBuyValidation:
         Covers: UC-002-EXT-C-04
         """
         with pytest.raises(ValidationError):
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand={"domain": "test.com"},
                 # start_time omitted
                 end_time=_future(8),
@@ -630,7 +634,7 @@ class TestCreateMediaBuyValidation:
         Covers: UC-002-EXT-C-02
         """
         # In adcp 3.12, end < start is accepted at schema level; _impl validates this
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "test.com"},
             start_time=_future(10),
             end_time=_future(3),  # end before start
@@ -1308,6 +1312,7 @@ class TestCreateMediaBuyIdempotency:
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
         mock_uow.media_buys = MagicMock()
+        mock_uow.media_buys.find_by_idempotency_key.return_value = None
         mock_uow.media_buys.get_by_principal.return_value = []
 
         with (
@@ -1597,7 +1602,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-MAIN-01
         """
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", packages=[])
         assert req.media_buy_id == "mb_1"
 
     def test_update_request_parses_iso_datetime_strings(self):
@@ -1607,12 +1612,12 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-ALT-UPDATE-TIMING-01
         """
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             start_time="2026-03-01T00:00:00+00:00",
             end_time="2026-03-31T00:00:00+00:00",
         )
-        assert isinstance(req.start_time, datetime)
+        assert isinstance(req.start_time.root, datetime)
         assert isinstance(req.end_time, datetime)
 
     def test_update_request_accepts_asap_start_time(self):
@@ -1622,8 +1627,8 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/start-timing.json
         Covers: UC-003-ALT-UPDATE-TIMING-02
         """
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="asap")
-        assert req.start_time == "asap"
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", start_time="asap")
+        assert req.start_time.root == "asap"
 
     def test_update_buyer_campaign_ref_roundtrip(self):
         """UC-003-S04: buyer_campaign_ref preserved in update response.
@@ -1662,7 +1667,7 @@ class TestUpdateMediaBuySchemaCompliance:
         Source: UC-003, salesagent-7gnv
         Covers: UC-003-MAIN-12
         """
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             ext={"custom_key": "custom_value"},
         )
@@ -1742,7 +1747,7 @@ class TestUpdateMediaBuyMainFlow:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_resolved",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -1768,6 +1773,7 @@ class TestUpdateMediaBuyMainFlow:
         mock_session = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        mock_uow.media_buys.find_by_idempotency_key.return_value = None
         mock_currency_limits = MagicMock()
         mock_currency_limits.get_for_currency.return_value = cl
         mock_uow.currency_limits = mock_currency_limits
@@ -1845,7 +1851,7 @@ class TestUpdateMediaBuyMainFlow:
         """
         from src.core.schemas import UpdateMediaBuyRequest
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_empty")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_empty")
         assert not req.has_updatable_fields()
 
 
@@ -1864,7 +1870,7 @@ class TestUpdateMediaBuyPauseResume:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess(
@@ -1897,6 +1903,7 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1921,7 +1928,7 @@ class TestUpdateMediaBuyPauseResume:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=False)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", paused=False)
         identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess(
@@ -1954,6 +1961,7 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1977,7 +1985,7 @@ class TestUpdateMediaBuyPauseResume:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         # Pause request with no budget or date changes should not trigger currency validation
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess(
@@ -2010,6 +2018,7 @@ class TestUpdateMediaBuyPauseResume:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2035,7 +2044,7 @@ class TestUpdateMediaBuyTiming:
         Covers: UC-003-ALT-UPDATE-TIMING-01
         """
         # Schema accepts valid range
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             start_time="2026-03-01T00:00:00+00:00",
             end_time="2026-03-31T00:00:00+00:00",
@@ -2054,7 +2063,7 @@ class TestUpdateMediaBuyTiming:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             start_time="2026-04-15T00:00:00+00:00",
             end_time="2026-04-01T00:00:00+00:00",  # end before start
@@ -2096,6 +2105,7 @@ class TestUpdateMediaBuyTiming:
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_currency_limits = MagicMock()
             mock_currency_limits.get_for_currency.return_value = cl
             mock_uow.currency_limits = mock_currency_limits
@@ -2124,7 +2134,7 @@ class TestUpdateMediaBuyTiming:
 
         # Shorten flight from 30 days to 2 days, same budget = higher daily spend
         # $5000 / 2 days = $2500/day > max_daily of $500
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             end_time="2026-03-03T00:00:00+00:00",  # much shorter than original
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=5000.0)],
@@ -2167,6 +2177,7 @@ class TestUpdateMediaBuyTiming:
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_currency_limits = MagicMock()
             mock_currency_limits.get_for_currency.return_value = cl
             mock_uow.currency_limits = mock_currency_limits
@@ -2202,7 +2213,7 @@ class TestUpdateMediaBuyCampaignBudget:
 
         # Positive budget at campaign level — carried via ext.salesagent.budget
         # since AdCP spec has no top-level UpdateMediaBuyRequest.budget.
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD").model_dump()}},
         )
@@ -2210,7 +2221,7 @@ class TestUpdateMediaBuyCampaignBudget:
         assert req.budget.total == 5000.0
 
         # Positive budget at package level is accepted
-        req2 = UpdateMediaBuyRequest(
+        req2 = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -2230,7 +2241,7 @@ class TestUpdateMediaBuyCampaignBudget:
         Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-99
         """
         with pytest.raises(ValidationError) as exc_info:
-            UpdateMediaBuyRequest(media_buy_id="mb_1", budget=15000)
+            UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", budget=15000)
         msg = str(exc_info.value)
         assert "ext.salesagent.budget" in msg, f"Migration message missing the new path: {msg}"
         assert "4241" in msg, f"Migration message missing the RFC reference: {msg}"
@@ -2281,7 +2292,7 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_new1", "c_new2"])],
         )
@@ -2343,6 +2354,7 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2382,7 +2394,7 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_nonexistent"])],
         )
@@ -2418,6 +2430,7 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2448,7 +2461,7 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_err"])],
         )
@@ -2500,6 +2513,7 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2531,7 +2545,7 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_wrong_fmt"])],
         )
@@ -2583,6 +2597,7 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2616,7 +2631,7 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         # Replace [c1, c2, c3] with [c2, c4]
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c2", "c4"])],
         )
@@ -2682,6 +2697,7 @@ class TestUpdateMediaBuyCreativeIds:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2727,7 +2743,7 @@ class TestUpdateMediaBuyIdentification:
         """
         # media_buy_id is now the sole identifier; omitting it is rejected
         with pytest.raises(ValidationError, match="media_buy_id"):
-            UpdateMediaBuyRequest(
+            UpdateMediaBuyRequest(**required_request_kwargs(), 
                 packages=[],
             )
 
@@ -2743,7 +2759,7 @@ class TestUpdateMediaBuyIdentification:
         """
         # Per AdCP spec, providing neither media_buy_id nor buyer_ref is invalid (oneOf)
         with pytest.raises(ValidationError):
-            UpdateMediaBuyRequest(
+            UpdateMediaBuyRequest(**required_request_kwargs(), 
                 packages=[],
             )
 
@@ -2759,7 +2775,7 @@ class TestUpdateMediaBuyIdentification:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[])
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_nonexistent", packages=[])
         identity = _make_identity()
 
         with (
@@ -2775,6 +2791,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = None
             mock_uow.media_buys.get_by_id.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -2798,7 +2815,7 @@ class TestUpdateMediaBuyIdentification:
         """
         # buyer_ref is no longer a valid identifier for update requests
         with pytest.raises(ValidationError, match="media_buy_id"):
-            UpdateMediaBuyRequest(packages=[])
+            UpdateMediaBuyRequest(**required_request_kwargs(), packages=[])
 
 
 class TestUpdateMediaBuyOwnership:
@@ -2815,7 +2832,7 @@ class TestUpdateMediaBuyOwnership:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", packages=[])
         identity = _make_identity(principal_id="different_principal")
 
         with (
@@ -2839,6 +2856,7 @@ class TestUpdateMediaBuyOwnership:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2863,7 +2881,7 @@ class TestUpdateMediaBuyManualApproval:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -2894,6 +2912,7 @@ class TestUpdateMediaBuyManualApproval:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2921,7 +2940,7 @@ class TestUpdateMediaBuyManualApproval:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -2951,6 +2970,7 @@ class TestUpdateMediaBuyManualApproval:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2979,7 +2999,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
@@ -3011,6 +3031,7 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -3035,7 +3056,7 @@ class TestUpdateMediaBuyAdapterFailure:
         from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -3082,6 +3103,7 @@ class TestUpdateMediaBuyAdapterFailure:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_currency_limits = MagicMock()
             mock_currency_limits.get_for_currency.return_value = cl
             mock_uow.currency_limits = mock_currency_limits

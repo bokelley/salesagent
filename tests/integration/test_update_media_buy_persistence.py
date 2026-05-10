@@ -24,6 +24,7 @@ from src.core.exceptions import AdCPMediaBuyNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
@@ -146,7 +147,7 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     identity = _make_identity(tenant_id, principal_id, token)
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
-    req = UpdateMediaBuyRequest(
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
         media_buy_id=media_buy_id,
     )
     response = _update_media_buy_impl(req=req, identity=identity)
@@ -164,7 +165,7 @@ def test_update_media_buy_requires_context():
     # Note: This will first hit Pydantic validation if buyer_ref is also provided
     # So we only provide media_buy_id to avoid the oneOf constraint
     with pytest.raises(ValueError, match="Identity is required"):
-        req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="buy_test_123")
         _update_media_buy_impl(req=req)
 
 
@@ -180,5 +181,5 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
 
     # media_buy_id that doesn't exist should raise AdCPMediaBuyNotFoundError
     with pytest.raises(AdCPMediaBuyNotFoundError, match="not found"):
-        req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="nonexistent_ref")
         _update_media_buy_impl(req=req, identity=identity)

@@ -21,6 +21,7 @@ from src.core.exceptions import AdCPAuthorizationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -163,7 +164,7 @@ class TestCrossPrincipalSecurity:
         # Principal B tries to update Principal A's media buy
         # _verify_principal should raise AdCPAuthorizationError
         with pytest.raises(AdCPAuthorizationError, match="does not own media buy"):
-            req = UpdateMediaBuyRequest(
+            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
                 media_buy_id="media_buy_a",  # Owned by Principal A!
             )
             _update_media_buy_impl(req=req, identity=identity_b)

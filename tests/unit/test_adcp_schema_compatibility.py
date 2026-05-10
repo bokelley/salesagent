@@ -79,7 +79,7 @@ class TestADCPSchemaCompatibility:
 
         assert signal.signal_agent_segment_id == "segment_123"
         assert signal.name == "Automotive Enthusiasts"
-        assert signal.signal_type == "marketplace"
+        assert signal.signal_type.value == "marketplace"
         assert signal.data_provider == "Optable"
         assert signal.coverage_percentage == 85.0
         assert len(signal.deployments) == 1

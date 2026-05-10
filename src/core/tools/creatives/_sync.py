@@ -347,7 +347,7 @@ def _sync_creatives_impl(
                                 "creative_id": create_result.creative_id,
                                 "format": creative.format_id,
                                 "name": creative.name,
-                                "status": create_result.status,
+                                "status": create_result.internal_status,
                             }
                             # AI review reason will be added asynchronously when review completes
                             # No ai_result available yet in async mode

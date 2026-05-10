@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import pytest
 
 from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestDateTimeStringParsing:
@@ -16,7 +17,7 @@ class TestDateTimeStringParsing:
 
     def test_create_media_buy_with_utc_z_format(self):
         """Test parsing ISO 8601 with Z timezone (most common format)."""
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             # Required per AdCP spec
             brand={"domain": "nike.com"},
             po_number="TEST-001",
@@ -38,7 +39,7 @@ class TestDateTimeStringParsing:
 
     def test_create_media_buy_with_offset_format(self):
         """Test parsing ISO 8601 with +00:00 offset."""
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             # Required per AdCP spec
             brand={"domain": "adidas.com"},
             po_number="TEST-002",
@@ -56,7 +57,7 @@ class TestDateTimeStringParsing:
 
     def test_create_media_buy_with_pst_timezone(self):
         """Test parsing ISO 8601 with PST offset."""
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             # Required per AdCP spec
             brand={"domain": "puma.com"},
             po_number="TEST-003",
@@ -74,14 +75,14 @@ class TestDateTimeStringParsing:
 
     def test_update_media_buy_with_datetime_strings(self):
         """Test UpdateMediaBuyRequest with datetime strings."""
-        req = UpdateMediaBuyRequest(
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
             media_buy_id="mb_123",
             start_time="2025-03-01T00:00:00Z",
             end_time="2025-03-31T23:59:59Z",
         )
 
         assert req.start_time is not None
-        assert isinstance(req.start_time, datetime)
+        assert isinstance(req.start_time.root, datetime)
         assert req.start_time.tzinfo is not None
         assert req.end_time is not None
         assert req.end_time.tzinfo is not None
@@ -93,7 +94,7 @@ class TestDateTimeStringParsing:
         # This should fail validation (no timezone on end_time)
         # Library enforces timezone on end_time (datetime type)
         with pytest.raises(ValidationError, match="timezone"):
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 # Required per AdCP spec
                 brand={"domain": "converse.com"},
                 po_number="TEST-006",
@@ -108,7 +109,7 @@ class TestDateTimeStringParsing:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 # Required per AdCP spec
                 brand={"domain": "vans.com"},
                 po_number="TEST-007",
@@ -120,7 +121,7 @@ class TestDateTimeStringParsing:
 
     def test_create_media_buy_roundtrip_serialization(self):
         """Test that parsed datetimes can be serialized back to ISO 8601."""
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             # Required per AdCP spec
             brand={"domain": "asics.com"},
             po_number="TEST-008",
@@ -145,7 +146,7 @@ class TestDateTimeParsingEdgeCases:
 
     def test_datetime_with_tzinfo_access(self):
         """Test that accessing .tzinfo on datetime works correctly."""
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             # Required per AdCP spec
             brand={"domain": "brooks.com"},
             po_number="TEST-009",
@@ -166,7 +167,7 @@ class TestDateTimeParsingEdgeCases:
     def test_create_media_buy_with_datetime_objects(self):
         """Test that CreateMediaBuyRequest works with datetime objects."""
 
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             # Required per AdCP spec
             brand={"domain": "saucony.com"},
             packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],

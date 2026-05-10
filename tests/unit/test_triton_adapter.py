@@ -12,6 +12,7 @@ from src.adapters.triton import TritonAdapter, TritonAPIError, TritonClient
 from src.adapters.triton.schemas import TritonConnectionConfig, TritonProductConfig
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 from tests.helpers.adapter_test_helpers import invoke_create_media_buy
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def sample_request():
     from tests.helpers.adcp_factories import create_test_package_request
 
     start = datetime.now(UTC)
-    return CreateMediaBuyRequest(
+    return CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "audio.example.com"},
         packages=[create_test_package_request(product_id="prod_1")],
         start_time=start,

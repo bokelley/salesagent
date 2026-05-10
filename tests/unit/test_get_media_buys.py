@@ -237,6 +237,7 @@ class TestGetMediaBuysImplPersistedStatusPrecedence:
             mock_repo.get_by_principal.return_value = [buy]
             mock_uow = MagicMock()
             mock_uow.media_buys = mock_repo
+            mock_uow.media_buys.find_by_idempotency_key.return_value = None
             mock_uow.session = MagicMock()
             mock_uow_cls.return_value.__enter__.return_value = mock_uow
             # No GAM projection
@@ -304,6 +305,7 @@ class TestFetchTargetMediaBuys:
         mock_repo.get_by_principal.return_value = buys
         mock_uow = MagicMock()
         mock_uow.media_buys = mock_repo
+        mock_uow.media_buys.find_by_idempotency_key.return_value = None
         return _fetch_target_media_buys(req, "principal_1", mock_uow, self.TODAY)
 
     def test_media_buy_ids_with_status_filter_excludes_non_matching(self):

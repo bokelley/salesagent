@@ -26,6 +26,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from tests.helpers.adcp_factories import create_test_package_request
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -87,7 +88,7 @@ class TestMCPContractValidation:
 
     def test_create_media_buy_minimal(self):
         """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""
-        request = CreateMediaBuyRequest(
+        request = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -108,7 +109,7 @@ class TestMCPContractValidation:
         Per AdCP spec, packages use product_id (singular, required) field.
         """
         # Test: Multiple packages with product IDs
-        request = CreateMediaBuyRequest(
+        request = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             po_number="PO-12345",
             packages=[
@@ -158,13 +159,13 @@ class TestMCPContractValidation:
     def test_update_media_buy_minimal(self):
         """Test update_media_buy requires media_buy_id (adcp 3.12)."""
         # media_buy_id is required in adcp 3.12
-        request = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
+        request = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="test_buy_123")
         assert request.media_buy_id == "test_buy_123"
         assert request.paused is None
 
         # Missing media_buy_id → validation error
         with pytest.raises(ValidationError):
-            UpdateMediaBuyRequest(paused=False)
+            UpdateMediaBuyRequest(**required_request_kwargs(), paused=False)
 
     def test_get_media_buy_delivery_minimal(self):
         """Test get_media_buy_delivery with no filters."""
@@ -229,7 +230,7 @@ class TestSchemaDefaultValues:
         assert req.brief is None  # Optional, defaults to None per spec
 
         # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(

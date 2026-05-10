@@ -1430,17 +1430,6 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 3.9 makes account required. Our impl resolves identity at the transport
-    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-
-    # Library v4.4.0 made idempotency_key required. Salesagent allows it
-    # optional — buyers that don't pass one fall through to the legacy
-    # MediaBuy.create_idempotency_key behavior. Override the field as
-    # optional with None default. Buyers who DO pass one still get
-    # PgBackend dedup via @IdempotencyStore.wrap on the platform method.
-    idempotency_key: str | None = None  # type: ignore[assignment]
-
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
@@ -1454,8 +1443,9 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP spec.
         """
-        if self.start_time and self.start_time != "asap":
-            if isinstance(self.start_time, datetime) and self.start_time.tzinfo is None:
+        if self.start_time:
+            inner = self.start_time.root if hasattr(self.start_time, "root") else self.start_time
+            if isinstance(inner, datetime) and inner.tzinfo is None:
                 raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
@@ -1592,8 +1582,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Override datetime fields to accept raw strings (A2A path sends ISO strings)
-    start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
     packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
@@ -1602,13 +1590,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # omission must mean "not a cancellation request", not "default to
     # canceled". (#155)
     canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
-    # Library v4.4.0 made account + idempotency_key required. Salesagent
-    # resolves identity at the transport boundary (ResolvedIdentity), not from
-    # the request payload, so account stays optional. idempotency_key is
-    # optional for backward-compat with buyers that don't send one (the
-    # underlying impl is idempotent at the DB layer regardless).
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -1664,8 +1645,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
-            raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
+        if self.start_time:
+            inner = self.start_time.root if hasattr(self.start_time, "root") else self.start_time
+            if isinstance(inner, datetime) and inner.tzinfo is None:
+                raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
         return self
@@ -1952,8 +1935,8 @@ class Signal(LibrarySignal):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override types that differ from library
-    signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
+    # signal_type inherited from library as SignalCatalogType enum (members:
+    # marketplace, custom, owned). Use `.value` for string comparisons.
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
 
     # Internal fields — excluded from serialization.

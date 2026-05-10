@@ -25,6 +25,7 @@ from fastmcp.exceptions import ToolError
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestAuthenticationRequirements:
@@ -106,7 +107,7 @@ class TestAuthenticationRequirements:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Construct spec-compliant request at the test boundary (matches refactored _impl signature)
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[{"product_id": "prod1", "budget": 1000.0, "pricing_option_id": "test_pricing"}],
             start_time="2025-01-01T00:00:00Z",

@@ -116,6 +116,7 @@ class TestDeferredResponseConstructedByImpl:
         mock_uow = MagicMock()
         mock_uow.session = MagicMock()
         mock_uow.media_buys = MagicMock()
+        mock_uow.media_buys.find_by_idempotency_key.return_value = None
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
         mock_uow.media_buys.get_by_id.return_value = MagicMock(

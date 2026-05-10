@@ -71,6 +71,7 @@ class TestDeliveryLoopErrorHandling:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
         mock_uow.media_buys = mock_repo
+        mock_uow.media_buys.find_by_idempotency_key.return_value = None
 
         with (
             patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=MagicMock()),

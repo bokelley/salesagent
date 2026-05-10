@@ -24,6 +24,7 @@ from src.core.schemas import (
     PackageRequest,
     Targeting,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # Minimal valid data for constructing test models
 # adcp 3.6.0: brand replaced brand_manifest
@@ -42,7 +43,7 @@ class TestBuyerModelRejectsExtraInDev:
 
     def test_create_media_buy_request_rejects_extra(self):
         with pytest.raises(ValidationError, match="bogus"):
-            CreateMediaBuyRequest(**_VALID_CMR_DATA, bogus="injected")
+            CreateMediaBuyRequest(**required_request_kwargs(), **_VALID_CMR_DATA, bogus="injected")
 
     def test_package_request_rejects_extra(self):
         with pytest.raises(ValidationError, match="bogus"):
@@ -82,7 +83,7 @@ class TestNestedModelRejectsExtraInDev:
         """Bogus field on PackageRequest within CMR.packages is rejected."""
         data = {**_VALID_CMR_DATA, "packages": [{**_VALID_PACKAGE_DATA, "bogus_pkg_field": "injected"}]}
         with pytest.raises(ValidationError, match="bogus_pkg_field"):
-            CreateMediaBuyRequest(**data)
+            CreateMediaBuyRequest(**required_request_kwargs(), **data)
 
     def test_nested_targeting_rejects_extra(self):
         """Bogus field on targeting_overlay within a package is rejected."""
@@ -96,14 +97,14 @@ class TestNestedModelRejectsExtraInDev:
             ],
         }
         with pytest.raises(ValidationError, match="bogus_targeting"):
-            CreateMediaBuyRequest(**data)
+            CreateMediaBuyRequest(**required_request_kwargs(), **data)
 
 
 class TestExtFieldAccepted:
     """The AdCP ext field is the sanctioned extension mechanism and must be accepted."""
 
     def test_ext_field_accepted_on_cmr(self):
-        cmr = CreateMediaBuyRequest(
+        cmr = CreateMediaBuyRequest(**required_request_kwargs(), 
             **_VALID_CMR_DATA,
             ext={"vendor": {"custom": "value"}},
         )

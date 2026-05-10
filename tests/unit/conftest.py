@@ -37,6 +37,34 @@ def mock_all_external_dependencies():
             yield
 
 
+@pytest.fixture(autouse=True)
+def _default_workflow_repo_misses_idempotency_key(request):
+    """Default WorkflowRepository.find_by_idempotency_key to return None.
+
+    The idempotency-replay branch in _update_media_buy_impl reads
+    WorkflowRepository(session, tenant_id).find_by_idempotency_key(...) and
+    branches on the result. Tests that mock the surrounding session/UoW but
+    don't explicitly patch WorkflowRepository would get a bare MagicMock —
+    truthy by default — which sends every test through the replay path and
+    fails on `UpdateMediaBuySuccess.model_validate({})`.
+
+    Tests that exercise the replay path patch WorkflowRepository themselves
+    (their patch wins because they enter inside this fixture's scope).
+
+    Skip when test marks itself ``no_default_workflow_repo`` (rare).
+    """
+    if request.node.get_closest_marker("no_default_workflow_repo"):
+        yield
+        return
+    instance = MagicMock()
+    instance.find_by_idempotency_key.return_value = None
+    cls_mock = MagicMock(return_value=instance)
+    with patch(
+        "src.core.database.repositories.workflow.WorkflowRepository", cls_mock
+    ):
+        yield
+
+
 @pytest.fixture
 def standard_mocks():
     """Context manager that patches all common dependencies for _update_media_buy_impl.
@@ -58,6 +86,10 @@ def standard_mocks():
     mock_uow = MagicMock()
     mock_uow.session = mock_session
     mock_uow.media_buys = MagicMock()
+    # Default idempotency lookup misses — tests exercising the replay path
+    # override per-test. Without this, the bare MagicMock returns a truthy
+    # default and every request looks like an idempotency hit.
+    mock_uow.media_buys.find_by_idempotency_key.return_value = None
     mock_currency_limits_repo = MagicMock()
     mock_currency_limits_repo.get_for_currency.return_value = mock_cl
     mock_uow.currency_limits = mock_currency_limits_repo

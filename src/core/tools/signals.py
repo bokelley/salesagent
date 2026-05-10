@@ -164,15 +164,16 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             if (
                 spec_lower not in signal.name.lower()
                 and spec_lower not in signal.description.lower()
-                and spec_lower not in signal.signal_type.lower()
+                and spec_lower not in signal.signal_type.value.lower()
             ):
                 continue
 
         # Apply filters if provided
         if req.filters:
             # Filter by catalog_types (equivalent to old 'type' field)
-            # catalog_types contains SignalCatalogType enums; compare via .value
-            if req.filters.catalog_types and signal.signal_type not in [ct.value for ct in req.filters.catalog_types]:
+            # signal.signal_type is SignalCatalogType enum; req.filters.catalog_types
+            # is also list[SignalCatalogType] — compare enum-to-enum directly.
+            if req.filters.catalog_types and signal.signal_type not in req.filters.catalog_types:
                 continue
 
             # Filter by data_providers

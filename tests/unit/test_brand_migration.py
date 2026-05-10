@@ -11,6 +11,7 @@ the old brand_manifest field, and confirm the correct brand (BrandReference) usa
 
 import pytest
 from pydantic import ValidationError
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestCreateMediaBuyRequestBrandMigration:
@@ -25,7 +26,7 @@ class TestCreateMediaBuyRequestBrandMigration:
         from src.core.schemas import CreateMediaBuyRequest
 
         with pytest.raises(ValidationError) as exc_info:
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand_manifest={"name": "Test Brand"},
                 packages=[],
                 start_time="asap",
@@ -54,7 +55,7 @@ class TestCreateMediaBuyRequestBrandMigration:
 
         # Should NOT raise for the brand field (may raise for other missing fields
         # like packages, but brand itself should be accepted)
-        request = CreateMediaBuyRequest(
+        request = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[],
             start_time="asap",
@@ -68,7 +69,7 @@ class TestCreateMediaBuyRequestBrandMigration:
         from src.core.schemas import CreateMediaBuyRequest
 
         with pytest.raises(ValidationError) as exc_info:
-            CreateMediaBuyRequest(
+            CreateMediaBuyRequest(**required_request_kwargs(), 
                 packages=[],
                 start_time="asap",
                 end_time="2026-12-31T23:59:59Z",

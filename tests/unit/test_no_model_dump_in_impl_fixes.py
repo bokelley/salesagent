@@ -13,11 +13,12 @@ from unittest.mock import MagicMock
 from src.core.database.models import MediaBuy
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import CreateMediaBuyRequest
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 def _make_minimal_request() -> CreateMediaBuyRequest:
     """Build a minimal CreateMediaBuyRequest for testing."""
-    return CreateMediaBuyRequest(
+    return CreateMediaBuyRequest(**required_request_kwargs(), 
         brand={"domain": "testbrand.com"},
         packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.now(UTC) + timedelta(days=1)).isoformat(),

@@ -31,6 +31,7 @@ from tests.integration._gam_projection_helpers import (
     build_assigned_order_scenario,
     make_identity,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -107,7 +108,7 @@ class TestMaterializeProjectedBuy:
 
         # No-op update triggers materialization without rejecting.
         _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}"),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
 
@@ -140,7 +141,7 @@ class TestMaterializeProjectedBuy:
         factory_session.commit()
 
         result = _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}", paused=True),
+            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}", paused=True),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
         assert isinstance(result, UpdateMediaBuyError)
@@ -163,12 +164,12 @@ class TestMaterializeProjectedBuy:
 
         # First call materializes + audits
         _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}"),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
         # Second call hits the existing row — should not audit again
         _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}"),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
 
@@ -293,7 +294,7 @@ class TestUpdateMediaBuyRejectsMutatingImportedBuy:
         factory_session.commit()
 
         result = _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}", paused=True),
+            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}", paused=True),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
 
@@ -322,7 +323,7 @@ class TestUpdateMediaBuyMaterializesOnFirstWrite:
 
         # No-op update — just trigger materialization
         _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(media_buy_id=f"gam_{sc.order.order_id}"),
+            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}"),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
 

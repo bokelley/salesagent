@@ -24,6 +24,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
@@ -107,7 +108,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         start_time, end_time = _get_future_date_range()
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -196,7 +197,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
 
         # Create media buy - should succeed or return structured error, not crash
         try:
-            req = CreateMediaBuyRequest(
+            req = CreateMediaBuyRequest(**required_request_kwargs(), 
                 brand={"domain": "testbrand.com"},
                 packages=[
                     create_test_package_request(
@@ -283,7 +284,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         # Use only the first product (AdCP spec: package has singular product_id)
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -389,7 +390,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         start_time, end_time = _get_future_date_range()
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
-        req = CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(**required_request_kwargs(), 
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(

@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # adcp 4.4 wire-required envelope on mutation tools — buyers must supply
 # both. Match the pattern used by tests/e2e/adcp_request_builder.py so test
@@ -259,7 +260,7 @@ class TestSchemaConstructionValidation:
         from src.core.schemas import UpdateMediaBuyRequest
 
         # Test with only media_buy_id (required via oneOf constraint)
-        req = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="test_buy_123")
 
         assert req.media_buy_id == "test_buy_123"
         assert req.paused is None  # adcp 2.12.0+: replaced 'active' with 'paused'
@@ -307,7 +308,7 @@ class TestParameterToSchemaMapping:
         }
 
         # Create request with valid fields only
-        req = UpdateMediaBuyRequest(**tool_params)
+        req = UpdateMediaBuyRequest(**required_request_kwargs(), **tool_params)
 
         # Valid fields should be set
         assert req.media_buy_id == "test_buy_123"

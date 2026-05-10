@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from typing import Any
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -35,21 +34,6 @@ _GET_PRODUCTS_DEFAULTS: dict[str, str] = {
     # pre-v3 clients without buying_mode SHOULD default to 'brief'."
     "buying_mode": "brief",
 }
-
-# Tools where adcp 4.4 added required ``account`` and ``idempotency_key``
-# fields, but our impls resolve identity from the auth chain
-# (``ResolvedIdentity`` produced by ``BearerTokenAuthMiddleware``) and dedupe
-# at the DB layer regardless of caller key. Backfill placeholders at the
-# wire boundary so the SDK's typed-dispatcher validation passes; our impl
-# layer ignores the placeholders.
-_AUTH_FILLED_TOOLS: frozenset[str] = frozenset(
-    {"sync_creatives", "sync_accounts", "activate_signal", "create_media_buy"}
-)
-
-#: Sentinel ``AccountReference`` used to satisfy strict request validation
-#: when callers don't supply one. ``account_id="auth-chain"`` signals that the
-#: real identity lives on ``scope.state`` from BearerTokenAuthMiddleware.
-_AUTH_CHAIN_ACCOUNT_REF = {"account_id": "auth-chain"}
 
 
 #: Asset key names that map to a known ``asset_type`` literal. When a buyer
@@ -102,11 +86,6 @@ def _infer_asset_type(key: str, value: dict[str, Any]) -> str | None:
 def _apply_get_products_defaults(args: dict[str, Any]) -> None:
     for field, default in _GET_PRODUCTS_DEFAULTS.items():
         args.setdefault(field, default)
-
-
-def _apply_auth_filled_defaults(args: dict[str, Any]) -> None:
-    args.setdefault("account", _AUTH_CHAIN_ACCOUNT_REF)
-    args.setdefault("idempotency_key", f"idem-{uuid.uuid4()}")
 
 
 _DEFAULT_FORMAT_AGENT_URL = "https://creative.adcontextprotocol.org/"
@@ -184,8 +163,6 @@ def _patch_mcp_tools_call(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
     if name == "get_products":
         _apply_get_products_defaults(arguments)
-    elif name in _AUTH_FILLED_TOOLS:
-        _apply_auth_filled_defaults(arguments)
     if name == "sync_creatives":
         _backfill_asset_types(arguments.get("creatives"))
     return payload
@@ -199,8 +176,6 @@ def _patch_a2a_skill(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
     if skill == "get_products":
         _apply_get_products_defaults(params)
-    elif skill in _AUTH_FILLED_TOOLS:
-        _apply_auth_filled_defaults(params)
     if skill == "sync_creatives":
         _backfill_asset_types(params.get("creatives"))
     return payload
