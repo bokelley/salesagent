@@ -24,8 +24,10 @@ proposal manager. Until then this is the right shape: reuse
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server.auth import current_principal
@@ -216,6 +218,38 @@ def _translate_adcp_error(exc: AdCPError) -> AdcpError:
     )
 
 
+_DelegateFn = TypeVar("_DelegateFn", bound=Callable[..., Awaitable[Any]])
+
+
+def translate_adcp_errors(fn: _DelegateFn) -> _DelegateFn:
+    """Decorator that translates every ``AdCPError`` raised by a delegate into
+    the framework's wire-shaped :class:`AdcpError`.
+
+    Both the MCP and A2A dispatchers project the framework ``AdcpError`` onto
+    the ``adcp_error`` envelope (MCP: ``CallToolResult.structuredContent``;
+    A2A: ``Task.artifacts[0].parts[0].data``). Untranslated salesagent errors
+    bubble through both dispatchers' generic ``except Exception`` and surface
+    as opaque ``INTERNAL_ERROR``, breaking the spec-mandated typed codes
+    (``MEDIA_BUY_NOT_FOUND``, ``PACKAGE_NOT_FOUND``, ``TERMS_REJECTED``, etc.).
+
+    Wrapping the delegate — which is the single shared entry point used by
+    both ``MockSellerPlatform`` and ``GamPlatform`` — guarantees both
+    transports translate identically. Replaces ad-hoc per-delegate
+    ``try/except AdCPError`` blocks; new delegates inherit the translation
+    by adding the decorator.
+    """
+
+    @functools.wraps(fn)
+    async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await fn(*args, **kwargs)
+        except AdCPError as exc:
+            raise _translate_adcp_error(exc) from exc
+
+    return _wrapper  # type: ignore[return-value]
+
+
+@translate_adcp_errors
 async def _delegate_get_products(req: GetProductsRequest, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/products.py:_get_products_impl``.
 
@@ -234,6 +268,7 @@ async def _delegate_get_products(req: GetProductsRequest, ctx: RequestContext[An
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/media_buy_create.py:_create_media_buy_impl``.
 
@@ -249,7 +284,8 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     retries; the impl's own transactional semantics handle the
     create-once invariant.
 
-    Salesagent ``AdCPError`` exceptions are translated to the framework's
+    Salesagent ``AdCPError`` exceptions are translated by the
+    :func:`translate_adcp_errors` decorator into the framework's
     :class:`AdcpError` so structured rejections (TERMS_REJECTED, etc.)
     project to the correct wire ``code`` instead of leaking through as
     generic ``INTERNAL_ERROR``.
@@ -264,13 +300,11 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
         pnc_dict = pnc.model_dump(mode="json", exclude_none=True)
     else:
         pnc_dict = dict(pnc)
-    try:
-        response = await _create_media_buy_impl(req_model, push_notification_config=pnc_dict, identity=identity)
-    except AdCPError as exc:
-        raise _translate_adcp_error(exc) from exc
+    response = await _create_media_buy_impl(req_model, push_notification_config=pnc_dict, identity=identity)
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_update_media_buy(
     media_buy_id: str,
     patch: Any,
@@ -285,14 +319,14 @@ async def _delegate_update_media_buy(
     a single :class:`UpdateMediaBuyRequest` here for the impl, since
     the impl wants the unified wire shape.
 
-    AdCPError translation: the impl raises typed AdCPError subclasses
-    (e.g. AdCPMediaBuyNotFoundError, AdCPPackageNotFoundError) for
-    structured rejections. The framework dispatcher only projects
-    decisioning AdcpError to the wire ``adcp_error`` envelope, so we
-    translate here. Without this translation a typed not-found surfaces
-    as an opaque INTERNAL_ERROR — losing the tenant-isolation guarantee
-    that cross-tenant probing returns ``MEDIA_BUY_NOT_FOUND``, not
-    ``AUTHORIZATION_ERROR``.
+    AdCPError translation runs in :func:`translate_adcp_errors`: the impl
+    raises typed AdCPError subclasses (e.g. AdCPMediaBuyNotFoundError,
+    AdCPPackageNotFoundError) for structured rejections, the decorator
+    projects them onto the framework's ``AdcpError`` so the dispatcher
+    emits a spec-compliant ``adcp_error.code`` envelope. Without this
+    translation a typed not-found surfaces as an opaque INTERNAL_ERROR —
+    losing the tenant-isolation guarantee that cross-tenant probing
+    returns ``MEDIA_BUY_NOT_FOUND``, not ``AUTHORIZATION_ERROR``.
     """
     identity = _build_identity(ctx)
     if isinstance(patch, dict):
@@ -303,24 +337,23 @@ async def _delegate_update_media_buy(
         patch_dict = dict(patch)
     patch_dict["media_buy_id"] = media_buy_id
     req_model = _coerce_to_request_model(patch_dict, UpdateMediaBuyRequest)
-    try:
-        response = await asyncio.to_thread(_update_media_buy_impl, req_model, identity)
-    except AdCPError as exc:
-        raise AdcpError(
-            exc.error_code,
-            message=exc.message or str(exc),
-            recovery=exc.recovery,
-            details=exc.details,
-        ) from exc
+    response = await asyncio.to_thread(_update_media_buy_impl, req_model, identity)
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_sync_creatives(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/creatives/_sync.py:_sync_creatives_impl``.
 
     The impl takes individual kwargs (creatives, assignments,
     creative_ids, ...) rather than a single request model — we
     unpack the wire shape into those kwargs.
+
+    Strict-mode validation failures (AdCPNotFoundError /
+    AdCPValidationError raised by the assignment loop) are translated by
+    :func:`translate_adcp_errors` into structured wire codes — without
+    translation the framework surfaces an opaque INTERNAL_ERROR and
+    buyers can't tell missing-package from internal failure.
     """
     identity = _build_identity(ctx)
     if hasattr(req, "model_dump"):
@@ -337,29 +370,22 @@ async def _delegate_sync_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
     # the assignment loop never raises ``AdCPNotFoundError``.
     raw_mode = body.get("validation_mode")
     validation_mode_str = getattr(raw_mode, "value", raw_mode) or "strict"
-    try:
-        response = await asyncio.to_thread(
-            _sync_creatives_impl,
-            creatives=body.get("creatives") or [],
-            assignments=body.get("assignments"),
-            creative_ids=body.get("creative_ids"),
-            delete_missing=bool(body.get("delete_missing", False)),
-            dry_run=bool(body.get("dry_run", False)),
-            validation_mode=validation_mode_str,
-            push_notification_config=body.get("push_notification_config"),
-            context=body.get("context"),
-            identity=identity,
-        )
-    except AdCPError as exc:
-        # Strict-mode validation failures (AdCPNotFoundError /
-        # AdCPValidationError raised by the assignment loop) need
-        # structured wire codes — without translation the framework
-        # surfaces an opaque INTERNAL_ERROR and buyers can't tell
-        # missing-package from internal failure.
-        raise _translate_adcp_error(exc) from exc
+    response = await asyncio.to_thread(
+        _sync_creatives_impl,
+        creatives=body.get("creatives") or [],
+        assignments=body.get("assignments"),
+        creative_ids=body.get("creative_ids"),
+        delete_missing=bool(body.get("delete_missing", False)),
+        dry_run=bool(body.get("dry_run", False)),
+        validation_mode=validation_mode_str,
+        push_notification_config=body.get("push_notification_config"),
+        context=body.get("context"),
+        identity=identity,
+    )
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_get_media_buys(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/media_buy_list.py:_get_media_buys_impl``."""
     identity = _build_identity(ctx)
@@ -368,6 +394,7 @@ async def _delegate_get_media_buys(req: Any, ctx: RequestContext[Any]) -> dict[s
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_get_media_buy_delivery(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/media_buy_delivery.py:_get_media_buy_delivery_impl``."""
     identity = _build_identity(ctx)
@@ -376,6 +403,7 @@ async def _delegate_get_media_buy_delivery(req: Any, ctx: RequestContext[Any]) -
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_list_creative_formats(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/creative_formats.py:_list_creative_formats_impl``."""
     identity = _build_identity(ctx)
@@ -386,6 +414,7 @@ async def _delegate_list_creative_formats(req: Any, ctx: RequestContext[Any]) ->
     return _to_wire(response)
 
 
+@translate_adcp_errors
 async def _delegate_provide_performance_feedback(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Stub — salesagent doesn't yet have a performance-feedback impl.
 
@@ -410,6 +439,7 @@ async def _delegate_provide_performance_feedback(req: Any, ctx: RequestContext[A
     }
 
 
+@translate_adcp_errors
 async def _delegate_list_creatives(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/creatives/listing.py:_list_creatives_impl``.
 

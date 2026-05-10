@@ -27,6 +27,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.unit.helpers.delegate_request_bodies import minimal_create_media_buy_body
+
 
 @pytest.mark.asyncio
 async def test_delegate_forwards_push_notification_config_to_impl() -> None:
@@ -43,19 +45,8 @@ async def test_delegate_forwards_push_notification_config_to_impl() -> None:
             "credentials": "x" * 40,
         },
     }
-    req_body = {
-        "brand": {"domain": "testbrand.com"},
-        "packages": [
-            {
-                "product_id": "prod_1",
-                "budget": 1000.0,
-                "pricing_option_id": "po-cpm-default",
-            }
-        ],
-        "start_time": "2026-06-01T00:00:00Z",
-        "end_time": "2026-06-30T00:00:00Z",
-        "push_notification_config": pnc_dict,
-    }
+    req_body = minimal_create_media_buy_body()
+    req_body["push_notification_config"] = pnc_dict
 
     fake_ctx = object()
 
@@ -94,18 +85,7 @@ async def test_delegate_passes_none_when_request_omits_pnc() -> None:
     """
     from core.platforms._delegate import _delegate_create_media_buy
 
-    req_body = {
-        "brand": {"domain": "testbrand.com"},
-        "packages": [
-            {
-                "product_id": "prod_1",
-                "budget": 1000.0,
-                "pricing_option_id": "po-cpm-default",
-            }
-        ],
-        "start_time": "2026-06-01T00:00:00Z",
-        "end_time": "2026-06-30T00:00:00Z",
-    }
+    req_body = minimal_create_media_buy_body()
     fake_ctx = object()
 
     impl_mock = AsyncMock()
