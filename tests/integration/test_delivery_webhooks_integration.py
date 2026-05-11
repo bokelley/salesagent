@@ -217,12 +217,18 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         extracted_principal_id = metadata.get("principal_id")
         extracted_media_buy_id = metadata.get("media_buy_id")
 
-        # Extract from payload — ``payload.result`` is a typed ``AdcpAsyncResponseData``
-        # (Pydantic model) since adcp 5.0; dump to dict for the subscriptable
-        # assertions below.
+        # Extract from payload. salesagent builds the delivery-report payload via
+        # ``McpWebhookPayload.model_construct(result=delivery_response.model_dump())``
+        # so the ``result`` slot is a plain dict — see delivery_webhook_scheduler
+        # for the bypass rationale.
         task_id = payload.task_id
         status = payload.status
-        result = payload.result.model_dump() if payload.result is not None else {}
+        if hasattr(payload.result, "model_dump"):
+            result = payload.result.model_dump()
+        elif isinstance(payload.result, dict):
+            result = payload.result
+        else:
+            result = {}
 
         # Webhook should have been sent exactly once
         assert mock_send_notification.await_count == 1

@@ -126,9 +126,16 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
             args, kwargs = mock_send.await_args
             payload = kwargs.get("payload")
             assert payload is not None
-            # Extract result from the McpWebhookPayload. adcp 5.0: payload.result
-            # is typed AdcpAsyncResponseData (Pydantic model), not a dict.
-            result_dict = payload.result.model_dump() if payload.result is not None else {}
+            # Extract result from the McpWebhookPayload. salesagent builds this
+            # via ``model_construct(result=delivery_response.model_dump())`` so the
+            # ``result`` slot is a plain dict (validation is bypassed for the
+            # non-task delivery-report case — see delivery_webhook_scheduler).
+            if hasattr(payload.result, "model_dump"):
+                result_dict = payload.result.model_dump()
+            elif isinstance(payload.result, dict):
+                result_dict = payload.result
+            else:
+                result_dict = {}
             assert result_dict["media_buy_deliveries"][0]["media_buy_id"] == media_buy_id
 
 

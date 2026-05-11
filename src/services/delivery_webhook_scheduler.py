@@ -13,7 +13,7 @@ from typing import Any
 
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import NotificationType
+from adcp.types import McpWebhookPayload, NotificationType
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -372,21 +372,25 @@ class DeliveryWebhookScheduler:
                 "media_buy_id": media_buy.media_buy_id,
             }
 
-            # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
-            # and accepts any BaseModel for `result`. ``task_type`` is restricted
-            # to the closed adcp.types.TaskType enum — scheduled delivery reports
-            # don't have their own enum member (they're push, not task-driven),
-            # so we map to ``get_creative_delivery`` which is the closest
-            # semantically (the buyer-pull tool fetching the same metrics shape).
-            # Buyer-side dispatch reads ``notification_type=delivery_report`` in
-            # the metadata, so the task_type narrowing doesn't change behaviour.
-            # Tracked upstream: request a ``media_buy_delivery`` TaskType member
-            # or a non-task webhook builder for scheduled reports.
-            media_buy_delivery_payload = create_mcp_webhook_payload(
+            # adcp 5.0 typed ``create_mcp_webhook_payload`` validates ``result``
+            # against ``AdcpAsyncResponseData``'s discriminated union by
+            # ``task_type``. Scheduled delivery reports don't fit any TaskType
+            # enum member (they're push, not a tracked async task), and the
+            # union doesn't have a get_media_buy_delivery variant — the
+            # validator picks the wrong arm and the receiver loses field
+            # typing. Bypass via ``model_construct`` with a raw dict result so
+            # the wire shape is preserved verbatim. Buyer-side dispatch reads
+            # ``notification_type=delivery_report`` from the metadata, not
+            # ``task_type``, so this is observably-correct.
+            # Tracked upstream: SDK needs either a ``media_buy_delivery``
+            # enum member or a non-task webhook builder for scheduled reports.
+            media_buy_delivery_payload = McpWebhookPayload.model_construct(
                 task_id=media_buy.media_buy_id,
-                status=AdcpTaskStatus.completed,
                 task_type="get_creative_delivery",
-                result=delivery_response,
+                status=AdcpTaskStatus.completed,
+                # mode="json" so enums serialize to their string values (the
+                # wire format) instead of leaking Enum instances.
+                result=delivery_response.model_dump(mode="json"),
             )
 
             # Send webhook notification OUTSIDE the session context
