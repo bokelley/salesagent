@@ -111,7 +111,15 @@ def build_adcp_media_buy_request(
     brand: dict[str, Any] | None = None,  # AdCP 3.6.0: BrandReference with domain
     context: dict[str, Any] | None = None,
     creative_ids: list[str] | None = None,
-    pricing_option_id: str = "default",
+    # ``cpm_usd_fixed`` matches the auto-generated pricing_option_id for the
+    # CI seed products (``prod_display_premium``, ``prod_video_premium``) —
+    # built from ``f"{pricing_model}_{currency.lower()}_{fixed_str}"``. The
+    # previous default ``"default"`` did not match any seeded product, so
+    # ``create_media_buy`` returned a VALIDATION_ERROR; pre-#350 the e2e
+    # tests silently no-op'd on that error (returned early when
+    # ``media_buy_id`` was missing), masking real coverage. Once the wire
+    # promotes that error to a raise, the early-return mask is gone.
+    pricing_option_id: str = "cpm_usd_fixed",
 ) -> dict[str, Any]:
     """
     Build a valid AdCP create_media_buy request.

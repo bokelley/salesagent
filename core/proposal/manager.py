@@ -35,7 +35,7 @@ from adcp.decisioning import RequestContext
 from adcp.decisioning.proposal_manager import ProposalCapabilities, ProposalManager
 from adcp.types import GetProductsRequest, GetProductsResponse
 
-from core.platforms._delegate import _build_identity, _check_major_version, _coerce_to_request_model
+from core.platforms._delegate import _build_identity, _coerce_to_request_model, translate_adcp_errors
 from src.core.tools.products import _get_products_impl
 
 
@@ -58,6 +58,7 @@ class SalesAgentProposalManager(ProposalManager):
         refine=False,
     )
 
+    @translate_adcp_errors
     async def get_products(
         self,
         req: GetProductsRequest,
@@ -69,13 +70,17 @@ class SalesAgentProposalManager(ProposalManager):
         because the framework's ProposalManager protocol declares the
         typed return; the inner adcp serializer handles model_dump.
 
-        Version negotiation runs here because the ``translate_adcp_errors``
-        decorator on the platform delegates is bypassed when get_products
-        flows through the proposal manager path. The check raises a
-        framework :class:`AdcpError` directly, so the dispatcher emits
-        ``VERSION_UNSUPPORTED`` without any further translation.
+        ``@translate_adcp_errors`` is mandatory here even though every
+        delegate it wraps lives in ``_delegate.py``: when a tenant has a
+        proposal manager wired (and every active tenant does per
+        :func:`core.main._build_proposal_managers`), the framework router
+        routes ``get_products`` to this method instead of
+        :func:`core.platforms._delegate._delegate_get_products`. Without
+        the decorator, salesagent ``AdCPError`` raises and pydantic
+        ``ValidationError`` raises surface as opaque ``INTERNAL_ERROR``
+        on the wire. The decorator also performs the
+        ``adcp_major_version`` negotiation check before the impl runs.
         """
-        _check_major_version(req)
         identity = _build_identity(ctx)
         req_model = _coerce_to_request_model(req, GetProductsRequest)
         return await _get_products_impl(req_model, identity)

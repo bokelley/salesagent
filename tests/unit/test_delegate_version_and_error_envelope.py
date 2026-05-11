@@ -84,7 +84,10 @@ class TestCheckMajorVersion:
 class TestMaybeRaiseLegacyErrors:
     """``_maybe_raise_legacy_errors`` promotes the legacy ``errors=[...]``
     wrapper to a framework :class:`AdcpError` raise so the dispatcher emits
-    the spec ``adcp_error`` envelope.
+    the spec ``adcp_error`` envelope — but only when the wire carries
+    ``status="failed"``, so partial-success responses (e.g.
+    ``GetMediaBuyDeliveryResponse`` returning per-buy errors alongside
+    valid deliveries) pass through unchanged.
     """
 
     def test_no_errors_field_is_passthrough(self) -> None:
@@ -95,8 +98,23 @@ class TestMaybeRaiseLegacyErrors:
         """An empty errors list — treat as no error."""
         _maybe_raise_legacy_errors({"errors": []})
 
+    def test_partial_success_without_failed_status_is_passthrough(self) -> None:
+        """A response carrying ``errors=[...]`` alongside success-shape data
+        but no ``status="failed"`` is NOT promoted — preserves
+        ``GetMediaBuyDeliveryResponse`` partial-failure semantics.
+        """
+        _maybe_raise_legacy_errors(
+            {
+                "errors": [{"code": "invalid_date_range", "message": "bad dates"}],
+                "media_buy_deliveries": [],
+                "aggregated_totals": {"impressions": 0},
+            }
+        )
+
     def test_first_error_promoted_to_raise(self) -> None:
-        """A legacy ``errors=[{code, message}]`` wrapper raises ``AdcpError``."""
+        """A legacy ``errors=[{code, message}]`` wrapper with ``status="failed"``
+        raises ``AdcpError``.
+        """
         with pytest.raises(AdcpError) as exc:
             _maybe_raise_legacy_errors(
                 {
@@ -114,8 +132,30 @@ class TestMaybeRaiseLegacyErrors:
         enum so buyer-side ``STANDARD_ERROR_CODES`` switches match.
         """
         with pytest.raises(AdcpError) as exc:
-            _maybe_raise_legacy_errors({"errors": [{"code": "validation_error", "message": "bad input"}]})
+            _maybe_raise_legacy_errors(
+                {
+                    "errors": [{"code": "validation_error", "message": "bad input"}],
+                    "status": "failed",
+                }
+            )
         assert exc.value.code == "VALIDATION_ERROR"
+
+    def test_authentication_error_maps_to_auth_required(self) -> None:
+        """The legacy ``authentication_error`` string maps to ``AUTH_REQUIRED``
+        — the only auth code in the AdCP 3.0 enum that covers both
+        missing and rejected credentials. Locking the mapping prevents
+        a future regression to ``AUTH_TOKEN_INVALID`` (which is NOT in
+        the spec enum and would surface as "unknown code" to buyer
+        agents walking ``STANDARD_ERROR_CODES``).
+        """
+        with pytest.raises(AdcpError) as exc:
+            _maybe_raise_legacy_errors(
+                {
+                    "errors": [{"code": "authentication_error", "message": "principal not found"}],
+                    "status": "failed",
+                }
+            )
+        assert exc.value.code == "AUTH_REQUIRED"
 
     def test_field_and_details_preserved(self) -> None:
         """When the legacy entry carries ``field`` and ``details``, both
@@ -132,7 +172,8 @@ class TestMaybeRaiseLegacyErrors:
                             "field": "packages.0.budget",
                             "details": {"limit": 100},
                         }
-                    ]
+                    ],
+                    "status": "failed",
                 }
             )
         assert exc.value.field == "packages.0.budget"

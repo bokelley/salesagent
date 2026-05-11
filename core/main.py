@@ -234,12 +234,13 @@ def build_router() -> LazyPlatformRouter:
     # Side-effect import: patches PlatformHandler.get_adcp_capabilities to
     # emit the canonical v3 envelope ``status`` field. See module docstring.
     from core.platforms import _capabilities_envelope  # noqa: F401
+    from core.platforms._delegate import SUPPORTED_MAJOR_VERSIONS
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
     capabilities = DecisioningCapabilities(
         specialisms=["sales-non-guaranteed"],
         adcp=Adcp(
-            major_versions=[3],
+            major_versions=sorted(SUPPORTED_MAJOR_VERSIONS),
             idempotency=IdempotencySupported(supported=True, replay_ttl_seconds=IDEMPOTENCY_REPLAY_TTL_SECONDS),
         ),
         # Both billing modes are supported at the platform level.
