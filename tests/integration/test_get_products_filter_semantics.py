@@ -317,7 +317,7 @@ class TestPerFilterSignalSemantics:
         assert len(both_result.signals) >= len(owned_result.signals)
 
         for s in both_result.signals:
-            assert s.signal_type in (
+            assert s.signal_type.value in (
                 "marketplace",
                 "owned",
             ), f"Signal {s.name} has type {s.signal_type}, expected marketplace or owned"
