@@ -231,6 +231,9 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
+    # Side-effect import: patches PlatformHandler.get_adcp_capabilities to
+    # emit the canonical v3 envelope ``status`` field. See module docstring.
+    from core.platforms import _capabilities_envelope  # noqa: F401
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
     capabilities = DecisioningCapabilities(

@@ -165,13 +165,105 @@ def _coerce_to_request_model(req: Any, model_cls: type) -> Any:
 
 def _to_wire(response: Any) -> dict[str, Any]:
     """Project a Pydantic response model onto a wire dict the framework
-    can serialize. Returns the response unchanged if it's already a
-    dict."""
+    can serialize.
+
+    Legacy impls return a success-shaped wrapper carrying ``errors=[...]``
+    when validation fails; that path predates the AdCP 3.0.11 transport
+    binding which projects rejections onto a singular ``adcp_error``
+    envelope built by the framework dispatcher. Raise an :class:`AdcpError`
+    here so the dispatcher's :func:`build_mcp_error_result` produces the
+    spec envelope (``CallToolResult.isError=True`` + ``structuredContent.adcp_error``)
+    and bypasses success-schema validation. Returning the legacy dict
+    inline doesn't take that bypass — FastMCP would then reject the
+    response on ``status='failed'`` not matching ``MediaBuyStatus``.
+    """
     if isinstance(response, dict):
-        return response
-    if hasattr(response, "model_dump"):
-        return response.model_dump(mode="json", exclude_none=True)
-    return dict(response)  # last-ditch coerce
+        wire = response
+    elif hasattr(response, "model_dump"):
+        wire = response.model_dump(mode="json", exclude_none=True)
+    else:
+        wire = dict(response)  # last-ditch coerce
+    _maybe_raise_legacy_errors(wire)
+    return wire
+
+
+# AdCP 3.0.11 standard error codes are uppercase snake_case. Some internal
+# call sites still pass lowercase legacy strings (``"validation_error"``,
+# ``"authentication_error"``, etc.) into the ``errors=[Error(code=...)]``
+# slot — the boundary translator uppercases them so buyer-side
+# ``STANDARD_ERROR_CODES`` switches match.
+_LEGACY_CODE_REMAP: dict[str, str] = {
+    "validation_error": "VALIDATION_ERROR",
+    "authentication_error": "AUTH_TOKEN_INVALID",
+    "invalid_configuration": "CONFIGURATION_ERROR",
+    "invalid_datetime": "VALIDATION_ERROR",
+}
+
+
+def _maybe_raise_legacy_errors(wire: dict[str, Any]) -> None:
+    """Promote a legacy ``{"errors": [...]}`` success-shaped wrapper to a
+    framework :class:`AdcpError` raise so the dispatcher emits the
+    ``adcp_error`` envelope. Only the first entry is projected — the spec
+    ``adcp_error`` is a single object.
+    """
+    errors = wire.get("errors")
+    if not errors or not isinstance(errors, list):
+        return
+    first = errors[0] if isinstance(errors[0], dict) else {}
+    code_raw = first.get("code") or "INTERNAL_ERROR"
+    code = _LEGACY_CODE_REMAP.get(code_raw, code_raw) if isinstance(code_raw, str) else "INTERNAL_ERROR"
+    field = first.get("field") if isinstance(first.get("field"), str) else None
+    details = first.get("details") if isinstance(first.get("details"), dict) else None
+    raise AdcpError(
+        code,
+        message=first.get("message") or code,
+        recovery=first.get("recovery") or "correctable",
+        field=field,
+        details=details,
+    )
+
+
+# AdCP major versions this agent serves. Mirrors ``DecisioningCapabilities.adcp.major_versions``
+# declared in :func:`core.main.build_router`. The check helper below rejects
+# request payloads carrying an out-of-set value with VERSION_UNSUPPORTED per
+# spec — without this check, buyers sending a future ``adcp_major_version``
+# silently get an old-protocol response and retry forever.
+_SUPPORTED_MAJOR_VERSIONS: frozenset[int] = frozenset({3})
+
+
+def _check_major_version(req: Any) -> None:
+    """Raise ``VERSION_UNSUPPORTED`` when a buyer's ``adcp_major_version`` is
+    outside what this agent declares in capabilities. ``None``/missing is
+    allowed — the spec says the seller assumes its highest supported version
+    when the field is omitted.
+
+    Defensive: ignore non-int values (Mock objects in tests, malformed
+    payloads). The spec types ``adcp_major_version`` as ``int | None`` and
+    the SDK validates wire requests against that model before they reach
+    here, so anything else is either test scaffolding or a corner case
+    upstream — raising here would surface as a confusing version error
+    when the real failure is elsewhere.
+    """
+    if isinstance(req, dict):
+        version = req.get("adcp_major_version")
+    else:
+        version = getattr(req, "adcp_major_version", None)
+    # bool is an int subclass — reject it explicitly so True/False on a
+    # mock-shaped request isn't read as version 1/0.
+    if version is None or isinstance(version, bool) or not isinstance(version, int):
+        return
+    if version in _SUPPORTED_MAJOR_VERSIONS:
+        return
+    raise AdcpError(
+        "VERSION_UNSUPPORTED",
+        message=(
+            f"adcp_major_version={version!r} is not supported by this agent. "
+            f"Supported versions: {sorted(_SUPPORTED_MAJOR_VERSIONS)}."
+        ),
+        recovery="correctable",
+        field="adcp_major_version",
+        details={"supported_major_versions": sorted(_SUPPORTED_MAJOR_VERSIONS)},
+    )
 
 
 # Map salesagent recovery hints to the framework's wire vocabulary. Both
@@ -288,6 +380,19 @@ def translate_adcp_errors(fn: _DelegateFn) -> _DelegateFn:
 
     @functools.wraps(fn)
     async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        # AdCP version negotiation runs before the impl: reject any
+        # incoming ``adcp_major_version`` that's outside this agent's
+        # declared major_versions before the impl burns work on a
+        # request shaped for a different protocol. Different delegates
+        # have different positional signatures (most are ``(req, ctx)``,
+        # update_media_buy is ``(media_buy_id, patch, ctx)``) so probe
+        # every non-scalar arg for the field rather than hard-coding
+        # positions.
+        for candidate in args:
+            if hasattr(candidate, "adcp_major_version") or (
+                isinstance(candidate, dict) and "adcp_major_version" in candidate
+            ):
+                _check_major_version(candidate)
         try:
             return await fn(*args, **kwargs)
         except AdCPError as exc:

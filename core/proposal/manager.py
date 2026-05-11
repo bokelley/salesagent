@@ -35,7 +35,7 @@ from adcp.decisioning import RequestContext
 from adcp.decisioning.proposal_manager import ProposalCapabilities, ProposalManager
 from adcp.types import GetProductsRequest, GetProductsResponse
 
-from core.platforms._delegate import _build_identity, _coerce_to_request_model
+from core.platforms._delegate import _build_identity, _check_major_version, _coerce_to_request_model
 from src.core.tools.products import _get_products_impl
 
 
@@ -68,7 +68,14 @@ class SalesAgentProposalManager(ProposalManager):
         ``GetProductsResponse`` Pydantic model rather than a wire dict
         because the framework's ProposalManager protocol declares the
         typed return; the inner adcp serializer handles model_dump.
+
+        Version negotiation runs here because the ``translate_adcp_errors``
+        decorator on the platform delegates is bypassed when get_products
+        flows through the proposal manager path. The check raises a
+        framework :class:`AdcpError` directly, so the dispatcher emits
+        ``VERSION_UNSUPPORTED`` without any further translation.
         """
+        _check_major_version(req)
         identity = _build_identity(ctx)
         req_model = _coerce_to_request_model(req, GetProductsRequest)
         return await _get_products_impl(req_model, identity)

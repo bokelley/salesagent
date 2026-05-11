@@ -1,0 +1,139 @@
+"""Unit tests for the boundary-layer additions in ``core/platforms/_delegate``:
+
+* ``_check_major_version`` — reject unknown ``adcp_major_version`` with
+  spec-canonical ``VERSION_UNSUPPORTED`` envelope (issue #348C).
+* ``_maybe_raise_legacy_errors`` — translate the legacy success-shaped
+  ``{"errors": [...]}`` wrapper into a framework ``AdcpError`` raise so the
+  dispatcher emits the AdCP 3.0.11 ``adcp_error`` envelope (issue #349.1).
+
+Verified end-to-end via the ``error_compliance / unsupported_major_version``
+and ``schema_validation / reversed_dates`` storyboard probes — the probe
+artifacts are in ``.context/probe-verify/``. The unit tests below pin the
+helpers' contracts so future refactors don't silently regress the wire shape.
+"""
+
+from __future__ import annotations
+
+import pytest
+from adcp.decisioning import AdcpError
+
+from core.platforms._delegate import _check_major_version, _maybe_raise_legacy_errors
+
+
+class TestCheckMajorVersion:
+    """``_check_major_version`` enforces version negotiation per AdCP 3.0."""
+
+    def test_allows_none(self) -> None:
+        """Omitted version → seller assumes its highest supported version."""
+        _check_major_version({"adcp_major_version": None})  # no raise
+
+    def test_allows_missing_attribute(self) -> None:
+        """Request without the field → no version assertion → no raise."""
+
+        class NoVersion:
+            pass
+
+        _check_major_version(NoVersion())  # no raise
+
+    def test_allows_supported_version(self) -> None:
+        """Major version 3 is in the supported set → no raise."""
+        _check_major_version({"adcp_major_version": 3})  # no raise
+
+    def test_rejects_unsupported_version_on_dict(self) -> None:
+        """Buyer sending v99 on a dict payload gets VERSION_UNSUPPORTED."""
+        with pytest.raises(AdcpError) as exc:
+            _check_major_version({"adcp_major_version": 99})
+        assert exc.value.code == "VERSION_UNSUPPORTED"
+        assert exc.value.field == "adcp_major_version"
+
+    def test_rejects_unsupported_version_on_attribute(self) -> None:
+        """Buyer sending v2 on a typed request gets VERSION_UNSUPPORTED."""
+
+        class TypedReq:
+            adcp_major_version = 2
+
+        with pytest.raises(AdcpError) as exc:
+            _check_major_version(TypedReq())
+        assert exc.value.code == "VERSION_UNSUPPORTED"
+
+    def test_ignores_non_int_value(self) -> None:
+        """Mock objects / malformed values must NOT trigger VERSION_UNSUPPORTED.
+
+        The check fires before request-coercion runs, so a test that hands
+        the delegate a MagicMock for ``ctx`` would have every attribute
+        truthy — including ``adcp_major_version``. Treat non-int as
+        "field not present" rather than version 0/1/-1.
+        """
+
+        class MockShaped:
+            adcp_major_version = object()  # not int, not None
+
+        _check_major_version(MockShaped())  # no raise
+
+    def test_ignores_bool_value(self) -> None:
+        """``bool`` is an ``int`` subclass — reject True/False explicitly so
+        ``adcp_major_version: True`` doesn't read as version 1.
+        """
+
+        class BoolShaped:
+            adcp_major_version = True
+
+        _check_major_version(BoolShaped())  # no raise
+
+
+class TestMaybeRaiseLegacyErrors:
+    """``_maybe_raise_legacy_errors`` promotes the legacy ``errors=[...]``
+    wrapper to a framework :class:`AdcpError` raise so the dispatcher emits
+    the spec ``adcp_error`` envelope.
+    """
+
+    def test_no_errors_field_is_passthrough(self) -> None:
+        """A normal success response is left alone."""
+        _maybe_raise_legacy_errors({"media_buy_id": "mb_1", "status": "active"})
+
+    def test_empty_errors_array_is_passthrough(self) -> None:
+        """An empty errors list — treat as no error."""
+        _maybe_raise_legacy_errors({"errors": []})
+
+    def test_first_error_promoted_to_raise(self) -> None:
+        """A legacy ``errors=[{code, message}]`` wrapper raises ``AdcpError``."""
+        with pytest.raises(AdcpError) as exc:
+            _maybe_raise_legacy_errors(
+                {
+                    "errors": [{"code": "VALIDATION_ERROR", "message": "end before start"}],
+                    "status": "failed",
+                }
+            )
+        assert exc.value.code == "VALIDATION_ERROR"
+        # ``args[0]`` is the message string AdcpError carries as its
+        # exception text.
+        assert "end before start" in exc.value.args[0]
+
+    def test_lowercase_legacy_code_uppercased(self) -> None:
+        """Some impls emit lowercase legacy codes — normalize to the spec
+        enum so buyer-side ``STANDARD_ERROR_CODES`` switches match.
+        """
+        with pytest.raises(AdcpError) as exc:
+            _maybe_raise_legacy_errors({"errors": [{"code": "validation_error", "message": "bad input"}]})
+        assert exc.value.code == "VALIDATION_ERROR"
+
+    def test_field_and_details_preserved(self) -> None:
+        """When the legacy entry carries ``field`` and ``details``, both
+        ride along onto the raised ``AdcpError`` so the dispatcher echoes
+        them on the wire envelope.
+        """
+        with pytest.raises(AdcpError) as exc:
+            _maybe_raise_legacy_errors(
+                {
+                    "errors": [
+                        {
+                            "code": "VALIDATION_ERROR",
+                            "message": "bad",
+                            "field": "packages.0.budget",
+                            "details": {"limit": 100},
+                        }
+                    ]
+                }
+            )
+        assert exc.value.field == "packages.0.budget"
+        assert exc.value.details == {"limit": 100}
