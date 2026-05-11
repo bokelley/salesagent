@@ -126,8 +126,10 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
             args, kwargs = mock_send.await_args
             payload = kwargs.get("payload")
             assert payload is not None
-            # Extract result from the McpWebhookPayload
-            assert payload.result["media_buy_deliveries"][0]["media_buy_id"] == media_buy_id
+            # Extract result from the McpWebhookPayload. adcp 5.0: payload.result
+            # is typed AdcpAsyncResponseData (Pydantic model), not a dict.
+            result_dict = payload.result.model_dump() if payload.result is not None else {}
+            assert result_dict["media_buy_deliveries"][0]["media_buy_id"] == media_buy_id
 
 
 @pytest.mark.requires_db

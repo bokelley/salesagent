@@ -217,10 +217,12 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         extracted_principal_id = metadata.get("principal_id")
         extracted_media_buy_id = metadata.get("media_buy_id")
 
-        # Extract from payload
+        # Extract from payload — ``payload.result`` is a typed ``AdcpAsyncResponseData``
+        # (Pydantic model) since adcp 5.0; dump to dict for the subscriptable
+        # assertions below.
         task_id = payload.task_id
         status = payload.status
-        result = payload.result
+        result = payload.result.model_dump() if payload.result is not None else {}
 
         # Webhook should have been sent exactly once
         assert mock_send_notification.await_count == 1
