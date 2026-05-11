@@ -288,7 +288,7 @@ def search_advertisers(tenant_id: str):
 
 
 @buyer_routing_bp.route("/<tenant_id>/buyer-routing/api/default-advertiser", methods=["PATCH"], strict_slashes=False)
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def update_default_advertiser(tenant_id: str):
     """Set ``Tenant.default_gam_advertiser_id`` from the page's picker.
 
@@ -334,7 +334,7 @@ def update_default_advertiser(tenant_id: str):
 
 
 @buyer_routing_bp.route("/<tenant_id>/buyer-routing/api/rules", methods=["POST"], strict_slashes=False)
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def create_rule(tenant_id: str):
     """Session-authenticated routing-rule create — same body + errors as
     ``POST /api/v1/tenant-management/tenants/{id}/buyer-advertiser-mappings``.
@@ -406,7 +406,7 @@ def create_rule(tenant_id: str):
     methods=["PATCH"],
     strict_slashes=False,
 )
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def patch_rule(tenant_id: str, rule_id: str):
     """Session-authenticated routing-rule patch — same shape as the API."""
     payload = request.get_json(silent=True) or {}
@@ -480,7 +480,7 @@ def patch_rule(tenant_id: str, rule_id: str):
     methods=["DELETE"],
     strict_slashes=False,
 )
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def delete_rule(tenant_id: str, rule_id: str):
     """Session-authenticated routing-rule delete — 204 on success, 404 on
     miss. JS treats 404 as a benign race ("someone else deleted it")."""
@@ -555,7 +555,7 @@ def list_advertiser_assignments(tenant_id: str):
     methods=["PATCH"],
     strict_slashes=False,
 )
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
     """Assign or clear the buyer agent for a GAM advertiser.
 

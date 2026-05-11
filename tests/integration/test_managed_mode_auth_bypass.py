@@ -400,14 +400,16 @@ class TestEmbeddedViewBlocksMutations:
         return JSON, not HTML, on the 403. Stable error code lets
         programmatic callers branch without substring-matching messages.
 
-        ``/buyer-routing/api/rules`` is api_mode=True. Verify the JSON
-        envelope shape so a client regression to HTML-only responses
-        (or a different code) is caught here.
+        ``/publisher-partners`` POST is api_mode=True and stays
+        platform-managed in embedded mode (Scope3 owns the partner
+        roster — see ``publisher_partners._reject_if_embedded``). Verify
+        the JSON envelope shape so a client regression to HTML-only
+        responses (or a different code) is caught here.
         """
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         resp = client.post(
-            f"/tenant/{preview_tenant['tenant_id']}/buyer-routing/api/rules",
-            json={},
+            f"/tenant/{preview_tenant['tenant_id']}/publisher-partners",
+            json={"publisher_domain": "evil.example"},
             headers=_identity_headers(preview_tenant["external_org_id"]),
         )
         assert resp.status_code == 403
@@ -415,3 +417,44 @@ class TestEmbeddedViewBlocksMutations:
         assert body is not None, f"expected JSON, got: {resp.get_data(as_text=True)[:200]}"
         assert body.get("error") == "embedded_writes_not_permitted"
         assert "platform-managed" in body.get("message", "")
+
+
+class TestEmbeddedViewAllowsPublisherManagedWrites:
+    """Routes that opt in with ``allow_embedded_writes=True`` must pass the
+    decorator-level gate so publisher-managed surfaces (buyer routing, products,
+    principals, creatives, ...) stay editable from the embedded admin UI. The
+    model-layer guard (``src/core/database/embedded_tenant_guard.py``) remains
+    the authoritative protection for platform-managed columns regardless.
+
+    Closes salesagent#337 (default-advertiser save was 403 in embedded mode).
+    """
+
+    def test_managed_tenant_can_save_default_advertiser(self, client, managed_tenant, monkeypatch):
+        """PATCH /buyer-routing/api/default-advertiser is publisher-managed —
+        the sprint-5 design requires the publisher (via the embedded iframe)
+        to be able to pick a default advertiser. The endpoint sets
+        ``management_api_caller=True`` to bypass the model-layer guard on
+        ``Tenant.default_gam_advertiser_id``; the decorator must not 403
+        the request before it can run."""
+        from src.core.database.models import GamAdvertiser
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        tid = managed_tenant["tenant_id"]
+        with get_db_session() as session:
+            session.add(
+                GamAdvertiser(
+                    tenant_id=tid,
+                    advertiser_id="12345",
+                    name="Test Advertiser",
+                    status="active",
+                )
+            )
+            session.commit()
+
+        resp = client.patch(
+            f"/tenant/{tid}/buyer-routing/api/default-advertiser",
+            json={"default_gam_advertiser_id": "12345"},
+            headers=_identity_headers(managed_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json() == {"default_gam_advertiser_id": "12345"}

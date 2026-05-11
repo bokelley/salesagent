@@ -696,7 +696,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
 
 @products_bp.route("/add", methods=["GET", "POST"])
 @log_admin_action("add_product")
-@require_tenant_access(role=("admin", "member"))
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 def add_product(tenant_id):
     """Add a new product - adapter-specific form."""
     # Get tenant's adapter type and currencies
@@ -1324,7 +1324,7 @@ def add_product(tenant_id):
 
 @products_bp.route("/<product_id>/edit", methods=["GET", "POST"])
 @log_admin_action("edit_product")
-@require_tenant_access(role=("admin", "member"))
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 def edit_product(tenant_id, product_id):
     """Edit an existing product."""
     from sqlalchemy import select
@@ -2121,7 +2121,7 @@ def edit_product(tenant_id, product_id):
 
 
 @products_bp.route("/<product_id>/delete", methods=["DELETE"])
-@require_tenant_access(role=("admin", "member"))
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 def delete_product(tenant_id, product_id):
     """Delete a product."""
     try:
@@ -2202,7 +2202,7 @@ def delete_product(tenant_id, product_id):
 
 @products_bp.route("/<product_id>/inventory", methods=["POST"])
 @log_admin_action("assign_inventory_to_product")
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def assign_inventory_to_product(tenant_id, product_id):
     """Assign inventory items to a product.
 
@@ -2381,7 +2381,7 @@ def get_product_inventory(tenant_id, product_id):
 
 @products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
 @log_admin_action("unassign_inventory_from_product")
-@require_tenant_access(api_mode=True, role=("admin", "member"))
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
     """Remove an inventory assignment from a product (API endpoint)."""
     try:
