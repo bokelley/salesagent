@@ -78,6 +78,8 @@ def pending_media_buy_with_package(integration_db):
             end_time=end,
             status="pending_approval",
             raw_request={
+                "account": {"account_id": "test-acct"},
+                "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
@@ -167,6 +169,8 @@ def pending_media_buy_with_two_packages(integration_db):
             end_time=end,
             status="pending_approval",
             raw_request={
+                "account": {"account_id": "test-acct"},
+                "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),

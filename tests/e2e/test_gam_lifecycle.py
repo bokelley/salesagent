@@ -471,7 +471,11 @@ def _persist_media_buy(response, request, packages, start_time, end_time):
             start_time=start_time,
             end_time=end_time,
             status="approved",
-            raw_request={"brand": {"domain": "testbrand.com"}},
+            raw_request={
+                "account": {"account_id": "test-acct"},
+                "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
+                "brand": {"domain": "testbrand.com"},
+            },
         )
         session.add(media_buy)
         session.flush()

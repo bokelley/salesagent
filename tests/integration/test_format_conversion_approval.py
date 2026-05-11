@@ -216,6 +216,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -318,6 +320,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -419,6 +423,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -519,6 +525,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -622,6 +630,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -723,6 +733,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -823,6 +835,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -918,6 +932,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -1029,6 +1045,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -1124,6 +1142,8 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
+                    "account": {"account_id": "test-acct"},
+                    "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
