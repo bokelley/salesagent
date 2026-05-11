@@ -94,6 +94,7 @@
     "tests.unit.test_delivery_measurement_enforcement,tests.unit.test_product_schema_obligations",
     "tests.unit.test_format_id_dimension_merging,tests.unit.test_formatid_media_package",
     "tests.unit.test_gam_currency_detection,tests.unit.test_gam_orders_manager_advertisers",
+    "tests.unit.test_gam_placement_targeting,tests.unit.test_performance_index_behavioral",
     "tests.unit.test_get_products_impl_coverage,tests.unit.test_quiet_failure_propagation"
   ]
 }

@@ -275,10 +275,12 @@ class TestSchemaConstructionValidation:
         """Verify that all request schemas can be constructed without all fields."""
         from src.core import schemas
 
-        # Test schemas that should work with minimal params
+        # Test schemas that should work with minimal params. ``account`` and
+        # ``idempotency_key`` are spec-required on UpdateMediaBuyRequest (no
+        # spec mode permits omission); supplied via required_request_kwargs().
         test_cases = [
             (schemas.GetProductsRequest, {"buying_mode": "wholesale", "brand": {"domain": "testbrand.com"}}),
-            (schemas.UpdateMediaBuyRequest, {"media_buy_id": "test"}),
+            (schemas.UpdateMediaBuyRequest, {**required_request_kwargs(), "media_buy_id": "test"}),
             (schemas.GetMediaBuyDeliveryRequest, {}),
             (schemas.ListCreativesRequest, {}),
             (schemas.ListAuthorizedPropertiesRequest, {}),
