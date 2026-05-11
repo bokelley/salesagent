@@ -58,6 +58,7 @@ from adcp.server import (
     Tenant,
     auth_context_factory,
 )
+from adcp.server.spec_compat import _spec_compat_hooks_impl
 from sqlalchemy import select
 
 # Import for side-effect: registers the SQLAlchemy session listener that
@@ -65,6 +66,7 @@ from sqlalchemy import select
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
+from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.platforms.gam import GamPlatform
@@ -383,53 +385,6 @@ def _allowed_hosts() -> list[str]:
     return base
 
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-
-
-def _resolve_public_url(request) -> str:
-    """Derive the A2A agent-card public URL from inbound request headers.
-
-    Fed to the SDK as a :data:`adcp.server.PublicUrlResolver` (adcp 5.1
-    #650). Called once per GET ``/.well-known/agent-card.json`` (and the
-    0.3 alias ``/agent.json``); the returned URL populates the card's
-    ``supportedInterfaces[].url`` so SDK clients can dial the public
-    A2A endpoint instead of the container's loopback socket.
-
-    Header precedence:
-
-    * Host: ``X-Forwarded-Host`` → ``Host``
-    * Scheme: ``X-Forwarded-Proto`` → ``https`` for non-loopback hosts,
-      request scheme for loopback (so local dev keeps working over http).
-
-    Non-loopback hosts always render https when ``X-Forwarded-Proto`` is
-    absent — production sits behind TLS termination and the SDK rejects
-    http://example.com URLs with HTTP 500. Loopback hosts preserve the
-    request's scheme so local-dev curl tests aren't forced through https.
-
-    When neither host header is present, falls back to the ``PUBLIC_URL``
-    env var, then to the bound socket.
-    """
-    headers = request.headers
-    forwarded_host = headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
-    host = forwarded_host or headers.get("host", "").split(",", 1)[0].strip()
-    if not host:
-        env_url = os.environ.get("PUBLIC_URL")
-        if env_url:
-            return env_url
-        port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
-        return f"http://localhost:{port}/"
-
-    is_loopback = host.split(":", 1)[0] in _LOOPBACK_HOSTS
-    forwarded_proto = headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
-    if forwarded_proto:
-        scheme = forwarded_proto
-    elif is_loopback:
-        scheme = request.url.scheme or "http"
-    else:
-        scheme = "https"
-    return f"{scheme}://{host}/"
-
-
 def _serve_kwargs(
     *,
     include_scheduler: bool,
@@ -470,6 +425,20 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
+        # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
+        # /.well-known/agent-card.json response with the request's public
+        # host (X-Forwarded-Host / Host). adcp 5.1 added a callable
+        # ``public_url=`` resolver (#650) intended to replace this, but
+        # 5.2.0's ``serve(transport="both")`` has a bug where a callable
+        # public_url makes the inner A2A app a function without ``.router``,
+        # breaking ``_composed_lifespan`` (AttributeError on startup).
+        # Until that's fixed upstream, we fall back to the static
+        # ``public_url=PUBLIC_URL`` env var for single-host deploys and
+        # rely on this middleware to rewrite per-request from
+        # ``X-Forwarded-Host`` for multi-tenant subdomain deploys.
+        # Loopback-only rewrite ensures the middleware no-ops cleanly
+        # when ``public_url`` is already set to a non-loopback value. (#103.)
+        (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
         subdomain_router = build_subdomain_router()
@@ -523,12 +492,34 @@ def _serve_kwargs(
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
         "enable_dns_rebinding_protection": (os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
-        # adcp 5.1 callable ``public_url`` (#650) — per-request resolver
-        # derives the agent-card URL from ``X-Forwarded-Host`` / ``Host``
-        # so multi-tenant subdomain deployments each advertise their own
-        # public host. Falls back to ``PUBLIC_URL`` env when no host
-        # headers are present (e.g. internal health probes).
-        "public_url": _resolve_public_url,
+        # adcp 5.0 ``public_url`` kwarg (#621) — advertises the canonical
+        # A2A base URL on /.well-known/agent-card.json. Static string from
+        # ``PUBLIC_URL`` env when set; otherwise None and
+        # ``AgentCardPublicUrlMiddleware`` (above) does the per-request
+        # rewrite from ``X-Forwarded-Host`` for multi-tenant subdomain
+        # deploys. The 5.1 callable resolver (#650) would let us drop the
+        # middleware, but ``transport="both"`` in 5.2.0 has a bug —
+        # callable ``public_url`` makes the A2A inner app a function
+        # without ``.router``, breaking ``_composed_lifespan``. Filed
+        # upstream.
+        "public_url": os.environ.get("PUBLIC_URL") or None,
+        # Heuristic backfills for pre-v3 / pre-4.4 buyers — defaults
+        # ``get_products.buying_mode='brief'`` when omitted (spec says
+        # sellers SHOULD default this for pre-v3 clients) and infers
+        # ``sync_creatives`` ``asset_type`` discriminators / wraps bare
+        # ``format_id`` strings / demotes image→url when dims absent.
+        #
+        # ``spec_compat_hooks()`` is deprecated in adcp 5.2 (#667) — removal
+        # target 6.0. Migration path is the typed AdapterPair registry in
+        # ``adcp.compat.legacy.v2_5``, but that only fires when buyers
+        # **declare** ``adcp_version='2.5'`` / ``adcp_major_version=2``. The
+        # hook here is unconditional, which our integration tests rely on
+        # for tag-less buyers omitting these required fields. We use the
+        # private ``_spec_compat_hooks_impl`` (no DeprecationWarning) — same
+        # symbol the SDK's own test suite uses for the same reason. Drop
+        # this when 6.0 ships or when we update tests to declare
+        # ``adcp_version`` explicitly.
+        "pre_validation_hooks": _spec_compat_hooks_impl(),
     }
 
 
@@ -571,6 +562,7 @@ def build_app():
     # A2A base URL into the agent-card response); tests neither read nor
     # assert on it, so drop it from the in-process app.
     kwargs.pop("public_url", None)
+    pre_validation_hooks = kwargs.pop("pre_validation_hooks", None)
 
     handler, _executor, _registry = create_adcp_server_from_platform(
         router,
@@ -594,6 +586,7 @@ def build_app():
         # rejected before the tool dispatcher runs.
         enable_dns_rebinding_protection=False,
         auth=kwargs["auth"],
+        pre_validation_hooks=pre_validation_hooks,
     )
     return _apply_asgi_middleware(app, asgi_middleware)
 

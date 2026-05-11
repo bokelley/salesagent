@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
+from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
 
@@ -50,11 +51,34 @@ def test_admin_wsgi_mount_runs_first(middleware_classes):
     )
 
 
-def test_public_url_is_callable_resolver():
-    """adcp 5.1 callable ``public_url`` (#650) — multi-tenant subdomain
-    deployments need per-request resolution so each tenant's agent card
-    advertises its own public host. A static string can only advertise
-    one URL; a callable derives from ``X-Forwarded-Host`` per request."""
+def test_agent_card_public_url_middleware_present(middleware_classes):
+    """``AgentCardPublicUrlMiddleware`` must be in the chain — without it,
+    ``/.well-known/agent-card.json`` advertises the container's localhost
+    URL and SDK clients can't discover the public A2A endpoint (#103).
+
+    The 5.1 callable ``public_url`` resolver (#650) is the eventual
+    replacement, but ``transport="both"`` in 5.2.0 has a bug where a
+    callable ``public_url`` breaks ``_composed_lifespan`` with
+    ``AttributeError: 'function' object has no attribute 'router'``."""
+    assert AgentCardPublicUrlMiddleware in middleware_classes, (
+        "AgentCardPublicUrlMiddleware missing from asgi_middleware — A2A "
+        "agent card will leak the localhost URL and SDK discovery breaks."
+    )
+
+
+def test_pre_validation_hooks_wired():
+    """Heuristic backfills for pre-v3 / pre-4.4 buyers must stay wired.
+
+    The hook backfills ``get_products.buying_mode='brief'`` and infers
+    ``sync_creatives`` ``asset_type`` discriminators for buyers omitting
+    those fields. Removing it breaks tag-less buyers and our own
+    integration tests that send minimal requests. adcp 5.2 deprecated
+    the public ``spec_compat_hooks()`` symbol (#667) in favour of typed
+    AdapterPair adapters that only fire for buyers declaring
+    ``adcp_version='2.5'`` — but our test buyers don't declare a version,
+    so the unconditional hooks remain load-bearing. Use the private
+    ``_spec_compat_hooks_impl`` (same as SDK's own tests) to avoid the
+    DeprecationWarning."""
     from unittest.mock import patch
 
     from core import main as core_main
@@ -65,11 +89,10 @@ def test_public_url_is_callable_resolver():
         patch("core.main.build_subdomain_router", return_value=MagicMock()),
     ):
         kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
-    public_url = kwargs.get("public_url")
-    assert callable(public_url), (
-        "public_url must be a callable PublicUrlResolver — static strings "
-        "leak one tenant's URL across all tenants in subdomain deployments."
-    )
+    hooks = kwargs.get("pre_validation_hooks")
+    assert hooks is not None, "pre_validation_hooks missing — pre-v3 buyer payloads will fail validation"
+    assert "get_products" in hooks
+    assert "sync_creatives" in hooks
 
 
 def test_signing_verify_runs_last(middleware_classes):
