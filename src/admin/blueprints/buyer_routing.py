@@ -353,7 +353,6 @@ def create_rule(tenant_id: str):
         )
 
     with get_db_session() as session:
-        session.info["management_api_caller"] = True
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
             return _api_error_json("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
@@ -394,9 +393,6 @@ def create_rule(tenant_id: str):
                     },
                 )
             raise
-        except EmbeddedTenantWriteError as exc:
-            session.rollback()
-            return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(rule)
         return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json")), 201
 
@@ -416,7 +412,6 @@ def patch_rule(tenant_id: str, rule_id: str):
         return _api_error_json("invalid_request", str(exc), 400)
 
     with get_db_session() as session:
-        session.info["management_api_caller"] = True
         rule = session.scalars(select(AdvertiserRoutingRule).filter_by(id=rule_id, tenant_id=tenant_id)).first()
         if rule is None:
             return _api_error_json(
@@ -468,9 +463,6 @@ def patch_rule(tenant_id: str, rule_id: str):
                     },
                 )
             raise
-        except EmbeddedTenantWriteError as exc:
-            session.rollback()
-            return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
         session.refresh(rule)
         return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json"))
 
@@ -485,7 +477,6 @@ def delete_rule(tenant_id: str, rule_id: str):
     """Session-authenticated routing-rule delete — 204 on success, 404 on
     miss. JS treats 404 as a benign race ("someone else deleted it")."""
     with get_db_session() as session:
-        session.info["management_api_caller"] = True
         rule = session.scalars(select(AdvertiserRoutingRule).filter_by(id=rule_id, tenant_id=tenant_id)).first()
         if rule is None:
             return _api_error_json(
@@ -495,11 +486,7 @@ def delete_rule(tenant_id: str, rule_id: str):
             )
 
         session.delete(rule)
-        try:
-            session.commit()
-        except EmbeddedTenantWriteError as exc:
-            session.rollback()
-            return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
+        session.commit()
     return "", 204
 
 
@@ -581,7 +568,6 @@ def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
         new_principal_id = None
 
     with get_db_session() as session:
-        session.info["management_api_caller"] = True
         gam_repo = GAMSyncRepository(session, tenant_id)
         tenant_repo = TenantConfigRepository(session, tenant_id)
         advertiser = gam_repo.get_advertiser(advertiser_id)
@@ -603,11 +589,7 @@ def patch_advertiser_assignment(tenant_id: str, advertiser_id: str):
                 )
 
         advertiser.principal_id = new_principal_id
-        try:
-            session.commit()
-        except EmbeddedTenantWriteError as exc:
-            session.rollback()
-            return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
+        session.commit()
 
         return jsonify(
             {

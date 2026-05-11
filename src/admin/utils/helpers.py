@@ -540,6 +540,15 @@ def require_tenant_access(
     AdapterConfig, signing creds) — it stays in force regardless of this
     flag, so opting in cannot smuggle a platform-managed write through.
 
+    An opted-in route MAY still write to a platform-managed column if it
+    explicitly sets ``session.info["management_api_caller"] = True`` (the
+    same bypass the Tenant Management API uses). Today only
+    ``buyer_routing.update_default_advertiser`` does this — it writes
+    ``Tenant.default_gam_advertiser_id``, which the design treats as
+    publisher-controlled even though the column lives on the Tenant row.
+    New uses of the bypass need explicit reviewer attention; the guard's
+    PUBLISHER_WRITABLE_FIELDS allowlist is the long-term home for that.
+
     ``role`` declares the RBAC policy for this route. Mutation routes
     that don't set ``role`` default to ``("admin",)`` (closed-by-default
     — config-grade authority required). Operational routes that the

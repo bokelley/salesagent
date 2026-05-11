@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
@@ -458,3 +459,91 @@ class TestEmbeddedViewAllowsPublisherManagedWrites:
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
         assert resp.get_json() == {"default_gam_advertiser_id": "12345"}
+
+    def test_managed_tenant_can_create_routing_rule(self, client, managed_tenant, monkeypatch):
+        """POST /buyer-routing/api/rules writes AdvertiserRoutingRule —
+        pure publisher-managed table (not in the embedded_tenant_guard's
+        locked set). Proves the opt-in works without any model-layer
+        bypass flag."""
+        from src.core.database.models import GamAdvertiser
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        tid = managed_tenant["tenant_id"]
+        with get_db_session() as session:
+            session.add(
+                GamAdvertiser(
+                    tenant_id=tid,
+                    advertiser_id="98765",
+                    name="Rule Target",
+                    status="active",
+                )
+            )
+            session.commit()
+
+        resp = client.post(
+            f"/tenant/{tid}/buyer-routing/api/rules",
+            json={"operator_domain": "wpp.com", "gam_advertiser_id": "98765"},
+            headers=_identity_headers(managed_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["operator_domain"] == "wpp.com"
+        assert body["gam_advertiser_id"] == "98765"
+
+    def test_managed_tenant_can_create_principal(self, client, managed_tenant, monkeypatch):
+        """POST /principals/create writes Principal — publisher-managed per
+        embedded_tenant_guard docstring. The publisher (via the iframe)
+        provisions buyer agents for their tenant."""
+        from src.core.database.models import Principal
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        tid = managed_tenant["tenant_id"]
+        # Form fields match src/admin/blueprints/principals.py:216-236 —
+        # ``enable_mock`` synthesizes a mock platform mapping so the
+        # at-least-one-platform validator passes.
+        resp = client.post(
+            f"/tenant/{tid}/principals/create",
+            data={"name": "Test Buyer", "enable_mock": "on"},
+            headers=_identity_headers(managed_tenant["external_org_id"]),
+            follow_redirects=False,
+        )
+        # Success path is a redirect to the principals list (302).
+        # If the gate had still been in place we'd get 403 here.
+        assert resp.status_code in (200, 302), resp.get_data(as_text=True)
+        with get_db_session() as session:
+            created = session.scalars(
+                select(Principal).filter_by(tenant_id=tid, name="Test Buyer")
+            ).first()
+            assert created is not None, "Principal row was not persisted"
+
+
+class TestEmbeddedGatePolarityNotInverted:
+    """Defensive: a future PR could accidentally land an
+    ``allow_embedded_writes=True`` on a platform-managed route (users,
+    settings, adapters, signing keys, …). These tests catch that by
+    spot-checking that the most sensitive routes still 403 in embedded
+    mode.
+
+    They duplicate intent already covered by ``TestEmbeddedViewBlocksMutations``
+    but live here so the contract that *some* routes stay gated reads
+    next to the contract that *some* are opted in.
+    """
+
+    def test_users_add_still_blocked(self, client, preview_tenant, monkeypatch):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.post(
+            f"/tenant/{preview_tenant['tenant_id']}/users/add",
+            data={"email": "intruder@evil.example", "role": "admin"},
+            headers=_identity_headers(preview_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 403
+        assert b"platform-managed" in resp.data
+
+    def test_publisher_partners_add_still_blocked(self, client, preview_tenant, monkeypatch):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.post(
+            f"/tenant/{preview_tenant['tenant_id']}/publisher-partners",
+            json={"publisher_domain": "evil.example"},
+            headers=_identity_headers(preview_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 403
