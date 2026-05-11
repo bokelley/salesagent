@@ -212,7 +212,7 @@ def _replay_update_media_buy(step, tenant_id: str, db) -> tuple[bool, str | None
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve", methods=["POST"])
-@require_tenant_access(role=("admin", "member"))
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
     """Approve a workflow step."""
@@ -342,7 +342,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject", methods=["POST"])
-@require_tenant_access(role=("admin", "member"))
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
     """Reject a workflow step with a reason."""
