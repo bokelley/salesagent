@@ -437,20 +437,13 @@ class TestEmbeddedViewAllowsPublisherManagedWrites:
         ``management_api_caller=True`` to bypass the model-layer guard on
         ``Tenant.default_gam_advertiser_id``; the decorator must not 403
         the request before it can run."""
-        from src.core.database.models import GamAdvertiser
+        from tests.factories import GamAdvertiserFactory
+        from tests.helpers.managed_tenant_api import bind_factories_to_session
 
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         tid = managed_tenant["tenant_id"]
-        with get_db_session() as session:
-            session.add(
-                GamAdvertiser(
-                    tenant_id=tid,
-                    advertiser_id="12345",
-                    name="Test Advertiser",
-                    status="active",
-                )
-            )
-            session.commit()
+        with bind_factories_to_session():
+            GamAdvertiserFactory(tenant_id=tid, advertiser_id="12345", name="Test Advertiser")
 
         resp = client.patch(
             f"/tenant/{tid}/buyer-routing/api/default-advertiser",
@@ -465,20 +458,13 @@ class TestEmbeddedViewAllowsPublisherManagedWrites:
         pure publisher-managed table (not in the embedded_tenant_guard's
         locked set). Proves the opt-in works without any model-layer
         bypass flag."""
-        from src.core.database.models import GamAdvertiser
+        from tests.factories import GamAdvertiserFactory
+        from tests.helpers.managed_tenant_api import bind_factories_to_session
 
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         tid = managed_tenant["tenant_id"]
-        with get_db_session() as session:
-            session.add(
-                GamAdvertiser(
-                    tenant_id=tid,
-                    advertiser_id="98765",
-                    name="Rule Target",
-                    status="active",
-                )
-            )
-            session.commit()
+        with bind_factories_to_session():
+            GamAdvertiserFactory(tenant_id=tid, advertiser_id="98765", name="Rule Target")
 
         resp = client.post(
             f"/tenant/{tid}/buyer-routing/api/rules",
