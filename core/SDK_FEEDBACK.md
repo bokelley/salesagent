@@ -1,7 +1,7 @@
 # SDK feedback — open items
 
 Tracker for adopter friction with `adcp-client-python` (currently pinned to
-**v5.0.0**, declares spec version **3.0.7**). The original three rounds of
+**v5.1.0**, declares spec version **3.0.7**). The original three rounds of
 feedback (most items now merged upstream) live in this file's git history.
 
 ## Currently open
@@ -48,43 +48,6 @@ when no static `public_url` is configured, OR accept a
 **Upstream:** [#647](https://github.com/adcontextprotocol/adcp-client-python/issues/647) (open — follow-up to closed #616 which shipped Option A static kwarg only; Option B per-request was explicitly deferred).
 **Local tracker:** salesagent #103.
 
-#### 3. Built-in `spec_compat_hooks()` for pre-v3 / pre-4.4 buyers
-
-adcp 5.0 (#629) shipped the `pre_validation_hooks` mechanism, but every
-Python adopter that accepts pre-v3 / pre-4.4 buyers writes the same hooks:
-`buying_mode='brief'` default (spec-mandated), `format_id` string→structured
-wrap (4.4 shape migration), `asset_type` inference (4.4 discriminator),
-image→url demote when dims missing (4.4 strictness). All four are universal
-compat shims, not adopter logic.
-
-**Workaround:** [core/spec_default_hooks.py](core/spec_default_hooks.py)
-(~150 LOC of pure-Python helpers).
-
-**Better SDK shape:** ship `adcp.server.spec_compat_hooks()` returning the
-canonical hook dict. Adopters compose via
-`pre_validation_hooks={**spec_compat_hooks(), **my_hooks}`. Centralises
-the canonical `agent_url` constant + asset-type inference table.
-
-**Upstream:** [#646](https://github.com/adcontextprotocol/adcp-client-python/issues/646).
-
-#### 4. TenantRegistry → serve() adapter (`as_platform()` or callable platform)
-
-adcp 5.0 shipped `TenantRegistry` (#619) with per-tenant health states,
-`register_lazy`, `recheck`, etc. But `serve()` takes a `DecisioningPlatform`,
-not a callable, and `TenantRegistry.resolve(host)` returns a `TenantResolution`
-(with `.platform`, `.health`), not a platform-conformant object. There's no
-bridge from registry to serve(): adopters who want both lazy registration
-AND health-tracked routing have to write a `DecisioningPlatform` wrapper
-that delegates per-request — duplicating `LazyPlatformRouter`'s purpose.
-
-**Workaround:** stay on `LazyPlatformRouter` (no health states observable).
-
-**Better SDK shape:** `TenantRegistry.as_platform()` returning a
-`DecisioningPlatform` that resolves + health-gates per request, OR
-`serve(platform_resolver=Callable[[RequestContext], DecisioningPlatform])`.
-
-**Upstream:** [#645](https://github.com/adcontextprotocol/adcp-client-python/issues/645).
-
 ### Strictness ergonomics
 
 - **Schema inheritance × strict mypy** — extending library types and
@@ -110,14 +73,21 @@ that delegates per-request — duplicating `LazyPlatformRouter`'s purpose.
 
 ## Closed since prior rounds
 
+### Shipped in adcp 5.1.0
+
+- [#648] `adcp.server.spec_compat_hooks()` — canonical pre-v3 / pre-4.4 buyer compat hook registry. Replaces our 150-LOC local `core/spec_default_hooks.py` (deleted).
+- [#649] `TenantRegistry.as_platform()` — bridges the registry into a `DecisioningPlatform` for `serve()`. (Local adoption tracked separately.)
+- [#655] `build_asgi_app(pre_validation_hooks=...)` — `adcp.testing.build_asgi_app` now forwards pre-validation hooks, so in-process test apps exercise the same compat layer as production.
+- [#656] `pydantic.ValidationError → INVALID_REQUEST` translation built into `serve()` (salesagent #330 stops being adopter-side).
+
 ### Shipped in adcp 5.0.0
 
-- [#614 / PR #629] `serve(pre_validation_hooks=...)` — replaces our 273-LOC `SpecDefaultsMiddleware` with pure-Python hooks ([core/spec_default_hooks.py](core/spec_default_hooks.py)). Follow-up #3 above tracks shipping these as built-in `spec_compat_hooks()` so adopters don't each re-write them.
+- [#614 / PR #629] `serve(pre_validation_hooks=...)` — replaces our 273-LOC `SpecDefaultsMiddleware` with pure-Python hooks.
 - [#615 / PR #639] Nested `model_dump()` — `AdCPBaseModel.model_dump()` defaults `serialize_as_any=True`.
 - [#616 / PR #621] `serve(public_url=...)` (static kwarg only — per-request case still open as #2 above).
 - [#617 / PR #627] `RequestContext.transport` + `adcp.server.current_transport` ContextVar — kills our `TransportDetectMiddleware` (85 LOC).
 - [#618 / PR #626] Public `adcp.testing.build_asgi_app` — replaces our 2 private-API imports in `core/main.py:build_app`.
-- [#619 / PR #628] `TenantRegistry` with `register_lazy` (the serve adapter follow-up tracked as #3 above).
+- [#619 / PR #628] `TenantRegistry` with `register_lazy`.
 - [#624 / PR #640] `Sequence[X]` widening on extension-point list fields.
 - [#625 / PR #634] Adopter type-checking test suite with zero-ignore contract.
 - [#643] `canceled: Literal[True] | None = None` codegen — our local overrides are now redundant.

@@ -57,6 +57,7 @@ from adcp.server import (
     SubdomainTenantMiddleware,
     Tenant,
     auth_context_factory,
+    spec_compat_hooks,
 )
 from sqlalchemy import select
 
@@ -71,7 +72,6 @@ from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
-from core.spec_default_hooks import PRE_VALIDATION_HOOKS
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
@@ -494,13 +494,10 @@ def _serve_kwargs(
         # and rely on the middleware to rewrite per-request from
         # ``X-Forwarded-Host``. Env: ``PUBLIC_URL``.
         "public_url": os.environ.get("PUBLIC_URL") or None,
-        # adcp 5.0 pre_validation_hooks (#629) — replaces the bytes-level
-        # ``SpecDefaultsMiddleware``. Hooks run on the raw wire dict before
-        # schema + Pydantic validation, applying spec-mandated defaults
-        # (``buying_mode='brief'``) and shape normalisation (``format_id``
-        # wrap, ``asset_type`` inference, image→url demote). Pure Python
-        # functions; no ASGI body-rewriting.
-        "pre_validation_hooks": PRE_VALIDATION_HOOKS,
+        # adcp 5.1 ``spec_compat_hooks()`` (#648) — built-in registry that
+        # backfills pre-v3 buying_mode and normalises pre-4.4 format_id shape /
+        # asset_type discriminator / image→url dim demotion.
+        "pre_validation_hooks": spec_compat_hooks(),
     }
 
 
@@ -534,14 +531,11 @@ def build_app():
     router = kwargs.pop("router")
     asgi_middleware = kwargs.pop("asgi_middleware")
     auto_emit = kwargs.pop("auto_emit_completion_webhooks")
+    pre_validation_hooks = kwargs.pop("pre_validation_hooks", None)
     # ``public_url`` is a production-shaping concern (writes the canonical
     # A2A base URL into the agent-card response); tests neither read nor
     # assert on it, so drop it from the in-process app.
     kwargs.pop("public_url", None)
-    # ``pre_validation_hooks`` is plumbed via ``serve()`` for production;
-    # ``build_asgi_app`` doesn't forward it (tests construct payloads via
-    # typed Pydantic models, bypassing pre-validation). Drop and skip.
-    kwargs.pop("pre_validation_hooks", None)
 
     return build_asgi_app(
         router,
@@ -552,6 +546,7 @@ def build_app():
         context_factory=kwargs["context_factory"],
         streaming_responses=kwargs["streaming_responses"],
         allowed_origins=kwargs["allowed_origins"],
+        pre_validation_hooks=pre_validation_hooks,
         # Tests use arbitrary base URLs (testserver, default.localhost,
         # 127.0.0.1); production's host allowlist isn't useful here.
         # Disable so requests to ``http://testserver/mcp/`` aren't
