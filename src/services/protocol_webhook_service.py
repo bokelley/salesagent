@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -217,9 +217,7 @@ class ProtocolWebhookService:
         principal_id = metadata["principal_id"] if "principal_id" in metadata else None
         media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
 
-        # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
-        # returns dict at runtime but is typed as AdcpAsyncResponseData | None
-        result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
+        result = extract_webhook_result_data(payload)
         # After serialization, payload is always a dict - extract task_id accordingly
         # A2A Task uses 'id', TaskStatusUpdateEvent uses 'task_id', MCP uses 'task_id'
         task_id = payload.get("id") or payload.get("task_id") or ""

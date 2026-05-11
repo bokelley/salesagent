@@ -2577,7 +2577,7 @@ async def _create_media_buy_impl(
                 )
                 return _build_idempotency_hit_result(
                     tenant_id=tenant["tenant_id"],
-                    idempotency_key=req.idempotency_key,  # type: ignore[arg-type]
+                    idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     context=req.context,
                 )
@@ -3520,7 +3520,7 @@ async def _create_media_buy_impl(
             )
             return _build_idempotency_hit_result(
                 tenant_id=tenant["tenant_id"],
-                idempotency_key=req.idempotency_key,  # type: ignore[arg-type]
+                idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 context=req.context,
             )

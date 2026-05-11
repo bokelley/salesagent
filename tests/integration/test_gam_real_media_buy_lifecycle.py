@@ -39,10 +39,10 @@ from tests.factories import (
     TenantAuthConfigFactory,
     TenantFactory,
 )
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.harness._base import IntegrationEnv
 from tests.helpers.gam_test_config import non_guaranteed_cpm_impl_config
 from tests.integration.media_buy_helpers import make_lifecycle_identity
-from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [
     pytest.mark.integration,
@@ -312,7 +312,8 @@ class TestGAMRealMediaBuyLifecycle:
             assert GAM_PRODUCT_ID in product_ids, f"Expected {GAM_PRODUCT_ID} in catalog, got {product_ids}"
 
             # ───── Phase 2: create_media_buy (real GAM order) ─────
-            create_req = CreateMediaBuyRequest(**required_request_kwargs(), 
+            create_req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 start_time=_future(1),
                 end_time=_future(8),
@@ -446,7 +447,8 @@ class TestGAMOrderProgressesPastDraft:
             identity = _identity()
 
             create_result = await _create_media_buy_impl(
-                req=CreateMediaBuyRequest(**required_request_kwargs(), 
+                req=CreateMediaBuyRequest(
+                    **required_request_kwargs(),
                     brand={"domain": "testbrand.com"},
                     start_time=_future(1),
                     end_time=_future(8),
@@ -577,7 +579,8 @@ class TestGAMRealDeliveryWebhook:
                 identity = _identity()
 
                 create_result = await _create_media_buy_impl(
-                    req=CreateMediaBuyRequest(**required_request_kwargs(), 
+                    req=CreateMediaBuyRequest(
+                        **required_request_kwargs(),
                         brand={"domain": "testbrand.com"},
                         # Past-equivalent start so the scheduler's date-based
                         # status filter sees this buy as 'active' (the filter
@@ -721,7 +724,8 @@ class TestGAMRealCreativeApprovalAsync:
             )
 
             create_result = await _create_media_buy_impl(
-                req=CreateMediaBuyRequest(**required_request_kwargs(), 
+                req=CreateMediaBuyRequest(
+                    **required_request_kwargs(),
                     brand={"domain": "testbrand.com"},
                     start_time=_future(1),
                     end_time=_future(8),

@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     AiTool,
     CreativeAction,
@@ -677,7 +676,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     # Override with local subtypes (each extends its library counterpart)
     query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
-    creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
+    creatives: list[Creative] = Field(..., description="Array of creative assets")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

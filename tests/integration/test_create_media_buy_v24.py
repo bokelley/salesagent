@@ -25,8 +25,8 @@ from src.core.database.database_session import get_db_session
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
 from src.core.testing_hooks import AdCPTestContext
-from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 from tests.factories.spec_required_kwargs import required_request_kwargs
+from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
 
@@ -243,7 +243,8 @@ class TestCreateMediaBuyV24Format:
         # Call _impl with a CreateMediaBuyRequest object
         # This exercises the FULL serialization path including response_packages construction
         # NOTE: budget is at package level per AdCP v2.4 spec (not a top-level parameter)
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -306,7 +307,8 @@ class TestCreateMediaBuyV24Format:
             protocol="mcp",
         )
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -381,7 +383,8 @@ class TestCreateMediaBuyV24Format:
         # Total budget is sum of all package budgets
         total_budget_value = sum(pkg.budget for pkg in packages)
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -424,7 +427,8 @@ class TestCreateMediaBuyV24Format:
             protocol="mcp",
         )
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -462,7 +466,8 @@ class TestCreateMediaBuyV24Format:
 
         # Standard AdCP format with explicit package
         # pricing_option_id format: {model}_{currency}_{fixed|auction}
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 PackageRequest(

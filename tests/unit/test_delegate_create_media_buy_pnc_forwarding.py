@@ -82,9 +82,9 @@ async def test_delegate_forwards_push_notification_config_to_impl() -> None:
     impl_mock.assert_awaited_once()
     _, kwargs = impl_mock.await_args
     forwarded = kwargs.get("push_notification_config")
-    assert (
-        forwarded is not None
-    ), "_delegate_create_media_buy dropped push_notification_config — impl received None. See #64 root cause."
+    assert forwarded is not None, (
+        "_delegate_create_media_buy dropped push_notification_config — impl received None. See #64 root cause."
+    )
     assert forwarded["url"] == pnc_dict["url"]
     assert forwarded["authentication"]["schemes"] == ["Bearer"]
 

@@ -154,9 +154,9 @@ async def test_a2a_accepts_authorization_bearer():
     messages: list[dict[str, Any]] = []
     await _drain(messages, _post_scope([(b"authorization", b"Bearer valid-token")]), app)
 
-    assert (
-        inner.captured_scope is not None
-    ), "A2A middleware rejected Authorization: Bearer — per-leg auth wiring is broken."
+    assert inner.captured_scope is not None, (
+        "A2A middleware rejected Authorization: Bearer — per-leg auth wiring is broken."
+    )
     starts = [m for m in messages if m.get("type") == "http.response.start"]
     assert starts and starts[0]["status"] == 200
 
@@ -172,9 +172,9 @@ async def test_a2a_rejects_x_adcp_auth_header():
     messages: list[dict[str, Any]] = []
     await _drain(messages, _post_scope([(b"x-adcp-auth", b"valid-token")]), app)
 
-    assert (
-        inner.captured_scope is None
-    ), "A2A middleware accepted x-adcp-auth — backward-compat fallback should be closed in adcp>=4.5.0."
+    assert inner.captured_scope is None, (
+        "A2A middleware accepted x-adcp-auth — backward-compat fallback should be closed in adcp>=4.5.0."
+    )
     starts = [m for m in messages if m.get("type") == "http.response.start"]
     assert starts and starts[0]["status"] == 401
 
@@ -212,11 +212,11 @@ async def test_a2a_401_carries_www_authenticate_bearer_challenge():
     starts = [m for m in messages if m.get("type") == "http.response.start"]
     assert starts and starts[0]["status"] == 401, "Expected 401 on missing bearer"
     headers = {name.decode("latin-1").lower(): value.decode("latin-1") for name, value in starts[0]["headers"]}
-    assert (
-        "www-authenticate" in headers
-    ), f"401 must carry WWW-Authenticate per RFC 6750 §3; got headers: {list(headers)}"
+    assert "www-authenticate" in headers, (
+        f"401 must carry WWW-Authenticate per RFC 6750 §3; got headers: {list(headers)}"
+    )
     challenge = headers["www-authenticate"]
     assert challenge.lower().startswith("bearer "), f"WWW-Authenticate must start with 'Bearer'; got {challenge!r}"
-    assert (
-        "realm=" in challenge.lower()
-    ), f"WWW-Authenticate Bearer challenge must include realm parameter; got {challenge!r}"
+    assert "realm=" in challenge.lower(), (
+        f"WWW-Authenticate Bearer challenge must include realm parameter; got {challenge!r}"
+    )

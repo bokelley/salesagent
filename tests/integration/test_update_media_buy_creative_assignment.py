@@ -137,7 +137,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy with creative assignment
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="test_buy_123",
             packages=[
                 {
@@ -326,7 +327,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy to replace creative_1 with creative_2 and creative_3
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="test_buy_456",
             packages=[
                 {
@@ -462,7 +464,8 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy with non-existent creative IDs
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="test_buy_789",
             packages=[
                 {
@@ -606,7 +609,8 @@ def test_creative_assignments_with_weights(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Call update_media_buy with creative_assignments (not creative_ids)
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="test_buy_weights",
             packages=[
                 {
@@ -772,7 +776,8 @@ def test_creative_assignments_replaces_all(integration_db):
         mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Send creative_assignments with ONLY c2 and c3 — c1 should be REMOVED
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="test_buy_replace",
             packages=[
                 {

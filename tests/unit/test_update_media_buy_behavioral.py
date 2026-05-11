@@ -185,7 +185,8 @@ def test_combined_campaign_and_package_update(standard_mocks):
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_combined",
         ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD", pacing="even").model_dump()}},
         packages=[{"package_id": "pkg_A", "budget": 2500.0}],
@@ -242,7 +243,8 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_multi",
         packages=[
             {"package_id": "pkg_1", "budget": 1000.0},
@@ -303,7 +305,8 @@ def test_main_flow_package_budget_update(standard_mocks):
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_main",
         packages=[{"package_id": "pkg_main_1", "budget": 15000.0}],
     )
@@ -354,7 +357,8 @@ class TestFlightDateValidationAndPersistence:
         end = datetime(2025, 12, 1, tzinfo=UTC)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_dates",
             start_time=start,
             end_time=end,
@@ -390,7 +394,8 @@ class TestFlightDateValidationAndPersistence:
         end = datetime(2025, 3, 1, tzinfo=UTC)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_dates_bad",
             start_time=start,
             end_time=end,
@@ -422,7 +427,8 @@ class TestFlightDateValidationAndPersistence:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_dates_equal",
             start_time=same_time,
             end_time=same_time,
@@ -460,7 +466,8 @@ class TestCampaignBudgetValidationAndPersistence:
         standard_mocks["uow_instance"].media_buys.get_packages.return_value = [mock_pkg]
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_budget",
             ext={"salesagent": {"budget": Budget(total=10000.0, currency="USD", pacing="even").model_dump()}},
         )
@@ -505,7 +512,8 @@ def test_manual_approval_path_through_impl(standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_manual",
     )
     result = _update_media_buy_impl(req=req, identity=identity)
@@ -542,7 +550,8 @@ def test_package_not_found_returns_error(standard_mocks):
     standard_mocks["uow_instance"].media_buys.get_package.return_value = None
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_pkg_nf",
         packages=[
             {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]}}
@@ -572,7 +581,8 @@ def test_pause_completes_workflow_step(standard_mocks):
     standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_pause",
         paused=True,
     )
@@ -614,7 +624,8 @@ def test_manual_approval_creates_object_workflow_mapping(standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_approval_mapping",
         paused=True,
     )
@@ -663,7 +674,8 @@ def test_manual_approval_stores_raw_request(standard_mocks):
     standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
 
     identity = _make_identity()
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_approval",
         paused=True,
     )
@@ -736,7 +748,8 @@ class TestTimezoneHandlingRegression:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_tz_end",
             end_time=datetime(2025, 9, 1, tzinfo=UTC),  # Only end_time
         )
@@ -769,7 +782,8 @@ class TestTimezoneHandlingRegression:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_tz_start",
             start_time=datetime(2025, 3, 1, tzinfo=UTC),  # Only start_time
         )
@@ -783,7 +797,8 @@ class TestTimezoneHandlingRegression:
         This is the schema-level guard that prevents #1039 from recurring.
         """
         with pytest.raises(ValidationError, match="should have timezone info"):
-            UpdateMediaBuyRequest(**required_request_kwargs(), 
+            UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_naive",
                 start_time=datetime(2025, 6, 1),  # naive — no tzinfo
             )
@@ -791,7 +806,8 @@ class TestTimezoneHandlingRegression:
     def test_schema_rejects_naive_end_time(self):
         """UpdateMediaBuyRequest must reject naive (no tzinfo) end_time."""
         with pytest.raises(ValidationError, match="should have timezone info|end_time must be timezone-aware"):
-            UpdateMediaBuyRequest(**required_request_kwargs(), 
+            UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_naive",
                 end_time=datetime(2025, 6, 1),  # naive — no tzinfo
             )
@@ -829,7 +845,8 @@ class TestUC003MainObligations:
 
         identity = _make_identity()
         # daily = 50000/30 = 1666.67 > 1000
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_cur_limit",
             packages=[{"package_id": "pkg_1", "budget": 50000.0}],
         )
@@ -856,7 +873,8 @@ class TestUC003MainObligations:
         )
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_max",
             packages=[{"package_id": "pkg_1", "budget": 999999.0}],
         )
@@ -881,7 +899,8 @@ class TestUC003MainObligations:
         )
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_adapter",
             packages=[{"package_id": "pkg_x", "budget": 5000.0}],
         )
@@ -909,7 +928,8 @@ class TestUC003MainObligations:
         )
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_persist",
             packages=[{"package_id": "pkg_y", "budget": 7500.0}],
         )
@@ -994,7 +1014,9 @@ class TestUC003UpdateTiming:
         end = datetime(2025, 9, 1, tzinfo=UTC)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_both_dates", start_time=start, end_time=end)
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(), media_buy_id="mb_both_dates", start_time=start, end_time=end
+        )
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
@@ -1023,7 +1045,8 @@ class TestUC003UpdateTiming:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_adapter",
             end_time=datetime(2025, 11, 1, tzinfo=UTC),
         )
@@ -1076,7 +1099,8 @@ class TestUC003CampaignLevelBudget:
 
         identity = _make_identity()
         # daily = 10000/10 = 1000 > 500
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_recalc",
             packages=[{"package_id": "pkg_1", "budget": 10000.0}],
         )
@@ -1102,7 +1126,8 @@ class TestUC003CampaignLevelBudget:
         standard_mocks["uow_instance"].media_buys.get_packages.return_value = [mock_pkg]
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_sync",
             ext={"salesagent": {"budget": Budget(total=5000.0, currency="USD", pacing="even").model_dump()}},
         )
@@ -1173,7 +1198,8 @@ class TestUC003UpdateCreativeIds:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_creative",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C999"]}],
         )
@@ -1204,7 +1230,8 @@ class TestUC003UpdateCreativeIds:
         mock_session.scalars.return_value = mock_scalars_seq
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_creative",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
         )
@@ -1232,7 +1259,8 @@ class TestUC003UpdateCreativeIds:
         mock_session.scalars.return_value = mock_scalars_seq
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_creative",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
         )
@@ -1280,7 +1308,8 @@ class TestUC003UpdateCreativeIds:
         mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_creative",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
         )
@@ -1325,7 +1354,8 @@ class TestUC003UpdateCreativeIds:
         mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_creative",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
         )
@@ -1370,9 +1400,9 @@ class TestUC003UpdateCreativeIds:
 
         from src.core.schemas import Creative
 
-        assert issubclass(
-            Creative, (LibraryDeliveryCreative, LibraryListCreative)
-        ), f"Creative should extend an adcp library Creative, but MRO is: {[c.__name__ for c in Creative.__mro__]}"
+        assert issubclass(Creative, (LibraryDeliveryCreative, LibraryListCreative)), (
+            f"Creative should extend an adcp library Creative, but MRO is: {[c.__name__ for c in Creative.__mro__]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1399,7 +1429,8 @@ class TestUC003UploadInlineCreatives:
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response) as mock_sync:
             identity = _make_identity()
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_inline",
                 packages=[
                     {
@@ -1461,7 +1492,8 @@ class TestUC003UploadInlineCreatives:
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_additive",
                 packages=[
                     {
@@ -1512,7 +1544,8 @@ class TestUC003UploadInlineCreatives:
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_sync_fail",
                 packages=[
                     {
@@ -1586,7 +1619,8 @@ class TestUC003UpdateCreativeAssignments:
         mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_assign",
             packages=[
                 {
@@ -1626,7 +1660,8 @@ class TestUC003UpdateCreativeAssignments:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_placement",
             packages=[
                 {
@@ -1666,7 +1701,8 @@ class TestUC003UpdateCreativeAssignments:
         mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_assign_not_found",
             packages=[
                 {
@@ -1705,7 +1741,8 @@ class TestUC003UpdateTargetingOverlay:
         standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_targeting",
             packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
@@ -1729,7 +1766,8 @@ class TestUC003UpdateTargetingOverlay:
 
         identity = _make_identity()
         # Invalid targeting data - should still be persisted
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_validate",
             packages=[
                 {"package_id": "pkg_1", "targeting_overlay": {"unknown_field": "value", "conflicting_geo": True}}
@@ -1753,7 +1791,8 @@ class TestUC003UpdateTargetingOverlay:
         standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_target_no_adapter",
             packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
@@ -1944,7 +1983,9 @@ class TestUC003ExtE:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_eq", start_time=same_time, end_time=same_time)
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(), media_buy_id="mb_eq", start_time=same_time, end_time=same_time
+        )
         result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
@@ -1971,7 +2012,8 @@ class TestUC003ExtE:
 
         identity = _make_identity()
         # Only end_time, before existing start_time
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_end_before",
             end_time=datetime(2025, 3, 10, tzinfo=UTC),
         )
@@ -2001,7 +2043,8 @@ class TestUC003ExtE:
 
         identity = _make_identity()
         # Only start_time, after existing end_time
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_start_after",
             start_time=datetime(2025, 4, 15, tzinfo=UTC),
         )
@@ -2034,7 +2077,8 @@ class TestUC003ExtF:
         standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = None
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_gbp",
             packages=[{"package_id": "pkg_1", "budget": 5000.0}],
         )
@@ -2069,7 +2113,8 @@ class TestUC003ExtG:
 
         identity = _make_identity()
         # daily = 10000/10 = 1000 > 500
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_daily",
             packages=[{"package_id": "pkg_1", "budget": 10000.0}],
         )
@@ -2095,7 +2140,8 @@ class TestUC003ExtH:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="package_id"):
-            UpdateMediaBuyRequest(**required_request_kwargs(), 
+            UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_no_pkg",
                 packages=[{"budget": 5000.0}],  # No package_id
             )
@@ -2109,7 +2155,8 @@ class TestUC003ExtH:
 
         # package_id is now required, cannot omit it
         with pytest.raises(ValidationError, match="package_id"):
-            UpdateMediaBuyRequest(**required_request_kwargs(), 
+            UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_buyer_ref_pkg",
                 packages=[{"budget": 5000.0}],  # No package_id
             )
@@ -2140,7 +2187,8 @@ class TestUC003ExtI:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_all_missing",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C999", "C998"]}],
         )
@@ -2196,7 +2244,8 @@ class TestUC003ExtJ:
         mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_rejected",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
         )
@@ -2247,7 +2296,8 @@ class TestUC003ExtJ:
         mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_multi_err",
             packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C2"]}],
         )
@@ -2286,7 +2336,8 @@ class TestUC003ExtK:
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_sync_err",
                 packages=[
                     {
@@ -2332,7 +2383,8 @@ class TestUC003ExtK:
 
         with patch("src.core.tools.creatives._sync_creatives_impl", return_value=mock_sync_response):
             identity = _make_identity()
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_no_modify",
                 packages=[
                     {
@@ -2385,7 +2437,8 @@ class TestUC003ExtL:
         standard_mocks["uow_instance"].media_buys.get_package.return_value = None
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_wrong_pkg",
             packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
@@ -2404,7 +2457,8 @@ class TestUC003ExtL:
         standard_mocks["uow_instance"].media_buys.get_package.return_value = None
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_pkg_exist",
             packages=[
                 {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]}}
@@ -2448,7 +2502,8 @@ class TestUC003ExtM:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_bad_placement",
             packages=[
                 {
@@ -2488,7 +2543,8 @@ class TestUC003ExtM:
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_no_placements",
             packages=[
                 {
@@ -2533,7 +2589,8 @@ class TestUC003ExtN:
         )
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_priv",
             packages=[{"package_id": "pkg_1", "budget": 5000.0}],
         )
@@ -2570,7 +2627,8 @@ class TestUC003ExtO:
         )
 
         identity = _make_identity()
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_quota",
             packages=[{"package_id": "pkg_1", "budget": 5000.0}],
         )

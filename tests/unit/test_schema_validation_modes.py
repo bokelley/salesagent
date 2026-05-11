@@ -104,7 +104,8 @@ class TestExtFieldAccepted:
     """The AdCP ext field is the sanctioned extension mechanism and must be accepted."""
 
     def test_ext_field_accepted_on_cmr(self):
-        cmr = CreateMediaBuyRequest(**required_request_kwargs(), 
+        cmr = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             **_VALID_CMR_DATA,
             ext={"vendor": {"custom": "value"}},
         )

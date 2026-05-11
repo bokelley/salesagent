@@ -53,7 +53,7 @@ class Placement(LibraryPlacement):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     description: str = Field(..., description="Detailed description of the placement")
-    format_ids: list[FormatId] = Field(  # type: ignore[assignment]
+    format_ids: list[FormatId] = Field(
         ...,
         description="Supported creative formats for this placement",
         min_length=1,

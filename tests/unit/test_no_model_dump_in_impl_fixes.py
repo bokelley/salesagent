@@ -18,7 +18,8 @@ from tests.factories.spec_required_kwargs import required_request_kwargs
 
 def _make_minimal_request() -> CreateMediaBuyRequest:
     """Build a minimal CreateMediaBuyRequest for testing."""
-    return CreateMediaBuyRequest(**required_request_kwargs(), 
+    return CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.now(UTC) + timedelta(days=1)).isoformat(),
@@ -77,9 +78,9 @@ class TestMediaBuyRepositoryCreateFromRequest:
         )
 
         # raw_request must be a dict, not a Pydantic model
-        assert isinstance(
-            result.raw_request, dict
-        ), f"raw_request should be dict, got {type(result.raw_request).__name__}"
+        assert isinstance(result.raw_request, dict), (
+            f"raw_request should be dict, got {type(result.raw_request).__name__}"
+        )
         # buyer_ref removed from CreateMediaBuyRequest in adcp 3.12
         assert "brand" in result.raw_request
 

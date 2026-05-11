@@ -426,7 +426,8 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
         format_ids=[],
     )
 
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         po_number=po_number,
         start_time=start_time,

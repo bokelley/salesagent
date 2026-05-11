@@ -280,7 +280,8 @@ class GAMAutomationTester:
             format="display",
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="AUTO001",
             total_budget=10.00,
@@ -338,7 +339,8 @@ class GAMAutomationTester:
             package_id="gam_test_confirm", name="Confirmation Test Package", impressions=500, format="display"
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="CONF001",
             total_budget=5.00,
@@ -397,7 +399,8 @@ class GAMAutomationTester:
             package_id="gam_test_manual", name="Manual Test Package", impressions=750, format="display"
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="MAN001",
             total_budget=7.50,
@@ -458,7 +461,8 @@ class GAMAutomationTester:
             format="display",
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="GUAR001",
             total_budget=500.00,
@@ -520,7 +524,8 @@ class GAMAutomationTester:
             format="display",
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE001",
             total_budget=7.50,
@@ -588,7 +593,8 @@ class GAMAutomationTester:
             format="display",
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE002",
             total_budget=20.00,
@@ -654,7 +660,8 @@ class GAMAutomationTester:
             format="display",
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE003",
             total_budget=15.00,
@@ -724,7 +731,8 @@ class GAMAutomationTester:
             format="display",
         )
 
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="LIFECYCLE004",
             total_budget=1.00,

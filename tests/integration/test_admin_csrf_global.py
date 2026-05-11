@@ -87,5 +87,5 @@ class TestAdminCsrfGlobal:
             follow_redirects=False,
         )
         assert resp.status_code != 403, (
-            f"embedded-mode POST (X-Identity-Subject set) should not be CSRF-rejected; " f"got 403: {resp.data!r}"
+            f"embedded-mode POST (X-Identity-Subject set) should not be CSRF-rejected; got 403: {resp.data!r}"
         )

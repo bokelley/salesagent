@@ -20,7 +20,6 @@ import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
-from core.middleware.spec_defaults import SpecDefaultsMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
 
@@ -52,12 +51,25 @@ def test_admin_wsgi_mount_runs_first(middleware_classes):
     )
 
 
-def test_spec_defaults_present(middleware_classes):
-    """``SpecDefaultsMiddleware`` must be in the chain — it backfills
-    pre-v3 wire defaults outside the SDK validation boundary."""
-    assert SpecDefaultsMiddleware in middleware_classes, (
-        "SpecDefaultsMiddleware missing from asgi_middleware — pre-v3 clients will fail strict-mode validation."
-    )
+def test_pre_validation_hooks_wired():
+    """adcp 5.0 ``pre_validation_hooks`` (#629) carries the pre-v3 default
+    backfill we used to run via the bytes-rewriting ``SpecDefaultsMiddleware``.
+    The serve-kwargs must register the hooks dict so the SDK's typed
+    dispatcher runs them before validation."""
+    from unittest.mock import patch
+
+    from core import main as core_main
+
+    with (
+        patch.object(core_main, "build_router", return_value=MagicMock()),
+        patch("src.admin.app.create_app", return_value=MagicMock()),
+        patch("core.main.build_subdomain_router", return_value=MagicMock()),
+    ):
+        kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
+    hooks = kwargs.get("pre_validation_hooks")
+    assert hooks is not None, "pre_validation_hooks missing — pre-v3 buyer payloads will fail validation"
+    assert "get_products" in hooks
+    assert "sync_creatives" in hooks
 
 
 def test_agent_card_public_url_middleware_present(middleware_classes):

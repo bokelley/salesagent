@@ -721,10 +721,14 @@ class ContextManager(DatabaseManager):
                             result=step.response_data or {},
                         )
                     else:
-                        # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
-                        # McpWebhookPayload instead of dict[str, Any] for proper type safety
-                        mcp_payload_dict = create_mcp_webhook_payload(step.step_id, status_enum, step.response_data)
-                        payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
+                        # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
+                        # and requires task_type (was passed via the deprecated `domain` arg pre-5.0).
+                        payload = create_mcp_webhook_payload(
+                            step.step_id,
+                            status_enum,
+                            task_type_str,
+                            result=step.response_data,
+                        )
 
                     metadata: dict[str, Any] = {
                         "task_type": task_type_str,

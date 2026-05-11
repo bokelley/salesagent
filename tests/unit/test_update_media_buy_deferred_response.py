@@ -13,6 +13,7 @@ deferred-aware human-readable signal.
 """
 
 from src.core.schemas import UpdateMediaBuySuccess
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestDeferredResponseDistinguishableFromNoOp:
@@ -156,7 +157,9 @@ class TestDeferredResponseConstructedByImpl:
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "t_1"}),
             patch("src.core.audit_logger.AuditLogger"),
         ):
-            req = UpdateMediaBuyRequest(media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z"
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert result.workflow_step_id == "step_pending_001"

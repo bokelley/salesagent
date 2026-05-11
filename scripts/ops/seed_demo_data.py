@@ -140,9 +140,7 @@ def _seed(session) -> None:
         ),
         {
             "tid": DEFAULT_TENANT_ID,
-            "fmt_ids": json.dumps(
-                [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
-            ),
+            "fmt_ids": json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]),
             "tags": json.dumps(["all_inventory"]),
             "dm": json.dumps({"provider": "publisher", "notes": "Demo measurement"}),
         },

@@ -27,11 +27,11 @@ from src.core.tools._gam_projection import (
 from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import GAMLineItemFactory, PrincipalFactory
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.integration._gam_projection_helpers import (
     build_assigned_order_scenario,
     make_identity,
 )
-from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -141,7 +141,9 @@ class TestMaterializeProjectedBuy:
         factory_session.commit()
 
         result = _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}", paused=True),
+            req=UpdateMediaBuyRequest(
+                **required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}", paused=True
+            ),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
         assert isinstance(result, UpdateMediaBuyError)
@@ -294,7 +296,9 @@ class TestUpdateMediaBuyRejectsMutatingImportedBuy:
         factory_session.commit()
 
         result = _update_media_buy_impl(
-            req=UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}", paused=True),
+            req=UpdateMediaBuyRequest(
+                **required_request_kwargs(), media_buy_id=f"gam_{sc.order.order_id}", paused=True
+            ),
             identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
         )
 

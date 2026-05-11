@@ -14,6 +14,7 @@ import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.spec_required_kwargs import required_request_kwargs
 
 
 class TestCreateMediaBuyDryRunResponseStructure:
@@ -126,6 +127,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
 
             # Execute — impl now accepts identity instead of ctx
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_existing_123",
                 paused=True,
                 packages=[{"package_id": "pkg_1", "paused": True}],

@@ -37,8 +37,8 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
-from tests.harness._base import BaseTestEnv
 from tests.factories.spec_required_kwargs import required_request_kwargs
+from tests.harness._base import BaseTestEnv
 
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"

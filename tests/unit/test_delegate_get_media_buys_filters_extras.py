@@ -39,9 +39,7 @@ def test_coerce_propagates_framework_fields_for_get_media_buys() -> None:
 
     assert isinstance(local_req, LocalGetMediaBuysRequest)
     assert local_req.media_buy_ids == ["mb_1"]
-    assert local_req.include_snapshot is True, (
-        "include_snapshot is a buyer-facing AdCP spec field — must propagate"
-    )
+    assert local_req.include_snapshot is True, "include_snapshot is a buyer-facing AdCP spec field — must propagate"
 
 
 def test_coerce_dict_input_still_strict() -> None:

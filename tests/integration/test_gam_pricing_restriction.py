@@ -45,10 +45,10 @@ from src.core.database.models import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
-from tests.factories.spec_required_kwargs import required_request_kwargs
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -302,7 +302,8 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
 async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPCV pricing model with clear error."""
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -337,7 +338,8 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -367,9 +369,9 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None
 
 
@@ -379,7 +381,8 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -413,7 +416,8 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     from src.core.tools.media_buy_create import _create_media_buy_impl
 
     start_time, end_time = _get_future_date_range()
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -443,7 +447,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert (
-        not hasattr(response, "errors") or response.errors is None or response.errors == []
-    ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
+    )
     assert response.media_buy_id is not None

@@ -42,7 +42,8 @@ def sample_request():
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-    return CreateMediaBuyRequest(**required_request_kwargs(), 
+    return CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing"),

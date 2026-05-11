@@ -2,7 +2,7 @@
 ``protocol='mcp'`` inside an authenticated request scope.
 
 Issue #221 — defense-in-depth against the next #64-style silent-drop.
-``TransportDetectMiddleware`` populates ``current_transport`` based on
+``adcp.server.current_transport ContextVar`` populates ``current_transport`` based on
 the inbound URL path. If a future middleware-chain reordering (or a
 new code path that bypasses the middleware) leaves the ContextVar
 unset while ``current_principal`` IS set (i.e. the request is real
@@ -64,9 +64,9 @@ class TestBuildIdentityTransportFallback:
     ) -> None:
         """Misconfig signal: real authenticated request reached
         ``_build_identity`` without transport detection running."""
+        from adcp.server import current_transport
         from adcp.server.auth import current_principal
 
-        from core.middleware.transport_detect import current_transport
         from core.platforms._delegate import _build_identity
 
         _patch_supporting_calls(monkeypatch)
@@ -83,7 +83,7 @@ class TestBuildIdentityTransportFallback:
         assert identity.protocol == "mcp"
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1, f"Expected exactly one WARNING, got {len(warnings)}: {[r.message for r in warnings]}"
-        assert "TransportDetectMiddleware" in warnings[0].message
+        assert "adcp.server.current_transport ContextVar" in warnings[0].message
         assert "#221" in warnings[0].message
 
     def test_warning_dedupes_across_repeated_misconfig(
@@ -92,9 +92,9 @@ class TestBuildIdentityTransportFallback:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Warn-once-per-process: repeated misconfigured calls don't spam logs."""
+        from adcp.server import current_transport
         from adcp.server.auth import current_principal
 
-        from core.middleware.transport_detect import current_transport
         from core.platforms._delegate import _build_identity
 
         _patch_supporting_calls(monkeypatch)
@@ -118,9 +118,9 @@ class TestBuildIdentityTransportFallback:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Happy path: transport detected → no warning, protocol=actual."""
+        from adcp.server import current_transport
         from adcp.server.auth import current_principal
 
-        from core.middleware.transport_detect import current_transport
         from core.platforms._delegate import _build_identity
 
         _patch_supporting_calls(monkeypatch)
@@ -145,9 +145,9 @@ class TestBuildIdentityTransportFallback:
     ) -> None:
         """Lifespan / unit-test / admin paths don't set ``current_principal`` —
         the fallback to ``mcp`` is legitimate, no warning should fire."""
+        from adcp.server import current_transport
         from adcp.server.auth import current_principal
 
-        from core.middleware.transport_detect import current_transport
         from core.platforms._delegate import _build_identity
 
         _patch_supporting_calls(monkeypatch)

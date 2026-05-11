@@ -589,7 +589,13 @@ def _update_media_buy_impl(
                     )
                     return response_data
 
-                start = req.start_time if req.start_time else media_buy.start_time
+                # Unwrap StartTiming RootModel when req carries the typed form.
+                req_start_inner: Any = (
+                    req.start_time.root
+                    if req.start_time is not None and hasattr(req.start_time, "root")
+                    else req.start_time
+                )
+                start = req_start_inner if req_start_inner is not None else media_buy.start_time
                 end = req.end_time if req.end_time else media_buy.end_time
 
                 from datetime import datetime as dt
@@ -1448,14 +1454,16 @@ def _update_media_buy_impl(
         if req.start_time is not None or req.end_time is not None:
             update_values: dict[str, Any] = {}
             if req.start_time is not None:
-                # Parse start_time (handle 'asap' and datetime strings)
-                if isinstance(req.start_time, str):
-                    if req.start_time == "asap":
+                # req.start_time is StartTiming (RootModel[datetime | "asap"]) when constructed
+                # via Pydantic; tests may pass a bare datetime/str through model_validate. Unwrap.
+                start_inner: Any = req.start_time.root if hasattr(req.start_time, "root") else req.start_time
+                if isinstance(start_inner, str):
+                    if start_inner == "asap":
                         update_values["start_time"] = datetime.now(UTC)
                     else:
-                        update_values["start_time"] = datetime.fromisoformat(req.start_time.replace("Z", "+00:00"))
-                elif isinstance(req.start_time, datetime):
-                    update_values["start_time"] = req.start_time
+                        update_values["start_time"] = datetime.fromisoformat(start_inner.replace("Z", "+00:00"))
+                elif isinstance(start_inner, datetime):
+                    update_values["start_time"] = start_inner
 
             if req.end_time is not None:
                 # Parse end_time (datetime string or datetime object)

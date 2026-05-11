@@ -16,7 +16,8 @@ class TestPackageProductExtraction:
     def test_get_product_ids_with_single_product_id(self):
         """Test extraction from product_id field (AdCP spec compliant)."""
         # Per AdCP v2.2.0: budget removed from top-level (now at package level)
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "test.com"},
             po_number="PO-001",
             start_time="2025-02-15T00:00:00Z",
@@ -30,7 +31,8 @@ class TestPackageProductExtraction:
 
     def test_get_product_ids_with_multiple_packages(self):
         """Test extraction from multiple packages."""
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "test.com"},
             po_number="PO-002",
             start_time="2025-02-15T00:00:00Z",
@@ -53,7 +55,8 @@ class TestPackageProductExtraction:
         mock_package.product_id = None
         mock_package.products = None
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "test.com"},
             po_number="PO-003",
             start_time="2025-02-15T00:00:00Z",
@@ -77,7 +80,8 @@ class TestPackageProductExtraction:
         mock_pkg2.product_id = None
         mock_pkg2.products = None
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "test.com"},
             po_number="PO-006",
             start_time="2025-02-15T00:00:00Z",

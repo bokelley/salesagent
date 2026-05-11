@@ -59,9 +59,7 @@ def _default_workflow_repo_misses_idempotency_key(request):
     instance = MagicMock()
     instance.find_by_idempotency_key.return_value = None
     cls_mock = MagicMock(return_value=instance)
-    with patch(
-        "src.core.database.repositories.workflow.WorkflowRepository", cls_mock
-    ):
+    with patch("src.core.database.repositories.workflow.WorkflowRepository", cls_mock):
         yield
 
 

@@ -28,6 +28,8 @@ def _make_mock_media_buy():
     mb.budget = Decimal("5000.00")
     mb.currency = "USD"
     mb.raw_request = {
+        "account": {"account_id": "test-acct"},
+        "idempotency_key": "idem-test-xxxxxxxxxxxxxxxx",
         "brand": {"domain": "testbrand.com"},
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "end_time": (datetime.now(UTC) + timedelta(days=8)).isoformat(),

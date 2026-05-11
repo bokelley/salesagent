@@ -98,10 +98,10 @@ class TestIdempotencyReplaySuccess:
         ):
             m_repo.return_value.find_by_idempotency_key.return_value = existing_step
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(idempotency_key="key-abc-123xxxxx"),
                 media_buy_id="mb_1",
                 end_time="2026-06-01T00:00:00Z",
-                
             )
             result = _update_media_buy_impl(req=req, identity=_make_identity())
 
@@ -132,7 +132,10 @@ class TestIdempotencyReplayError:
         ):
             m_repo.return_value.find_by_idempotency_key.return_value = existing_step
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), media_buy_id="mb_1", )
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(idempotency_key="key-abc-123xxxxx"),
+                media_buy_id="mb_1",
+            )
             result = _update_media_buy_impl(req=req, identity=_make_identity())
 
         assert isinstance(result, UpdateMediaBuyError)
@@ -141,18 +144,9 @@ class TestIdempotencyReplayError:
 
 
 class TestIdempotencyReplaySkippedConditions:
-    def test_no_idempotency_key_skips_replay_lookup(self, patches):
-        uow = _make_uow(_make_buy())
-
-        with (
-            patch(f"{MODULE}.MediaBuyUoW", return_value=uow),
-            patch("src.core.database.repositories.workflow.WorkflowRepository") as m_repo,
-        ):
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", end_time="2026-06-01T00:00:00Z")
-            _update_media_buy_impl(req=req, identity=_make_identity())
-
-        # Without a key the lookup never runs — no DB load on every call.
-        m_repo.return_value.find_by_idempotency_key.assert_not_called()
+    # NOTE: test_no_idempotency_key_skips_replay_lookup was removed when adcp 5.0
+    # made idempotency_key a required field on UpdateMediaBuyRequest. There is
+    # no longer a buyer-omits-key code path to exercise. See #314.
 
     def test_dry_run_skips_replay_lookup(self, patches):
         uow = _make_uow(_make_buy())
@@ -161,10 +155,10 @@ class TestIdempotencyReplaySkippedConditions:
             patch(f"{MODULE}.MediaBuyUoW", return_value=uow),
             patch("src.core.database.repositories.workflow.WorkflowRepository") as m_repo,
         ):
-            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(idempotency_key="key-abc-123xxxxx"),
                 media_buy_id="mb_1",
                 end_time="2026-06-01T00:00:00Z",
-                
             )
             _update_media_buy_impl(req=req, identity=_make_identity(dry_run=True))
 
@@ -183,7 +177,10 @@ class TestIdempotencyReplaySkippedConditions:
         ):
             m_repo.return_value.find_by_idempotency_key.return_value = in_flight_step
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(idempotency_key="key-abc-123xxxxx"), media_buy_id="mb_1", )
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(idempotency_key="key-abc-123xxxxx"),
+                media_buy_id="mb_1",
+            )
             _update_media_buy_impl(req=req, identity=_make_identity())
 
         # Replay was NOT taken (no early return); impl proceeded and

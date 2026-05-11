@@ -76,7 +76,9 @@ class TestGuaranteedTypesBlockReservationFields:
         assert result.errors[0].details["blocked_fields"] == ["end_time"]
 
     def test_standard_blocks_budget_change(self):
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_1", ext={"salesagent": {"budget": 5000.0}})
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(), media_buy_id="mb_1", ext={"salesagent": {"budget": 5000.0}}
+        )
         uow = _make_uow([_pkg("prod_1")])
         session = _make_session([_product("prod_1", "STANDARD")])
 
@@ -86,7 +88,8 @@ class TestGuaranteedTypesBlockReservationFields:
         assert result.errors[0].details["blocked_fields"] == ["budget"]
 
     def test_multiple_reservation_fields_listed_alphabetically(self):
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_1",
             start_time="2026-06-01T00:00:00Z",
             end_time="2026-07-01T00:00:00Z",

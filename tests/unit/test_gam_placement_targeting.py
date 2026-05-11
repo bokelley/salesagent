@@ -9,6 +9,8 @@ These tests verify the creative-level placement targeting implementation:
 
 from unittest.mock import MagicMock
 
+from tests.factories.spec_required_kwargs import required_request_kwargs
+
 
 class TestPlacementTargetingSchema:
     """Test PlacementTargeting schema in GAM implementation config."""
@@ -190,6 +192,7 @@ class TestPlacementIdsValidation:
             mock_session.scalars.return_value = mock_scalars
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_placement",
                 packages=[
                     {
@@ -291,6 +294,7 @@ class TestPlacementIdsValidation:
             mock_session.scalars.return_value = mock_scalars
 
             req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_no_placements",
                 packages=[
                     {

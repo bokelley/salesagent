@@ -28,9 +28,9 @@ import logging
 from typing import Any
 
 from adcp.decisioning import AdcpError, RequestContext
+from adcp.server import current_transport
 from adcp.server.auth import current_principal
 
-from core.middleware.transport_detect import current_transport
 from src.core.config_loader import get_tenant_by_id
 from src.core.exceptions import AdCPError
 from src.core.resolved_identity import ResolvedIdentity
@@ -100,12 +100,10 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
 
     # Inbound transport drives webhook payload shape: A2A buyers receive
     # ``Task``/``TaskStatusUpdateEvent``, MCP buyers receive
-    # ``McpWebhookPayload``. ``TransportDetectMiddleware`` (added per #202)
-    # populates the ``current_transport`` ContextVar based on URL path;
-    # we read it here and stamp ``identity.protocol`` so every downstream
-    # impl sees the actual transport. Falls back to "mcp" when the
-    # ContextVar is unset (lifespan events, unit-test harness paths,
-    # admin requests that somehow reach here).
+    # ``McpWebhookPayload``. adcp 5.0 exposes ``adcp.server.current_transport``
+    # (#627): the dispatcher itself populates this ContextVar based on which
+    # transport invoked the handler. Falls back to "mcp" when unset (lifespan
+    # events, unit-test harness paths, admin requests that somehow reach here).
     detected_transport = current_transport.get()
     if detected_transport in ("mcp", "a2a"):
         protocol: str = detected_transport
@@ -114,22 +112,18 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
         # Forward-compat guard: if the auth chain populated
         # ``current_principal`` (only set inside HTTP requests by
         # ``BearerTokenAuthMiddleware``) but transport detection didn't,
-        # the middleware chain is misconfigured — A2A buyers will silently
-        # receive MCP-shaped webhooks. Surface once per process so the
-        # operator gets a clear signal before the next #64-style
-        # silent-drop bug. Lifespan / unit-test / admin paths don't
-        # populate ``current_principal``, so they skip this branch.
-        # See #221 for the rationale.
+        # the SDK dispatcher chain is misconfigured — A2A buyers will silently
+        # receive MCP-shaped webhooks. Surface once per process. Lifespan /
+        # unit-test / admin paths don't populate ``current_principal``, so
+        # they skip this branch. See #221 for the rationale.
         global _TRANSPORT_FALLBACK_WARNED
         if not _TRANSPORT_FALLBACK_WARNED and current_principal.get() is not None:
             _TRANSPORT_FALLBACK_WARNED = True
             logger.warning(
                 "_build_identity falling back to protocol='mcp' inside an "
-                "authenticated request scope — TransportDetectMiddleware may "
-                "not be wired or has been reordered after the auth chain. "
-                "A2A buyers will silently receive MCP-shaped webhooks. "
-                "Check core.main:_serve_kwargs middleware order. "
-                "See salesagent issue #221."
+                "authenticated request scope — adcp.server.current_transport "
+                "ContextVar was not set by the dispatcher. A2A buyers will "
+                "silently receive MCP-shaped webhooks. See salesagent issue #221."
             )
 
     return ResolvedIdentity(

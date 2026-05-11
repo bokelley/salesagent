@@ -31,6 +31,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy as DBMediaBuy
 from src.core.database.models import MediaPackage as DBMediaPackage
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.integration.media_buy_helpers import (
     _get_tenant_dict as _tenant_dict,
 )
@@ -41,7 +42,6 @@ from tests.integration.media_buy_helpers import (
     set_tenant_approval_mode,
     set_tenant_human_review_required,
 )
-from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
 
@@ -90,7 +90,8 @@ class TestBasicMediaBuyLifecycle:
         pricing_option_id = "cpm_usd_fixed"
 
         # ───────── Phase 2: create_media_buy ─────────
-        create_req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        create_req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             start_time=_future(1),
             end_time=_future(8),
@@ -266,7 +267,8 @@ class TestMediaBuyApprovalAsync:
         tenant_dict = _tenant_dict(sample_tenant["tenant_id"])
         identity = make_lifecycle_identity(tenant_dict, sample_principal["principal_id"])
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             start_time=_future(1),
             end_time=_future(8),
@@ -333,7 +335,8 @@ class TestDeliveryStatusExcludedError:
 
         # Buy starts in the future → date-derived dynamic status = "ready".
         create_result = await _create_media_buy_impl(
-            req=CreateMediaBuyRequest(**required_request_kwargs(), 
+            req=CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 start_time=_future(2),
                 end_time=_future(8),
@@ -415,7 +418,8 @@ class TestDeliveryWebhookFires:
             tenant_dict = _tenant_dict(sample_tenant["tenant_id"])
             identity = make_lifecycle_identity(tenant_dict, sample_principal["principal_id"])
 
-            create_req = CreateMediaBuyRequest(**required_request_kwargs(), 
+            create_req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 # 'asap' so the date-based dynamic status is "active" — the
                 # scheduler's status_filter=[active, completed] is evaluated
@@ -533,7 +537,8 @@ class TestDeliveryWebhookHeartbeatForPendingStart:
             identity = make_lifecycle_identity(tenant_dict, sample_principal["principal_id"])
 
             create_result = await _create_media_buy_impl(
-                req=CreateMediaBuyRequest(**required_request_kwargs(), 
+                req=CreateMediaBuyRequest(
+                    **required_request_kwargs(),
                     brand={"domain": "testbrand.com"},
                     # Future start so the date-derived dynamic status is
                     # 'pending_start'. Pre-#48 the scheduler skipped these.
@@ -649,7 +654,8 @@ class TestDeliveryWebhookOptOutPreStart:
             identity = make_lifecycle_identity(tenant_dict, sample_principal["principal_id"])
 
             create_result = await _create_media_buy_impl(
-                req=CreateMediaBuyRequest(**required_request_kwargs(), 
+                req=CreateMediaBuyRequest(
+                    **required_request_kwargs(),
                     brand={"domain": "testbrand.com"},
                     start_time=_future(2),
                     end_time=_future(8),

@@ -139,9 +139,9 @@ class TestSigningCacheInvalidationListener:
             )
             session.rollback()
 
-        assert _has_cached_entry(
-            tenant_id
-        ), "Listener evicted on rollback — sentinel still represents the durable state and must survive."
+        assert _has_cached_entry(tenant_id), (
+            "Listener evicted on rollback — sentinel still represents the durable state and must survive."
+        )
 
     def test_other_purposes_do_not_evict_webhook_cache(self, integration_db):
         tenant_id = "t_other_purpose"
@@ -180,6 +180,6 @@ class TestSigningCacheInvalidationListener:
             session.commit()
 
         assert not _has_cached_entry(tenant_a)
-        assert _has_cached_entry(
-            tenant_b
-        ), "Listener evicted tenant_b's cache when tenant_a rotated — cross-tenant leak."
+        assert _has_cached_entry(tenant_b), (
+            "Listener evicted tenant_b's cache when tenant_a rotated — cross-tenant leak."
+        )

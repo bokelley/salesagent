@@ -2005,7 +2005,8 @@ class TestProposalBasedObligations:
         fields for when the feature is built.
         """
         # proposal_id and total_budget coexist on the schema
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "test.com"},
             start_time=_future(1),
             end_time=_future(8),

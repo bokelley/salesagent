@@ -26,9 +26,7 @@ from typing import Any
 from adcp.types import AccountReference
 
 
-def required_request_kwargs(
-    *, account_id: str = "test-acct", **overrides: Any
-) -> dict[str, Any]:
+def required_request_kwargs(*, account_id: str = "test-acct", **overrides: Any) -> dict[str, Any]:
     """Return ``account`` + ``idempotency_key`` defaults satisfying the
     AdCP spec's required-field validation. Spread as ``**kwargs`` into
     ``CreateMediaBuyRequest``, ``UpdateMediaBuyRequest``, or

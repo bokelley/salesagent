@@ -65,7 +65,8 @@ def test_create_media_buy_request_with_axe_segments():
     """Test that CreateMediaBuyRequest supports AXE segment targeting in packages."""
     from datetime import datetime
 
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "example.com"},
         start_time=datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC),
         end_time=datetime(2025, 2, 15, 23, 59, 59, tzinfo=UTC),
@@ -101,7 +102,8 @@ def test_update_media_buy_request_with_axe_segments():
     """Test that UpdateMediaBuyRequest supports AXE segment targeting in package updates."""
     from src.core.schemas import AdCPPackageUpdate
 
-    request = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    request = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id="mb_test_001",
         packages=[
             AdCPPackageUpdate(

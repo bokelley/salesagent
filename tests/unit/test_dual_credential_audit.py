@@ -89,9 +89,9 @@ async def test_no_warning_when_tokens_match(caplog):
         await _drive(_http_scope(headers), middleware)
 
     assert inner.called
-    assert not [
-        r for r in caplog.records if r.levelno == logging.WARNING
-    ], "Expected no warning when both headers carry the same token"
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING], (
+        "Expected no warning when both headers carry the same token"
+    )
 
 
 @pytest.mark.asyncio

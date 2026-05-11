@@ -67,7 +67,8 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
         )
     ]
 
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "sports.example.com"},  # Required per AdCP spec
         packages=packages,  # AdCP v2.2.0: packages required
         start_time=start_time,

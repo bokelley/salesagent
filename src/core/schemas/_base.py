@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
 
 from adcp import Error
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     ContextObject,
     DeliveryStatus,  # noqa: F401 — used by Snapshot below
@@ -357,7 +356,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
-    affected_packages: list[AffectedPackage] | None = None  # type: ignore[assignment]
+    affected_packages: list[AffectedPackage] | None = None
 
     # workflow_step_id is surfaced on the wire so buyers can disambiguate
     # "deferred for approval" from "applied with no package effect" —
@@ -1433,7 +1432,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
-    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
+    packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -1560,7 +1559,7 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     # Same library default-injection bug as on the parent UpdateMediaBuyRequest
     # (Literal[True]=True). Force default to None so omitted fields don't
     # silently mark the package canceled. (#155)
-    canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
+    canceled: Literal[True] | None = Field(default=None)
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
@@ -1584,12 +1583,12 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
-    packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
+    packages: list[AdCPPackageUpdate] | None = None
     # Override library default of `canceled: Literal[True] = True`. Buyer
     # must explicitly send `canceled: true` to request cancellation;
     # omission must mean "not a cancellation request", not "default to
     # canceled". (#155)
-    canceled: Literal[True] | None = Field(default=None)  # type: ignore[assignment]
+    canceled: Literal[True] | None = Field(default=None)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -1974,7 +1973,7 @@ class Signal(LibrarySignal):
             DeprecationWarning,
             stacklevel=2,
         )
-        return self.signal_type
+        return self.signal_type.value
 
     def model_dump_internal(self, **kwargs: Any) -> dict[str, Any]:
         """Dump including internal fields for database storage.
@@ -2015,7 +2014,7 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    signals: list[Signal] = Field(..., description="Array of available signals")  # type: ignore[assignment]
+    signals: list[Signal] = Field(..., description="Array of available signals")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

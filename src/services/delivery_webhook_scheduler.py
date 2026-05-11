@@ -13,7 +13,7 @@ from typing import Any
 
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import McpWebhookPayload, NotificationType
+from adcp.types import NotificationType
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -372,16 +372,14 @@ class DeliveryWebhookScheduler:
                 "media_buy_id": media_buy.media_buy_id,
             }
 
-            # TODO: Fix in adcp python client - create_mcp_webhook_payload should accept
-            # any BaseModel for result (it handles model_dump internally), and return
-            # McpWebhookPayload instead of dict[str, Any]
-            mcp_payload_dict = create_mcp_webhook_payload(
-                task_id=media_buy.media_buy_id,  # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
-                task_type="media_buy_delivery",
-                result=delivery_response,  # type: ignore[arg-type]  # library handles BaseModel via hasattr(result, "model_dump")
+            # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
+            # and accepts any BaseModel for `result`.
+            media_buy_delivery_payload = create_mcp_webhook_payload(
+                task_id=media_buy.media_buy_id,
                 status=AdcpTaskStatus.completed,
+                task_type="media_buy_delivery",
+                result=delivery_response,
             )
-            media_buy_delivery_payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
 
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call

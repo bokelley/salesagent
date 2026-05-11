@@ -147,7 +147,8 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     identity = _make_identity(tenant_id, principal_id, token)
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
-    req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
         media_buy_id=media_buy_id,
     )
     response = _update_media_buy_impl(req=req, identity=identity)

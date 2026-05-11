@@ -68,12 +68,10 @@ from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
-from core.middleware.spec_defaults import SpecDefaultsMiddleware
-from core.middleware.transport_detect import TransportDetectMiddleware
-from core.middleware.well_known_agent_json_redirect import WellKnownAgentJsonRedirectMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
+from core.spec_default_hooks import PRE_VALIDATION_HOOKS
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
@@ -417,16 +415,6 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
-        # TransportDetectMiddleware sets a ``current_transport`` ContextVar
-        # based on the URL path so platform methods know whether the
-        # inbound request was MCP or A2A. Webhook payload shape is
-        # transport-matched (A2A buyers expect ``Task``, MCP buyers expect
-        # ``McpWebhookPayload``); without this signal the platform
-        # defaults to MCP and A2A buyers get the wrong shape. Runs after
-        # ``AdminWSGIMount`` so admin paths short-circuit before this
-        # fires (admin traffic doesn't carry buyer transport semantics).
-        # See issue #202.
-        (TransportDetectMiddleware, {}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
         # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores
@@ -434,29 +422,16 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
-        # SpecDefaultsMiddleware backfills wire fields the spec marks as
-        # required but instructs sellers to default for pre-v3 clients
-        # (e.g. GetProductsRequest.buying_mode → 'brief'). Sits *outside*
-        # the SDK validation boundary so the defaults land before the
-        # typed-dispatcher rejects the payload.
-        (SpecDefaultsMiddleware, {}),
-        # WellKnownAgentJsonRedirectMiddleware 308-redirects the 0.3-era
-        # alias /.well-known/agent.json to /.well-known/agent-card.json.
-        # The framework only registers a handler for the canonical path,
-        # so without this redirect the alias falls through to no handler
-        # and Fly's edge returns 503 to SDK clients still probing the
-        # alias for transport auto-detection (#267). Sits before
-        # AgentCardPublicUrlMiddleware so the alias short-circuits with a
-        # redirect rather than attempting a body rewrite on an empty
-        # response.
-        (WellKnownAgentJsonRedirectMiddleware, {}),
         # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
         # /.well-known/agent-card.json response with the request's public
-        # host (X-Forwarded-Host / Host). The framework hardcodes
-        # ``http://localhost:{port}/`` at server-init time and exposes no
-        # hook for injecting a public URL — without this rewrite, SDK
-        # clients reading the card try to reach the internal socket and
-        # all A2A discovery cascades to "fetch failed" (#103).
+        # host (X-Forwarded-Host / Host). adcp 5.0 added a static
+        # ``public_url=`` kwarg (#621) we feed below from ``PUBLIC_URL``,
+        # which is sufficient for single-host deployments. The middleware
+        # is still required for multi-tenant subdomain deployments where
+        # each tenant has its own public host — the static kwarg can only
+        # advertise one. Loopback-only rewrite ensures the middleware
+        # no-ops cleanly when ``public_url`` is already set to a non-
+        # loopback value. (#103.)
         (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
@@ -511,6 +486,21 @@ def _serve_kwargs(
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
         "enable_dns_rebinding_protection": (os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
+        # adcp 5.0 public_url kwarg (#621) — advertises the canonical A2A
+        # base URL on /.well-known/agent-card.json. When set, the SDK
+        # emits this URL directly instead of the bound localhost; our
+        # ``AgentCardPublicUrlMiddleware`` then no-ops for single-host
+        # deployments. Multi-tenant subdomain deployments leave this unset
+        # and rely on the middleware to rewrite per-request from
+        # ``X-Forwarded-Host``. Env: ``PUBLIC_URL``.
+        "public_url": os.environ.get("PUBLIC_URL") or None,
+        # adcp 5.0 pre_validation_hooks (#629) — replaces the bytes-level
+        # ``SpecDefaultsMiddleware``. Hooks run on the raw wire dict before
+        # schema + Pydantic validation, applying spec-mandated defaults
+        # (``buying_mode='brief'``) and shape normalisation (``format_id``
+        # wrap, ``asset_type`` inference, image→url demote). Pure Python
+        # functions; no ASGI body-rewriting.
+        "pre_validation_hooks": PRE_VALIDATION_HOOKS,
     }
 
 
@@ -533,46 +523,41 @@ def build_app():
     need the production server (or vice versa) don't pay the other
     surface's import cost.
     """
-    # Build the handler ourselves so we can hand it to the SDK's
-    # private app-builder. The decisioning.serve() one-shot wrapper
-    # binds uvicorn; we want the ASGI app without the socket.
-    from adcp.decisioning.serve import create_adcp_server_from_platform
-    from adcp.server.serve import _apply_asgi_middleware, _build_mcp_and_a2a_app
+    # adcp 5.0 exposes a public ``adcp.testing.build_asgi_app`` (#626) that
+    # composes the SDK's MCP+A2A ASGI app with the same wrapping order
+    # production uses, minus the uvicorn bind. Replaces the previous reliance
+    # on the private ``_build_mcp_and_a2a_app`` / ``_apply_asgi_middleware``
+    # symbols.
+    from adcp.testing import build_asgi_app
 
     kwargs = _serve_kwargs(include_scheduler=False, include_subdomain_routing=False)
     router = kwargs.pop("router")
     asgi_middleware = kwargs.pop("asgi_middleware")
     auto_emit = kwargs.pop("auto_emit_completion_webhooks")
+    # ``public_url`` is a production-shaping concern (writes the canonical
+    # A2A base URL into the agent-card response); tests neither read nor
+    # assert on it, so drop it from the in-process app.
+    kwargs.pop("public_url", None)
+    # ``pre_validation_hooks`` is plumbed via ``serve()`` for production;
+    # ``build_asgi_app`` doesn't forward it (tests construct payloads via
+    # typed Pydantic models, bypassing pre-validation). Drop and skip.
+    kwargs.pop("pre_validation_hooks", None)
 
-    handler, _executor, _registry = create_adcp_server_from_platform(
+    return build_asgi_app(
         router,
+        name=kwargs["name"],
         auto_emit_completion_webhooks=auto_emit,
-    )
-
-    # _build_mcp_and_a2a_app accepts a subset of serve()'s kwargs.
-    # Filter the ones the inner builder takes; the rest are uvicorn /
-    # debug-endpoint concerns that don't apply to the in-process app.
-    build_kwargs = {
-        "name": kwargs["name"],
-        "port": kwargs["port"],
-        "host": "127.0.0.1",
-        "instructions": None,
-        "test_controller": None,
-        "context_factory": kwargs["context_factory"],
-        "streaming_responses": kwargs["streaming_responses"],
-        "allowed_hosts": kwargs["allowed_hosts"],
-        "allowed_origins": kwargs["allowed_origins"],
+        auth=kwargs["auth"],
+        asgi_middleware=asgi_middleware,
+        context_factory=kwargs["context_factory"],
+        streaming_responses=kwargs["streaming_responses"],
+        allowed_origins=kwargs["allowed_origins"],
         # Tests use arbitrary base URLs (testserver, default.localhost,
-        # 127.0.0.1, etc.); production's host allowlist isn't useful in
-        # this context. Disable explicitly so requests to e.g.
-        # ``http://testserver/mcp/`` aren't rejected before the tool
-        # dispatcher runs.
-        "enable_dns_rebinding_protection": False,
-        "auth": kwargs["auth"],
-    }
-
-    app = _build_mcp_and_a2a_app(handler, **build_kwargs)
-    return _apply_asgi_middleware(app, asgi_middleware)
+        # 127.0.0.1); production's host allowlist isn't useful here.
+        # Disable so requests to ``http://testserver/mcp/`` aren't
+        # rejected before the tool dispatcher runs.
+        enable_dns_rebinding_protection=False,
+    )
 
 
 def main() -> None:

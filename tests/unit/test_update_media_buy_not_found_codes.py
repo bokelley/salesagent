@@ -91,7 +91,8 @@ class TestImplRaisesTypedNotFoundErrors:
             # Media buy exists, package does not.
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[
                     {
@@ -119,7 +120,8 @@ class TestImplRaisesTypedNotFoundErrors:
         with self._stub_uow() as uow:
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
@@ -138,7 +140,8 @@ class TestImplRaisesTypedNotFoundErrors:
             existing_mb.currency = "USD"
             uow.media_buys.get_by_id.return_value = existing_mb
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "budget": 1000.0}],
             )
@@ -164,7 +167,8 @@ class TestImplRaisesTypedNotFoundErrors:
         with self._stub_uow(manual_approval=True) as uow:
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist", "paused": True}],
             )
@@ -183,7 +187,8 @@ class TestImplRaisesTypedNotFoundErrors:
         with self._stub_uow() as uow:
             uow.media_buys.get_package.return_value = None
 
-            req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(),
                 media_buy_id="mb_exists",
                 packages=[{"package_id": "pkg_does_not_exist"}],
             )
@@ -276,7 +281,7 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
             side_effect=AdCPMediaBuyNotFoundError("Media buy 'mb_x' not found."),
         ):
             with pytest.raises(AdcpError) as exc_info:
-                self._run(_delegate_update_media_buy("mb_x", {}, ctx))
+                self._run(_delegate_update_media_buy("mb_x", required_request_kwargs(), ctx))
 
         assert exc_info.value.code == "MEDIA_BUY_NOT_FOUND"
         assert exc_info.value.recovery == "correctable"
@@ -297,7 +302,10 @@ class TestDelegateProjectsTypedErrorsToWireEnvelope:
                 self._run(
                     _delegate_update_media_buy(
                         "mb_x",
-                        {"packages": [{"package_id": "pkg_z", "paused": True}]},
+                        {
+                            **required_request_kwargs(),
+                            "packages": [{"package_id": "pkg_z", "paused": True}],
+                        },
                         ctx,
                     )
                 )

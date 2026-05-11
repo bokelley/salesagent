@@ -19,8 +19,8 @@ import pytest
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
-from tests.helpers.adcp_factories import create_test_package_request
 from tests.factories.spec_required_kwargs import required_request_kwargs
+from tests.helpers.adcp_factories import create_test_package_request
 
 
 @pytest.mark.requires_db
@@ -79,7 +79,8 @@ class TestDuplicateProductValidation:
             end_time = start_time + timedelta(days=7)
 
             # Should return error response about duplicate products
-            req = CreateMediaBuyRequest(**required_request_kwargs(), 
+            req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -92,9 +93,9 @@ class TestDuplicateProductValidation:
             error_msg = result.errors[0].message
             assert "duplicate" in error_msg.lower(), f"Error should mention 'duplicate': {error_msg}"
             assert "prod_test_1" in error_msg, f"Error should mention 'prod_test_1': {error_msg}"
-            assert (
-                "each product can only be used once" in error_msg.lower()
-            ), f"Error should say 'each product can only be used once': {error_msg}"
+            assert "each product can only be used once" in error_msg.lower(), (
+                f"Error should say 'each product can only be used once': {error_msg}"
+            )
 
     @pytest.mark.asyncio
     async def test_multiple_duplicate_products_all_listed(self, integration_db):
@@ -158,7 +159,8 @@ class TestDuplicateProductValidation:
             end_time = start_time + timedelta(days=7)
 
             # Should return error response listing both duplicate products
-            req = CreateMediaBuyRequest(**required_request_kwargs(), 
+            req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -227,7 +229,8 @@ class TestDuplicateProductValidation:
 
             # Should fail on currency validation (since we didn't set that up)
             # but NOT on duplicate product validation
-            req = CreateMediaBuyRequest(**required_request_kwargs(), 
+            req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,

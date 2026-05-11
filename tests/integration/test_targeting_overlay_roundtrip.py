@@ -31,8 +31,8 @@ from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
-from tests.integration.media_buy_helpers import _get_tenant_dict, make_lifecycle_identity
 from tests.factories.spec_required_kwargs import required_request_kwargs
+from tests.integration.media_buy_helpers import _get_tenant_dict, make_lifecycle_identity
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
 
@@ -54,7 +54,8 @@ class TestTargetingOverlayRoundtrip:
         collection_agent_url = "https://governance.pinnacle-agency.example/"
         collection_list_id = "acme_outdoor_collections_v1"
 
-        create_req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        create_req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             start_time=_future(1),
             end_time=_future(8),
@@ -93,13 +94,13 @@ class TestTargetingOverlayRoundtrip:
             assert packages, f"No MediaPackage rows for {media_buy_id}"
             persisted_overlay = (packages[0].package_config or {}).get("targeting_overlay") or {}
             persisted_property = persisted_overlay.get("property_list") or {}
-            assert (
-                persisted_property.get("list_id") == property_list_id
-            ), f"property_list.list_id missing from persisted package_config: got {persisted_overlay!r}"
+            assert persisted_property.get("list_id") == property_list_id, (
+                f"property_list.list_id missing from persisted package_config: got {persisted_overlay!r}"
+            )
             persisted_collection = persisted_overlay.get("collection_list") or {}
-            assert (
-                persisted_collection.get("list_id") == collection_list_id
-            ), f"collection_list.list_id missing from persisted package_config: got {persisted_overlay!r}"
+            assert persisted_collection.get("list_id") == collection_list_id, (
+                f"collection_list.list_id missing from persisted package_config: got {persisted_overlay!r}"
+            )
 
         # Read-path assertion — get_media_buys must echo the references back.
         # status_filter must include both pending_creatives (the variant-1
@@ -127,9 +128,9 @@ class TestTargetingOverlayRoundtrip:
         assert echoed_buy.packages, "echoed media buy has no packages"
         echoed_overlay = echoed_buy.packages[0].targeting_overlay
         assert echoed_overlay is not None, "targeting_overlay missing on echoed package"
-        assert (
-            echoed_overlay.property_list is not None
-        ), "property_list missing on echoed targeting_overlay — list-targeting specialism cannot be honored"
+        assert echoed_overlay.property_list is not None, (
+            "property_list missing on echoed targeting_overlay — list-targeting specialism cannot be honored"
+        )
         assert echoed_overlay.property_list.list_id == property_list_id
         assert echoed_overlay.collection_list is not None
         assert echoed_overlay.collection_list.list_id == collection_list_id

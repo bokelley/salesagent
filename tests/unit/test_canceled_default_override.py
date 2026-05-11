@@ -41,7 +41,8 @@ class TestUpdateMediaBuyRequestCanceledDefault:
     def test_explicit_canceled_true_preserved(self):
         # Buyer explicitly cancels — the field is preserved verbatim and
         # `cancellation_reason` can ride along per spec.
-        req = UpdateMediaBuyRequest(**required_request_kwargs(), 
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id="mb_1",
             canceled=True,
             cancellation_reason="campaign goal achieved",

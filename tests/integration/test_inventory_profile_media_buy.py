@@ -23,8 +23,8 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 from tests.factories.spec_required_kwargs import required_request_kwargs
+from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 
 
 def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
@@ -108,7 +108,8 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         start_time, end_time = _get_future_date_range()
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -123,9 +124,9 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         response, task_status = await _create_media_buy_impl(req=req, identity=ctx)
 
         # Verify success
-        assert (
-            not hasattr(response, "errors") or response.errors is None or response.errors == []
-        ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+        )
         assert response.media_buy_id is not None
         assert response.packages is not None
         assert len(response.packages) >= 1
@@ -197,7 +198,8 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
 
         # Create media buy - should succeed or return structured error, not crash
         try:
-            req = CreateMediaBuyRequest(**required_request_kwargs(), 
+            req = CreateMediaBuyRequest(
+                **required_request_kwargs(),
                 brand={"domain": "testbrand.com"},
                 packages=[
                     create_test_package_request(
@@ -284,7 +286,8 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         # Use only the first product (AdCP spec: package has singular product_id)
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -299,9 +302,9 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         )
         response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
-        assert (
-            not hasattr(response, "errors") or response.errors is None or response.errors == []
-        ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+        )
         assert response.media_buy_id is not None
         assert response.packages is not None
         assert len(response.packages) == 3
@@ -390,7 +393,8 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         start_time, end_time = _get_future_date_range()
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -404,7 +408,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         )
         response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
-        assert (
-            not hasattr(response, "errors") or response.errors is None or response.errors == []
-        ), f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
+            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
+        )
         assert response.media_buy_id is not None

@@ -22,9 +22,9 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
-from tests.factories.spec_required_kwargs import required_request_kwargs
 
 pytestmark = pytest.mark.requires_db
 
@@ -118,7 +118,8 @@ def _make_identity() -> ResolvedIdentity:
 async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
     """Same country in include and exclude → validation error via real wiring."""
     start, end = _future_dates()
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -147,7 +148,8 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
 async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
     """Same metro DMA in include and exclude → validation error via real wiring."""
     start, end = _future_dates()
-    request = CreateMediaBuyRequest(**required_request_kwargs(), 
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(

@@ -25,8 +25,8 @@ from src.core.schemas import (
     ListAuthorizedPropertiesRequest,  # Removed from adcp 3.2.0, defined locally
     UpdateMediaBuyRequest,
 )
-from tests.helpers.adcp_factories import create_test_package_request
 from tests.factories.spec_required_kwargs import required_request_kwargs
+from tests.helpers.adcp_factories import create_test_package_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -88,7 +88,8 @@ class TestMCPContractValidation:
 
     def test_create_media_buy_minimal(self):
         """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -109,7 +110,8 @@ class TestMCPContractValidation:
         Per AdCP spec, packages use product_id (singular, required) field.
         """
         # Test: Multiple packages with product IDs
-        request = CreateMediaBuyRequest(**required_request_kwargs(), 
+        request = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             po_number="PO-12345",
             packages=[
@@ -230,7 +232,8 @@ class TestSchemaDefaultValues:
         assert req.brief is None  # Optional, defaults to None per spec
 
         # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
-        req = CreateMediaBuyRequest(**required_request_kwargs(), 
+        req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
