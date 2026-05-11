@@ -179,33 +179,104 @@ class _ReplayMarkingStore(IdempotencyStore):
     states explicitly that "the seller injects ``replayed: true`` at the
     envelope level before sending." This subclass performs that injection.
 
-    The override pre-checks the cache on entry. On hit with matching payload
-    hash it returns ``{**cached, "replayed": True}`` and skips the inner
-    handler. On miss or hash mismatch it delegates to the library wrap, which
-    handles the conflict raise + cache put for the fresh response.
+    Implementation note: we reimplement the full :meth:`wrap` body inline
+    (rather than pre-checking and delegating to ``super().wrap()``) so the
+    cache lookup and the ``replayed`` injection happen in a single code path.
+    A pre-check-then-delegate design has a narrow race: worker A misses our
+    pre-check and delegates; worker B's pre-check also misses and delegates;
+    A populates the cache; B's delegated library wrap then performs its own
+    ``backend.get`` and returns the cached response **without** the
+    ``replayed`` flag — exactly the bug this class exists to fix, just on a
+    narrower window. Inlining the wrap closes that window.
     """
 
     def wrap(self, handler):  # type: ignore[no-untyped-def]
-        from adcp.server.idempotency.store import (
-            _WRAPPED_FUNCTIONS,
-            _clone_response,
-            _resolve_call_args,
-        )
+        # Private library symbols. The library deliberately exposes these as
+        # underscore-prefixed module helpers, but they are the de-facto
+        # extension surface for adopters who need to subclass the wrap path
+        # (see :class:`CachedResponse` / :class:`IdempotencyStore` docstrings).
+        # Import inside ``wrap`` so module import remains side-effect-free,
+        # and fail fast with a pinned-version hint if the library renames any
+        # of them on a minor bump — otherwise the boot validator would
+        # silently regress.
+        import copy
 
-        library_wrapped = super().wrap(handler)
+        try:
+            from adcp.server.idempotency.backends import CachedResponse
+            from adcp.server.idempotency.store import (
+                _WRAPPED_FUNCTIONS,
+                _clone_response,
+                _resolve_call_args,
+                _to_dict,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "core.idempotency._ReplayMarkingStore depends on private "
+                "adcp.server.idempotency symbols (_resolve_call_args, "
+                "_clone_response, _to_dict, _WRAPPED_FUNCTIONS, CachedResponse). "
+                "One of them was renamed in the installed adcp version. "
+                "Pin adcp to a known-good release in pyproject.toml and align "
+                "this wrap with the library's current internals."
+            ) from exc
 
         @functools.wraps(handler)
         async def _replay_aware(*args: Any, **kwargs: Any) -> Any:
             _, hash_source, context = _resolve_call_args(args, kwargs)
             scope_key, idempotency_key, params_dict = self._prepare(hash_source, context)
-            if scope_key is not None and idempotency_key is not None:
-                cached = await self.backend.get(scope_key, idempotency_key)
-                if cached is not None and cached.payload_hash == self._hash_fn(params_dict):
+            # No-key / no-principal path → forward to handler unchanged.
+            # Matches the library's fall-through behavior so missing-key
+            # validation still happens upstream (Pydantic / FastAPI).
+            if scope_key is None or idempotency_key is None:
+                return await handler(*args, **kwargs)
+
+            payload_hash = self._hash_fn(params_dict)
+            cached = await self.backend.get(scope_key, idempotency_key)
+            if cached is not None:
+                if cached.payload_hash == payload_hash:
                     response = _clone_response(cached.response)
                     if isinstance(response, dict):
                         response["replayed"] = True
                     return response
-            return await library_wrapped(*args, **kwargs)
+                # Same key, different payload — spec-defined conflict. The
+                # outer ``translate_idempotency_conflict`` decorator converts
+                # this into a wire-shaped ``AdcpError``.
+                raise IdempotencyConflictError(
+                    operation=getattr(handler, "__name__", "handler"),
+                    errors=[
+                        {
+                            "code": "IDEMPOTENCY_CONFLICT",
+                            "message": ("idempotency_key reused with a different payload (canonical hash mismatch)"),
+                        }
+                    ],
+                )
+
+            # Cache miss — run the handler, deep-copy the result so post-return
+            # mutation can't poison future replays (mirrors the library's own
+            # caching contract), then commit to the backend.
+            response = await handler(*args, **kwargs)
+            response_dict = copy.deepcopy(_to_dict(response))
+            entry = CachedResponse(
+                payload_hash=payload_hash,
+                response=response_dict,
+                expires_at_epoch=self._clock() + self.ttl_seconds,
+            )
+            try:
+                await self.backend.put(scope_key, idempotency_key, entry)
+            except Exception:
+                # Backend put failure: log loudly but return the handler's
+                # fresh response. Swallowing would hide an operational issue;
+                # raising would look like the handler failed and trigger a
+                # retry that re-executes side effects. Same compromise the
+                # library makes in its wrap.
+                logger.warning(
+                    "Idempotency cache put failed for scope=%s key_prefix=%s — "
+                    "handler completed but a subsequent retry with this key "
+                    "will re-execute rather than replay.",
+                    scope_key[:12] if isinstance(scope_key, str) else scope_key,
+                    idempotency_key[:8],
+                    exc_info=True,
+                )
+            return response
 
         # Mirror the library wrap's WeakSet registration so the boot-time
         # validator (``is_wrapped``) still recognizes our outer wrapper —
