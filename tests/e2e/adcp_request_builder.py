@@ -191,6 +191,7 @@ def build_sync_creatives_request(
     creative_ids: list[str] | None = None,
     delete_missing: bool = False,
     validation_mode: str = "strict",
+    brand: dict[str, Any] | None = None,
     # Deprecated: patch parameter removed in AdCP 2.5 - kept for backward compat
     patch: bool | None = None,
 ) -> dict[str, Any]:
@@ -224,12 +225,12 @@ def build_sync_creatives_request(
         "dry_run": dry_run,
         "validation_mode": validation_mode,
         "delete_missing": delete_missing,
-        # adcp 4.4 made idempotency_key required at the wire boundary —
-        # real buyers must generate one for retry-safe dedupe. Tests
-        # follow the same contract so the SDK validator accepts the call
-        # without server-side autogen.
-        "idempotency_key": f"e2e-sync-{uuid.uuid4()}",
     }
+    # adcp 4.4 made both ``account`` and ``idempotency_key`` required at the
+    # wire boundary on sync_creatives. Real buyers must supply them; tests
+    # follow the same contract so the SDK validator accepts the call without
+    # server-side autogen.
+    _inject_wire_required_fields(request, brand=brand, idempotency_prefix="e2e-sync")
 
     if assignments:
         # adcp 4.4 changed Assignment from a dict
