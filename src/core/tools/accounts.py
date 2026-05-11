@@ -308,40 +308,6 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     return None
 
 
-def _check_domain_validity(brand_domain: str) -> list[Any] | None:
-    """Check if the brand domain is valid for account provisioning.
-
-    Returns a list of Error objects if invalid, None if valid.
-    Reserved TLDs (.test, .invalid, .example, .localhost) are rejected
-    in production. Compliance runs (``ADCP_TESTING=true``) accept them
-    because the AdCP storyboards intentionally exercise the protocol
-    with RFC 2606 reserved test domains
-    (e.g. ``acmeoutdoor.example``) — rejecting those in a compliance
-    grade would break every sales-* scenario at the ``sync_accounts``
-    setup step.
-    """
-    import os
-
-    from adcp.types import Error
-
-    if os.environ.get("ADCP_TESTING", "").lower() in ("true", "1", "yes"):
-        return None
-
-    reserved_tlds = {".test", ".invalid", ".example", ".localhost"}
-    for tld in reserved_tlds:
-        if brand_domain.endswith(tld):
-            return [
-                Error(
-                    code="INVALID_DOMAIN",
-                    message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
-                    f"and cannot be used for account provisioning.",
-                    suggestion="Use a real domain name for production accounts.",
-                    field="brand.domain",
-                )
-            ]
-    return None
-
-
 def _read_principal_billing_enabled_sync(tenant_id: str, principal_id: str) -> bool:
     """Read ``principals.billing_enabled`` once per sync_accounts call.
 
@@ -499,22 +465,6 @@ async def _sync_accounts_impl(
         for entry in req.accounts:
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
             billing_val = _enum_to_str(entry.billing)
-
-            # Domain validation: reject reserved TLDs
-            domain_errors = _check_domain_validity(brand_domain)
-            if domain_errors is not None:
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action="failed",
-                        status="rejected",
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=domain_errors,
-                    )
-                )
-                continue
 
             # BR-RULE-059 + BR-RULE-061: check tenant + per-principal billing
             billing_errors = _check_billing_policy(

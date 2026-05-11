@@ -301,9 +301,9 @@ class TestSyncAccountsDryRun:
         assert len(response.accounts) == 1
         result = response.accounts[0]
         assert _action_value(result.action) == "created"
-        assert _status_value(result.status) == "pending_approval", (
-            "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
-        )
+        assert (
+            _status_value(result.status) == "pending_approval"
+        ), "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
         assert result.setup is not None, "dry_run must preview the setup object"
         assert result.setup.message is not None
         assert result.setup.url is not None
@@ -430,9 +430,9 @@ class TestSyncAccountsApproval:
                 tenant = fresh_session.scalars(select(Tenant).filter_by(tenant_id="harness_audit_t")).first()
                 assert tenant is not None
                 # MUST be written to account_approval_mode (BR-RULE-060)
-                assert tenant.account_approval_mode == "credit_review", (
-                    "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
-                )
+                assert (
+                    tenant.account_approval_mode == "credit_review"
+                ), "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
 
             # And the serialized tenant dict used by resolve_identity must include it
             tenant_dict = get_tenant_by_id("harness_audit_t")
@@ -594,3 +594,89 @@ class TestSyncAccountsApprovalTransport:
         acct = result.payload.accounts[0]
         assert _status_value(acct.status) == "active"
         assert acct.setup is None
+
+
+class TestSyncAccountsAccountId:
+    """Storyboard ``media_buy_seller/refine_products/sync_accounts`` (3.0.9):
+    every created account must carry a non-null platform-assigned ``account_id``
+    that is stable across re-syncs of the same natural key.
+
+    Regression for: storyboard ``field_present`` assertion on
+    ``accounts[0].account_id`` failing against production. PR #313 wired
+    sync_accounts but the reserved-TLD gate rejected the storyboard's
+    RFC 2606 ``acmeoutdoor.example`` domain in production mode, producing a
+    rejected result with no ``account_id``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_account_id_present_on_create(self, integration_db, monkeypatch):
+        # Production-mode (ADCP_TESTING off): the storyboard runner hits a
+        # plain compliance endpoint with no testing escape hatch set.
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        with AccountSyncEnv(tenant_id="aid_t1", principal_id="agent_aid1") as env:
+            env.setup_default_data()
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acmeoutdoor.example"},
+                        "operator": "pinnacle-agency.example",
+                        "billing": "operator",
+                        "payment_terms": "net_30",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert len(response.accounts) == 1
+        acct = response.accounts[0]
+        assert _action_value(acct.action) == "created"
+        assert acct.account_id is not None
+        assert acct.account_id.startswith("acc_")
+
+    @pytest.mark.asyncio
+    async def test_account_id_stable_across_resync(self, integration_db, monkeypatch):
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        with AccountSyncEnv(tenant_id="aid_t2", principal_id="agent_aid2") as env:
+            env.setup_default_data()
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acmeoutdoor.example"},
+                        "operator": "pinnacle-agency.example",
+                        "billing": "operator",
+                        "payment_terms": "net_30",
+                    }
+                ],
+            )
+            first = await env.call_impl_async(req=req)
+            second = await env.call_impl_async(req=req)
+
+        first_id = first.accounts[0].account_id
+        second_id = second.accounts[0].account_id
+        assert first_id is not None
+        assert first_id == second_id, "sync_accounts must be idempotent — same natural key → same account_id"
+
+    @pytest.mark.asyncio
+    async def test_distinct_natural_keys_get_distinct_account_ids(self, integration_db, monkeypatch):
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        with AccountSyncEnv(tenant_id="aid_t3", principal_id="agent_aid3") as env:
+            env.setup_default_data()
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acmeoutdoor.example"},
+                        "operator": "pinnacle-agency.example",
+                        "billing": "operator",
+                    },
+                    {
+                        "brand": {"domain": "betaoutdoor.example"},
+                        "operator": "pinnacle-agency.example",
+                        "billing": "operator",
+                    },
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        ids = [a.account_id for a in response.accounts]
+        assert all(i is not None for i in ids)
+        assert len(set(ids)) == 2, "Different (brand, operator) tuples must mint different account_ids"
