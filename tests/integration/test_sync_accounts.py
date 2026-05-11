@@ -680,3 +680,97 @@ class TestSyncAccountsAccountId:
         ids = [a.account_id for a in response.accounts]
         assert all(i is not None for i in ids)
         assert len(set(ids)) == 2, "Different (brand, operator) tuples must mint different account_ids"
+
+
+class TestSyncAccountsWireStatusEnum:
+    """#332: response.accounts[*].status must be a spec-valid AccountStatus.
+
+    Internal lifecycle state ``pending_provision`` (auto-approved + GAM tenant +
+    not sandbox + no pre-mapped advertiser) is collapsed to the spec value
+    ``pending_approval`` at the wire-emit boundary. Both mean "buyer can't use
+    this account yet, operator-side work pending"; the AdCP Account.status enum
+    doesn't distinguish the two.
+    """
+
+    @pytest.mark.asyncio
+    async def test_gam_tenant_new_account_wire_status_is_pending_approval(self, integration_db):
+        """GAM tenant + auto-approve + no pre-mapping → DB=pending_provision,
+        wire=pending_approval. Without the wire-side translation, Pydantic
+        validation of SyncAccountsSuccessResponse fails with:
+
+            1 validation error for Account / status / Input should be ...
+        """
+        with AccountSyncEnv(
+            tenant_id="wire_status_t1",
+            principal_id="agent_wire1",
+            ad_server="google_ad_manager",
+            account_approval_mode="auto",
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "cocacola.com"},
+                        "operator": "accuweather.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert len(response.accounts) == 1
+        result = response.accounts[0]
+        assert _action_value(result.action) == "created"
+        # Wire-shape: spec enum value (not the internal pending_provision)
+        assert _status_value(result.status) == "pending_approval", (
+            "wire status must be a spec-valid AccountStatus; pending_provision "
+            "is an internal lifecycle state and must be translated at wire-emit"
+        )
+
+        # Internal DB state still uses pending_provision — the routing logic in
+        # _create_media_buy_impl + account_provisioning.py depends on it.
+        from src.core.database.repositories.uow import AccountUoW
+
+        with AccountUoW("wire_status_t1") as uow:
+            assert uow.accounts is not None
+            db_accounts = uow.accounts.list_all()
+            assert len(db_accounts) == 1
+            assert db_accounts[0].status == "pending_provision", (
+                "internal DB status must remain pending_provision so the "
+                "provisioning chain in media_buy_create / account_provisioning "
+                "can still distinguish 'waiting for provision' from 'waiting "
+                "for human approval'"
+            )
+
+    @pytest.mark.asyncio
+    async def test_response_validates_against_spec_schema(self, integration_db):
+        """The full SyncAccountsResponse must round-trip through Pydantic
+        without raising — i.e. every nested Account.status must be in the
+        spec enum. This is the symptom #332 reported."""
+        from adcp.types.aliases import SyncAccountsSuccessResponse
+
+        with AccountSyncEnv(
+            tenant_id="wire_status_t2",
+            principal_id="agent_wire2",
+            ad_server="google_ad_manager",
+            account_approval_mode="auto",
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "cocacola.com"},
+                        "operator": "accuweather.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        # Round-trip: dump and re-validate as the library success-response
+        # type. Fails on origin/main with the same Pydantic enum error the
+        # MCP layer surfaces (#332).
+        dumped = response.model_dump(mode="json", exclude_none=True)
+        SyncAccountsSuccessResponse.model_validate(dumped)
