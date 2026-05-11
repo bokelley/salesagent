@@ -39,7 +39,24 @@ Auth setup mode allows test credentials to work per-tenant:
 import os
 from unittest.mock import patch
 
+import pytest
+
 from src.core.database.models import Tenant
+
+# Values for session["auth_method"] that must NOT grant access to the
+# setup-mode endpoints. "oidc" is the only acceptable value; everything else
+# (including the absent case, test-credentials sessions, and case-variants)
+# must 403. Pinned here so a refactor from `!= "oidc"` to a looser comparison
+# fails the parametrized regression tests below.
+NON_SSO_AUTH_METHODS = [
+    pytest.param(None, id="absent"),
+    pytest.param("test", id="test-credentials"),
+    pytest.param("password", id="password-login"),
+    pytest.param("header", id="header-auth"),
+    pytest.param("OIDC", id="case-variant-upper"),
+    pytest.param("Oidc", id="case-variant-mixed"),
+    pytest.param("", id="empty-string"),
+]
 
 
 class TestTenantAuthSetupMode:
@@ -80,9 +97,17 @@ class TestDisableSetupModeEndpoint:
     real route so a broken endpoint would actually fail.
     """
 
-    def test_disable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client):
-        """POST disable-setup-mode returns 403 when session auth_method is not 'oidc'."""
+    @pytest.mark.parametrize("auth_method", NON_SSO_AUTH_METHODS)
+    def test_disable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client, auth_method):
+        """POST disable-setup-mode returns 403 for any auth_method that is not exactly 'oidc'.
+
+        Locks in the strict equality check — including case-sensitivity and the
+        non-SSO method values that other auth paths can write (test, password, header).
+        """
         with make_users_test_client(auth_setup_mode=True, oidc_enabled=True) as (client, _):
+            if auth_method is not None:
+                with client.session_transaction() as sess:
+                    sess["auth_method"] = auth_method
             response = client.post("/tenant/default/users/disable-setup-mode")
         assert response.status_code == 403
         body = response.get_json()
@@ -206,9 +231,18 @@ class TestEnableSetupModeEndpoint:
     mode and chain into full OAuth-equivalent access.
     """
 
-    def test_enable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client):
-        """POST enable-setup-mode returns 403 when session auth_method is not 'oidc'."""
+    @pytest.mark.parametrize("auth_method", NON_SSO_AUTH_METHODS)
+    def test_enable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client, auth_method):
+        """POST enable-setup-mode returns 403 for any auth_method that is not exactly 'oidc'.
+
+        Re-enabling the test-credentials backdoor must not be reachable via
+        test-credentials, header-auth, or any case-variant — only a genuine
+        OIDC callback writes ``session["auth_method"] = "oidc"``.
+        """
         with make_users_test_client(auth_setup_mode=False) as (client, _):
+            if auth_method is not None:
+                with client.session_transaction() as sess:
+                    sess["auth_method"] = auth_method
             response = client.post("/tenant/default/users/enable-setup-mode")
         assert response.status_code == 403
         body = response.get_json()

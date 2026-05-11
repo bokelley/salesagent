@@ -235,8 +235,11 @@ def make_auth_test_client():
 def make_users_test_client():
     """Factory fixture: context manager yielding (client, mock_session) for users blueprint.
 
-    Sets up ADCP_AUTH_TEST_MODE=true + a super-admin test session so
-    @require_tenant_access() passes without a DB call. tenant_id used in routes is "default".
+    Sets up ADCP_AUTH_TEST_MODE=true + an admin-role test session so
+    @require_tenant_access(role=("admin",)) passes without a DB call. tenant_id used in routes is "default".
+
+    The session role is ``"admin"`` — not super_admin — so a regression that
+    drops ``role=("admin",)`` from the decorator would fail the test.
 
     Usage::
 
@@ -253,6 +256,7 @@ def make_users_test_client():
         auth_setup_mode: bool = True,
         oidc_enabled: bool = False,
         auth_config_exists: bool = True,
+        is_embedded: bool = False,
     ):
         app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
         client = app.test_client()
@@ -262,7 +266,7 @@ def make_users_test_client():
         mock_tenant.name = "Test Tenant"
         mock_tenant.tenant_id = "default"  # base.html subnav concatenates with string prefix
         mock_tenant.authorized_domains = []
-        mock_tenant.is_embedded = False  # otherwise list_users redirects to _embedded_locked_page
+        mock_tenant.is_embedded = is_embedded  # True triggers _embedded_locked_page on list_users
         mock_tenant.embed_breadcrumb_root = None  # resolve_embed_breadcrumb_root rejects MagicMock
 
         mock_auth_config = MagicMock() if auth_config_exists else None
@@ -281,7 +285,7 @@ def make_users_test_client():
             with client.session_transaction() as sess:
                 sess["test_user"] = "admin@test.com"
                 sess["test_tenant_id"] = "default"
-                sess["test_user_role"] = "super_admin"
+                sess["test_user_role"] = "admin"
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 yield client, mock_session
 
