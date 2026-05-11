@@ -48,6 +48,14 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Compute lockfile hash
+        id: lockhash
+        run: |
+          # ``LOCKFILE_HASH`` invalidates the uv install layer when
+          # uv.lock changes — otherwise a BuildKit cache-mount edge case
+          # can reuse a stale venv across dep bumps. See CLAUDE.md.
+          echo "value=$(shasum -a 256 uv.lock | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -58,3 +66,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            LOCKFILE_HASH=${{ steps.lockhash.outputs.value }}

@@ -192,12 +192,36 @@ def _list_creatives_impl(
     creatives = []
     total_count = 0
 
+    # Extract structured-only filter values (creative_ids, format_ids, statuses)
+    # from the validated request. These have no flat-param equivalent on the _impl
+    # signature, so prior to this fix they were silently dropped — list_creatives
+    # ignored filters.creative_ids and returned every creative in the library.
+    # Closes #318 (and #316).
+    structured_creative_ids: list[str] | None = None
+    structured_format_ids: list[str] | None = None
+    structured_statuses: list[str] | None = None
+    if req.filters:
+        if req.filters.creative_ids:
+            structured_creative_ids = list(req.filters.creative_ids)
+        if req.filters.format_ids:
+            # FormatReferenceStructuredObject has an ``id`` field (str). DB column
+            # ``Creative.format`` stores the bare format id, so match on ``.id``.
+            structured_format_ids = [fid.id for fid in req.filters.format_ids]
+        if req.filters.statuses:
+            # ``statuses`` is a list of CreativeStatus enum members. Use ``.value``
+            # to get the wire string ("approved", not "CreativeStatus.approved")
+            # so it matches the DB column.
+            structured_statuses = [s.value if hasattr(s, "value") else str(s) for s in req.filters.statuses]
+
     with CreativeUoW(tenant["tenant_id"]) as uow:
         assert uow.creatives is not None
         result = uow.creatives.get_by_principal(
             principal_id,
             status=status,
+            statuses=structured_statuses,
             format=format,
+            format_ids=structured_format_ids,
+            creative_ids=structured_creative_ids,
             tags=tags,
             created_after=created_after_dt,
             created_before=created_before_dt,
@@ -278,6 +302,31 @@ def _list_creatives_impl(
             from src.core.schemas._asset_type_compat import infer_asset_types
 
             assets_dict = infer_asset_types(assets_dict)
+            # Drop null-valued *optional* asset fields the bundled
+            # response schema declares as non-nullable scalar / object
+            # types. Pydantic ImageAsset / VideoAsset / etc. allow
+            # ``None`` on these (``str | None``); the bundled spec
+            # schema (``creative/list-creatives-response.json``) does
+            # not, so emitting ``format: null`` / ``alt_text: null`` /
+            # ``provenance: null`` makes the asset value ambiguous
+            # against the AssetVariant ``oneOf`` and the storyboard
+            # validator rejects with ``Invalid input`` at
+            # ``/creatives/0/assets/<key>``.
+            #
+            # Allowlist (vs. stripping every null) so a future field
+            # that genuinely uses ``null`` as a meaningful sentinel
+            # isn't silently elided.
+            _NULL_STRIP_FIELDS: frozenset[str] = frozenset(
+                {"format", "alt_text", "provenance", "mime_type", "container_format"}
+            )
+            assets_dict = {
+                key: (
+                    {k: v for k, v in value.items() if v is not None or k not in _NULL_STRIP_FIELDS}
+                    if isinstance(value, dict)
+                    else value
+                )
+                for key, value in assets_dict.items()
+            }
 
             # Convert string status to CreativeStatus enum
             from src.core.schemas import CreativeStatus
@@ -310,6 +359,8 @@ def _list_creatives_impl(
     # Build filters_applied list from structured filters (typed CreativeFilters model)
     filters_applied: list[str] = []
     if req.filters:
+        if req.filters.creative_ids:
+            filters_applied.append(f"creative_ids={','.join(req.filters.creative_ids)}")
         if req.filters.media_buy_ids:
             filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
         if req.filters.statuses:

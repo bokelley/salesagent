@@ -5,6 +5,7 @@ These fixtures are for complete system tests that exercise the full AdCP protoco
 Implements testing hooks from https://github.com/adcontextprotocol/adcp/pull/34
 """
 
+import hashlib
 import os
 import socket
 import subprocess
@@ -143,6 +144,20 @@ def docker_services_e2e(request):
         # Ensure SUPER_ADMIN_EMAILS is set (required by run_all_services.py)
         if not env.get("SUPER_ADMIN_EMAILS"):
             env["SUPER_ADMIN_EMAILS"] = "e2e-test@example.com"
+
+        # ``LOCKFILE_HASH`` invalidates the Dockerfile uv install layer when
+        # ``uv.lock`` changes — otherwise a BuildKit cache-mount edge case can
+        # reuse a stale venv across dep bumps. Compute the lockfile hash on
+        # the runner so the install layer's cache key changes whenever
+        # lockfile content does. See CLAUDE.md / Makefile for the full why.
+        # NOTE: keep imports at module level — a nested ``from pathlib
+        # import Path`` here would shadow the module-level binding for the
+        # entire function (Python scoping), and the earlier
+        # ``Path(".env")`` call would UnboundLocalError.
+        if "LOCKFILE_HASH" not in env:
+            lockfile = Path(__file__).resolve().parents[2] / "uv.lock"
+            if lockfile.exists():
+                env["LOCKFILE_HASH"] = hashlib.sha256(lockfile.read_bytes()).hexdigest()
 
         print("Building and starting Docker services with dynamic ports...")
         print("This may take 2-3 minutes for initial build...")

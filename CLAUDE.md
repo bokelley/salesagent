@@ -394,7 +394,9 @@ docker compose down       # Stop
 uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 ```
 
-**Note:** `docker compose` builds from local source. For a clean rebuild: `docker compose build --no-cache`
+**Note:** `docker compose` builds from local source. For a clean rebuild: `docker compose build --no-cache`.
+
+**After a dependency bump (`uv.lock` changed), always use `make compose-up`** — bare `docker compose build` can reuse a stale install layer because of a BuildKit cache-mount edge case (the `RUN uv sync --frozen` step's COPY layer hash short-circuits even when the lockfile content changed). The make target threads `LOCKFILE_HASH=<sha256 of uv.lock>` as a build arg so the install layer's cache key changes whenever lockfile content does. Symptom if you skip it: bumped a dep but the running container still imports the old version.
 
 ### Testing
 

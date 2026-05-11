@@ -164,3 +164,11 @@ class MockSellerPlatform(DecisioningPlatform):
         ctx: RequestContext[Any],
     ) -> dict[str, Any]:
         return await _delegate_provide_performance_feedback(req, ctx)
+
+    # ─────────────────────────── sync_accounts / list_accounts ──────
+    # Account dispatch lives on ``accounts`` (the AccountStore), not on
+    # the platform — the framework's LazyPlatformRouter explicitly
+    # excludes account methods from per-tenant delegation. The
+    # ``upsert`` / ``list`` methods on SalesagentAccountStore handle the
+    # wire flow; adcp >= 4.6.1's PlatformHandler dispatchers wire those
+    # store methods to the wire skill calls.

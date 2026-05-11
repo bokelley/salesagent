@@ -155,6 +155,22 @@ class AdCPGoneError(AdCPError):
     error_code = "GONE"
 
 
+class AdCPNotCancellableError(AdCPError):
+    """Media buy is in a terminal state and cannot be canceled (422, NOT_CANCELLABLE).
+
+    Raised by ``update_media_buy`` when a buyer attempts to cancel a media buy
+    whose status is already terminal (``canceled``, etc.). Re-cancel is a
+    correctable buyer mistake — agents should treat the prior cancel as the
+    authoritative outcome and stop retrying. Pre-validation runs BEFORE
+    adapter dispatch so the error is idempotency-spec friendly: the same
+    request payload always yields the same wire code regardless of adapter.
+    """
+
+    status_code = 422
+    error_code = "NOT_CANCELLABLE"
+    recovery: RecoveryHint = "correctable"
+
+
 class AdCPBudgetExhaustedError(AdCPError):
     """Budget or spend limit has been reached (422)."""
 

@@ -41,6 +41,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Same image as adcp-server (rebuilt independently by Compose
+      # for db-init's own service). Thread the lockfile hash through
+      # so the install layer's cache key invalidates on uv.lock change
+      # — see the comment on adcp-server.build.args for the full why.
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
     entrypoint: []
     env_file:
       - path: .env
@@ -78,6 +84,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Force the install layer to invalidate when uv.lock changes.
+      # ``make compose-build`` / ``make compose-up`` set this to the
+      # current uv.lock content hash. Bare ``docker compose build``
+      # without the env var fails fast inside the Dockerfile — silently
+      # regressing dependency bumps is worse than a build error.
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
     entrypoint: [] # Override image entrypoint for local dev
     env_file:
       - path: .env
