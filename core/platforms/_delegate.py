@@ -31,6 +31,7 @@ from typing import Any, TypeVar
 
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.server.auth import current_principal
+from pydantic import ValidationError
 
 from core.middleware.transport_detect import current_transport
 from src.core.config_loader import get_tenant_by_id
@@ -218,24 +219,76 @@ def _translate_adcp_error(exc: AdCPError) -> AdcpError:
     )
 
 
+def _translate_validation_error(exc: ValidationError) -> AdcpError:
+    """Translate a pydantic :class:`ValidationError` raised during request
+    coercion into the framework's wire-shaped :class:`AdcpError` with
+    ``INVALID_REQUEST`` / ``recovery="correctable"``.
+
+    Without this translation, a wire patch carrying a field our stricter
+    request schema rejects (type mismatch, unknown field under
+    ``extra='forbid'``, etc.) reaches the framework dispatcher as a bare
+    ``ValidationError``, which gets wrapped as opaque ``INTERNAL_ERROR``
+    ("Platform method 'X' raised ValidationError"). The spec-correct shape
+    for a buyer-fixable bad request is ``INVALID_REQUEST`` with the offending
+    field path so the buyer agent knows which field to repair — matching
+    the body-validation rejection already produced upstream for spec-level
+    schema violations.
+
+    The first error's ``loc`` tuple is joined into a dotted field path
+    (e.g. ``packages.0.budget``); ``details.errors`` carries the full
+    pydantic error list so the buyer agent can repair every offending
+    field in one round-trip.
+    """
+    errors = exc.errors()
+    field: str | None = None
+    message: str = "Request validation failed"
+    if errors:
+        first = errors[0]
+        loc = first.get("loc") or ()
+        if loc:
+            field = ".".join(str(part) for part in loc)
+        msg_text = first.get("msg") or message
+        if field:
+            message = f"{field}: {msg_text}"
+        else:
+            message = str(msg_text)
+    return AdcpError(
+        "INVALID_REQUEST",
+        message=message,
+        recovery="correctable",
+        field=field,
+        details={"errors": errors} if errors else None,
+    )
+
+
 _DelegateFn = TypeVar("_DelegateFn", bound=Callable[..., Awaitable[Any]])
 
 
 def translate_adcp_errors(fn: _DelegateFn) -> _DelegateFn:
-    """Decorator that translates every ``AdCPError`` raised by a delegate into
-    the framework's wire-shaped :class:`AdcpError`.
+    """Decorator that translates structured rejections raised by a delegate
+    into the framework's wire-shaped :class:`AdcpError`.
+
+    Catches two exception classes:
+
+    * Salesagent ``AdCPError`` subclasses → translated by
+      :func:`_translate_adcp_error` to preserve typed codes
+      (``MEDIA_BUY_NOT_FOUND``, ``PACKAGE_NOT_FOUND``, ``TERMS_REJECTED``, etc.).
+    * Pydantic ``ValidationError`` raised by request coercion → translated by
+      :func:`_translate_validation_error` to ``INVALID_REQUEST`` with
+      ``recovery="correctable"`` and the offending field path.
 
     Both the MCP and A2A dispatchers project the framework ``AdcpError`` onto
     the ``adcp_error`` envelope (MCP: ``CallToolResult.structuredContent``;
-    A2A: ``Task.artifacts[0].parts[0].data``). Untranslated salesagent errors
-    bubble through both dispatchers' generic ``except Exception`` and surface
-    as opaque ``INTERNAL_ERROR``, breaking the spec-mandated typed codes
-    (``MEDIA_BUY_NOT_FOUND``, ``PACKAGE_NOT_FOUND``, ``TERMS_REJECTED``, etc.).
+    A2A: ``Task.artifacts[0].parts[0].data``). Untranslated exceptions bubble
+    through both dispatchers' generic ``except Exception`` and surface as
+    opaque ``INTERNAL_ERROR`` — for ``ValidationError`` that masquerades as
+    "Platform method 'X' raised ValidationError" on the wire, which is wrong
+    for both transports (MCP should see ``INVALID_REQUEST``; A2A buyers see
+    "Task failed" with no actionable signal).
 
     Wrapping the delegate — which is the single shared entry point used by
     both ``MockSellerPlatform`` and ``GamPlatform`` — guarantees both
-    transports translate identically. Replaces ad-hoc per-delegate
-    ``try/except AdCPError`` blocks; new delegates inherit the translation
+    transports translate identically. New delegates inherit the translation
     by adding the decorator.
     """
 
@@ -245,6 +298,8 @@ def translate_adcp_errors(fn: _DelegateFn) -> _DelegateFn:
             return await fn(*args, **kwargs)
         except AdCPError as exc:
             raise _translate_adcp_error(exc) from exc
+        except ValidationError as exc:
+            raise _translate_validation_error(exc) from exc
 
     return _wrapper  # type: ignore[return-value]
 

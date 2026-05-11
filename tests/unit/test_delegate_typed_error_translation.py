@@ -168,6 +168,61 @@ def test_typed_error_translates_to_wire_envelope_on_both_transports(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Pydantic ValidationError → INVALID_REQUEST translation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("transport", ["mcp", "a2a"])
+def test_pydantic_validation_error_translates_to_invalid_request(transport: str) -> None:
+    """A pydantic :class:`ValidationError` raised during request coercion
+    inside a ``_delegate_*`` MUST surface on the wire as ``INVALID_REQUEST``
+    with ``recovery="correctable"``, not as opaque ``INTERNAL_ERROR``.
+
+    Regression for the bug where a wire patch with a field our stricter
+    request schema rejects (type mismatch under
+    ``CreateMediaBuyRequest`` / ``UpdateMediaBuyRequest``) would raise
+    ``ValidationError`` past the salesagent translator. The framework's
+    generic ``except Exception`` would then wrap it as
+    ``INTERNAL_ERROR: "Platform method 'update_media_buy' raised
+    ValidationError"`` — on A2A this lands as "Task failed".
+
+    The field path (e.g. ``packages.0``) must be projected onto the
+    framework :class:`AdcpError`'s ``field`` attribute so the buyer
+    agent knows which field to repair.
+    """
+    from core.platforms import _delegate
+
+    fake_ctx = object()
+    # Send a bad patch: ``packages`` typed as list[AdCPPackageUpdate] but we
+    # send a string. Pydantic raises ValidationError during coercion inside
+    # ``_coerce_to_request_model`` — that's the exception the decorator
+    # must catch and translate.
+    bad_patch = {"packages": "not_a_list"}
+
+    with patch("core.platforms._delegate.current_transport", MagicMock(get=MagicMock(return_value=transport))):
+        with patch.object(_delegate, "_build_identity", return_value=_identity_stub()):
+            with pytest.raises(WireAdcpError) as exc_info:
+                asyncio.run(_delegate._delegate_update_media_buy("mb_x", bad_patch, fake_ctx))
+
+    assert exc_info.value.code == "INVALID_REQUEST", (
+        f"transport={transport}: expected wire code INVALID_REQUEST for "
+        f"pydantic ValidationError, got {exc_info.value.code!r}. Without the "
+        f"translator the framework wraps ValidationError as INTERNAL_ERROR."
+    )
+    assert exc_info.value.recovery == "correctable", (
+        f"transport={transport}: ValidationError is buyer-fixable; "
+        f"recovery must be 'correctable', got {exc_info.value.recovery!r}"
+    )
+    # The first validation error's field path must surface so the buyer
+    # agent can repair the offending field. ``packages`` is a list of
+    # AdCPPackageUpdate; pydantic reports ``loc=('packages', 0)`` when the
+    # input string is iterated into characters.
+    assert exc_info.value.field is not None and exc_info.value.field.startswith(
+        "packages"
+    ), f"transport={transport}: expected field path under 'packages', got {exc_info.value.field!r}"
+
+
 def test_every_delegate_is_decorated_with_translate_adcp_errors() -> None:
     """Architectural guard: any new ``_delegate_*`` function added to
     ``core.platforms._delegate`` MUST be wrapped with
