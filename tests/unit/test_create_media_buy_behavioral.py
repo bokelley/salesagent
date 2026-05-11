@@ -279,7 +279,9 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        # Canonical AdCP enum is uppercase ``VALIDATION_ERROR`` —
+        # adcontextprotocol/adcp #342 finding 3.
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 
@@ -318,7 +320,9 @@ class TestMaxDailySpendExceeded:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        # Canonical AdCP enum is uppercase ``VALIDATION_ERROR`` —
+        # adcontextprotocol/adcp #342 finding 3.
+        assert errors[0].code == "VALIDATION_ERROR"
         assert "daily" in errors[0].message.lower()
 
     @pytest.mark.asyncio

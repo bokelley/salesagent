@@ -91,6 +91,38 @@ class TestTranslateIdempotencyConflictDecorator:
         assert await handler() == {"ok": True}
 
     @pytest.mark.asyncio
+    async def test_idempotency_conflict_does_not_leak_field_pointer(self):
+        """The :class:`AdcpError` raised on conflict MUST NOT include a
+        ``field`` json-pointer.
+
+        AdCP L1/security idempotency rule: even a generic pointer like
+        ``"idempotency_key"`` reveals schema shape and acts as a probing
+        oracle — the spec says the IDEMPOTENCY_CONFLICT body MUST NOT
+        include any ``field``. Regression for sales-agent #342 finding 4.
+        """
+
+        @translate_idempotency_conflict
+        async def handler() -> dict[str, Any]:
+            raise IdempotencyConflictError(
+                operation="create_media_buy",
+                errors=[
+                    {
+                        "code": "IDEMPOTENCY_CONFLICT",
+                        "message": "idempotency_key reused with a different payload",
+                    }
+                ],
+            )
+
+        with pytest.raises(AdcpError) as exc_info:
+            await handler()
+
+        assert getattr(exc_info.value, "field", None) is None, (
+            "IDEMPOTENCY_CONFLICT body must not include a 'field' json-pointer "
+            "(oracle-resistance); got "
+            f"field={getattr(exc_info.value, 'field', None)!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_existing_adcp_error_pass_through(self):
         """An :class:`AdcpError` raised by the inner handler (e.g.
         :class:`AdcpError("INVALID_REQUEST")`) must reach the dispatcher

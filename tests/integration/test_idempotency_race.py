@@ -136,6 +136,108 @@ class TestBuildIdempotencyHitResult:
         assert result.response.packages[0].package_id == "pkg_winner_1"
         assert result.status == "completed"
 
+    def test_replay_marks_response_replayed_true(self, integration_db):
+        """The rebuilt response carries ``replayed=True`` on its envelope.
+
+        Regression for salesagent #342 finding 1: AdCP L1/security idempotency
+        rule 4 requires that any cached-response replay sets the envelope
+        ``replayed`` flag so buyer agents can suppress side effects on retry.
+        The DB-level idempotency race-recovery path returns the existing media
+        buy — that's a replay from the buyer's perspective and must be marked.
+        """
+        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+
+        idem_key = f"replay-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"rep_t_{uuid.uuid4().hex[:6]}"
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            principal = PrincipalFactory(tenant=tenant)
+            principal_id = principal.principal_id
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                idempotency_key=idem_key,
+                status="active",
+            )
+            MediaPackageFactory(media_buy=buy, package_id="pkg_replay_1")
+            env.get_session()
+
+        result = _build_idempotency_hit_result(
+            tenant_id=tenant_id,
+            idempotency_key=idem_key,
+            principal_id=principal_id,
+            context=None,
+        )
+
+        # ``CreateMediaBuySuccess`` extends a library type with ``extra='allow'``
+        # so ``replayed`` round-trips on the wire envelope.
+        dumped = result.response.model_dump(mode="json")
+        assert dumped.get("replayed") is True, (
+            "Idempotency replay must inject ``replayed: true`` on the envelope "
+            f"(AdCP L1/security rule 4); response: {dumped!r}"
+        )
+
+    def test_replay_preserves_package_fields_from_config(self, integration_db):
+        """The rebuilt Package echoes buyer-visible fields persisted in
+        ``package_config``: ``product_id``, ``pricing_option_id``, ``paused``,
+        ``canceled``, etc.
+
+        Regression for salesagent #342 finding 2: the replay payload MUST be
+        byte-stable with the original response — a bare ``Package(package_id=...)``
+        drops everything else and lets buyers see different shapes across
+        parallel replays of the same idempotency_key.
+        """
+        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+
+        idem_key = f"fields-{uuid.uuid4().hex[:8]}"
+        tenant_id = f"fld_t_{uuid.uuid4().hex[:6]}"
+
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            principal = PrincipalFactory(tenant=tenant)
+            principal_id = principal.principal_id
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                idempotency_key=idem_key,
+                status="pending_creatives",
+            )
+            # Factory-defaulted ``package_config`` only carries package_id /
+            # product_id / budget. Override with the full set we expect to
+            # round-trip on replay.
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_full_1",
+                package_config={
+                    "package_id": "pkg_full_1",
+                    "product_id": "prod_291a023d",
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "paused": False,
+                    "canceled": False,
+                    "budget": 1000.0,
+                },
+            )
+            env.get_session()
+
+        result = _build_idempotency_hit_result(
+            tenant_id=tenant_id,
+            idempotency_key=idem_key,
+            principal_id=principal_id,
+            context=None,
+        )
+
+        assert len(result.response.packages) == 1
+        package = result.response.packages[0]
+        assert package.package_id == "pkg_full_1"
+        assert package.product_id == "prod_291a023d"
+        assert package.pricing_option_id == "cpm_usd_fixed"
+        assert package.paused is False
+        assert package.canceled is False
+        assert package.budget == 1000.0
+
 
 class TestIdempotencyRaceRecovery:
     """Integration test: IntegrityError catch + _build_idempotency_hit_result recovery.

@@ -1687,22 +1687,64 @@ def _build_idempotency_hit_result(
             )
 
         db_packages = uow.media_buys.get_packages(existing.media_buy_id)
-        response_packages = [Package(package_id=pkg.package_id) for pkg in db_packages]
+        # Rebuild AdCP Package response from the persisted ``package_config``
+        # so the replay payload is byte-stable with the original response
+        # (AdCP L1/security idempotency rule: only envelope fields may differ
+        # between original and replay). A bare ``Package(package_id=...)``
+        # drops ``product_id``, ``pricing_option_id``, ``paused``, ``canceled``,
+        # ``budget``, etc. and fails the conformance suite.
+        response_packages = [_package_from_config(pkg) for pkg in db_packages]
 
         try:
             adcp_status = MediaBuyStatus(existing.status)
         except ValueError:
             adcp_status = MediaBuyStatus.pending_start
 
+        # AdCP L1/security idempotency rule 4: the cached-response replay MUST
+        # inject ``replayed: true`` on the outgoing protocol envelope so buyer
+        # agents can suppress side effects (notifications, downstream calls,
+        # memory writes) on retry. ``CreateMediaBuyResponse1`` has
+        # ``extra='allow'``, so the field round-trips through the wire.
         return CreateMediaBuyResult(
             response=CreateMediaBuySuccess(
                 media_buy_id=existing.media_buy_id,
                 packages=response_packages,
                 status=adcp_status,
                 context=context,
+                replayed=True,
             ),
             status=AdcpTaskStatus.completed.value,
         )
+
+
+def _package_from_config(db_package: Any) -> Package:
+    """Rebuild a wire-shaped :class:`Package` from a persisted ``MediaPackage``.
+
+    Reads buyer-supplied fields from the JSON ``package_config`` blob (where
+    create_media_buy persists ``product_id``, ``pricing_option_id``, ``paused``,
+    ``canceled``, ``budget``, etc.) and merges with the dedicated columns. Used
+    on the idempotency-replay path so cached replays return the same package
+    shape the buyer saw on the original commit.
+    """
+    config = db_package.package_config or {}
+    kwargs: dict[str, Any] = {"package_id": db_package.package_id}
+    # Echo buyer-visible AdCP package fields from the persisted config.
+    # We use ``in`` rather than ``.get(...) is not None`` so explicit ``null``
+    # values round-trip on replay — matches the original wire payload.
+    for field in (
+        "product_id",
+        "pricing_option_id",
+        "name",
+        "paused",
+        "canceled",
+        "budget",
+        "creative_assignments",
+        "format_ids_to_provide",
+        "impressions",
+    ):
+        if field in config:
+            kwargs[field] = config[field]
+    return Package(**kwargs)
 
 
 async def _create_media_buy_impl(
@@ -2357,7 +2399,7 @@ async def _create_media_buy_impl(
         # Return error response with failed status
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="validation_error", message=str(e), details=None)],
+                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
@@ -2665,10 +2707,12 @@ async def _create_media_buy_impl(
                             package_config.update(
                                 {
                                     "product_id": req_pkg.product_id,
+                                    "pricing_option_id": getattr(req_pkg, "pricing_option_id", None),
                                     "budget": budget_value,
                                     "targeting_overlay": req_pkg.targeting_overlay,
                                     "creative_ids": _get_creative_ids(req_pkg),
                                     "format_ids": req_pkg.format_ids,
+                                    "canceled": getattr(pkg_obj, "canceled", False),
                                     "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                                     "impressions": getattr(
                                         req_pkg, "impressions", None
@@ -3567,16 +3611,25 @@ async def _create_media_buy_impl(
                     # references per the AdCP spec for sellers claiming list-targeting specialisms.
                     request_targeting_overlay = request_pkg.targeting_overlay if request_pkg is not None else None
 
+                    # Persist buyer-supplied pricing_option_id from the original
+                    # request package so the idempotency-replay rebuild path
+                    # (_build_idempotency_hit_result) can echo it on cached
+                    # replays — AdCP L1/security rule: the replay payload MUST
+                    # be byte-stable across replays, only envelope fields differ.
+                    request_pricing_option_id = getattr(request_pkg, "pricing_option_id", None) if request_pkg else None
                     package_config = {
                         "package_id": resp_package_id,
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
                         "product_id": getattr(resp_package, "product_id", None),
+                        "pricing_option_id": getattr(resp_package, "pricing_option_id", None)
+                        or request_pricing_option_id,
                         "budget": getattr(resp_package, "budget", None),
                         "targeting_overlay": request_targeting_overlay,
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),
                         "paused": paused,  # Store paused state (adcp 2.12.0)
+                        "canceled": getattr(resp_package, "canceled", False),
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                         "impressions": impressions,  # Store impressions for display
                     }

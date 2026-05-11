@@ -85,6 +85,11 @@ def translate_idempotency_conflict(handler: _F) -> _F:
         try:
             return await handler(*args, **kwargs)
         except IdempotencyConflictError as exc:
+            # AdCP L1/security idempotency rule: the IDEMPOTENCY_CONFLICT body
+            # MUST NOT include a ``field`` json-pointer (even a generic one)
+            # to preserve oracle resistance — a pointer reveals schema shape
+            # and gives attackers a probing signal. Omit ``field`` here so the
+            # wire envelope carries only code + message + recovery.
             raise AdcpError(
                 "IDEMPOTENCY_CONFLICT",
                 message=(
@@ -93,7 +98,6 @@ def translate_idempotency_conflict(handler: _F) -> _F:
                     "uuid.uuid4() key and retry"
                 ),
                 recovery="correctable",
-                field="idempotency_key",
             ) from exc
 
     # The framework's boot-time ``validate_idempotency_wiring`` calls
@@ -163,6 +167,54 @@ def _build_pool():
     )
 
 
+class _ReplayMarkingStore(IdempotencyStore):
+    """:class:`IdempotencyStore` subclass that injects ``replayed: true`` on
+    the cache-hit envelope.
+
+    AdCP L1/security idempotency rule 4 mandates that a cached-response replay
+    MUST set the envelope-level ``replayed`` flag so buyer agents can suppress
+    side effects (notifications, downstream tool calls, memory writes) on
+    retry. The upstream :class:`IdempotencyStore.wrap` returns the cached
+    response verbatim — the library docstring on :class:`CachedResponse`
+    states explicitly that "the seller injects ``replayed: true`` at the
+    envelope level before sending." This subclass performs that injection.
+
+    The override pre-checks the cache on entry. On hit with matching payload
+    hash it returns ``{**cached, "replayed": True}`` and skips the inner
+    handler. On miss or hash mismatch it delegates to the library wrap, which
+    handles the conflict raise + cache put for the fresh response.
+    """
+
+    def wrap(self, handler):  # type: ignore[no-untyped-def]
+        from adcp.server.idempotency.store import (
+            _WRAPPED_FUNCTIONS,
+            _clone_response,
+            _resolve_call_args,
+        )
+
+        library_wrapped = super().wrap(handler)
+
+        @functools.wraps(handler)
+        async def _replay_aware(*args: Any, **kwargs: Any) -> Any:
+            _, hash_source, context = _resolve_call_args(args, kwargs)
+            scope_key, idempotency_key, params_dict = self._prepare(hash_source, context)
+            if scope_key is not None and idempotency_key is not None:
+                cached = await self.backend.get(scope_key, idempotency_key)
+                if cached is not None and cached.payload_hash == self._hash_fn(params_dict):
+                    response = _clone_response(cached.response)
+                    if isinstance(response, dict):
+                        response["replayed"] = True
+                    return response
+            return await library_wrapped(*args, **kwargs)
+
+        # Mirror the library wrap's WeakSet registration so the boot-time
+        # validator (``is_wrapped``) still recognizes our outer wrapper —
+        # the validator does NOT walk ``__wrapped__``, so omitting this
+        # silently regresses the wiring check.
+        _WRAPPED_FUNCTIONS.add(_replay_aware)
+        return _replay_aware
+
+
 def get_idempotency_store() -> IdempotencyStore:
     """Return the process-wide :class:`IdempotencyStore`.
 
@@ -189,7 +241,7 @@ def get_idempotency_store() -> IdempotencyStore:
                 "CORE_IDEMPOTENCY_BACKEND=memory). Multi-worker deployments "
                 "MUST set DATABASE_URL so PgBackend takes over."
             )
-            _STORE = IdempotencyStore(backend=MemoryBackend(), ttl_seconds=86400)
+            _STORE = _ReplayMarkingStore(backend=MemoryBackend(), ttl_seconds=86400)
             return _STORE
 
         # PgBackend path. The pool MUST open on the same event loop that
@@ -205,7 +257,7 @@ def get_idempotency_store() -> IdempotencyStore:
         backend = _LazyBootstrapPgBackend(pool=_POOL)
 
         logger.info("Idempotency: PgBackend constructed (pool will open on first async use)")
-        _STORE = IdempotencyStore(backend=backend, ttl_seconds=86400)
+        _STORE = _ReplayMarkingStore(backend=backend, ttl_seconds=86400)
         return _STORE
 
 
