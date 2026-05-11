@@ -191,6 +191,17 @@ class CreativeSyncEnv(IntegrationEnv):
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.
 
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
+
+        Spec-required wire fields (per AdCP 4.5+ ``SyncCreativesRequest``):
+        ``account``, ``idempotency_key``. Default them from the test's
+        ``(tenant_id, principal_id)`` when the caller doesn't pass them
+        explicitly, mirroring the ``required_request_kwargs()`` factory
+        helper used by unit/integration tests building request models.
         """
+        import uuid
+
         kwargs.setdefault("creatives", [])
+        if "account" not in kwargs:
+            kwargs["account"] = {"account_id": f"{self._tenant_id}:{self._principal_id}"}
+        kwargs.setdefault("idempotency_key", f"idem-test-{uuid.uuid4().hex}")
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)

@@ -520,39 +520,53 @@ def build_app():
     need the production server (or vice versa) don't pay the other
     surface's import cost.
     """
-    # adcp 5.0 exposes a public ``adcp.testing.build_asgi_app`` (#626) that
-    # composes the SDK's MCP+A2A ASGI app with the same wrapping order
-    # production uses, minus the uvicorn bind. Replaces the previous reliance
-    # on the private ``_build_mcp_and_a2a_app`` / ``_apply_asgi_middleware``
-    # symbols.
-    from adcp.testing import build_asgi_app
+    # adcp 5.1 ships ``adcp.testing.build_asgi_app`` (#626), but it composes
+    # the MCP leg only — A2A isn't included, so any in-process test that
+    # POSTs to ``/`` (A2A host-root) gets a 401 from the MCP-side auth
+    # middleware that sees a missing ``x-adcp-auth`` header on the A2A
+    # ``Authorization: Bearer`` request. Until the SDK exposes a public
+    # both-transports test builder, fall back to the private
+    # ``_build_mcp_and_a2a_app`` symbol which production's ``serve()``
+    # uses internally and wraps BOTH legs with auth. Filed upstream:
+    # request public ``adcp.testing.build_asgi_app(transport="both")``.
+    from adcp.decisioning.serve import create_adcp_server_from_platform
+    from adcp.server.serve import _apply_asgi_middleware, _build_mcp_and_a2a_app
 
     kwargs = _serve_kwargs(include_scheduler=False, include_subdomain_routing=False)
     router = kwargs.pop("router")
     asgi_middleware = kwargs.pop("asgi_middleware")
     auto_emit = kwargs.pop("auto_emit_completion_webhooks")
-    pre_validation_hooks = kwargs.pop("pre_validation_hooks", None)
     # ``public_url`` is a production-shaping concern (writes the canonical
     # A2A base URL into the agent-card response); tests neither read nor
     # assert on it, so drop it from the in-process app.
     kwargs.pop("public_url", None)
+    pre_validation_hooks = kwargs.pop("pre_validation_hooks", None)
 
-    return build_asgi_app(
+    handler, _executor, _registry = create_adcp_server_from_platform(
         router,
-        name=kwargs["name"],
         auto_emit_completion_webhooks=auto_emit,
-        auth=kwargs["auth"],
-        asgi_middleware=asgi_middleware,
+    )
+
+    app = _build_mcp_and_a2a_app(
+        handler,
+        name=kwargs["name"],
+        port=kwargs["port"],
+        host="127.0.0.1",
+        instructions=None,
+        test_controller=None,
         context_factory=kwargs["context_factory"],
         streaming_responses=kwargs["streaming_responses"],
+        allowed_hosts=kwargs["allowed_hosts"],
         allowed_origins=kwargs["allowed_origins"],
-        pre_validation_hooks=pre_validation_hooks,
         # Tests use arbitrary base URLs (testserver, default.localhost,
         # 127.0.0.1); production's host allowlist isn't useful here.
         # Disable so requests to ``http://testserver/mcp/`` aren't
         # rejected before the tool dispatcher runs.
         enable_dns_rebinding_protection=False,
+        auth=kwargs["auth"],
+        pre_validation_hooks=pre_validation_hooks,
     )
+    return _apply_asgi_middleware(app, asgi_middleware)
 
 
 def main() -> None:

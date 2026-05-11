@@ -68,7 +68,11 @@ class SalesagentAccountStore:
         ref: dict[str, Any] | None = None,
         auth_info: AuthInfo | None = None,
     ) -> Account[dict[str, Any]]:
-        tenant_id = self._tenant_from_principal() or self._tenant_from_subdomain() or self._tenant_from_ref(ref)
+        tenant_id = (
+            self._tenant_from_principal(auth_info)
+            or self._tenant_from_subdomain()
+            or self._tenant_from_ref(ref)
+        )
         if tenant_id is None or not self._tenant_exists(tenant_id):
             raise AdcpError(
                 "ACCOUNT_NOT_FOUND",
@@ -93,28 +97,41 @@ class SalesagentAccountStore:
         )
 
     @staticmethod
-    def _tenant_from_principal() -> str | None:
+    def _tenant_from_principal(auth_info: AuthInfo | None = None) -> str | None:
         """Authenticated principal's tenant — beats subdomain.
 
-        ``BearerTokenAuthMiddleware`` populates two ContextVars on
-        successful token validation: ``current_principal`` (the
-        ``caller_identity`` string) and the auth-module's own
-        ``current_tenant`` (the principal's ``tenant_id``). We prefer
-        the latter when present — a request that authenticates as a
-        principal in ``tenant_xyz`` belongs to ``tenant_xyz`` even
-        when the Host header points elsewhere (embedded mode, single
-        ingress fronting many tenants).
+        Resolution order:
 
-        Falls back to a DB lookup keyed on the principal_id if the
-        auth module's tenant ContextVar is unset for any reason — a
-        defensive belt-and-suspenders pattern, since ``current_tenant``
-        in adcp.server.auth is set in lockstep with ``current_principal``
-        by the middleware.
+        1. ``auth_info.principal`` — the framework-canonical handoff.
+           ``serve()`` threads the verified principal onto every
+           ``AccountStore.resolve`` call via this argument; reading it
+           here is task-safe (the MCP handler runs in a different
+           asyncio task than the bearer-auth middleware, so its
+           ContextVars may not be visible).
+        2. ``adcp.server.auth.current_tenant`` ContextVar — set by
+           :class:`BearerTokenAuthMiddleware` when the middleware and
+           the handler share a task (A2A, REST). Falls back here when
+           ``auth_info`` is absent (callers outside the framework
+           dispatch, e.g. legacy admin paths).
+        3. ``adcp.server.auth.current_principal`` ContextVar → DB
+           lookup. Defensive belt-and-suspenders.
+
+        Returns ``None`` if no principal can be resolved by any path —
+        callers fall through to subdomain / ref resolution.
         """
-        tenant_id = auth_current_tenant.get()
-        if tenant_id:
-            return tenant_id
-        principal_id = current_principal.get()
+        # 1. Framework-canonical: auth_info.principal carries the principal_id
+        # the bearer middleware verified, regardless of which task we're in.
+        principal_id: str | None = None
+        if auth_info is not None and getattr(auth_info, "principal", None):
+            principal_id = auth_info.principal
+        else:
+            # 2. ContextVar fast path (same-task callers).
+            tenant_id = auth_current_tenant.get()
+            if tenant_id:
+                return tenant_id
+            # 3. ContextVar principal → DB lookup fallback.
+            principal_id = current_principal.get()
+
         if not principal_id:
             return None
         with get_db_session() as session:

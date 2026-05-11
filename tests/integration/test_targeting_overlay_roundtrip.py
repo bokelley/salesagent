@@ -166,6 +166,7 @@ class TestTargetingOverlayRoundtrip:
 
         # Step 1 — create with v1 references
         create_req = CreateMediaBuyRequest(
+            **required_request_kwargs(),
             brand={"domain": "testbrand.com"},
             start_time=_future(1),
             end_time=_future(8),
@@ -197,6 +198,7 @@ class TestTargetingOverlayRoundtrip:
 
         # Step 2 — update with v2 references
         update_req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
             media_buy_id=media_buy_id,
             packages=[
                 {

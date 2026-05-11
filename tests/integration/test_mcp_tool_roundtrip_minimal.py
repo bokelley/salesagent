@@ -84,6 +84,7 @@ class TestMCPToolRoundtripMinimal:
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
                     "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+                    **_wire_envelope("roundtrip-create"),
                 },
             )
 
@@ -121,6 +122,7 @@ class TestMCPToolRoundtripMinimal:
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
                     "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+                    **_wire_envelope("roundtrip-update-create"),
                 },
             )
 
@@ -207,7 +209,8 @@ class TestMCPToolRoundtripMinimal:
                             "click_url": {"url": "https://example.com"},
                         },
                     }
-                ]
+                ],
+                **_wire_envelope("roundtrip-sync"),
             },
         )
 
