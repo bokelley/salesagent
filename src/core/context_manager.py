@@ -8,8 +8,27 @@ from typing import Any
 
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import McpWebhookPayload
+from adcp.types import McpWebhookPayload, TaskType
 from adcp.webhooks import GeneratedTaskStatus
+
+
+def _coerce_task_type(raw: str | None) -> TaskType | None:
+    """Map an arbitrary step ``tool_name`` to a ``TaskType`` enum member.
+
+    adcp 5.0 closed ``TaskType`` to a fixed enum. Workflow steps carry a free-form
+    ``tool_name`` that includes values not in the enum (custom approval actions,
+    internal review steps, schema events). Returning ``None`` for non-enum
+    values tells the caller to skip webhook construction rather than throw a
+    ValidationError when ``create_mcp_webhook_payload`` validates the field.
+    """
+    if not raw:
+        return None
+    try:
+        return TaskType(raw)
+    except ValueError:
+        return None
+
+
 from rich.console import Console
 from sqlalchemy import select
 
@@ -705,7 +724,8 @@ class ContextManager(DatabaseManager):
                     # ``"mcp"`` only when the step pre-dates the middleware
                     # (legacy data) or was created outside an HTTP request
                     # (admin / lifespan paths). See #202.
-                    task_type_str = step.tool_name or mapping.action or "unknown"
+                    raw_task_type = step.tool_name or mapping.action or ""
+                    task_type_enum = _coerce_task_type(raw_task_type)
                     protocol = (step.request_data or {}).get("protocol", "mcp")
                     try:
                         status_enum = GeneratedTaskStatus(new_status)
@@ -720,18 +740,30 @@ class ContextManager(DatabaseManager):
                             context_id=step.context_id,
                             result=step.response_data or {},
                         )
-                    else:
+                    elif task_type_enum is not None:
                         # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
-                        # and requires task_type (was passed via the deprecated `domain` arg pre-5.0).
+                        # and requires task_type to be a closed TaskType enum value
+                        # (was a free-form ``domain`` string pre-5.0).
                         payload = create_mcp_webhook_payload(
                             step.step_id,
                             status_enum,
-                            task_type_str,
+                            task_type_enum,
                             result=step.response_data,
                         )
+                    else:
+                        # Non-enum tool_name (internal review action, custom step,
+                        # etc.) — MCP webhook spec doesn't model these. Skip the
+                        # webhook rather than fail at validation. The buyer-facing
+                        # state still updates via the DB; the webhook is best-effort.
+                        logger.info(
+                            "Skipping MCP webhook for step %s: tool_name=%r is not a TaskType enum member.",
+                            step.step_id,
+                            raw_task_type,
+                        )
+                        continue
 
                     metadata: dict[str, Any] = {
-                        "task_type": task_type_str,
+                        "task_type": raw_task_type or "unknown",
                         "tenant_id": derived_tenant_id,
                         "principal_id": derived_principal_id,
                     }

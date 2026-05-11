@@ -373,11 +373,19 @@ class DeliveryWebhookScheduler:
             }
 
             # adcp 5.0+: create_mcp_webhook_payload returns McpWebhookPayload directly
-            # and accepts any BaseModel for `result`.
+            # and accepts any BaseModel for `result`. ``task_type`` is restricted
+            # to the closed adcp.types.TaskType enum — scheduled delivery reports
+            # don't have their own enum member (they're push, not task-driven),
+            # so we map to ``get_creative_delivery`` which is the closest
+            # semantically (the buyer-pull tool fetching the same metrics shape).
+            # Buyer-side dispatch reads ``notification_type=delivery_report`` in
+            # the metadata, so the task_type narrowing doesn't change behaviour.
+            # Tracked upstream: request a ``media_buy_delivery`` TaskType member
+            # or a non-task webhook builder for scheduled reports.
             media_buy_delivery_payload = create_mcp_webhook_payload(
                 task_id=media_buy.media_buy_id,
                 status=AdcpTaskStatus.completed,
-                task_type="media_buy_delivery",
+                task_type="get_creative_delivery",
                 result=delivery_response,
             )
 
