@@ -157,9 +157,23 @@ class TestDeliverySimulatorRestart:
             assert active_count == 3, f"Expected 3 simulations, found {active_count}"
 
         finally:
-            # Cleanup: Stop all simulations
+            # Cleanup: Stop all simulations AND wait for their threads to exit
+            # before deleting media_buys. ``stop_simulation`` is non-blocking
+            # — it only sets the stop signal; the simulation thread continues
+            # firing ``send_delivery_webhook`` (which writes to media_buys-
+            # referencing tables) until it next checks the signal. Deleting
+            # the media_buy while those writes are in flight produces FK
+            # violations and (with three concurrent simulator threads) inter-
+            # session deadlocks that mark the test DB unhealthy and cascade
+            # into 13 downstream test failures. Mirror the unit-test pattern
+            # (tests/unit/test_delivery_simulator.py:55-56) of explicit
+            # join-with-timeout after stop_simulation.
+            threads = [delivery_simulator._active_simulations.get(mb_id) for mb_id in media_buy_ids]
             for media_buy_id in media_buy_ids:
                 delivery_simulator.stop_simulation(media_buy_id)
+            for thread in threads:
+                if thread is not None:
+                    thread.join(timeout=5.0)
 
             # Cleanup: Delete media buys
             with get_db_session() as session:
