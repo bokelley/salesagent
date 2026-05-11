@@ -37,7 +37,7 @@ Auth setup mode allows test credentials to work per-tenant:
 # ---
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.core.database.models import Tenant
 
