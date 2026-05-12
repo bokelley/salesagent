@@ -134,14 +134,35 @@ class TestEnvironmentAndOptional:
 class TestFreeWheelProductConfig:
     def test_defaults_are_empty(self):
         cfg = FreeWheelProductConfig()
+        # Inventory
         assert cfg.site_ids == []
         assert cfg.site_section_ids == []
         assert cfg.video_group_ids == []
         assert cfg.series_ids == []
         assert cfg.ad_unit_package_id is None
+        # Audience
+        assert cfg.viewership_profile_ids == []
+        assert cfg.audience_item_ids == []
+        # Content classification
+        assert cfg.genre_ids == []
+        assert cfg.content_daypart_ids == []
+        assert cfg.content_duration_ids == []
+        assert cfg.content_territory_ids == []
+        assert cfg.language_ids == []
+        # Delivery context
+        assert cfg.device_type_ids == []
+        assert cfg.os_ids == []
+        assert cfg.environment_ids == []
+        assert cfg.stream_type_ids == []
+        assert cfg.subscription_model_ids == []
+        # Privacy
+        assert cfg.addressability_ids == []
+        assert cfg.privacy_signal_ids == []
         assert cfg.tv_rating_ids == []
+        # Pricing
         assert cfg.priority is None
         assert cfg.price_model is None
+        # Escape hatches
         assert cfg.targeting_profile_id is None
         assert cfg.custom_targeting == {}
 
@@ -161,6 +182,45 @@ class TestFreeWheelProductConfig:
         assert cfg.tv_rating_ids == [11, 12]
         assert cfg.price_model == "ACTUAL_ECPM"
         assert cfg.priority == 10
+
+    def test_audience_fields_accepted(self):
+        cfg = FreeWheelProductConfig(
+            viewership_profile_ids=[101, 102],
+            audience_item_ids=[5001, 5002],
+        )
+        assert cfg.viewership_profile_ids == [101, 102]
+        assert cfg.audience_item_ids == [5001, 5002]
+
+    def test_full_targeting_envelope_round_trips(self):
+        """Every targeting dimension persists through model_dump/validate."""
+        cfg = FreeWheelProductConfig(
+            site_ids=[1, 2],
+            video_group_ids=[10],
+            series_ids=[100],
+            ad_unit_package_id=51949,
+            viewership_profile_ids=[1001],
+            audience_item_ids=[2001],
+            genre_ids=[300],
+            content_daypart_ids=[7],
+            content_duration_ids=[8],
+            content_territory_ids=[9],
+            language_ids=[42],
+            device_type_ids=[60],
+            os_ids=[1],
+            environment_ids=[2],
+            stream_type_ids=[3],
+            subscription_model_ids=[4],
+            addressability_ids=[20],
+            privacy_signal_ids=[1, 2, 3],
+            tv_rating_ids=[11],
+            price_model="FIXED_PRICE",
+            priority=5,
+        )
+        dumped = cfg.model_dump()
+        rehydrated = FreeWheelProductConfig.model_validate(dumped)
+        assert rehydrated.model_dump() == dumped
+        assert rehydrated.privacy_signal_ids == [1, 2, 3]
+        assert rehydrated.subscription_model_ids == [4]
 
     def test_advanced_targeting_fields_kept(self):
         """Targeting profile + custom KV are escape hatches; still supported."""

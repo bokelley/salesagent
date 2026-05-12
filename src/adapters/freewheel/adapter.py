@@ -76,6 +76,7 @@ from src.adapters.base import (
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.freewheel.client import FreeWheelClient, FreeWheelError
+from src.adapters.freewheel.formats import freewheel_creative_formats
 from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS, FreeWheelConnectionConfig, FreeWheelProductConfig
 from src.adapters.freewheel.targeting import build_targeting, validate_targeting
 from src.core.schemas import (
@@ -167,6 +168,16 @@ class FreeWheelAdapter(AdServerAdapter):
     def get_supported_pricing_models(self) -> set[str]:
         return {"cpm", "flat_rate"}
 
+    def get_creative_formats(self) -> list[dict[str, Any]]:
+        """Return the static set of VAST video formats this adapter supports.
+
+        FreeWheel delivers video via VAST tag forwarding — the six declared
+        formats cover the common pre/mid/post-roll × 15s/30s combinations.
+        See :mod:`._formats` for the canonical list and the rationale for
+        declaring statically rather than synthesising from synced data.
+        """
+        return freewheel_creative_formats(self.tenant_id)
+
     def get_targeting_capabilities(self) -> TargetingCapabilities:
         return TargetingCapabilities(
             geo_countries=True,
@@ -194,6 +205,29 @@ class FreeWheelAdapter(AdServerAdapter):
         # ultimately becomes ad_unit_nodes attached to the placement; that write
         # path is blocked on the v4 ``ad_unit_nodes`` scope, so for now we just
         # echo the configured intent.
+        # Targeting fields that are list-shaped — echo every configured
+        # dimension into the dry-run payload so operators can verify intent.
+        list_dimensions = (
+            "site_ids",
+            "site_section_ids",
+            "video_group_ids",
+            "series_ids",
+            "viewership_profile_ids",
+            "audience_item_ids",
+            "genre_ids",
+            "content_daypart_ids",
+            "content_duration_ids",
+            "content_territory_ids",
+            "language_ids",
+            "device_type_ids",
+            "os_ids",
+            "environment_ids",
+            "stream_type_ids",
+            "subscription_model_ids",
+            "addressability_ids",
+            "privacy_signal_ids",
+            "tv_rating_ids",
+        )
         payload: dict[str, Any] = {
             "name": package.name,
             "advertiser_id": self.advertiser_id,
@@ -202,16 +236,13 @@ class FreeWheelAdapter(AdServerAdapter):
             "impression_goal": package.impressions,
             "rate": rate,
             "rate_type": rate_type,
-            "site_ids": list(product_config.get("site_ids", [])),
-            "site_section_ids": list(product_config.get("site_section_ids", [])),
-            "video_group_ids": list(product_config.get("video_group_ids", [])),
-            "series_ids": list(product_config.get("series_ids", [])),
             "ad_unit_package_id": product_config.get("ad_unit_package_id"),
-            "tv_rating_ids": list(product_config.get("tv_rating_ids", [])),
             "price_model": product_config.get("price_model"),
             "targeting": build_targeting(package.targeting_overlay, product_config),
             "external_id": package.package_id,
         }
+        for dim in list_dimensions:
+            payload[dim] = list(product_config.get(dim, []))
         if product_config.get("priority") is not None:
             payload["priority"] = product_config["priority"]
         return payload

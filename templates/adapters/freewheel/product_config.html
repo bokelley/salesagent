@@ -105,6 +105,191 @@ Expected context:
             </small>
         </div>
 
+        <h4 style="margin-top: 2rem;">Audience</h4>
+
+        <div class="form-group">
+            <label for="impl_viewership_profile_ids">Viewership Profiles</label>
+            <select id="impl_viewership_profile_ids" name="impl_viewership_profile_ids" multiple size="6"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="viewership_profiles"
+                    data-selected="{{ (implementation_config.get('viewership_profile_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading viewership profiles…</option>
+            </select>
+            <small class="form-text text-muted">
+                FreeWheel-standardised audience profiles (e.g. Adults 25-34). Use alongside
+                Video Groups for finer audience targeting.
+            </small>
+        </div>
+
+        <details style="margin-top: 0.5rem;">
+            <summary style="cursor: pointer; font-weight: 500;">
+                Custom audience items (Data Suite — gated)
+            </summary>
+            <div class="form-group" style="margin-top: 0.75rem;">
+                <label for="impl_audience_item_ids">Audience Item IDs</label>
+                <input type="text" id="impl_audience_item_ids" name="impl_audience_item_ids"
+                       value="{{ (implementation_config.get('audience_item_ids', [])|join(', ')) if implementation_config else '' }}"
+                       placeholder="Comma-separated numeric IDs">
+                <small class="form-text text-muted">
+                    Requires the FreeWheel Data Suite (AUDIENCE_TAB +
+                    FW_DATA_SUITE_BUY_SIDE/SELL_SIDE). Stored on the product but not
+                    exercised against the live API until those features are enabled.
+                </small>
+            </div>
+        </details>
+
+        <h4 style="margin-top: 2rem;">Content Classification</h4>
+
+        <div class="form-group">
+            <label for="impl_genre_ids">Genres</label>
+            <select id="impl_genre_ids" name="impl_genre_ids" multiple size="6" class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="genres"
+                    data-selected="{{ (implementation_config.get('genre_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading genres…</option>
+            </select>
+            <small class="form-text text-muted">Restrict to content of these genres.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_content_daypart_ids">Dayparts</label>
+            <select id="impl_content_daypart_ids" name="impl_content_daypart_ids" multiple size="3"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="content_dayparts"
+                    data-selected="{{ (implementation_config.get('content_daypart_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading dayparts…</option>
+            </select>
+            <small class="form-text text-muted">Daytime / Latenight / Primetime restrictions.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_content_duration_ids">Content Length</label>
+            <select id="impl_content_duration_ids" name="impl_content_duration_ids" multiple size="3"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="content_durations"
+                    data-selected="{{ (implementation_config.get('content_duration_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading durations…</option>
+            </select>
+            <small class="form-text text-muted">Short Form / Mid Form / Long Form buckets.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_content_territory_ids">Content Territories</label>
+            <select id="impl_content_territory_ids" name="impl_content_territory_ids" multiple size="6"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="content_territories"
+                    data-selected="{{ (implementation_config.get('content_territory_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading territories…</option>
+            </select>
+            <small class="form-text text-muted">Geographic content scoping.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_language_ids">Languages</label>
+            <select id="impl_language_ids" name="impl_language_ids" multiple size="6"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="languages"
+                    data-selected="{{ (implementation_config.get('language_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading languages…</option>
+            </select>
+            <small class="form-text text-muted">Content-language restrictions.</small>
+        </div>
+
+        <h4 style="margin-top: 2rem;">Delivery Context</h4>
+
+        <div class="form-group">
+            <label for="impl_device_type_ids">Device Types</label>
+            <select id="impl_device_type_ids" name="impl_device_type_ids" multiple size="6"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="device_types"
+                    data-selected="{{ (implementation_config.get('device_type_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading device types…</option>
+            </select>
+            <small class="form-text text-muted">CTV apps, mobile, desktop, set-top boxes, etc.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_os_ids">Operating Systems</label>
+            <select id="impl_os_ids" name="impl_os_ids" multiple size="3"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="oss"
+                    data-selected="{{ (implementation_config.get('os_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading OSs…</option>
+            </select>
+            <small class="form-text text-muted">Android / iOS / Windows.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_environment_ids">Environment</label>
+            <select id="impl_environment_ids" name="impl_environment_ids" multiple size="2"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="environments"
+                    data-selected="{{ (implementation_config.get('environment_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading environments…</option>
+            </select>
+            <small class="form-text text-muted">App vs Web delivery.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_stream_type_ids">Stream Types</label>
+            <select id="impl_stream_type_ids" name="impl_stream_type_ids" multiple size="4"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="stream_types"
+                    data-selected="{{ (implementation_config.get('stream_type_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading stream types…</option>
+            </select>
+            <small class="form-text text-muted">Digital DAI / Linear Addressable / Live / Live Events / etc.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_subscription_model_ids">Subscription Models</label>
+            <select id="impl_subscription_model_ids" name="impl_subscription_model_ids" multiple size="3"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="subscription_models"
+                    data-selected="{{ (implementation_config.get('subscription_model_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading subscription models…</option>
+            </select>
+            <small class="form-text text-muted">FAST / Full Ad Load / Light Ad Load.</small>
+        </div>
+
+        <h4 style="margin-top: 2rem;">Privacy &amp; Compliance</h4>
+
+        <div class="form-group">
+            <label for="impl_addressability_ids">Addressability Categories</label>
+            <select id="impl_addressability_ids" name="impl_addressability_ids" multiple size="6"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="addressabilities"
+                    data-selected="{{ (implementation_config.get('addressability_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading addressabilities…</option>
+            </select>
+            <small class="form-text text-muted">Addressable Cookies / Device ID / Federated Segments / etc.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_privacy_signal_ids">Privacy Signals</label>
+            <select id="impl_privacy_signal_ids" name="impl_privacy_signal_ids" multiple size="3"
+                    class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="privacies"
+                    data-selected="{{ (implementation_config.get('privacy_signal_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading privacy signals…</option>
+            </select>
+            <small class="form-text text-muted">
+                Privacy-aware audience scoping (Has Privacy Signal, Opt-Out Eligible, No Privacy Signal).
+            </small>
+        </div>
+
         <h4 style="margin-top: 2rem;">Pricing &amp; Priority</h4>
 
         <div class="form-group">

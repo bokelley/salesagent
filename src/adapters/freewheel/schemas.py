@@ -155,7 +155,106 @@ class FreeWheelProductConfig(BaseProductConfig):
         ),
     )
 
-    # Compliance + content restrictions
+    # Audience targeting
+    viewership_profile_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel viewership profile IDs (from standard_attributes."
+            "viewership_profiles). Network-standardized audiences "
+            "(e.g., 'Adults', 'Adults 25-34'). For richer custom audience "
+            "targeting, also see ``video_group_ids`` (publisher-curated) and "
+            "``audience_item_ids`` (Data Suite, gated)."
+        ),
+    )
+    audience_item_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel Audience Item IDs from the Data Suite API. Requires "
+            "AUDIENCE_TAB + FW_DATA_SUITE_BUY_SIDE + FW_DATA_SUITE_SELL_SIDE "
+            "features enabled at the network level. Stored on the product but "
+            "not currently exercised against the live API (token-side feature "
+            "flag denied for our Talpa setup)."
+        ),
+    )
+
+    # Content classification
+    genre_ids: list[int] = Field(
+        default_factory=list,
+        description="FreeWheel content genre IDs (from standard_attributes.genres)",
+    )
+    content_daypart_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel content daypart IDs (from standard_attributes."
+            "content_dayparts). Talpa exposes 'Daytime', 'Latenight', 'Primetime'."
+        ),
+    )
+    content_duration_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel content duration IDs (from standard_attributes."
+            "content_durations). Buckets: 'Short Form', 'Mid Form', 'Long Form'."
+        ),
+    )
+    content_territory_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel content territory IDs (from standard_attributes."
+            "content_territories). Geographic content scoping."
+        ),
+    )
+    language_ids: list[int] = Field(
+        default_factory=list,
+        description="FreeWheel language IDs (from standard_attributes.languages)",
+    )
+
+    # Delivery context
+    device_type_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel device type IDs (from standard_attributes.device_types). "
+            "76 entries on Talpa — CTV apps, mobile, desktop, etc."
+        ),
+    )
+    os_ids: list[int] = Field(
+        default_factory=list,
+        description="FreeWheel OS IDs (from standard_attributes.oss) — Android/iOS/Windows",
+    )
+    environment_ids: list[int] = Field(
+        default_factory=list,
+        description="FreeWheel environment IDs (from standard_attributes.environments) — App vs Web",
+    )
+    stream_type_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel stream type IDs (from standard_attributes.stream_types). "
+            "Talpa: Digital DAI, Linear Addressable, Live, Live Events, etc."
+        ),
+    )
+    subscription_model_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel subscription model IDs (from standard_attributes."
+            "subscription_models). Talpa: FAST, Full Ad Load, Light Ad Load."
+        ),
+    )
+
+    # Privacy + compliance
+    addressability_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel addressability category IDs (from standard_attributes."
+            "addressabilities). Cookies / Device ID / Federated Segments / etc."
+        ),
+    )
+    privacy_signal_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel privacy signal IDs (from standard_attributes.privacies). "
+            "Talpa: Has Privacy Signal(s), Privacy Signal Opt-Out Eligible, "
+            "No Privacy Signal."
+        ),
+    )
     tv_rating_ids: list[int] = Field(
         default_factory=list,
         description=(
