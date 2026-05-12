@@ -145,6 +145,16 @@ class FreeWheelCommercialClient:
         root = self._transport.post_xml(f"{_BASE}/campaign", body)
         return Campaign.model_validate(_element_to_dict(root))
 
+    def update_campaign(self, campaign_id: int, **fields: Any) -> Campaign:
+        """Partial-update a campaign via PUT (PATCH returns 405).
+
+        Only fields provided in ``**fields`` are sent; unset fields retain
+        their current value server-side. Returns the full updated campaign.
+        """
+        body = _build_xml("campaign", fields)
+        root = self._transport.put_xml(f"{_BASE}/campaign/{campaign_id}", body)
+        return Campaign.model_validate(_element_to_dict(root))
+
     def delete_campaign(self, campaign_id: int) -> None:
         """Hard-delete a campaign. Confirmed end-to-end against the live API."""
         self._transport.delete_xml(f"{_BASE}/campaign/{campaign_id}")
@@ -168,6 +178,22 @@ class FreeWheelCommercialClient:
         root = self._transport.get_xml(f"{_BASE}/insertion_orders/{insertion_order_id}")
         return InsertionOrder.model_validate(_element_to_dict(root))
 
+    def create_insertion_order(self, *, name: str, campaign_id: int, **extra: Any) -> InsertionOrder:
+        """Create an insertion order under a campaign.
+
+        Minimum required body is ``name`` + ``campaign_id`` (verified on
+        2026-05-12). Server defaults: ``stage=NOT_BOOKED``, ``currency=EUR``,
+        and auto-attaches an ``assigned_user`` derived from the bearer
+        token's identity (ignored by our model — extra fields are dropped).
+        """
+        body = _build_xml("insertion_order", {"name": name, "campaign_id": campaign_id, **extra})
+        root = self._transport.post_xml(f"{_BASE}/insertion_order", body)
+        return InsertionOrder.model_validate(_element_to_dict(root))
+
+    def delete_insertion_order(self, insertion_order_id: int) -> None:
+        """Hard-delete an insertion order. Verified end-to-end."""
+        self._transport.delete_xml(f"{_BASE}/insertion_order/{insertion_order_id}")
+
     # ----- placements -----
 
     def list_placements(
@@ -182,6 +208,21 @@ class FreeWheelCommercialClient:
             params["advertiser_id"] = advertiser_id
         root = self._transport.get_xml(f"{_BASE}/placements", **params)
         return PaginatedResponse[Placement].model_validate(_parse_collection(root, "placement"))
+
+    def create_placement(self, *, name: str, insertion_order_id: int, **extra: Any) -> Placement:
+        """Create a placement under an insertion order.
+
+        Minimum required body is ``name`` + ``insertion_order_id`` (verified
+        2026-05-12). Server defaults: ``status=IN_ACTIVE``,
+        ``placement_type=NORMAL``.
+        """
+        body = _build_xml("placement", {"name": name, "insertion_order_id": insertion_order_id, **extra})
+        root = self._transport.post_xml(f"{_BASE}/placement", body)
+        return Placement.model_validate(_element_to_dict(root))
+
+    def delete_placement(self, placement_id: int) -> None:
+        """Hard-delete a placement. Verified end-to-end."""
+        self._transport.delete_xml(f"{_BASE}/placement/{placement_id}")
 
     def get_placement(self, placement_id: int) -> Placement:
         root = self._transport.get_xml(f"{_BASE}/placements/{placement_id}")

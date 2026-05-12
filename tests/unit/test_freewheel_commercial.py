@@ -101,6 +101,89 @@ class TestCampaignCreate:
         assert call["method"] == "DELETE"
         assert call["url"].endswith("/services/v3/campaign/91439758")
 
+    def test_update_campaign_uses_put(self):
+        """v3 update verb is PUT — PATCH returns 405."""
+        session = MagicMock()
+        session.request.return_value = _make_response(
+            "<campaign><id>91439758</id><name>name 50</name><description>updated</description></campaign>"
+        )
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        updated = client.update_campaign(91439758, description="updated")
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "PUT"
+        assert call["url"].endswith("/services/v3/campaign/91439758")
+        assert "<description>updated</description>" in call["data"]
+        # Fields not passed should NOT appear in the body — partial update.
+        assert "<name>" not in call["data"]
+        assert updated.description == "updated"
+
+
+class TestInsertionOrderCreate:
+    def test_create_io_posts_singular_path_with_campaign_id(self):
+        session = MagicMock()
+        session.request.return_value = _make_response(
+            "<insertion_order><id>93935458</id><campaign_id>91439758</campaign_id>"
+            "<name>io probe</name><stage>NOT_BOOKED</stage><currency>EUR</currency>"
+            "</insertion_order>"
+        )
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        io = client.create_insertion_order(name="io probe", campaign_id=91439758)
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "POST"
+        assert call["url"].endswith("/services/v3/insertion_order")
+        assert "<name>io probe</name>" in call["data"]
+        assert "<campaign_id>91439758</campaign_id>" in call["data"]
+        assert io.id == 93935458
+        assert io.campaign_id == 91439758
+        assert io.currency == "EUR"
+
+    def test_delete_io(self):
+        session = MagicMock()
+        session.request.return_value = _make_response("")
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        client.delete_insertion_order(93935458)
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "DELETE"
+        assert call["url"].endswith("/services/v3/insertion_order/93935458")
+
+
+class TestPlacementCreate:
+    def test_create_placement_posts_singular_path_with_io_id(self):
+        session = MagicMock()
+        session.request.return_value = _make_response(
+            "<placement><id>93935461</id><insertion_order_id>93935458</insertion_order_id>"
+            "<name>placement probe</name><status>IN_ACTIVE</status>"
+            "<placement_type>NORMAL</placement_type></placement>"
+        )
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        placement = client.create_placement(name="placement probe", insertion_order_id=93935458)
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "POST"
+        assert call["url"].endswith("/services/v3/placement")
+        assert "<name>placement probe</name>" in call["data"]
+        assert "<insertion_order_id>93935458</insertion_order_id>" in call["data"]
+        assert placement.id == 93935461
+        assert placement.placement_type == "NORMAL"
+
+    def test_delete_placement(self):
+        session = MagicMock()
+        session.request.return_value = _make_response("")
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        client.delete_placement(93935461)
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "DELETE"
+        assert call["url"].endswith("/services/v3/placement/93935461")
+
 
 class TestInsertionOrders:
     def test_list_io_paginates(self):

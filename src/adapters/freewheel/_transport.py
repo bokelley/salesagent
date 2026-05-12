@@ -102,6 +102,19 @@ class FreeWheelTransport:
         )
         return ET.fromstring(response.text)
 
+    def put_xml(self, path: str, body: str) -> ET.Element:
+        """PUT an XML body and parse the XML response. v3 uses PUT (not PATCH)
+        for partial updates — only the fields included in the body are
+        modified server-side."""
+        response = self._request(
+            "PUT",
+            path,
+            accept="application/xml",
+            body=body,
+            content_type="application/xml",
+        )
+        return ET.fromstring(response.text)
+
     def delete_xml(self, path: str) -> None:
         """DELETE a v3 resource. Response body (if any) is discarded."""
         self._request("DELETE", path, accept="application/xml")

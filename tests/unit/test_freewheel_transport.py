@@ -75,6 +75,19 @@ class TestContentTypeNegotiation:
         assert headers["Content-Type"] == "application/xml"
         assert headers["accept"] == "application/xml"
 
+    def test_put_xml_uses_put_method(self):
+        session = MagicMock()
+        session.request.return_value = _stub_response(
+            200, text="<campaign><id>1</id></campaign>", content=b"<campaign><id>1</id></campaign>"
+        )
+        FreeWheelTransport(api_token="t", session=session).put_xml(
+            "/services/v3/campaign/1", "<campaign><description>x</description></campaign>"
+        )
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "PUT"
+        assert call["headers"]["Content-Type"] == "application/xml"
+
 
 class TestStatusMapping:
     @pytest.mark.parametrize(
