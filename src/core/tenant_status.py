@@ -21,7 +21,7 @@ def is_tenant_ad_server_configured(tenant_id: str) -> bool:
     A tenant is considered configured if:
     - For GAM: OAuth token OR service account credentials exist
     - For Triton: publisher username/password exist in config_json
-    - For FreeWheel: OAuth client_id/client_secret/network_id exist in config_json
+    - For FreeWheel: api_token (bearer) exists in config_json
     - For Mock: Always configured
     - For others: Adapter config exists
 
@@ -81,9 +81,9 @@ def is_tenant_ad_server_configured(tenant_id: str) -> bool:
 
             elif adapter_type == "freewheel":
                 config = adapter_config.config_json or {}
-                has_creds = bool(config.get("client_id") and config.get("client_secret") and config.get("network_id"))
+                has_creds = bool(config.get("api_token"))
                 if not has_creds:
-                    logger.info(f"Tenant {tenant_id} FreeWheel adapter missing OAuth credentials")
+                    logger.info(f"Tenant {tenant_id} FreeWheel adapter missing bearer token")
                 return has_creds
 
             else:
@@ -167,12 +167,8 @@ def get_tenant_status(tenant_id: str) -> dict:
 
             elif adapter_type == "freewheel":
                 config = adapter_config.config_json or {}
-                if not config.get("client_id"):
-                    missing_config.append("FreeWheel OAuth client_id not set")
-                if not config.get("client_secret"):
-                    missing_config.append("FreeWheel OAuth client_secret not set")
-                if not config.get("network_id"):
-                    missing_config.append("FreeWheel network_id not set")
+                if not config.get("api_token"):
+                    missing_config.append("FreeWheel api_token not set")
 
             # Mock adapter doesn't need additional config
             status["is_configured"] = len(missing_config) == 0

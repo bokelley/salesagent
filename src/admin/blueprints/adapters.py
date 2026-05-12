@@ -271,36 +271,29 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/test-connection", methods=["POST"])
 @require_tenant_access(role=("admin",))
 def test_freewheel_connection(tenant_id, **kwargs):
-    """Verify FreeWheel OAuth credentials by performing a client_credentials token fetch.
+    """Verify a FreeWheel bearer token by calling /auth/token/info.
 
-    Accepts ``client_id``, ``network_id``, ``environment`` (production/staging) and
-    ``client_secret`` (optional — falls back to the encrypted secret already stored
-    on AdapterConfig.config_json).
+    Accepts ``api_token`` (optional — falls back to the encrypted token already
+    stored on ``AdapterConfig.config_json``) and ``environment``
+    (production/staging).
     """
     from src.core.utils.encryption import is_encrypted
 
     try:
         data = request.get_json() or {}
-        client_id = data.get("client_id")
-        client_secret = data.get("client_secret")
-        network_id = data.get("network_id")
+        api_token = data.get("api_token")
         environment = data.get("environment", "production")
-
-        if not client_id or not network_id:
-            return jsonify({"success": False, "error": "client_id and network_id are required"}), 400
 
         # Reject submitted ciphertext — only the DB-fallback path is allowed
         # to use the stored ciphertext. See cross-tenant smuggling note in
         # save_adapter_config.
-        if client_secret and is_encrypted(client_secret):
+        if api_token and is_encrypted(api_token):
             return (
-                jsonify(
-                    {"success": False, "error": "client_secret must be plaintext (encrypted-token replay rejected)"}
-                ),
+                jsonify({"success": False, "error": "api_token must be plaintext (encrypted-token replay rejected)"}),
                 400,
             )
 
-        if not client_secret:
+        if not api_token:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             with get_db_session() as session:
@@ -310,42 +303,36 @@ def test_freewheel_connection(tenant_id, **kwargs):
 
                     try:
                         rehydrated = FreeWheelConnectionConfig.model_validate(existing.config_json)
-                        client_secret = rehydrated.client_secret
+                        api_token = rehydrated.api_token
                     except ValidationError:
-                        client_secret = None
-        if not client_secret:
+                        api_token = None
+        if not api_token:
             return (
-                jsonify({"success": False, "error": "client_secret is required for first connection test"}),
+                jsonify({"success": False, "error": "api_token is required for first connection test"}),
                 400,
             )
 
-        from src.adapters.freewheel import FreeWheelAPIError, FreeWheelClient
+        from src.adapters.freewheel import FreeWheelClient, FreeWheelError
         from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
 
         base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
-        client = FreeWheelClient(
-            client_id=client_id,
-            client_secret=client_secret,
-            network_id=network_id,
-            base_url=base_url,
-        )
+        client = FreeWheelClient(api_token=api_token, base_url=base_url)
         try:
-            client._fetch_token()
-        except FreeWheelAPIError as exc:
+            info = client.token_info()
+        except FreeWheelError as exc:
             # Log the full upstream body server-side; return only a generic
             # message to the client to avoid echoing reflected request data
             # or hint messages from the auth provider.
-            logger.warning("FreeWheel auth probe failed: %s body=%s", exc, exc.body)
-            return jsonify({"success": False, "error": "FreeWheel rejected the credentials"}), 200
+            logger.warning("FreeWheel token probe failed: %s body=%s", exc, exc.body)
+            return jsonify({"success": False, "error": "FreeWheel rejected the token"}), 200
 
-        network_name: str | None = None
-        try:
-            network = client.get_network()
-            network_name = network.get("name") or network.get("displayName")
-        except FreeWheelAPIError:
-            pass  # Token works; network endpoint specifics may vary
-
-        return jsonify({"success": True, "environment": environment, "network_name": network_name})
+        return jsonify(
+            {
+                "success": True,
+                "environment": environment,
+                "expires_in": info.get("expires_in"),
+            }
+        )
 
     except Exception as e:
         logger.error(f"FreeWheel connection test failed: {e}", exc_info=True)

@@ -1,15 +1,14 @@
-"""Tests for the FreeWheel adapter — factory wiring + dry-run + OAuth refresh."""
+"""Tests for the FreeWheel adapter — factory wiring + dry-run + client construction."""
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.adapters import get_adapter_default_channels, get_adapter_schemas
-from src.adapters.freewheel import FreeWheelAdapter, FreeWheelAPIError, FreeWheelClient
+from src.adapters.freewheel import FreeWheelAdapter, FreeWheelClient
 from src.adapters.freewheel.schemas import FreeWheelConnectionConfig, FreeWheelProductConfig
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 from tests.factories.spec_required_kwargs import required_request_kwargs
@@ -70,7 +69,7 @@ class TestRegistry:
 class TestAdapterDryRun:
     def test_dry_run_creates_buy_without_calling_client(self, mock_principal, sample_request, sample_packages):
         adapter = FreeWheelAdapter(
-            config={"client_id": "cid", "client_secret": "csec", "network_id": "12345"},
+            config={"api_token": "test-bearer-token"},
             principal=mock_principal,
             dry_run=True,
             tenant_id="tenant_fw_1",
@@ -92,7 +91,7 @@ class TestAdapterDryRun:
             }
         )
         adapter = FreeWheelAdapter(
-            config={"client_id": "cid", "client_secret": "csec", "network_id": "12345"},
+            config={"api_token": "test-bearer-token"},
             principal=mock_principal,
             dry_run=True,
             tenant_id="tenant_fw_1",
@@ -102,9 +101,10 @@ class TestAdapterDryRun:
         assert response.errors[0].code == "unsupported_targeting"
 
     def test_live_mode_create_returns_pending_credentials(self, mock_principal, sample_request, sample_packages):
-        """Live mode is intentionally stubbed until staging credentials land."""
+        """Live mode create_media_buy is stubbed until the v3 commercial write
+        flow is wired through the adapter (next PR)."""
         adapter = FreeWheelAdapter(
-            config={"client_id": "cid", "client_secret": "csec", "network_id": "12345"},
+            config={"api_token": "test-bearer-token"},
             principal=mock_principal,
             dry_run=False,
             tenant_id="tenant_fw_1",
@@ -113,61 +113,34 @@ class TestAdapterDryRun:
         assert hasattr(response, "errors")
         assert response.errors[0].code == "pending_credentials"
 
-    def test_live_mode_requires_credentials(self, mock_principal):
-        with pytest.raises(ValueError, match="client_id"):
+    def test_live_mode_requires_api_token(self, mock_principal):
+        with pytest.raises(ValueError, match="api_token"):
             FreeWheelAdapter(config={}, principal=mock_principal, dry_run=False, tenant_id="tenant_fw_1")
 
 
-class TestClientOAuth:
-    @patch("src.adapters.freewheel.client.requests.post")
-    @patch("src.adapters.freewheel.client.requests.request")
-    def test_token_fetch_caches_with_expiry(self, mock_request, mock_post):
-        mock_post.return_value = MagicMock(
+class TestClientConstruction:
+    def test_client_composes_inventory_and_commercial(self):
+        client = FreeWheelClient(api_token="test-bearer-token", base_url="https://api.stg.freewheel.tv")
+        assert client.inventory is not None
+        assert client.commercial is not None
+
+    def test_client_token_info_calls_auth_endpoint(self):
+        """token_info() proves the bearer is valid; uses /auth/token/info."""
+        from src.adapters.freewheel._transport import FreeWheelTransport
+
+        mock_session = MagicMock()
+        mock_session.request.return_value = MagicMock(
             status_code=200,
-            json=lambda: {"access_token": "tok-1", "expires_in": 7 * 24 * 60 * 60},
-            content=b'{"access_token":"tok-1"}',
+            ok=True,
+            content=b'{"user_id": 0, "expires_in": 604800, "created_at": 1700000000}',
+            text='{"user_id": 0, "expires_in": 604800, "created_at": 1700000000}',
+            json=lambda: {"user_id": 0, "expires_in": 604800, "created_at": 1700000000},
         )
-        mock_request.return_value = MagicMock(status_code=200, ok=True, json=lambda: {"id": "n1"}, content=b"{}")
+        transport = FreeWheelTransport(api_token="t", session=mock_session)
+        info = transport.token_info()
 
-        client = FreeWheelClient(
-            client_id="cid", client_secret="csec", network_id="12345", base_url="https://api.stg.freewheel.tv"
-        )
-        client.get_network()
-
-        # Token cached, second call shouldn't re-fetch
-        client.get_network()
-        assert mock_post.call_count == 1
-        assert client._token == "tok-1"
-        assert client._token_expires_at > time.time()
-
-    @patch("src.adapters.freewheel.client.requests.post")
-    @patch("src.adapters.freewheel.client.requests.request")
-    def test_401_triggers_refresh_and_retry(self, mock_request, mock_post):
-        mock_post.return_value = MagicMock(
-            status_code=200,
-            json=lambda: {"access_token": "fresh", "expires_in": 7 * 24 * 60 * 60},
-            content=b"",
-        )
-        first = MagicMock(status_code=401, ok=False, content=b"")
-        second = MagicMock(status_code=200, ok=True, json=lambda: {"id": "c1"}, content=b'{"id":"c1"}')
-        mock_request.side_effect = [first, second]
-
-        client = FreeWheelClient(
-            client_id="cid", client_secret="csec", network_id="12345", base_url="https://api.stg.freewheel.tv"
-        )
-        client._token = "stale"
-        client._token_expires_at = time.time() + 1000
-        result = client.create_campaign({"name": "x"})
-
-        assert result == {"id": "c1"}
-        assert mock_post.call_count == 1  # one re-auth on 401
-        assert mock_request.call_count == 2
-
-    @patch("src.adapters.freewheel.client.requests.post")
-    def test_auth_failure_raises_api_error(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=401, text="invalid client", content=b"")
-        client = FreeWheelClient(
-            client_id="bad", client_secret="bad", network_id="0", base_url="https://api.stg.freewheel.tv"
-        )
-        with pytest.raises(FreeWheelAPIError, match="auth failed"):
-            client._fetch_token()
+        assert info["expires_in"] == 604800
+        call_kwargs = mock_session.request.call_args.kwargs
+        assert call_kwargs["url"].endswith("/auth/token/info")
+        assert call_kwargs["headers"]["Authorization"] == "Bearer t"
+        assert call_kwargs["headers"]["accept"] == "application/json"

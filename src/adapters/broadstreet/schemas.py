@@ -3,7 +3,7 @@
 Defines connection and product configuration for the admin UI schema system.
 ``api_key`` is encrypted at rest with Fernet via Pydantic field
 serializer/validator — same pattern as ``TritonConnectionConfig.password`` and
-``FreeWheelConnectionConfig.client_secret``. Pre-encryption rows persisted before
+``FreeWheelConnectionConfig.api_token``. Pre-encryption rows persisted before
 this change continue to load (the validator passes plaintext through) and get
 encrypted automatically on the next save.
 """

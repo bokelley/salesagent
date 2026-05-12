@@ -444,16 +444,12 @@ def create_tenant():
                 from src.adapters.freewheel import FreeWheelConnectionConfig
                 from src.core.utils.encryption import is_encrypted
 
-                if data.get("client_secret") and is_encrypted(data["client_secret"]):
+                if data.get("api_token") and is_encrypted(data["api_token"]):
                     return (
-                        jsonify({"error": "client_secret must be plaintext (encrypted-token replay rejected)"}),
+                        jsonify({"error": "api_token must be plaintext (encrypted-token replay rejected)"}),
                         400,
                     )
-                fw_payload = {
-                    k: data[k]
-                    for k in ("client_id", "client_secret", "network_id", "environment", "default_advertiser_id")
-                    if k in data
-                }
+                fw_payload = {k: data[k] for k in ("api_token", "environment", "default_advertiser_id") if k in data}
                 validated = FreeWheelConnectionConfig(**fw_payload)
                 new_adapter = AdapterConfig(
                     tenant_id=tenant_id,
@@ -654,16 +650,14 @@ def update_tenant(tenant_id):
                         from src.adapters.freewheel import FreeWheelConnectionConfig
                         from src.core.utils.encryption import is_encrypted
 
-                        if adapter_data.get("client_secret") and is_encrypted(adapter_data["client_secret"]):
+                        if adapter_data.get("api_token") and is_encrypted(adapter_data["api_token"]):
                             return (
-                                jsonify({"error": "client_secret must be plaintext (encrypted-token replay rejected)"}),
+                                jsonify({"error": "api_token must be plaintext (encrypted-token replay rejected)"}),
                                 400,
                             )
                         merged = dict(adapter.config_json or {})
                         for field_name in (
-                            "client_id",
-                            "client_secret",
-                            "network_id",
+                            "api_token",
                             "environment",
                             "default_advertiser_id",
                         ):

@@ -95,6 +95,7 @@ def fake_int_for(field: str, original: int) -> int:
     _int_memo[key] = fake
     return fake
 
+
 # Memoized mapping: (field, original_value) -> fake_value. Ensures same input
 # gives same output across all fixture files in a single run.
 _memo: dict[tuple[str, str], str] = {}
@@ -208,9 +209,7 @@ def main() -> None:
         # Replace user_id with a stable fake to avoid linking the fixture to
         # a real account.
         info["user_id"] = 0
-        (OUT / "_token_info.json").write_text(
-            json.dumps(info, indent=2, sort_keys=True) + "\n"
-        )
+        (OUT / "_token_info.json").write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
 
     count = 0
     for src in sorted(RAW.rglob("*")):

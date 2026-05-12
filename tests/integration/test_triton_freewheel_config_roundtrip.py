@@ -155,17 +155,13 @@ class TestFreeWheelConfigRoundtrip:
 
     def test_full_roundtrip_staging(self, _tenant):
         validated = FreeWheelConnectionConfig(
-            client_id="fw_client_xyz",
-            client_secret="fw_secret_abc",
-            network_id="9876",
+            api_token="fw_bearer_xyz",
             environment="staging",
         )
         _persist_adapter_config(_tenant, "freewheel", validated.model_dump())
 
         on_disk = _read_config_json(_tenant)
-        assert is_encrypted(on_disk["client_secret"]), "client_secret must be ciphertext at rest"
-        assert on_disk["client_id"] == "fw_client_xyz"
-        assert on_disk["network_id"] == "9876"
+        assert is_encrypted(on_disk["api_token"]), "api_token must be ciphertext at rest"
         assert on_disk["environment"] == "staging"
 
         assert is_tenant_ad_server_configured(_tenant) is True
@@ -174,19 +170,18 @@ class TestFreeWheelConfigRoundtrip:
         assert status["adapter_type"] == "freewheel"
 
         rehydrated = FreeWheelConnectionConfig.model_validate(on_disk)
-        assert rehydrated.client_secret == "fw_secret_abc"
+        assert rehydrated.api_token == "fw_bearer_xyz"
         assert rehydrated.base_url == "https://api.stg.freewheel.tv"
 
-    def test_missing_network_id_reports_unconfigured(self, _tenant):
+    def test_missing_api_token_reports_unconfigured(self, _tenant):
         _persist_adapter_config(
             _tenant,
             "freewheel",
             {
-                "client_id": "fw_client_xyz",
-                "client_secret": "fw_secret_abc",
-                # network_id missing
+                # api_token missing
+                "environment": "production",
             },
         )
         assert is_tenant_ad_server_configured(_tenant) is False
         status = get_tenant_status(_tenant)
-        assert any("network_id" in m for m in status["missing_config"])
+        assert any("api_token" in m for m in status["missing_config"])

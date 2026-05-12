@@ -20,43 +20,49 @@ def encryption_key():
 
 class TestFreeWheelConnectionConfig:
     def test_default_environment_is_production(self):
-        cfg = FreeWheelConnectionConfig(client_id="cid", client_secret="csec", network_id="123")
+        cfg = FreeWheelConnectionConfig(api_token="tok")
         assert cfg.environment == "production"
         assert cfg.base_url == "https://api.freewheel.tv"
 
     def test_staging_environment_resolves_to_staging_host(self):
-        cfg = FreeWheelConnectionConfig(client_id="cid", client_secret="csec", network_id="123", environment="staging")
+        cfg = FreeWheelConnectionConfig(api_token="tok", environment="staging")
         assert cfg.base_url == "https://api.stg.freewheel.tv"
 
     def test_invalid_environment_rejected(self):
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
-            FreeWheelConnectionConfig(client_id="cid", client_secret="csec", network_id="123", environment="dev")
+            FreeWheelConnectionConfig(api_token="tok", environment="dev")
 
-    def test_client_secret_serializes_to_ciphertext(self, encryption_key):
-        cfg = FreeWheelConnectionConfig(client_id="cid", client_secret="super-secret", network_id="123")
+    def test_api_token_serializes_to_ciphertext(self, encryption_key):
+        cfg = FreeWheelConnectionConfig(api_token="super-secret-token")
         dumped = cfg.model_dump()
-        assert dumped["client_secret"] != "super-secret"
-        assert is_encrypted(dumped["client_secret"])
+        assert dumped["api_token"] != "super-secret-token"
+        assert is_encrypted(dumped["api_token"])
 
-    def test_client_secret_round_trips(self, encryption_key):
-        original = FreeWheelConnectionConfig(client_id="cid", client_secret="super-secret", network_id="123")
+    def test_api_token_round_trips(self, encryption_key):
+        original = FreeWheelConnectionConfig(api_token="super-secret-token")
         persisted = original.model_dump()
         rehydrated = FreeWheelConnectionConfig.model_validate(persisted)
-        assert rehydrated.client_secret == "super-secret"
+        assert rehydrated.api_token == "super-secret-token"
 
-    def test_already_encrypted_secret_not_double_encrypted(self, encryption_key):
-        cfg = FreeWheelConnectionConfig(client_id="cid", client_secret="super-secret", network_id="123")
-        ciphertext = cfg.model_dump()["client_secret"]
-        rehydrated = FreeWheelConnectionConfig.model_validate(
-            {"client_id": "cid", "client_secret": ciphertext, "network_id": "123"}
-        )
-        assert rehydrated.client_secret == "super-secret"
+    def test_already_encrypted_token_not_double_encrypted(self, encryption_key):
+        cfg = FreeWheelConnectionConfig(api_token="super-secret-token")
+        ciphertext = cfg.model_dump()["api_token"]
+        rehydrated = FreeWheelConnectionConfig.model_validate({"api_token": ciphertext})
+        assert rehydrated.api_token == "super-secret-token"
 
     def test_secret_marker_in_schema(self):
         schema = FreeWheelConnectionConfig.model_json_schema()
-        assert schema["properties"]["client_secret"].get("secret") is True
+        assert schema["properties"]["api_token"].get("secret") is True
+
+    def test_default_advertiser_id_optional(self):
+        cfg = FreeWheelConnectionConfig(api_token="tok")
+        assert cfg.default_advertiser_id is None
+
+    def test_default_advertiser_id_accepts_string(self):
+        cfg = FreeWheelConnectionConfig(api_token="tok", default_advertiser_id="1356511")
+        assert cfg.default_advertiser_id == "1356511"
 
     def test_hosts_table_has_both_envs(self):
         assert "production" in FREEWHEEL_HOSTS

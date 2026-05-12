@@ -76,9 +76,7 @@ def save(version: str, resource: str, shape: str, body: str, ext: str) -> None:
     d = OUT / version / resource
     d.mkdir(parents=True, exist_ok=True)
     if ext == "json":
-        d.joinpath(f"{shape}.json").write_text(
-            json.dumps(json.loads(body), indent=2, sort_keys=True)
-        )
+        d.joinpath(f"{shape}.json").write_text(json.dumps(json.loads(body), indent=2, sort_keys=True))
     else:
         d.joinpath(f"{shape}.{ext}").write_text(body)
 
@@ -196,9 +194,7 @@ def capture_v3(session: requests.Session, resource: str, test_advertiser_id: int
             save("v3", resource, "single", single, "xml")
 
     if resource in V3_ADVERTISER_SCOPED:
-        code, filtered = request(
-            session, path, advertiser_id=test_advertiser_id, per_page=10
-        )
+        code, filtered = request(session, path, advertiser_id=test_advertiser_id, per_page=10)
         print(f"  GET {path}?advertiser_id=<test> -> {code}")
         if code == 200:
             save("v3", resource, "filtered_by_test_advertiser", filtered, "xml")

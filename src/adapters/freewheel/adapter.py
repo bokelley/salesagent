@@ -28,7 +28,7 @@ from src.adapters.base import (
     TargetingCapabilities,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.adapters.freewheel.client import FreeWheelAPIError, FreeWheelClient
+from src.adapters.freewheel.client import FreeWheelClient, FreeWheelError
 from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS, FreeWheelConnectionConfig, FreeWheelProductConfig
 from src.adapters.freewheel.targeting import build_targeting, validate_targeting
 from src.core.schemas import (
@@ -80,11 +80,10 @@ class FreeWheelAdapter(AdServerAdapter):
         creative_engine: CreativeEngineAdapter | None = None,
         tenant_id: str | None = None,
     ):
-        """Resolve OAuth client credentials and the target environment host.
+        """Resolve the bearer token and target environment host.
 
-        Dry-run defers OAuth client construction so the adapter can be
-        configured before staging credentials are provisioned by FreeWheel's
-        Account Team.
+        Dry-run defers client construction so the adapter can be configured
+        before a bearer token is provisioned by FreeWheel (or the publisher).
         """
         super().__init__(config, principal, dry_run, creative_engine, tenant_id)
 
@@ -95,9 +94,7 @@ class FreeWheelAdapter(AdServerAdapter):
                 "and no default_advertiser_id is configured"
             )
 
-        self.client_id = self.config.get("client_id")
-        self.client_secret = self.config.get("client_secret")
-        self.network_id = self.config.get("network_id")
+        self.api_token = self.config.get("api_token")
         self.environment = self.config.get("environment", "production")
         self.base_url = FREEWHEEL_HOSTS.get(self.environment, FREEWHEEL_HOSTS["production"])
 
@@ -105,14 +102,9 @@ class FreeWheelAdapter(AdServerAdapter):
             self.log("Running in dry-run mode — FreeWheel Publisher API calls will be simulated", dry_run_prefix=False)
             self._client: FreeWheelClient | None = None
         else:
-            if not self.client_id or not self.client_secret or not self.network_id:
-                raise ValueError("FreeWheel config is missing 'client_id', 'client_secret', or 'network_id'")
-            self._client = FreeWheelClient(
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-                network_id=self.network_id,
-                base_url=self.base_url,
-            )
+            if not self.api_token:
+                raise ValueError("FreeWheel config is missing 'api_token'")
+            self._client = FreeWheelClient(api_token=self.api_token, base_url=self.base_url)
 
     # ----- capabilities -----
 
@@ -193,16 +185,16 @@ class FreeWheelAdapter(AdServerAdapter):
         )
 
         if self.dry_run:
-            self.log(f"Would call: POST {self.base_url}/networks/{self.network_id}/campaigns")
+            self.log(f"Would call: POST {self.base_url}/services/v3/campaign")
             self.log(
-                f"  Campaign: name=AdCP {media_buy_id}, advertiserId={self.advertiser_id}, "
+                f"  Campaign: name=AdCP {media_buy_id}, advertiser_id={self.advertiser_id}, "
                 f"start={start_time.date()}, end={end_time.date()}"
             )
             for package in packages:
                 rate, rate_type = self._resolve_pricing_rate(package, package_pricing_info)
                 payload = self._line_item_payload(package, rate, rate_type, start_time, end_time)
-                self.log(f"Would call: POST .../campaigns/{media_buy_id}/line-items")
-                self.log(f"  LineItem: {payload}")
+                self.log(f"Would call: POST {self.base_url}/services/v3/insertion_order")
+                self.log(f"  InsertionOrder: {payload}")
             return self._build_create_success(request, media_buy_id, packages)
 
         # Live mode — pending credential validation and JSON-shape lock-in.
@@ -216,7 +208,7 @@ class FreeWheelAdapter(AdServerAdapter):
         if self.dry_run:
             for asset in assets:
                 self.log(
-                    f"Would POST {self.base_url}/networks/{self.network_id}/creatives "
+                    f"Would POST {self.base_url}/services/v3/creative "
                     f"name={asset.get('name')} format={asset.get('format')}"
                 )
                 self.log(f"  Then POST creative-association for line items {asset.get('package_assignments', [])}")
@@ -248,17 +240,14 @@ class FreeWheelAdapter(AdServerAdapter):
 
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         if self.dry_run:
-            self.log(
-                f"Would call: GET {self.base_url}/networks/{self.network_id}"
-                f"/campaigns/{media_buy_id.replace('freewheel_', '')}"
-            )
+            self.log(f"Would call: GET {self.base_url}/services/v3/campaigns/{media_buy_id.replace('freewheel_', '')}")
             return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
         assert self._client is not None
         try:
             campaign = self._client.get_campaign(media_buy_id.removeprefix("freewheel_"))
-            status = campaign.get("status", "active").lower()
+            status = (campaign.get("status") or "active").lower()
             return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
-        except FreeWheelAPIError as exc:
+        except FreeWheelError as exc:
             logger.warning("FreeWheel get_campaign failed: %s", exc)
             return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
 
