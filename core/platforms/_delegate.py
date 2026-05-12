@@ -348,8 +348,17 @@ def _translate_validation_error(exc: ValidationError) -> AdcpError:
     (e.g. ``packages.0.budget``); ``details.errors`` carries the full
     pydantic error list so the buyer agent can repair every offending
     field in one round-trip.
+
+    Pydantic's :meth:`pydantic.ValidationError.errors` returns dicts that
+    can embed Python objects (raw user input, raised exception instances
+    via ``ctx['error']``) — those are NOT JSON-serializable, so passing
+    the raw list into ``AdcpError.details`` crashes the framework
+    dispatcher's wire serializer with ``PydanticSerializationError:
+    Unable to serialize unknown type: <class 'ValueError'>`` (#355).
+    Strip with ``include_input=False, include_context=False,
+    include_url=False`` to keep only JSON-safe primitives (loc, msg, type).
     """
-    errors = exc.errors()
+    errors = exc.errors(include_input=False, include_context=False, include_url=False)
     field: str | None = None
     message: str = "Request validation failed"
     if errors:

@@ -14,10 +14,17 @@ helpers' contracts so future refactors don't silently regress the wire shape.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from adcp.decisioning import AdcpError
+from pydantic import BaseModel, field_validator
 
-from core.platforms._delegate import _check_major_version, _maybe_raise_legacy_errors
+from core.platforms._delegate import (
+    _check_major_version,
+    _maybe_raise_legacy_errors,
+    _translate_validation_error,
+)
 
 
 class TestCheckMajorVersion:
@@ -178,3 +185,90 @@ class TestMaybeRaiseLegacyErrors:
             )
         assert exc.value.field == "packages.0.budget"
         assert exc.value.details == {"limit": 100}
+
+
+class TestTranslateValidationErrorIsJSONSafe:
+    """Regression: ``_translate_validation_error`` must strip pydantic's
+    non-JSON-safe ``ctx`` / ``input`` / ``url`` fields from ``errors()``.
+
+    Pydantic's ``ValidationError.errors()`` includes ``ctx={"error":
+    ValueError(...)}`` when a ``@field_validator`` raises a Python
+    exception. Forwarding that into ``AdcpError.details`` crashes the
+    framework dispatcher's wire serializer with
+    ``PydanticSerializationError: Unable to serialize unknown type:
+    <class 'ValueError'>`` — and the buyer sees HTTP 500 instead of the
+    spec ``INVALID_REQUEST`` envelope (#355).
+    """
+
+    @staticmethod
+    def _trigger_validation_error_with_ctx() -> Exception:
+        """Build a pydantic ValidationError whose ``errors()`` contains a
+        ``ctx['error']`` ValueError instance — mirrors the real
+        ``UpdateMediaBuyRequest.budget`` rejection that surfaced #355.
+        """
+
+        class _Model(BaseModel):
+            field: int
+
+            @field_validator("field", mode="before")
+            @classmethod
+            def _reject(cls, v):  # noqa: ANN001, ANN206
+                raise ValueError(f"rejected {v}")
+
+        try:
+            _Model(field=1)
+        except Exception as exc:
+            return exc
+        raise AssertionError("expected ValidationError")
+
+    def test_details_round_trip_through_json(self) -> None:
+        """The full :class:`AdcpError` produced by the translator must be
+        JSON-serializable, including ``details.errors``. This is what the
+        dispatcher passes to the wire serializer.
+        """
+        exc = self._trigger_validation_error_with_ctx()
+        adcp_err = _translate_validation_error(exc)
+        # The dispatcher's wire path roughly does this — fail loudly if it
+        # would crash. AdcpError exposes message via ``args[0]``.
+        json.dumps(
+            {
+                "code": adcp_err.code,
+                "message": adcp_err.args[0] if adcp_err.args else None,
+                "field": adcp_err.field,
+                "details": adcp_err.details,
+            }
+        )
+
+    def test_details_contains_no_class_or_exception_objects(self) -> None:
+        """Belt-and-suspenders: the translator must not forward any
+        Python class object or exception instance in ``details``. Walk
+        the structure and assert primitives only.
+        """
+        exc = self._trigger_validation_error_with_ctx()
+        adcp_err = _translate_validation_error(exc)
+        assert adcp_err.details is not None
+
+        def _walk(obj):
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    _walk(v)
+            elif isinstance(obj, list | tuple):
+                for v in obj:
+                    _walk(v)
+            else:
+                assert isinstance(obj, str | int | float | bool | type(None)), (
+                    f"non-JSON-primitive in details: type={type(obj).__name__} repr={obj!r}"
+                )
+
+        _walk(adcp_err.details)
+
+    def test_field_path_still_populated(self) -> None:
+        """Stripping ``ctx``/``input``/``url`` must not also drop ``loc``
+        — the buyer needs the field path to repair the offending value.
+        """
+        exc = self._trigger_validation_error_with_ctx()
+        adcp_err = _translate_validation_error(exc)
+        msg = adcp_err.args[0] if adcp_err.args else ""
+        assert adcp_err.field == "field"
+        assert "field" in msg
+        assert "rejected" in msg

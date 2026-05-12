@@ -108,15 +108,6 @@ class TestAdCPReferenceImplementation:
 
         Use this as a template for all future E2E tests!
         """
-        # Blocked on #355: update_media_buy crashes serialization on the
-        # manual-approval flow this test exercises
-        # (``PydanticSerializationError: Unable to serialize unknown type:
-        # <class 'ValueError'>``). The crash surfaces during MCP session
-        # cleanup at the ``async with Client(...)`` exit, AFTER any inline
-        # try/except inside the test body — so the skip has to happen
-        # BEFORE the session opens. Re-enable once #355 lands.
-        pytest.skip("Blocked on #355: update_media_buy PydanticSerializationError on manual-approval flow")
-
         print("\n" + "=" * 80)
         print("REFERENCE E2E TEST: Complete Campaign Lifecycle")
         print("=" * 80)
@@ -285,27 +276,19 @@ class TestAdCPReferenceImplementation:
             # Clear any previous webhooks
             webhook_server["received"].clear()
 
-            # Update budget (AdCP spec: budget is a number, not an object).
-            # Use the shared builder so account + idempotency_key (4.4 wire
-            # required) are populated with proper natural-key shapes.
+            # Update budget via per-package update — AdCP spec has no
+            # media-buy-level ``budget`` update field (adcontextprotocol/adcp#4241).
+            # Per-package shape is the canonical way to change spend allocation.
+            packages_in_buy = media_buy_data.get("packages") or []
+            assert packages_in_buy, "media buy must report packages so we can update budgets"
+            package_id_for_update = packages_in_buy[0]["package_id"]
             update_request = build_update_media_buy_request(
                 media_buy_id=media_buy_id,
-                budget=7500.0,
+                packages=[{"package_id": package_id_for_update, "budget": 7500.0}],
                 webhook_url=webhook_server["url"],
                 context={"e2e": "update_media_buy"},
             )
-            # Blocked on #355: update_media_buy on the manual-approval flow
-            # crashes serialization with
-            # ``PydanticSerializationError: Unable to serialize unknown type:
-            # <class 'ValueError'>``. Skip the update + webhook phases at
-            # runtime until the underlying impl bug is fixed. We've reached
-            # this point past create_media_buy, sync_creatives, and
-            # get_media_buy_delivery — coverage of the discovery and creation
-            # paths still lands, just not the update path.
-            try:
-                update_result = await client.call_tool("update_media_buy", update_request)
-            except Exception as exc:  # noqa: BLE001 — exception type varies by transport
-                pytest.skip(f"#355 still open — update_media_buy crashed: {type(exc).__name__}: {exc}")
+            update_result = await client.call_tool("update_media_buy", update_request)
             update_data = parse_tool_result(update_result)
 
             assert "media_buy_id" in update_data
