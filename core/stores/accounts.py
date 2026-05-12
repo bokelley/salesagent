@@ -249,14 +249,18 @@ class SalesagentAccountStore:
         return ListAccountsRequest.model_validate(payload)
 
     def _identity_from_ctx(self, ctx: Any | None) -> ResolvedIdentity:
-        """Build a :class:`ResolvedIdentity` from the request-scope
-        ContextVars populated by :class:`BearerTokenAuthMiddleware`.
+        """Build a :class:`ResolvedIdentity` for the account-store dispatch
+        path (``sync_accounts`` / ``list_accounts``).
 
-        The ``ctx`` argument is the framework's :class:`ResolveContext`;
-        it carries ``auth_info`` / ``agent`` for adopters that key gates
-        off the verified principal, but salesagent's tenant resolution
-        is owned by ``BearerTokenAuthMiddleware`` (writes
-        ``auth_current_tenant`` and ``current_principal`` in lockstep).
+        Tenant resolution mirrors :meth:`_tenant_from_principal` — that's
+        the framework-canonical fallback chain already used by
+        :meth:`resolve`. Reading ``ctx.auth_info.principal`` is
+        task-safe: the MCP handler runs in a different asyncio task than
+        ``BearerTokenAuthMiddleware``, so its ContextVars may not be
+        visible. Looking up the persisted Principal row gives us
+        ``tenant_id`` regardless of whether the ContextVar propagated
+        (#354).
+
         We deliberately don't read ``ctx.agent.tenant_id`` as a
         fallback — the framework's :class:`BuyerAgent` doesn't carry
         ``tenant_id`` today, and accepting that attribute as authoritative
@@ -265,8 +269,15 @@ class SalesagentAccountStore:
         """
         from src.core.config_loader import get_tenant_by_id
 
-        principal_id = current_principal.get()
-        tenant_id = auth_current_tenant.get()
+        auth_info = getattr(ctx, "auth_info", None) if ctx is not None else None
+        tenant_id = self._tenant_from_principal(auth_info)
+        # Derive principal_id with the same fallback order — ``auth_info``
+        # first (task-safe), then ContextVar.
+        principal_id: str | None = None
+        if auth_info is not None:
+            principal_id = getattr(auth_info, "principal", None)
+        if not principal_id:
+            principal_id = current_principal.get()
         if not tenant_id:
             raise AdcpError(
                 "ACCOUNT_NOT_FOUND",
