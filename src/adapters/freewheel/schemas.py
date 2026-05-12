@@ -110,23 +110,83 @@ class FreeWheelConnectionConfig(BaseConnectionConfig):
 class FreeWheelProductConfig(BaseProductConfig):
     """Per-product FreeWheel inventory + targeting selection.
 
-    Placements are FreeWheel's inventory primitive — each product points at
-    one or more placements that line items will deliver into.
+    Configuration follows FreeWheel's real data model (Sites + content
+    groupings, not raw "placement IDs" — placements are created per buy
+    by the adapter, not pre-built inventory). All IDs reference rows in
+    the local ``freewheel_inventory`` cache populated by
+    :class:`FreeWheelInventorySync`; the product setup UI picks from that
+    cache rather than asking publishers to type IDs.
+
+    Targeting fields are stored on the product so the adapter can apply
+    them at buy-creation time. End-to-end delivery currently depends on
+    additional v4 scopes (``ad_unit_nodes`` write, ``creative_instances``
+    write); see :mod:`src.adapters.freewheel.adapter` for the blocker
+    list. Until those land, the product config is captured but not yet
+    fully exercised against live delivery.
     """
 
-    placement_ids: list[str] = Field(
+    # Inventory targeting — references freewheel_inventory cache
+    site_ids: list[int] = Field(
         default_factory=list,
-        description="FreeWheel placement IDs this product targets",
+        description="FreeWheel Site IDs this product delivers into",
     )
+    site_section_ids: list[int] = Field(
+        default_factory=list,
+        description="FreeWheel Site Section IDs (sub-sections within a site)",
+    )
+    video_group_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel Video Group IDs. On Talpa-style networks these are "
+            "audience-segmented groupings (e.g., 'DOELGROEP INDEX 150+ | "
+            "Sociale D13+') and are the canonical targeting primitive."
+        ),
+    )
+    series_ids: list[int] = Field(
+        default_factory=list,
+        description="FreeWheel Series IDs (specific shows)",
+    )
+    ad_unit_package_id: int | None = Field(
+        default=None,
+        description=(
+            "FreeWheel Ad Unit Package ID (e.g., 'Pre-Mid' = pre+mid-roll, "
+            "'Pre-Mid-Post' = pre+mid+post-roll). Determines which slot "
+            "positions the product can deliver into."
+        ),
+    )
+
+    # Compliance + content restrictions
+    tv_rating_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "FreeWheel TV Rating IDs (from standard_attributes.tv_ratings) "
+            "restricting which rated content this product delivers against."
+        ),
+    )
+
+    # Pricing / priority
+    priority: int | None = Field(
+        default=None,
+        description="Line item priority (lower = higher priority)",
+    )
+    price_model: str | None = Field(
+        default=None,
+        description=(
+            "FreeWheel pricing model for ad_unit_nodes (e.g., ACTUAL_ECPM, "
+            "FIXED_PRICE). Optional; defaults to the network's policy."
+        ),
+    )
+
+    # Escape hatches kept from the previous schema for forward compatibility
     targeting_profile_id: str | None = Field(
         default=None,
         description="Optional pre-built FreeWheel targeting profile ID",
     )
-    priority: int | None = Field(
-        default=None,
-        description="Line item priority (FreeWheel uses numeric priorities; lower = higher priority)",
-    )
     custom_targeting: dict[str, list[str]] = Field(
         default_factory=dict,
-        description="FreeWheel custom key-value targeting (e.g. {'genre': ['sports','news']})",
+        description=(
+            "FreeWheel custom key-value targeting (e.g. {'genre': "
+            "['sports','news']}). Requires v4 custom_keys scope on the "
+            "bearer; currently denied for our test token."
+        ),
     )

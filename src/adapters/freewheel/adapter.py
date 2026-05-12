@@ -189,17 +189,28 @@ class FreeWheelAdapter(AdServerAdapter):
         end_time: datetime,
     ) -> dict[str, Any]:
         product_config = self._product_config_from_package(package)
+        # Dry-run payload — surfaces what the adapter would send to FW.
+        # FreeWheel inventory targeting (sites, video_groups, series, ad_unit_package)
+        # ultimately becomes ad_unit_nodes attached to the placement; that write
+        # path is blocked on the v4 ``ad_unit_nodes`` scope, so for now we just
+        # echo the configured intent.
         payload: dict[str, Any] = {
             "name": package.name,
-            "advertiserId": self.advertiser_id,
-            "startDate": start_time.date().isoformat(),
-            "endDate": end_time.date().isoformat(),
-            "impressionGoal": package.impressions,
+            "advertiser_id": self.advertiser_id,
+            "start_date": start_time.date().isoformat(),
+            "end_date": end_time.date().isoformat(),
+            "impression_goal": package.impressions,
             "rate": rate,
-            "rateType": rate_type,
-            "placementIds": list(product_config.get("placement_ids", [])),
+            "rate_type": rate_type,
+            "site_ids": list(product_config.get("site_ids", [])),
+            "site_section_ids": list(product_config.get("site_section_ids", [])),
+            "video_group_ids": list(product_config.get("video_group_ids", [])),
+            "series_ids": list(product_config.get("series_ids", [])),
+            "ad_unit_package_id": product_config.get("ad_unit_package_id"),
+            "tv_rating_ids": list(product_config.get("tv_rating_ids", [])),
+            "price_model": product_config.get("price_model"),
             "targeting": build_targeting(package.targeting_overlay, product_config),
-            "externalId": package.package_id,
+            "external_id": package.package_id,
         }
         if product_config.get("priority") is not None:
             payload["priority"] = product_config["priority"]

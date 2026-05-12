@@ -84,8 +84,10 @@ class TestSyncDispatch:
 
     @staticmethod
     def _fake_transport_get_json(path, **params):
-        if "ad_unit_packages" in path:
+        if path == "/services/v4/ad_unit_packages":
             return {"page": 1, "per_page": 50, "total": 0, "total_pages": 1, "ad_unit_packages": []}
+        if path.startswith("/services/v4/ad_unit_packages/"):
+            return {"id": 1, "name": "stub", "ad_units": []}
         if "standard_attributes" in path:
             return {
                 "tv_ratings": [
@@ -115,6 +117,7 @@ class TestSyncDispatch:
         assert result.counts["video_group"] == 0
         # Reference families:
         assert result.counts["ad_unit_package"] == 0
+        assert result.counts["ad_unit"] == 0
         assert result.counts["ad_unit_node"] == 0
         assert result.counts["standard_attribute"] == 2  # TV-G + Unrated
         assert result.total_synced == 12
@@ -145,6 +148,66 @@ class TestSyncDispatch:
         assert "standard_attribute" in result.counts
 
 
+class TestAdUnitPackagesSync:
+    """The list endpoint returns package metadata only; nested ad_units
+    are only on the single-item GET. The sync fans out to each package
+    detail and dedupes the ad_units across packages."""
+
+    def test_fans_out_to_per_package_detail(self):
+        client = MagicMock()
+        empty_envelope = MagicMock(items=[], total_page=0)
+        client.inventory.list_sites.return_value = empty_envelope
+        client.inventory.list_site_sections.return_value = empty_envelope
+        client.inventory.list_site_groups.return_value = empty_envelope
+        client.inventory.list_series.return_value = empty_envelope
+        client.inventory.list_video_groups.return_value = empty_envelope
+
+        def get_json(path, **params):
+            if path == "/services/v4/ad_unit_packages":
+                return {
+                    "total_pages": 1,
+                    "ad_unit_packages": [
+                        {"id": 51949, "name": "Pre-Mid"},
+                        {"id": 51948, "name": "Pre-Mid-Post"},
+                    ],
+                }
+            if path == "/services/v4/ad_unit_packages/51949":
+                return {
+                    "id": 51949,
+                    "name": "Pre-Mid",
+                    "ad_units": [
+                        {"id": 51925, "name": "Pre-roll Ad"},
+                        {"id": 51929, "name": "Mid-roll Ad"},
+                    ],
+                }
+            if path == "/services/v4/ad_unit_packages/51948":
+                return {
+                    "id": 51948,
+                    "name": "Pre-Mid-Post",
+                    "ad_units": [
+                        {"id": 51925, "name": "Pre-roll Ad"},  # same as pkg 51949
+                        {"id": 51929, "name": "Mid-roll Ad"},  # same as pkg 51949
+                        {"id": 51930, "name": "Post-roll Ad"},
+                    ],
+                }
+            if "standard_attributes" in path:
+                return {}
+            return {}
+
+        client._transport.get_json.side_effect = get_json
+        client._transport.get_xml.side_effect = lambda path, **p: ET.fromstring(
+            '<ad_unit_nodes total_pages="0"></ad_unit_nodes>'
+        )
+
+        session = MagicMock()
+        syncer = FreeWheelInventorySync(client=client, session=session, tenant_id="t1")
+        result = syncer.run()
+
+        assert result.counts["ad_unit_package"] == 2
+        # Pre-roll, Mid-roll, Post-roll — deduped from the two packages
+        assert result.counts["ad_unit"] == 3
+
+
 class TestStandardAttributesSync:
     """The standard_attributes endpoint returns a flat dict of reference
     lists (tv_ratings, etc.), not a paginated list, so it has its own
@@ -163,8 +226,10 @@ class TestStandardAttributesSync:
         client.inventory.list_video_groups.return_value = empty_envelope
 
         def get_json(path, **params):
-            if "ad_unit_packages" in path:
+            if path == "/services/v4/ad_unit_packages":
                 return {"total_pages": 1, "ad_unit_packages": []}
+            if path.startswith("/services/v4/ad_unit_packages/"):
+                return {"id": 1, "name": "stub", "ad_units": []}
             if "standard_attributes" in path:
                 return {
                     "tv_ratings": [

@@ -361,6 +361,40 @@ def test_freewheel_connection(tenant_id, **kwargs):
         return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
 
 
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/inventory", methods=["GET"])
+@require_tenant_access()
+def list_freewheel_inventory(tenant_id, **kwargs):
+    """Return locally-cached FreeWheel inventory entries for the product setup UI.
+
+    Filterable by ``entity_type`` (site, site_section, site_group, series,
+    video_group, ad_unit_package, ad_unit, ad_unit_node, standard_attribute).
+    Optional ``parent_id`` narrows to children of a specific parent. Optional
+    ``q`` substring-matches the ``name`` field.
+
+    Returns a flat list (no pagination — the cache is small enough that
+    sending the whole filtered set is fine for now).
+    """
+    from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
+
+    entity_type = request.args.get("entity_type")
+    parent_id = request.args.get("parent_id")
+    q = request.args.get("q")
+
+    if not entity_type:
+        return jsonify({"success": False, "error": "entity_type query param is required"}), 400
+
+    with get_db_session() as session:
+        repo = FreeWheelInventoryRepository(session, tenant_id)
+        rows = repo.list_by_type(entity_type, parent_id=parent_id)
+
+    items = [
+        {"entity_id": row.entity_id, "name": row.name, "parent_id": row.parent_id}
+        for row in rows
+        if not q or (row.name and q.lower() in row.name.lower())
+    ]
+    return jsonify({"success": True, "entity_type": entity_type, "count": len(items), "items": items})
+
+
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/sync-inventory", methods=["POST"])
 @require_tenant_access(role=("admin",))
 def sync_freewheel_inventory(tenant_id, **kwargs):

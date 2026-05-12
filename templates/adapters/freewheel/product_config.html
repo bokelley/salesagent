@@ -2,7 +2,13 @@
 FreeWheel Adapter Product Configuration Template Fragment
 
 Included in the product add/edit form when the FreeWheel adapter is selected.
-Drives FreeWheelProductConfig — placement selection, targeting profile, custom KV.
+Drives FreeWheelProductConfig — inventory selection, ad-unit package, content
+ratings, pricing.
+
+All inventory pickers load from the local freewheel_inventory cache via
+GET /api/tenant/<id>/adapters/freewheel/inventory. If a tenant hasn't run
+inventory sync yet, the pickers come back empty and the page links to the
+adapter settings.
 
 Expected context:
 - implementation_config: dict with current product implementation config
@@ -11,31 +17,111 @@ Expected context:
 
 <div class="adapter-product-config" data-adapter-type="freewheel">
     <div class="form-section">
-        <h3>FreeWheel Placement &amp; Targeting</h3>
+        <h3>FreeWheel Inventory &amp; Targeting</h3>
         <p class="text-muted" style="margin-bottom: 1rem;">
-            Choose which FreeWheel placements this product delivers into and any pre-built
-            targeting profile or custom key-value targeting that applies.
+            Pick the inventory this product targets. Pickers populate from your
+            local FreeWheel inventory cache — run Sync Inventory on the
+            <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/settings#adserver">adapter settings</a>
+            page first if these come back empty.
         </p>
 
         <div class="form-group">
-            <label for="impl_placement_ids">Placement IDs *</label>
-            <input type="text" id="impl_placement_ids" name="impl_placement_ids"
-                   value="{{ (implementation_config.get('placement_ids', [])|join(', ')) if implementation_config else '' }}"
-                   placeholder="e.g., 12345, 67890">
+            <label for="impl_site_ids">Sites</label>
+            <select id="impl_site_ids" name="impl_site_ids" multiple size="6" class="fw-inventory-picker"
+                    data-entity-type="site"
+                    data-selected="{{ (implementation_config.get('site_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading sites…</option>
+            </select>
             <small class="form-text text-muted">
-                Comma-separated FreeWheel placement IDs. Each line item created from this product
-                delivers into these placements.
+                Delivery destinations (websites, apps, CTV apps). Hold Ctrl/Cmd to multi-select.
             </small>
         </div>
 
         <div class="form-group">
-            <label for="impl_targeting_profile_id">Targeting Profile ID</label>
-            <input type="text" id="impl_targeting_profile_id" name="impl_targeting_profile_id"
-                   value="{{ implementation_config.get('targeting_profile_id', '') if implementation_config else '' }}"
-                   placeholder="Optional — pre-built FreeWheel targeting profile">
+            <label for="impl_video_group_ids">Video Groups (audience targeting)</label>
+            <select id="impl_video_group_ids" name="impl_video_group_ids" multiple size="6" class="fw-inventory-picker"
+                    data-entity-type="video_group"
+                    data-selected="{{ (implementation_config.get('video_group_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading video groups…</option>
+            </select>
             <small class="form-text text-muted">
-                Optional reference to a saved targeting profile in FreeWheel. Geo and device
-                targeting from the buyer's request layer on top of this profile.
+                Audience-segmented content groupings (e.g. demographic indices, sentiment).
+                These are the canonical targeting primitive on most FreeWheel networks.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_series_ids">Series</label>
+            <select id="impl_series_ids" name="impl_series_ids" multiple size="6" class="fw-inventory-picker"
+                    data-entity-type="series"
+                    data-selected="{{ (implementation_config.get('series_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading series…</option>
+            </select>
+            <small class="form-text text-muted">
+                Optionally restrict delivery to specific shows. Leave empty to deliver across
+                all series matching the other filters.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_site_section_ids">Site Sections (optional)</label>
+            <select id="impl_site_section_ids" name="impl_site_section_ids" multiple size="4" class="fw-inventory-picker"
+                    data-entity-type="site_section"
+                    data-selected="{{ (implementation_config.get('site_section_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading sections…</option>
+            </select>
+            <small class="form-text text-muted">
+                Sub-sections within a site. Most products target whole sites; use sections
+                only when you need finer scoping.
+            </small>
+        </div>
+
+        <h4 style="margin-top: 2rem;">Slot &amp; Format</h4>
+
+        <div class="form-group">
+            <label for="impl_ad_unit_package_id">Ad Unit Package</label>
+            <select id="impl_ad_unit_package_id" name="impl_ad_unit_package_id" class="fw-inventory-picker"
+                    data-entity-type="ad_unit_package"
+                    data-single="true"
+                    data-selected="{{ implementation_config.get('ad_unit_package_id', '') if implementation_config else '' }}">
+                <option value="">— select an ad unit package —</option>
+            </select>
+            <small class="form-text text-muted">
+                Which slot positions the product delivers into (e.g., "Pre-Mid" = pre+mid-roll,
+                "Pre-Mid-Post" = pre+mid+post-roll).
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="impl_tv_rating_ids">Content Rating Restrictions</label>
+            <select id="impl_tv_rating_ids" name="impl_tv_rating_ids" multiple size="4" class="fw-inventory-picker"
+                    data-entity-type="standard_attribute"
+                    data-parent-id="tv_ratings"
+                    data-selected="{{ (implementation_config.get('tv_rating_ids', [])|tojson) if implementation_config else '[]' }}">
+                <option disabled>Loading ratings…</option>
+            </select>
+            <small class="form-text text-muted">
+                Restrict delivery to specific TV content ratings. Leave empty to allow all.
+            </small>
+        </div>
+
+        <h4 style="margin-top: 2rem;">Pricing &amp; Priority</h4>
+
+        <div class="form-group">
+            <label for="impl_price_model">Price Model</label>
+            <select id="impl_price_model" name="impl_price_model" class="form-control">
+                <option value="" {% if not implementation_config or not implementation_config.get('price_model') %}selected{% endif %}>
+                    (network default)
+                </option>
+                <option value="ACTUAL_ECPM" {% if implementation_config and implementation_config.get('price_model') == 'ACTUAL_ECPM' %}selected{% endif %}>
+                    Actual eCPM
+                </option>
+                <option value="FIXED_PRICE" {% if implementation_config and implementation_config.get('price_model') == 'FIXED_PRICE' %}selected{% endif %}>
+                    Fixed Price
+                </option>
+            </select>
+            <small class="form-text text-muted">
+                Sets the ``price_model`` field on AdUnitNodes created from this product.
             </small>
         </div>
 
@@ -48,5 +134,92 @@ Expected context:
                 FreeWheel uses numeric priorities. Leave blank for default.
             </small>
         </div>
+
+        <details style="margin-top: 1rem;">
+            <summary style="cursor: pointer; font-weight: 500;">Advanced: targeting profile + custom KV</summary>
+            <div class="form-group" style="margin-top: 0.75rem;">
+                <label for="impl_targeting_profile_id">Targeting Profile ID</label>
+                <input type="text" id="impl_targeting_profile_id" name="impl_targeting_profile_id"
+                       value="{{ implementation_config.get('targeting_profile_id', '') if implementation_config else '' }}"
+                       placeholder="Optional — pre-built FW targeting profile">
+                <small class="form-text text-muted">
+                    Reference a saved targeting profile in FreeWheel.
+                </small>
+            </div>
+            <div class="form-group">
+                <label for="impl_custom_targeting">Custom Key-Value Targeting (JSON)</label>
+                <textarea id="impl_custom_targeting" name="impl_custom_targeting" rows="3"
+                          placeholder='{"genre": ["sports", "news"]}'>{{ (implementation_config.get('custom_targeting', {})|tojson) if implementation_config else '' }}</textarea>
+                <small class="form-text text-muted">
+                    Requires the v4 custom_keys scope on your bearer token. Currently denied
+                    for the Talpa test bearer; values are stored but not yet applied.
+                </small>
+            </div>
+        </details>
     </div>
 </div>
+
+<script>
+(function() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const apiBase = scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/inventory';
+
+    async function populatePicker(selectEl) {
+        const entityType = selectEl.dataset.entityType;
+        const parentId = selectEl.dataset.parentId;
+        const isSingle = selectEl.dataset.single === 'true';
+        const selectedRaw = selectEl.dataset.selected || (isSingle ? '""' : '[]');
+        let selected;
+        try {
+            selected = JSON.parse(selectedRaw);
+        } catch (e) {
+            selected = selectedRaw;
+        }
+        const selectedSet = isSingle
+            ? new Set([String(selected)])
+            : new Set((Array.isArray(selected) ? selected : []).map(String));
+
+        let url = apiBase + '?entity_type=' + encodeURIComponent(entityType);
+        if (parentId) url += '&parent_id=' + encodeURIComponent(parentId);
+
+        try {
+            const resp = await fetch(url, {credentials: 'same-origin'});
+            const data = await resp.json();
+            selectEl.innerHTML = '';
+            if (isSingle) {
+                const blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = '— select —';
+                selectEl.appendChild(blank);
+            }
+            if (!data.success || !data.items || data.items.length === 0) {
+                const opt = document.createElement('option');
+                opt.disabled = true;
+                opt.textContent = '(no ' + entityType + ' in cache — run Sync Inventory)';
+                selectEl.appendChild(opt);
+                return;
+            }
+            data.items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            for (const item of data.items) {
+                const opt = document.createElement('option');
+                opt.value = item.entity_id;
+                opt.textContent = item.name || item.entity_id;
+                if (selectedSet.has(String(item.entity_id))) opt.selected = true;
+                selectEl.appendChild(opt);
+            }
+        } catch (err) {
+            selectEl.innerHTML = '<option disabled>Error loading ' + entityType + ': ' + err.message + '</option>';
+        }
+    }
+
+    function init() {
+        document.querySelectorAll('.fw-inventory-picker').forEach(populatePicker);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>

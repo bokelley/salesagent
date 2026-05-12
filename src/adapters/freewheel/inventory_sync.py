@@ -109,7 +109,9 @@ class FreeWheelInventorySync:
                 result.errors[entity_type] = str(exc)
 
         try:
-            result.counts["ad_unit_package"] = self._sync_ad_unit_packages()
+            pkg_count, ad_unit_count = self._sync_ad_unit_packages()
+            result.counts["ad_unit_package"] = pkg_count
+            result.counts["ad_unit"] = ad_unit_count
         except Exception as exc:  # noqa: BLE001
             logger.warning("FreeWheel sync failed for ad_unit_package: %s", exc)
             result.errors["ad_unit_package"] = str(exc)
@@ -213,58 +215,66 @@ class FreeWheelInventorySync:
         # linked-rels endpoints which we don't fold into the bulk sync.
         return None
 
-    def _sync_ad_unit_packages(self) -> int:
-        """Pull v4 ad_unit_packages with nested ad_units (returned inline)."""
+    def _sync_ad_unit_packages(self) -> tuple[int, int]:
+        """Pull v4 ad_unit_packages and their nested ad_units.
+
+        The list endpoint returns package metadata only — nested ad_units
+        only appear on the single-item GET. We list packages, then fetch
+        each detail to harvest its ad_units. Ad_units are deduplicated
+        across packages on entity_id (the same Pre-roll Ad belongs to
+        both "Pre-Mid" and "Pre-Mid-Post"); first-write wins.
+
+        Returns ``(package_count, ad_unit_count)``.
+        """
         page = 1
-        rows: list[dict[str, Any]] = []
-        ad_unit_rows: list[dict[str, Any]] = []
+        pkg_rows: list[dict[str, Any]] = []
+        ad_unit_dict: dict[str, dict[str, Any]] = {}
         now = datetime.now(UTC)
 
         while True:
             body = self._client._transport.get_json("/services/v4/ad_unit_packages", page=page, per_page=50)
             packages = body.get("ad_unit_packages") or body.get("items") or []
+            if not packages:
+                break
             for pkg in packages:
                 pkg_id = str(pkg["id"])
-                rows.append(
+                # Fetch package detail to get nested ad_units inline.
+                detail = self._client._transport.get_json(f"/services/v4/ad_unit_packages/{pkg_id}")
+                pkg_rows.append(
                     {
                         "tenant_id": self._tenant_id,
                         "entity_type": "ad_unit_package",
                         "entity_id": pkg_id,
-                        "name": pkg.get("name"),
+                        "name": detail.get("name") or pkg.get("name"),
                         "parent_id": None,
-                        "raw_json": pkg,
+                        "raw_json": detail,
                         "last_synced_at": now,
                     }
                 )
-                # ad_units come back nested under each package
-                for au in pkg.get("ad_units") or []:
-                    ad_unit_rows.append(
+                for au in detail.get("ad_units") or []:
+                    au_id = str(au["id"])
+                    ad_unit_dict.setdefault(
+                        au_id,
                         {
                             "tenant_id": self._tenant_id,
                             "entity_type": "ad_unit",
-                            "entity_id": str(au["id"]),
+                            "entity_id": au_id,
                             "name": au.get("name"),
                             "parent_id": pkg_id,
                             "raw_json": au,
                             "last_synced_at": now,
-                        }
+                        },
                     )
             total_pages = int(body.get("total_pages", body.get("total_page", 1)) or 1)
-            if page >= total_pages or not packages:
+            if page >= total_pages:
                 break
             page += 1
 
-        if rows:
-            self._bulk_upsert(rows)
-        if ad_unit_rows:
-            # De-duplicate by (entity_id) since the same ad_unit can appear
-            # in multiple packages — last write wins, which is fine
-            # because the inline payload is identical across packages.
-            seen: dict[str, dict[str, Any]] = {}
-            for row in ad_unit_rows:
-                seen[row["entity_id"]] = row
-            self._bulk_upsert(list(seen.values()))
-        return len(rows)
+        if pkg_rows:
+            self._bulk_upsert(pkg_rows)
+        if ad_unit_dict:
+            self._bulk_upsert(list(ad_unit_dict.values()))
+        return len(pkg_rows), len(ad_unit_dict)
 
     def _sync_ad_unit_nodes(self) -> int:
         """Pull v3 ad_unit_nodes (XML) — the placement↔ad_unit binding."""

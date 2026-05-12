@@ -134,18 +134,40 @@ class TestEnvironmentAndOptional:
 class TestFreeWheelProductConfig:
     def test_defaults_are_empty(self):
         cfg = FreeWheelProductConfig()
-        assert cfg.placement_ids == []
-        assert cfg.targeting_profile_id is None
+        assert cfg.site_ids == []
+        assert cfg.site_section_ids == []
+        assert cfg.video_group_ids == []
+        assert cfg.series_ids == []
+        assert cfg.ad_unit_package_id is None
+        assert cfg.tv_rating_ids == []
         assert cfg.priority is None
+        assert cfg.price_model is None
+        assert cfg.targeting_profile_id is None
         assert cfg.custom_targeting == {}
 
-    def test_accepts_full_product_config(self):
+    def test_accepts_full_inventory_targeting(self):
         cfg = FreeWheelProductConfig(
-            placement_ids=["12345", "67890"],
-            targeting_profile_id="tp_123",
+            site_ids=[973371, 767268],
+            video_group_ids=[1843152716, 1843152488],
+            series_ids=[1824258494],
+            ad_unit_package_id=51949,
+            tv_rating_ids=[11, 12],
+            price_model="ACTUAL_ECPM",
             priority=10,
+        )
+        assert cfg.site_ids == [973371, 767268]
+        assert cfg.video_group_ids == [1843152716, 1843152488]
+        assert cfg.ad_unit_package_id == 51949
+        assert cfg.tv_rating_ids == [11, 12]
+        assert cfg.price_model == "ACTUAL_ECPM"
+        assert cfg.priority == 10
+
+    def test_advanced_targeting_fields_kept(self):
+        """Targeting profile + custom KV are escape hatches; still supported."""
+        cfg = FreeWheelProductConfig(
+            site_ids=[1],
+            targeting_profile_id="tp_123",
             custom_targeting={"genre": ["sports", "news"]},
         )
-        assert cfg.placement_ids == ["12345", "67890"]
-        assert cfg.priority == 10
+        assert cfg.targeting_profile_id == "tp_123"
         assert cfg.custom_targeting == {"genre": ["sports", "news"]}
