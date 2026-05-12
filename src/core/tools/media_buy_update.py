@@ -520,8 +520,27 @@ def _update_media_buy_impl(
             # Store the original request alongside the response so the approval
             # execution path can re-execute the update after human approval.
             # This mirrors create_media_buy's raw_request pattern.
+            #
+            # Include the media buy's CURRENT persisted status — the update
+            # hasn't transitioned the buy yet (it's pending approval).
+            # Without this, buyer agents walking the response can't
+            # distinguish a deferred update from a noop, and the
+            # ``media_buy_state_machine / pause_buy`` storyboard would fail
+            # on ``field_present @ /status`` (#353) for tenants that route
+            # update_media_buy through manual approval. Use the persisted
+            # status string directly (rather than ``_compute_status``)
+            # because the date-math fallback for "is the buy live yet"
+            # doesn't matter for a deferred update — what the buyer needs
+            # is the lifecycle position the buy is sitting in.
+            current_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
+            current_status: str | None = None
+            if current_buy is not None:
+                raw_status = getattr(current_buy, "status", None)
+                if isinstance(raw_status, str):
+                    current_status = raw_status
             approval_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
+                status=current_status,
                 affected_packages=[],  # Not yet applied — pending approval
                 context=req.context,
                 # Surface the workflow step id so buyers can disambiguate
@@ -690,8 +709,14 @@ def _update_media_buy_impl(
             # it would need a schema migration; tracked separately.
             uow.media_buys.update_fields(req.media_buy_id, status="canceled")
 
+            # Include the resulting status — buyers need ``status="canceled"``
+            # to confirm the lifecycle transition without an extra
+            # ``get_media_buys`` round-trip. The
+            # ``media_buy_state_machine / cancel_buy`` storyboard asserts on
+            # ``field_present @ /status`` (#353).
             cancel_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
+                status="canceled",
                 affected_packages=[],
                 context=req.context,
             )
@@ -730,8 +755,15 @@ def _update_media_buy_impl(
                 media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                 affected_pkgs = getattr(result, "affected_packages", [])
 
+                # Echo the resulting media-buy status — ``paused`` after a
+                # pause, ``active`` after a resume. Buyers need this to
+                # confirm the transition; the
+                # ``media_buy_state_machine / {pause,resume}_buy`` storyboards
+                # assert on ``field_present @ /status`` (#353).
+                resulting_status = "paused" if req.paused else "active"
                 success_response = UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
+                    status=resulting_status,
                     affected_packages=affected_pkgs,
                     context=req.context,
                 )

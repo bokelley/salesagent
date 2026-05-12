@@ -605,6 +605,61 @@ def test_pause_completes_workflow_step(standard_mocks):
     )
 
 
+def test_pause_response_includes_status_paused(standard_mocks):
+    """Pause response must include ``status="paused"`` (#353).
+
+    Buyer agents walking the wire response need ``status`` to confirm
+    the lifecycle transition without a separate ``get_media_buys``
+    round-trip. The ``media_buy_state_machine / pause_buy`` storyboard
+    asserts ``field_present @ /status``.
+    """
+    mock_result = UpdateMediaBuySuccess(media_buy_id="mb_pause", affected_packages=[])
+    standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_pause", paused=True)
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    # Pydantic stores the value as the ``MediaBuyStatus`` enum; compare
+    # via ``.value`` to assert on the wire string.
+    assert result.status is not None
+    assert getattr(result.status, "value", result.status) == "paused"
+
+
+def test_resume_response_includes_status_active(standard_mocks):
+    """Resume response must include ``status="active"`` (#353)."""
+    mock_result = UpdateMediaBuySuccess(media_buy_id="mb_resume", affected_packages=[])
+    standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_resume", paused=False)
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.status is not None
+    assert getattr(result.status, "value", result.status) == "active"
+
+
+def test_cancel_response_includes_status_canceled(standard_mocks):
+    """Cancel response must include ``status="canceled"`` (#353).
+
+    Without ``status``, buyers can't programmatically confirm the
+    cancellation took effect — they'd have to poll ``get_media_buys``.
+    """
+    mock_buy = MagicMock()
+    mock_buy.status = "active"
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_buy
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_cancel", canceled=True)
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.status is not None
+    assert getattr(result.status, "value", result.status) == "canceled"
+
+
 # ---------------------------------------------------------------------------
 # BUG #1041: Manual approval gate creates no ObjectWorkflowMapping
 # Without the mapping, the admin approval flow cannot find the media buy
