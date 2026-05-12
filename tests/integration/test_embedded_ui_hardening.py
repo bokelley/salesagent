@@ -405,10 +405,11 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
 
     The "Advertiser" surface in PSA Settings = ``Principal`` (a
     buyer-protocol identity bound to an existing GAM advertiser id).
-    Manual creation is redundant in embedded mode because the embedded
-    auth bypass auto-creates Principals from ``X-Identity-*`` headers
-    on first request — so the directory is a read-only view of who's
-    transacting + the resolved GAM advertiser they map to.
+    Manual creation is hidden in embedded mode because Principal
+    provisioning is platform-managed: the upstream platform creates
+    Principals via the Tenant Management API (initial_principal on
+    /provision, or POST /principals). The directory is a read-only
+    view of who's transacting + the resolved GAM advertiser they map to.
 
     Note: this is NOT about hiding GAM company creation. PSA never
     mints GAM companies for commercial traffic — only for sandbox.
@@ -423,9 +424,10 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         # The directory section heading and nav tab remain.
         assert "<h2>Buyer Agent Management</h2>" in body
         assert 'data-section="advertisers"' in body
-        # Read-only note is visible — surfaces the auto-create-from-headers
-        # rationale so publishers know why there's no Create button.
-        assert "auto-created from request headers" in body
+        # Read-only note is visible — surfaces the platform-API
+        # provisioning rationale so publishers know why there's no
+        # Create button.
+        assert "provisioned by your platform via the Tenant Management API" in body
 
     def test_embedded_hides_advertiser_create_button(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
@@ -451,7 +453,7 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
         assert "<h2>Buyer Agent Management</h2>" in body
         assert 'data-section="advertisers"' in body
         # Read-only note is NOT shown on open-instance tenants.
-        assert "auto-created from request headers" not in body
+        assert "provisioned by your platform via the Tenant Management API" not in body
         # Create CTA is present.
         # When there are 0 advertisers, "Create First Buyer Agent" renders;
         # otherwise the header "Add Buyer Agent" renders. Either is fine —
