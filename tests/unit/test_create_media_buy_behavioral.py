@@ -242,15 +242,18 @@ class _PatchContext:
 
 
 class TestProductNotFound:
-    """GAP-001: Product not found returns CreateMediaBuyError with validation_error."""
+    """#351: nonexistent product_id raises AdCPProductNotFoundError so the
+    boundary translator emits spec-canonical ``PRODUCT_NOT_FOUND`` on the
+    wire — replaces the legacy generic ``VALIDATION_ERROR`` shape.
+    """
 
     @pytest.mark.asyncio
-    async def test_product_not_found_returns_error(self):
-        """When packages reference non-existent product_ids, return validation_error
-        with missing IDs listed.
-
-        Anchors: media_buy_create.py:1470-1473
+    async def test_product_not_found_raises_typed_error(self):
+        """When packages reference non-existent product_ids, raise
+        ``AdCPProductNotFoundError`` with the missing IDs in ``details``
+        so buyers can re-discover and retry.
         """
+        from src.core.exceptions import AdCPProductNotFoundError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request(
@@ -272,18 +275,15 @@ class TestProductNotFound:
         existing_product = _mock_product("prod_exists")
 
         with _PatchContext(products=[existing_product]) as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPProductNotFoundError) as exc_info:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        errors = result.response.errors
-        assert len(errors) == 1
-        # Canonical AdCP enum is uppercase ``VALIDATION_ERROR`` —
-        # adcontextprotocol/adcp #342 finding 3.
-        assert errors[0].code == "VALIDATION_ERROR"
-        assert "prod_missing" in errors[0].message
-        assert "not found" in errors[0].message.lower()
+        assert exc_info.value.error_code == "PRODUCT_NOT_FOUND"
+        assert "prod_missing" in str(exc_info.value)
+        assert exc_info.value.details == {
+            "missing_product_ids": ["prod_missing"],
+            "field": "packages[].product_id",
+        }
 
 
 class TestMaxDailySpendExceeded:
@@ -2028,7 +2028,13 @@ class TestProposalBasedObligations:
         Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-06
 
         Note: Even with proposal_id, product validation still runs on packages.
+
+        Per #351, the missing-product path raises ``AdCPProductNotFoundError``
+        so the boundary translator maps it to spec-canonical
+        ``PRODUCT_NOT_FOUND`` on the wire (instead of the generic
+        ``VALIDATION_ERROR`` the old ``ValueError`` produced).
         """
+        from src.core.exceptions import AdCPProductNotFoundError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Request with proposal_id but packages referencing non-existent product
@@ -2046,10 +2052,15 @@ class TestProposalBasedObligations:
         with _PatchContext(products=[]) as pc:
             # No products in DB -> products not found
             pc.db_session.scalars.return_value.all.return_value = []
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPProductNotFoundError) as exc_info:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert any("not found" in e.message.lower() for e in result.response.errors)
+        assert exc_info.value.error_code == "PRODUCT_NOT_FOUND"
+        assert "nonexistent_product" in str(exc_info.value)
+        assert exc_info.value.details == {
+            "missing_product_ids": ["nonexistent_product"],
+            "field": "packages[].product_id",
+        }
 
 
 class TestCrossCuttingObligations:
@@ -2496,10 +2507,17 @@ class TestPostconditionObligations:
         """On validation failure, no records are created.
 
         Covers: UC-002-POST-01
+
+        Per #351, the nonexistent-product path raises
+        ``AdCPProductNotFoundError`` (spec ``PRODUCT_NOT_FOUND``) rather
+        than returning a ``CreateMediaBuyError`` wrapper. The
+        postcondition this test pins — no DB writes on failure — is
+        the same.
         """
+        from src.core.exceptions import AdCPProductNotFoundError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Non-existent product -> validation failure inside _impl
+        # Non-existent product -> typed raise inside _impl
         req = _make_request(
             packages=[
                 {
@@ -2511,12 +2529,11 @@ class TestPostconditionObligations:
         )
 
         with _PatchContext() as pc:
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPProductNotFoundError):
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        # Validation failure -> error response, no DB records created
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        # UoW session.add should NOT have been called (no records created)
+        # The postcondition: no DB records created.
+        # UoW session.add should NOT have been called.
         pc.db_session.add.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2524,10 +2541,15 @@ class TestPostconditionObligations:
         """Error messages include enough info for buyer to fix and retry.
 
         Covers: UC-002-POST-03
+
+        Per #351, the typed exception carries the missing product_ids
+        in ``details`` and the spec ``field`` path so buyers can drop the
+        offending IDs and retry without parsing the message.
         """
+        from src.core.exceptions import AdCPProductNotFoundError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Missing product -> error with product ID listed
+        # Missing product -> typed raise with product ID in details
         req = _make_request(
             packages=[
                 {
@@ -2540,12 +2562,16 @@ class TestPostconditionObligations:
 
         with _PatchContext(products=[]) as pc:
             pc.db_session.scalars.return_value.all.return_value = []
-            result = await _create_media_buy_impl(req=req, identity=pc.identity)
+            with pytest.raises(AdCPProductNotFoundError) as exc_info:
+                await _create_media_buy_impl(req=req, identity=pc.identity)
 
-        assert isinstance(result.response, CreateMediaBuyError)
-        error_msg = result.response.errors[0].message
-        # Message should identify which product was not found
-        assert "nonexistent_prod" in error_msg
+        # Message identifies the product. Details give buyers a
+        # programmatic handle for retry (missing IDs + field path).
+        assert "nonexistent_prod" in str(exc_info.value)
+        assert exc_info.value.details == {
+            "missing_product_ids": ["nonexistent_prod"],
+            "field": "packages[].product_id",
+        }
 
 
 class TestUpgradeObligations:

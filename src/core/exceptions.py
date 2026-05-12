@@ -112,6 +112,19 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     error_code = "PACKAGE_NOT_FOUND"
 
 
+class AdCPProductNotFoundError(AdCPNotFoundError):
+    """Referenced product_id is unknown or expired (404, PRODUCT_NOT_FOUND).
+
+    Raised when ``create_media_buy`` (or any other tool taking a
+    ``product_id``) references a product that does not exist in the
+    tenant's catalog. The AdCP spec defines ``PRODUCT_NOT_FOUND`` as
+    correctable — the buyer can re-discover via ``get_products`` and
+    retry with valid IDs.
+    """
+
+    error_code = "PRODUCT_NOT_FOUND"
+
+
 class AdCPAccountSetupRequiredError(AdCPError):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 

@@ -33,6 +33,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPNotFoundError,
+    AdCPProductNotFoundError,
     AdCPTermsRejectedError,
     AdCPValidationError,
 )
@@ -2089,11 +2090,20 @@ async def _create_media_buy_impl(
             # Build product lookup map
             product_map = {p.product_id: p for p in products}
 
-            # Validate all requested product_ids exist
+            # Validate all requested product_ids exist. Raise the typed
+            # AdCPProductNotFoundError so the boundary translator maps it to
+            # spec-canonical PRODUCT_NOT_FOUND on the wire (#351); a bare
+            # ValueError would otherwise be swallowed by the outer
+            # ``except (ValueError, PermissionError)`` handler and surface as
+            # generic VALIDATION_ERROR. ``details`` carries the offending IDs
+            # so the buyer can drop them and retry with valid IDs.
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
-                error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
-                raise ValueError(error_msg)
+                sorted_missing = sorted(missing_product_ids)
+                raise AdCPProductNotFoundError(
+                    f"Product(s) not found: {', '.join(sorted_missing)}",
+                    details={"missing_product_ids": sorted_missing, "field": "packages[].product_id"},
+                )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)

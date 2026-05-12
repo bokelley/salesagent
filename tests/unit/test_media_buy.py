@@ -420,12 +420,16 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            # Per #351, missing-product path raises the typed
+            # ``AdCPProductNotFoundError`` so the boundary translator
+            # emits spec-canonical ``PRODUCT_NOT_FOUND`` (replacing the
+            # legacy generic ``VALIDATION_ERROR`` shape).
+            from src.core.exceptions import AdCPProductNotFoundError
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuyError)
-        assert result.status == "failed"
-        assert any("not found" in e.message.lower() for e in result.response.errors)
+            with pytest.raises(AdCPProductNotFoundError) as exc_info:
+                await _create_media_buy_impl(req, identity=identity)
+            assert exc_info.value.error_code == "PRODUCT_NOT_FOUND"
+            assert "prod_missing" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_max_daily_spend_exceeded(self):
@@ -1356,12 +1360,19 @@ class TestCreateMediaBuyIdempotency:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            result = await _create_media_buy_impl(req, identity=identity)
+            # Idempotency check returns nothing → proceeds to normal flow.
+            # Product validation then fails with a typed
+            # ``AdCPProductNotFoundError`` (#351), proving the idempotency
+            # check ran and didn't short-circuit. The test's invariant is
+            # that the idempotency lookup happened — not the precise shape
+            # of the downstream rejection.
+            from src.core.exceptions import AdCPProductNotFoundError
+
+            with pytest.raises(AdCPProductNotFoundError):
+                await _create_media_buy_impl(req, identity=identity)
 
         # Idempotency check ran but found nothing — proceeded to normal flow
         mock_idem_repo.find_by_idempotency_key.assert_called_once_with("new-key-never-seen", "test_principal")
-        # Result is an error because product validation fails (expected)
-        assert isinstance(result, CreateMediaBuyResult)
 
 
 class TestCreateMediaBuyAdapterInteraction:
