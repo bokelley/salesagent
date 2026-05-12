@@ -38,7 +38,12 @@ _BASE = "/services/v3"
 def _element_to_dict(element: ET.Element) -> dict[str, Any]:
     """Convert an XML element to a dict suitable for Pydantic validation.
 
-    Recursively handles child elements. Empty elements become empty strings.
+    Recursively handles child elements. Empty leaf elements map to ``None``
+    so Pydantic ``int | None`` / ``datetime | None`` fields don't fail
+    coercion on a stray ``""``. Empty container elements (no children, no
+    text — like ``<schedule />``) likewise become ``None`` so optional
+    nested models stay optional.
+
     Repeated child tags would need list collapsing, but the FreeWheel v3
     shapes observed so far don't use repeated tags inside entity records.
     """
@@ -46,9 +51,9 @@ def _element_to_dict(element: ET.Element) -> dict[str, Any]:
     for child in element:
         if len(child) > 0:
             result[child.tag] = _element_to_dict(child)
-        else:
-            text = child.text or ""
-            result[child.tag] = text.strip()
+            continue
+        text = (child.text or "").strip()
+        result[child.tag] = text if text else None
     return result
 
 

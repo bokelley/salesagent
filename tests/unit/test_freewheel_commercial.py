@@ -271,7 +271,9 @@ class TestXMLHelpers:
         result = _element_to_dict(root)
         assert result == {"id": "1", "budget": {"budget_model": "X", "impression": "5"}}
 
-    def test_element_to_dict_empty_elements_become_empty_string(self):
-        root = ET.fromstring("<io><id>1</id><schedule /></io>")
+    def test_element_to_dict_empty_elements_become_none(self):
+        """Empty leaf elements map to ``None`` so ``int | None`` fields don't
+        fail Pydantic coercion on a stray ``""``."""
+        root = ET.fromstring("<io><id>1</id><schedule /><agency_id></agency_id></io>")
         result = _element_to_dict(root)
-        assert result == {"id": "1", "schedule": ""}
+        assert result == {"id": "1", "schedule": None, "agency_id": None}
