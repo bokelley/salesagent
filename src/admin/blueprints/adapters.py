@@ -361,6 +361,64 @@ def test_freewheel_connection(tenant_id, **kwargs):
         return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
 
 
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/sync-inventory", methods=["POST"])
+@require_tenant_access(role=("admin",))
+def sync_freewheel_inventory(tenant_id, **kwargs):
+    """Walk the FreeWheel inventory taxonomy and refresh the local cache.
+
+    Reads the stored connection config, instantiates a FreeWheel client,
+    and runs :class:`FreeWheelInventorySync` against the tenant's adapter
+    config. Returns per-entity-type counts + any partial-failure errors.
+
+    The cache feeds the FreeWheel adapter's product setup UI; it's not
+    exposed to AdCP buyers (property discovery goes through AAO lookup).
+    """
+    try:
+        from src.adapters.freewheel import FreeWheelClient, FreeWheelConnectionConfig
+        from src.adapters.freewheel.inventory_sync import FreeWheelInventorySync
+        from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+        with get_db_session() as session:
+            existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+            if not existing or existing.adapter_type != "freewheel" or not existing.config_json:
+                return (
+                    jsonify({"success": False, "error": "FreeWheel adapter is not configured for this tenant"}),
+                    400,
+                )
+
+            try:
+                cfg = FreeWheelConnectionConfig.model_validate(existing.config_json)
+            except ValidationError as exc:
+                return jsonify({"success": False, "error": f"Stored config is invalid: {exc}"}), 400
+
+            base_url = FREEWHEEL_HOSTS.get(cfg.environment, FREEWHEEL_HOSTS["production"])
+            client = FreeWheelClient(
+                username=cfg.username,
+                password=cfg.password,
+                api_token=cfg.api_token,
+                base_url=base_url,
+            )
+
+            syncer = FreeWheelInventorySync(client=client, session=session, tenant_id=tenant_id)
+            result = syncer.run()
+            session.commit()
+
+        return jsonify(
+            {
+                "success": result.succeeded,
+                "counts": result.counts,
+                "errors": result.errors,
+                "total_synced": result.total_synced,
+                "started_at": result.started_at.isoformat() if result.started_at else None,
+                "finished_at": result.finished_at.isoformat() if result.finished_at else None,
+            }
+        )
+    except Exception as e:
+        logger.error(f"FreeWheel inventory sync failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Sync failed (see server logs)"}), 500
+
+
 # Triton-specific endpoints
 
 

@@ -2277,6 +2277,51 @@ class PropertyTag(Base, JSONValidatorMixin):
     )
 
 
+class FreeWheelInventory(Base, JSONValidatorMixin):
+    """Local cache of FreeWheel inventory taxonomy.
+
+    Stores FW Sites, SiteSections, SiteGroups, Series, VideoGroups,
+    AdUnitPackages, AdUnitNodes, and StandardAttributes as JSON-blob rows
+    keyed by ``(tenant_id, entity_type, entity_id)``. The cache is used by
+    the FreeWheel adapter's product configuration UI so publishers can
+    pick targeting from their FW inventory without round-tripping to the
+    FW API on every page render.
+
+    NOT exposed to AdCP buyers — buyer-facing property discovery goes
+    through the AAO lookup path (adagents.json + brand.json). This is a
+    private adapter-side cache.
+
+    Refreshed on demand via the adapter settings "Sync Inventory" button.
+    """
+
+    __tablename__ = "freewheel_inventory"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        primary_key=True,
+        comment=(
+            "FW entity kind: site, site_section, site_group, series, "
+            "video_group, ad_unit_package, ad_unit_node, standard_attribute"
+        ),
+    )
+    entity_id: Mapped[str] = mapped_column(String(64), nullable=False, primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    parent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    raw_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    tenant = relationship("Tenant", backref="freewheel_inventory")
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        Index("idx_freewheel_inventory_tenant_type", "tenant_id", "entity_type"),
+        Index("idx_freewheel_inventory_parent", "tenant_id", "parent_id"),
+    )
+
+
 class PublisherPartner(Base, JSONValidatorMixin):
     """Publisher domains that this tenant has partnerships with.
 
