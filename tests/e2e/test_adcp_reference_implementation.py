@@ -89,18 +89,6 @@ def webhook_server():
 class TestAdCPReferenceImplementation:
     """Reference E2E test demonstrating full AdCP V2.3 workflow."""
 
-    @pytest.mark.skip(
-        reason=(
-            "Blocked on #355: update_media_buy fails with "
-            "PydanticSerializationError on the manual-approval flow this test "
-            "exercises. Pre-#350 the test silently no-op'd at the "
-            "create_media_buy step (bad pricing_option_id default returned an "
-            "error response, the test early-returned on missing media_buy_id, "
-            "and never reached update_media_buy). #350 fixed the default and "
-            "made the wire raise on errors — which surfaced the latent crash. "
-            "Re-enable after #355 lands."
-        )
-    )
     @pytest.mark.asyncio
     async def test_complete_campaign_lifecycle_with_webhooks(
         self, docker_services_e2e, live_server, test_auth_token, webhook_server
@@ -297,7 +285,18 @@ class TestAdCPReferenceImplementation:
                 webhook_url=webhook_server["url"],
                 context={"e2e": "update_media_buy"},
             )
-            update_result = await client.call_tool("update_media_buy", update_request)
+            # Blocked on #355: update_media_buy on the manual-approval flow
+            # crashes serialization with
+            # ``PydanticSerializationError: Unable to serialize unknown type:
+            # <class 'ValueError'>``. Skip the update + webhook phases at
+            # runtime until the underlying impl bug is fixed. We've reached
+            # this point past create_media_buy, sync_creatives, and
+            # get_media_buy_delivery — coverage of the discovery and creation
+            # paths still lands, just not the update path.
+            try:
+                update_result = await client.call_tool("update_media_buy", update_request)
+            except Exception as exc:  # noqa: BLE001 — exception type varies by transport
+                pytest.skip(f"#355 still open — update_media_buy crashed: {type(exc).__name__}: {exc}")
             update_data = parse_tool_result(update_result)
 
             assert "media_buy_id" in update_data
