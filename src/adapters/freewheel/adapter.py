@@ -1,18 +1,28 @@
 """FreeWheel adapter — implements ``AdServerAdapter`` against the Publisher API.
 
-Entity mapping (from the Publisher API docs):
-- AdCP MediaBuy → FreeWheel Campaign
-- AdCP Package → FreeWheel Line Item
-- AdCP Creative → FreeWheel Creative
-- AdCP creative-to-package assignment → Creative-Line Item Association
-- AdCP Product → FreeWheel Placement(s) + targeting profile
+Entity mapping (Mapping A — see docs/adapters/freewheel/):
+- AdCP MediaBuy → FreeWheel Insertion Order (the commercial transaction:
+  carries budget, schedule, currency, stage)
+- AdCP Package  → FreeWheel Placement (the delivery unit, one per package)
+- FW Campaign   → per-buy wrapper above the IO (auto-created; carries
+  ``advertiser_id`` and groups the IO + its placements)
 
-This is a skeleton: dry-run mode logs the planned API calls based on the
-public Publisher API reference. Live mode currently raises a clear error
-for create_media_buy and stubs the remaining methods so the adapter can be
-selected and configured before staging credentials arrive. Concrete request
-shapes and live-mode coverage are finalised once we can exercise the API
-against a sandbox.
+FreeWheel's data model is three levels (Campaign > IO > Placement). The IO
+is the unit of commerce; the Campaign is a grouping layer above. Reusing a
+single Campaign across many IOs (the publisher-ideal pattern) would require
+state we don't currently have, so v1 creates one Campaign per AdCP MediaBuy.
+
+Live coverage (Phase D):
+- ✅ create_media_buy — creates Campaign + IO + Placement(s) and returns
+  the IO id as ``media_buy_id``.
+- ✅ check_media_buy_status — reads the IO (not the Campaign).
+- ⏳ update_media_buy — wiring deferred until ``update_insertion_order`` /
+  ``update_placement`` write paths are probed against the live API.
+- ⏳ add_creative_assets / associate_creatives — the v3 creative endpoint
+  isn't at ``/services/v3/creative`` (returns 404). Live mode falls back
+  to "pending" status until we map the real creative surface.
+- ⏳ get_media_buy_delivery — reporting lives on a different API surface
+  not yet mapped.
 """
 
 from __future__ import annotations
@@ -180,25 +190,57 @@ class FreeWheelAdapter(AdServerAdapter):
         if targeting_error is not None:
             return targeting_error
 
-        media_buy_id = (
-            f"freewheel_{request.po_number}" if request.po_number else f"freewheel_{int(datetime.now(UTC).timestamp())}"
-        )
+        buy_name = self._buy_name(request)
 
         if self.dry_run:
             self.log(f"Would call: POST {self.base_url}/services/v3/campaign")
+            self.log(f"  Campaign: name={buy_name}, advertiser_id={self.advertiser_id}")
+            self.log(f"Would call: POST {self.base_url}/services/v3/insertion_order")
             self.log(
-                f"  Campaign: name=AdCP {media_buy_id}, advertiser_id={self.advertiser_id}, "
-                f"start={start_time.date()}, end={end_time.date()}"
+                f"  InsertionOrder: name={buy_name}, campaign_id=<new>, start={start_time.date()}, end={end_time.date()}"
             )
             for package in packages:
                 rate, rate_type = self._resolve_pricing_rate(package, package_pricing_info)
                 payload = self._line_item_payload(package, rate, rate_type, start_time, end_time)
-                self.log(f"Would call: POST {self.base_url}/services/v3/insertion_order")
-                self.log(f"  InsertionOrder: {payload}")
-            return self._build_create_success(request, media_buy_id, packages)
+                self.log(f"Would call: POST {self.base_url}/services/v3/placement")
+                self.log(f"  Placement: {payload}")
+            return self._build_create_success(request, f"freewheel_{buy_name}", packages)
 
-        # Live mode — pending credential validation and JSON-shape lock-in.
-        return self._pending_creds_error()
+        # Live mode — Mapping A: Campaign(wrapper) > IO(buy) > Placement(packages).
+        assert self._client is not None
+        assert self.advertiser_id is not None  # enforced in __init__ for non-dry-run
+        try:
+            campaign = self._client.commercial.create_campaign(name=buy_name, advertiser_id=int(self.advertiser_id))
+            io = self._client.commercial.create_insertion_order(name=buy_name, campaign_id=campaign.id)
+            for package in packages:
+                self._client.commercial.create_placement(
+                    name=package.name or package.package_id,
+                    insertion_order_id=io.id,
+                )
+        except FreeWheelError as exc:
+            logger.warning("FreeWheel create_media_buy failed: %s body=%s", exc, exc.body)
+            return CreateMediaBuyError(
+                errors=[
+                    Error(
+                        code="upstream_error",
+                        message=f"FreeWheel rejected the request: {exc}",
+                        details=None,
+                    )
+                ]
+            )
+
+        return self._build_create_success(request, f"freewheel_{io.id}", packages)
+
+    def _buy_name(self, request: CreateMediaBuyRequest) -> str:
+        """Derive a human-readable buy name from the AdCP request.
+
+        Uses po_number when present (the buyer's reference), otherwise falls
+        back to a timestamp so we don't collide if a buyer issues multiple
+        buys without po_numbers.
+        """
+        if request.po_number:
+            return f"adcp_{request.po_number}"
+        return f"adcp_{int(datetime.now(UTC).timestamp())}"
 
     # ----- creatives -----
 
@@ -239,16 +281,19 @@ class FreeWheelAdapter(AdServerAdapter):
     # ----- status / delivery -----
 
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
+        io_id = media_buy_id.removeprefix("freewheel_")
         if self.dry_run:
-            self.log(f"Would call: GET {self.base_url}/services/v3/campaigns/{media_buy_id.replace('freewheel_', '')}")
+            self.log(f"Would call: GET {self.base_url}/services/v3/insertion_orders/{io_id}")
             return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
         assert self._client is not None
         try:
-            campaign = self._client.get_campaign(media_buy_id.removeprefix("freewheel_"))
-            status = (campaign.get("status") or "active").lower()
-            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
+            io = self._client.commercial.get_insertion_order(int(io_id))
+            # The IO carries its booking state on ``stage`` (NOT_BOOKED, BOOKED, etc.);
+            # ``status`` is reserved for placement/campaign-level lifecycle.
+            status_value = (io.stage or io.status or "active").lower()
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status_value)
         except FreeWheelError as exc:
-            logger.warning("FreeWheel get_campaign failed: %s", exc)
+            logger.warning("FreeWheel get_insertion_order failed: %s", exc)
             return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
 
     def get_media_buy_delivery(
