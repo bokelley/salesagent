@@ -1,0 +1,13 @@
+{
+  "items": [],
+  "links": [
+    {
+      "href": "/services/v4/video_groups/1843152716/child_video_groups?page=1&per_page=5",
+      "rel": "self"
+    }
+  ],
+  "page": 1,
+  "per_page": 5,
+  "total_count": 0,
+  "total_page": 0
+}

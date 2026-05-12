@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<advertiser>
+  <id>100001</id>
+  <name>name 1</name>
+  <status>ACTIVE</status>
+  <external_id>EXT-00000001</external_id>
+  <billing_term />
+</advertiser>

@@ -1,0 +1,44 @@
+{
+  "items": [
+    {
+      "created_at": "2016-10-12T08:07:11Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618803,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618803",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 91",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_1",
+      "updated_at": "2017-03-08T08:56:23Z"
+    }
+  ],
+  "links": [],
+  "page": 1,
+  "per_page": 5,
+  "total_count": 1,
+  "total_page": 1
+}

@@ -1,0 +1,36 @@
+{
+  "created_at": "2026-05-12T12:18:28Z",
+  "customized_metadata": {},
+  "description": null,
+  "external_id": null,
+  "id": 1843152716,
+  "links": [
+    {
+      "href": "/services/v4/video_groups/1843152716",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/video_groups/1843152716/parent_video_groups",
+      "rel": "parent_video_groups"
+    },
+    {
+      "href": "/services/v4/video_groups/1843152716/child_video_groups",
+      "rel": "child_video_groups"
+    },
+    {
+      "href": "/services/v4/video_groups/1843152716/child_series",
+      "rel": "child_series"
+    },
+    {
+      "href": "/services/v4/video_groups/1843152716/child_videos",
+      "rel": "child_videos"
+    }
+  ],
+  "metadata": "",
+  "name": "name 150",
+  "network_id": 100001,
+  "rating": null,
+  "status": "ACTIVE",
+  "updated_at": "2026-05-12T12:18:29Z",
+  "vod_metadata": null
+}

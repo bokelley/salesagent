@@ -1,0 +1,42 @@
+{
+  "items": [
+    {
+      "content_owner_id": null,
+      "created_at": "2024-05-02T13:08:19Z",
+      "description": "description 5",
+      "duration": 5,
+      "external_id": "EXT-00000008",
+      "id": 406419193,
+      "links": [
+        {
+          "href": "/services/v4/videos/406419193",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/videos/406419193/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/videos/406419193/parent_series",
+          "rel": "parent_series"
+        }
+      ],
+      "network_id": 100001,
+      "rating": "",
+      "secondary_ids": [],
+      "status": "ACTIVE",
+      "title1": "title1 2",
+      "updated_at": "2026-05-12T12:18:28Z"
+    }
+  ],
+  "links": [
+    {
+      "href": "/services/v4/video_groups/1843152716/child_videos?page=1&per_page=5",
+      "rel": "self"
+    }
+  ],
+  "page": 1,
+  "per_page": 5,
+  "total_count": 1,
+  "total_page": 1
+}

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<advertisers current_page="2" per_page="10" total_pages="14" total_entries="137">
+  <advertiser>
+    <id>100011</id>
+    <name>name 11</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-29T13:28:31Z</created_at>
+    <updated_at>2024-05-29T13:28:32Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100012</id>
+    <name>name 12</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-24T10:58:20Z</created_at>
+    <updated_at>2024-05-24T10:58:20Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100013</id>
+    <name>name 13</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-22T08:45:20Z</created_at>
+    <updated_at>2024-05-23T11:00:39Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100014</id>
+    <name>name 14</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-23T09:15:33Z</created_at>
+    <updated_at>2024-05-23T09:33:42Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100015</id>
+    <name>name 15</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-22T08:19:13Z</created_at>
+    <updated_at>2024-05-22T09:42:12Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100016</id>
+    <name>name 16</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-22T08:30:55Z</created_at>
+    <updated_at>2024-05-22T08:36:00Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100017</id>
+    <name>name 17</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-21T14:06:10Z</created_at>
+    <updated_at>2024-05-22T08:33:54Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100018</id>
+    <name>name 18</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-22T08:07:16Z</created_at>
+    <updated_at>2024-05-22T08:07:17Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100019</id>
+    <name>name 19</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-22T07:56:35Z</created_at>
+    <updated_at>2024-05-22T08:04:08Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100020</id>
+    <name>name 20</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-21T13:45:48Z</created_at>
+    <updated_at>2024-05-21T13:45:48Z</updated_at>
+  </advertiser>
+</advertisers>

@@ -1,0 +1,292 @@
+{
+  "items": [
+    {
+      "created_at": "2021-12-01T13:35:19Z",
+      "customized_metadata": {},
+      "description": "",
+      "external_id": "",
+      "id": 16832925,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/16832925",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/16832925/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/16832925/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": "",
+      "name": "name 111",
+      "rating": "AL0",
+      "status": "Active",
+      "tag": "tag_21",
+      "updated_at": "2021-12-01T13:35:19Z"
+    },
+    {
+      "created_at": "2019-04-29T08:00:51Z",
+      "customized_metadata": {},
+      "description": "",
+      "external_id": "",
+      "id": 9500120,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/9500120",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/9500120/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/9500120/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": "",
+      "name": "name 112",
+      "rating": "AL0",
+      "status": "Active",
+      "tag": "tag_22",
+      "updated_at": "2019-04-29T08:00:51Z"
+    },
+    {
+      "created_at": "2017-02-13T12:26:20Z",
+      "customized_metadata": {},
+      "description": "description 4",
+      "external_id": "",
+      "id": 1893068,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1893068",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1893068/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1893068/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": "",
+      "name": "name 113",
+      "rating": null,
+      "status": "Active",
+      "tag": "tag_23",
+      "updated_at": "2024-04-18T15:30:48Z"
+    },
+    {
+      "created_at": "2017-02-13T12:26:20Z",
+      "customized_metadata": {},
+      "description": "description 4",
+      "external_id": "",
+      "id": 1893067,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1893067",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1893067/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1893067/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": "",
+      "name": "name 114",
+      "rating": null,
+      "status": "Active",
+      "tag": "tag_24",
+      "updated_at": "2024-04-18T15:30:24Z"
+    },
+    {
+      "created_at": "2017-02-03T10:26:34Z",
+      "customized_metadata": {},
+      "description": "",
+      "external_id": "",
+      "id": 1891111,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1891111",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1891111/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1891111/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": "",
+      "name": "name 115",
+      "rating": "AL0",
+      "status": "Active",
+      "tag": "tag_25",
+      "updated_at": "2017-02-03T10:26:59Z"
+    },
+    {
+      "created_at": "2016-10-12T08:05:51Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 1806995,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1806995",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1806995/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1806995/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": null,
+      "name": "name 116",
+      "rating": null,
+      "status": "Active",
+      "tag": "tag_26",
+      "updated_at": "2017-02-27T12:50:34Z"
+    },
+    {
+      "created_at": "2016-10-12T08:05:50Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 1806985,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1806985",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1806985/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1806985/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": null,
+      "name": "name 117",
+      "rating": null,
+      "status": "Active",
+      "tag": "tag_27",
+      "updated_at": "2017-02-27T12:50:31Z"
+    },
+    {
+      "created_at": "2016-10-12T08:05:50Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 1806984,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1806984",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1806984/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1806984/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": null,
+      "name": "name 118",
+      "rating": null,
+      "status": "Active",
+      "tag": "tag_28",
+      "updated_at": "2016-10-12T08:05:50Z"
+    },
+    {
+      "created_at": "2016-10-12T08:05:50Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 1806983,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1806983",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1806983/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1806983/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": null,
+      "name": "name 119",
+      "rating": null,
+      "status": "Inactive",
+      "tag": "tag_29",
+      "updated_at": "2017-02-13T11:35:57Z"
+    },
+    {
+      "created_at": "2016-10-12T08:05:50Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 1806982,
+      "links": [
+        {
+          "href": "/services/v4/site_sections/1806982",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_sections/1806982/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_sections/1806982/parent_sites",
+          "rel": "parent_sites"
+        }
+      ],
+      "metadata": null,
+      "name": "name 120",
+      "rating": null,
+      "status": "Inactive",
+      "tag": "tag_30",
+      "updated_at": "2017-02-13T11:35:56Z"
+    }
+  ],
+  "links": [
+    {
+      "href": "/services/v4/site_sections?page=1&per_page=10",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/site_sections?page=2&per_page=10",
+      "rel": "next"
+    },
+    {
+      "href": "/services/v4/site_sections?page=6&per_page=10",
+      "rel": "last"
+    }
+  ],
+  "page": 1,
+  "per_page": 10,
+  "total_count": 51,
+  "total_page": 6
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<campaign>
+  <id>91439758</id>
+  <name>name 41</name>
+  <advertiser_id>100001</advertiser_id>
+  <agency_id>100001</agency_id>
+  <description />
+  <external_id>EXT-00000004</external_id>
+  <status>IN_ACTIVE</status>
+  <network_id>100001</network_id>
+  <start_date />
+  <end_date />
+  <created_at>2026-01-26 11:53:28 +0100</created_at>
+  <updated_at>2026-01-26 11:53:28 +0100</updated_at>
+</campaign>

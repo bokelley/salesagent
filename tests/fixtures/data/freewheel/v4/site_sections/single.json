@@ -1,0 +1,29 @@
+{
+  "content_partner_ids": [],
+  "created_at": "2021-12-01T13:35:19Z",
+  "customized_metadata": {},
+  "description": "",
+  "external_id": "",
+  "id": 16832925,
+  "links": [
+    {
+      "href": "/services/v4/site_sections/16832925",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/site_sections/16832925/parent_site_groups",
+      "rel": "parent_site_groups"
+    },
+    {
+      "href": "/services/v4/site_sections/16832925/parent_sites",
+      "rel": "parent_sites"
+    }
+  ],
+  "metadata": "",
+  "name": "name 111",
+  "rating": "AL0",
+  "site_id": 973371,
+  "status": "Active",
+  "tag": "tag_21",
+  "updated_at": "2021-12-01T13:35:19Z"
+}

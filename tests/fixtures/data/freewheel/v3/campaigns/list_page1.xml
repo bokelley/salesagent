@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<campaigns current_page="1" per_page="10" total_pages="33" total_entries="322">
+  <campaign>
+    <id>91439758</id>
+    <name>name 41</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2026-01-26T10:53:28Z</created_at>
+    <updated_at>2026-01-26T10:53:28Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>90763087</id>
+    <name>name 42</name>
+    <status>ACTIVE</status>
+    <created_at>2025-12-31T13:31:41Z</created_at>
+    <updated_at>2026-01-09T08:33:05Z</updated_at>
+    <start_date>2025-12-31T23:00:00Z</start_date>
+    <end_date>2026-12-31T22:59:59Z</end_date>
+  </campaign>
+  <campaign>
+    <id>87366425</id>
+    <name>name 43</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-08-12T10:02:16Z</created_at>
+    <updated_at>2025-08-12T10:06:58Z</updated_at>
+    <start_date>2025-08-12T22:00:00Z</start_date>
+    <end_date>2025-08-20T21:59:59Z</end_date>
+  </campaign>
+  <campaign>
+    <id>86862718</id>
+    <name>name 44</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:44:29Z</created_at>
+    <updated_at>2025-07-11T14:49:34Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>86862483</id>
+    <name>name 44</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:42:31Z</created_at>
+    <updated_at>2025-07-11T14:42:32Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>86862193</id>
+    <name>name 44</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:40:04Z</created_at>
+    <updated_at>2025-07-11T14:40:04Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>86861284</id>
+    <name>name 44</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:33:18Z</created_at>
+    <updated_at>2025-07-11T14:33:19Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>86860838</id>
+    <name>name 45</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:18:10Z</created_at>
+    <updated_at>2025-07-11T14:18:11Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>86860779</id>
+    <name>name 45</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:16:05Z</created_at>
+    <updated_at>2025-07-11T14:16:05Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+  <campaign>
+    <id>86860756</id>
+    <name>name 45</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-07-11T14:14:52Z</created_at>
+    <updated_at>2025-07-11T14:14:53Z</updated_at>
+    <start_date />
+    <end_date />
+  </campaign>
+</campaigns>

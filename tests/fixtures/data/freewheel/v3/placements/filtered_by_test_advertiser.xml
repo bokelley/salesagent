@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<placements current_page="1" per_page="10" total_pages="25" total_entries="247">
+  <placement>
+    <id>90997225</id>
+    <name>name 60</name>
+    <status>ACTIVE</status>
+    <created_at>2026-01-09T08:31:04Z</created_at>
+    <updated_at>2026-01-09T08:33:04Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2026-01-01T00:00:00</start_date>
+      <end_date>2026-12-31T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>90997222</id>
+    <name>name 61</name>
+    <status>ACTIVE</status>
+    <created_at>2026-01-09T08:31:04Z</created_at>
+    <updated_at>2026-01-09T08:33:04Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2026-01-01T00:00:00</start_date>
+      <end_date>2026-12-31T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>90997219</id>
+    <name>name 62</name>
+    <status>ACTIVE</status>
+    <created_at>2026-01-09T08:31:04Z</created_at>
+    <updated_at>2026-01-09T08:33:04Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2026-01-01T00:00:00</start_date>
+      <end_date>2026-12-31T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>90763090</id>
+    <name>name 63</name>
+    <status>ACTIVE</status>
+    <created_at>2025-12-31T13:31:41Z</created_at>
+    <updated_at>2026-01-09T08:31:42Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2026-01-01T00:00:00</start_date>
+      <end_date>2026-12-31T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>87366428</id>
+    <name>name 64</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2025-08-12T10:02:16Z</created_at>
+    <updated_at>2025-08-12T10:06:59Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2025-08-13T00:00:00</start_date>
+      <end_date>2025-08-20T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>77796437</id>
+    <name>name 65</name>
+    <status>COMPLETED</status>
+    <created_at>2024-05-28T15:11:32Z</created_at>
+    <updated_at>2024-06-09T22:31:09Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2024-06-03T00:00:00</start_date>
+      <end_date>2024-06-09T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>77723983</id>
+    <name>name 66</name>
+    <status>COMPLETED</status>
+    <created_at>2024-05-23T12:01:04Z</created_at>
+    <updated_at>2024-06-09T22:31:08Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2024-06-03T00:00:00</start_date>
+      <end_date>2024-06-09T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>77118367</id>
+    <name>name 67</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2024-04-18T07:29:55Z</created_at>
+    <updated_at>2024-04-18T07:29:54Z</updated_at>
+    <schedule>
+      <timezone>(GMT-05:00) America - New York</timezone>
+      <start_date>2024-09-04T10:59:00</start_date>
+      <end_date>2024-09-17T09:01:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>52151285</id>
+    <name>name 68</name>
+    <status>COMPLETED</status>
+    <created_at>2021-03-16T15:06:17Z</created_at>
+    <updated_at>2021-03-31T22:31:17Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2021-02-25T00:00:00</start_date>
+      <end_date>2021-03-31T23:59:59</end_date>
+    </schedule>
+  </placement>
+  <placement>
+    <id>52144215</id>
+    <name>name 68</name>
+    <status>IN_ACTIVE</status>
+    <created_at>2021-03-16T13:37:40Z</created_at>
+    <updated_at>2021-03-16T15:42:08Z</updated_at>
+    <schedule>
+      <timezone>(GMT+01:00) CET</timezone>
+      <start_date>2021-02-25T00:00:00</start_date>
+      <end_date>2021-03-31T23:59:59</end_date>
+    </schedule>
+  </placement>
+</placements>

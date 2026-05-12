@@ -1,0 +1,346 @@
+{
+  "items": [
+    {
+      "created_at": "2026-05-11T08:35:10Z",
+      "description": "",
+      "id": 1841241241,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841241241",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241241/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241241/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241241/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241241/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 160",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:35:11Z"
+    },
+    {
+      "created_at": "2026-05-11T08:34:26Z",
+      "description": "",
+      "id": 1841241024,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841241024",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241024/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241024/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241024/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241024/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 161",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:34:27Z"
+    },
+    {
+      "created_at": "2026-05-11T08:34:26Z",
+      "description": "",
+      "id": 1841241023,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841241023",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241023/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241023/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241023/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241023/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 162",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:34:27Z"
+    },
+    {
+      "created_at": "2026-05-11T08:34:26Z",
+      "description": "",
+      "id": 1841241022,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841241022",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241022/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241022/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241022/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241022/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 163",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:34:27Z"
+    },
+    {
+      "created_at": "2026-05-11T08:34:26Z",
+      "description": "",
+      "id": 1841241021,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841241021",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241021/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241021/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241021/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841241021/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 164",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:34:26Z"
+    },
+    {
+      "created_at": "2026-05-11T08:11:41Z",
+      "description": "",
+      "id": 1841233510,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841233510",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233510/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233510/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233510/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233510/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 165",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:11:42Z"
+    },
+    {
+      "created_at": "2026-05-11T08:10:57Z",
+      "description": "",
+      "id": 1841233155,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841233155",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233155/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233155/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233155/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233155/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 166",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:10:58Z"
+    },
+    {
+      "created_at": "2026-05-11T08:10:57Z",
+      "description": "",
+      "id": 1841233154,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841233154",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233154/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233154/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233154/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233154/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 167",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:10:58Z"
+    },
+    {
+      "created_at": "2026-05-11T08:10:57Z",
+      "description": "",
+      "id": 1841233153,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841233153",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233153/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233153/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233153/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233153/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 168",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:10:58Z"
+    },
+    {
+      "created_at": "2026-05-11T08:10:57Z",
+      "description": "",
+      "id": 1841233152,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/1841233152",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233152/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233152/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233152/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/1841233152/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 169",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2026-05-11T08:10:57Z"
+    }
+  ],
+  "links": [
+    {
+      "href": "/services/v4/video_groups?page=2&per_page=10",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/video_groups?page=1&per_page=10",
+      "rel": "prev"
+    },
+    {
+      "href": "/services/v4/video_groups?page=3&per_page=10",
+      "rel": "next"
+    },
+    {
+      "href": "/services/v4/video_groups?page=51&per_page=10",
+      "rel": "last"
+    }
+  ],
+  "page": 2,
+  "per_page": 10,
+  "total_count": 507,
+  "total_page": 51
+}

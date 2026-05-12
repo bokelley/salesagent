@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<advertisers current_page="1" per_page="10" total_pages="14" total_entries="137">
+  <advertiser>
+    <id>100001</id>
+    <name>name 1</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-29T13:40:33Z</created_at>
+    <updated_at>2026-01-26T10:53:26Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100002</id>
+    <name>name 2</name>
+    <status>ACTIVE</status>
+    <created_at>2025-01-09T10:37:16Z</created_at>
+    <updated_at>2025-02-28T14:38:39Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100003</id>
+    <name>name 3</name>
+    <status>ACTIVE</status>
+    <created_at>2024-04-24T11:31:47Z</created_at>
+    <updated_at>2025-02-10T10:46:56Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100004</id>
+    <name>name 4</name>
+    <status>ACTIVE</status>
+    <created_at>2025-01-08T15:07:25Z</created_at>
+    <updated_at>2025-01-08T15:07:26Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100005</id>
+    <name>name 5</name>
+    <status>ACTIVE</status>
+    <created_at>2024-09-30T11:17:55Z</created_at>
+    <updated_at>2024-09-30T11:17:55Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100006</id>
+    <name>name 6</name>
+    <status>ACTIVE</status>
+    <created_at>2024-09-27T09:43:32Z</created_at>
+    <updated_at>2024-09-27T09:43:32Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100007</id>
+    <name>name 7</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-23T11:52:09Z</created_at>
+    <updated_at>2024-07-25T04:07:06Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100008</id>
+    <name>name 8</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-07T12:31:35Z</created_at>
+    <updated_at>2024-06-12T15:22:32Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100009</id>
+    <name>name 9</name>
+    <status>ACTIVE</status>
+    <created_at>2024-06-05T23:55:56Z</created_at>
+    <updated_at>2024-06-05T23:56:20Z</updated_at>
+  </advertiser>
+  <advertiser>
+    <id>100010</id>
+    <name>name 10</name>
+    <status>ACTIVE</status>
+    <created_at>2024-05-06T12:38:25Z</created_at>
+    <updated_at>2024-06-05T13:23:53Z</updated_at>
+  </advertiser>
+</advertisers>

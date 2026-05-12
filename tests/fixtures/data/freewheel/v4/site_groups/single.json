@@ -1,0 +1,35 @@
+{
+  "created_at": "2017-03-08T08:56:22Z",
+  "customized_metadata": {},
+  "description": "",
+  "external_id": "",
+  "id": 657861,
+  "links": [
+    {
+      "href": "/services/v4/site_groups/657861",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/site_groups/657861/parent_site_groups",
+      "rel": "parent_site_groups"
+    },
+    {
+      "href": "/services/v4/site_groups/657861/child_site_groups",
+      "rel": "child_site_groups"
+    },
+    {
+      "href": "/services/v4/site_groups/657861/child_sites",
+      "rel": "child_sites"
+    },
+    {
+      "href": "/services/v4/site_groups/657861/child_site_sections",
+      "rel": "child_site_sections"
+    }
+  ],
+  "metadata": "",
+  "name": "name 92",
+  "session_duration": null,
+  "status": "ACTIVE",
+  "tag": "tag_2",
+  "updated_at": "2017-03-08T08:58:04Z"
+}

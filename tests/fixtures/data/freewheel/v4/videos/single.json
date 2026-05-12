@@ -1,0 +1,46 @@
+{
+  "actor": null,
+  "air_dates": [],
+  "asset_aging_date": "2026-05-12T12:16:10Z",
+  "created_at": "2026-05-12T12:16:10Z",
+  "customized_metadata": {},
+  "description": "description 6",
+  "director": null,
+  "display_right_end_date": "2026-05-19T12:14:04Z",
+  "display_right_start_date": "2026-05-11T12:14:04Z",
+  "duration": 2,
+  "external_id": "EXT-00000009",
+  "genres": [
+    "Actie"
+  ],
+  "id": 470829165,
+  "languages": [],
+  "links": [
+    {
+      "href": "/services/v4/videos/470829165",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/videos/470829165/parent_video_groups",
+      "rel": "parent_video_groups"
+    },
+    {
+      "href": "/services/v4/videos/470829165/parent_series",
+      "rel": "parent_series"
+    }
+  ],
+  "metadata": null,
+  "mirror_type": null,
+  "network_id": 100001,
+  "producer": null,
+  "rating": null,
+  "season": null,
+  "secondary_ids": [],
+  "status": "Active",
+  "title1": "title1 3",
+  "title2": null,
+  "updated_at": "2026-05-12T12:16:10Z",
+  "upstream_asset_id": null,
+  "upstream_network_id": null,
+  "writer": null
+}

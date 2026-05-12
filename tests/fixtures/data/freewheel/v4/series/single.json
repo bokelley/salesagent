@@ -1,0 +1,28 @@
+{
+  "created_at": "2026-04-28T22:28:11Z",
+  "customized_metadata": {},
+  "description": null,
+  "external_id": null,
+  "id": 1824258494,
+  "links": [
+    {
+      "href": "/services/v4/series/1824258494",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/series/1824258494/parent_video_groups",
+      "rel": "parent_video_groups"
+    },
+    {
+      "href": "/services/v4/series/1824258494/child_videos",
+      "rel": "child_videos"
+    }
+  ],
+  "metadata": "",
+  "name": "name 71",
+  "network_id": 100001,
+  "rating": null,
+  "status": "ACTIVE",
+  "updated_at": "2026-04-28T22:28:11Z",
+  "vod_metadata": null
+}

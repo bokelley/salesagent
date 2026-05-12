@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<insertion_order>
+  <id>91439759</id>
+  <campaign_id>91439758</campaign_id>
+  <name>name 51</name>
+  <description>description 1</description>
+  <client_po>PO-1</client_po>
+  <brand_id />
+  <external_id>EXT-00000005</external_id>
+  <primary_sales_person>Person 1</primary_sales_person>
+  <primary_trafficker />
+  <stage>NOT_BOOKED</stage>
+  <schedule />
+  <currency>EUR</currency>
+  <budget>
+    <budget_model>IMPRESSION_TARGET</budget_model>
+    <impression>5000</impression>
+    <over_delivery_value>1</over_delivery_value>
+  </budget>
+</insertion_order>

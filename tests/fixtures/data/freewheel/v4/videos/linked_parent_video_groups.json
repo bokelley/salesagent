@@ -1,0 +1,169 @@
+{
+  "items": [
+    {
+      "created_at": "2020-04-02T15:54:30Z",
+      "description": "",
+      "id": 22435045,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/22435045",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/22435045/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22435045/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22435045/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/22435045/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 171",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2020-04-02T15:54:30Z"
+    },
+    {
+      "created_at": "2020-04-02T15:54:30Z",
+      "description": "",
+      "id": 22435044,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/22435044",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/22435044/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22435044/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22435044/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/22435044/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 172",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2020-04-02T15:54:30Z"
+    },
+    {
+      "created_at": "2020-03-25T13:45:33Z",
+      "description": "",
+      "id": 22270738,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/22270738",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/22270738/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22270738/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22270738/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/22270738/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 173",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2020-03-25T13:45:33Z"
+    },
+    {
+      "created_at": "2020-03-23T10:52:49Z",
+      "description": "",
+      "id": 22233000,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/22233000",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/22233000/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22233000/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/22233000/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/22233000/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 174",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2020-03-23T10:52:49Z"
+    },
+    {
+      "created_at": "2017-01-31T09:51:23Z",
+      "description": "",
+      "id": 10950916,
+      "links": [
+        {
+          "href": "/services/v4/video_groups/10950916",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/video_groups/10950916/parent_video_groups",
+          "rel": "parent_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/10950916/child_video_groups",
+          "rel": "child_video_groups"
+        },
+        {
+          "href": "/services/v4/video_groups/10950916/child_series",
+          "rel": "child_series"
+        },
+        {
+          "href": "/services/v4/video_groups/10950916/child_videos",
+          "rel": "child_videos"
+        }
+      ],
+      "name": "name 175",
+      "network_id": 100001,
+      "rating": "",
+      "status": "ACTIVE",
+      "updated_at": "2017-01-31T09:51:23Z"
+    }
+  ],
+  "links": [],
+  "page": 1,
+  "per_page": 5,
+  "total_count": 10,
+  "total_page": 2
+}

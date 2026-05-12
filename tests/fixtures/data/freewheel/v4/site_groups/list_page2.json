@@ -1,0 +1,378 @@
+{
+  "items": [
+    {
+      "created_at": "2016-10-12T08:07:12Z",
+      "customized_metadata": {
+        "publ": "metadata_2"
+      },
+      "description": "",
+      "external_id": "",
+      "id": 618808,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618808",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618808/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618808/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618808/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618808/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": "",
+      "name": "name 102",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_12",
+      "updated_at": "2017-01-11T14:43:28Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:12Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": null,
+      "id": 618807,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618807",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618807/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618807/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618807/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618807/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 103",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_13",
+      "updated_at": "2016-10-12T08:07:12Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:12Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618806,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618806",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618806/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618806/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618806/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618806/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 104",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_14",
+      "updated_at": "2016-10-12T08:07:14Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:12Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618805,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618805",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618805/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618805/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618805/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618805/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 105",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_15",
+      "updated_at": "2017-01-13T15:16:50Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:11Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618804,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618804",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618804/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618804/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618804/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618804/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 106",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_16",
+      "updated_at": "2017-01-13T15:15:53Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:11Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618803,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618803",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618803/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 91",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_1",
+      "updated_at": "2017-03-08T08:56:23Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:11Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618802,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618802",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618802/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618802/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618802/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618802/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 107",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_17",
+      "updated_at": "2017-01-13T15:14:41Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:10Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618801,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618801",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618801/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618801/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618801/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618801/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 108",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_18",
+      "updated_at": "2017-01-13T15:13:43Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:10Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618800,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618800",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618800/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618800/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618800/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618800/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 109",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_19",
+      "updated_at": "2017-01-13T15:06:48Z"
+    },
+    {
+      "created_at": "2016-10-12T08:07:10Z",
+      "customized_metadata": {},
+      "description": null,
+      "external_id": "",
+      "id": 618799,
+      "links": [
+        {
+          "href": "/services/v4/site_groups/618799",
+          "rel": "self"
+        },
+        {
+          "href": "/services/v4/site_groups/618799/parent_site_groups",
+          "rel": "parent_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618799/child_site_groups",
+          "rel": "child_site_groups"
+        },
+        {
+          "href": "/services/v4/site_groups/618799/child_sites",
+          "rel": "child_sites"
+        },
+        {
+          "href": "/services/v4/site_groups/618799/child_site_sections",
+          "rel": "child_site_sections"
+        }
+      ],
+      "metadata": null,
+      "name": "name 110",
+      "session_duration": null,
+      "status": "ACTIVE",
+      "tag": "tag_20",
+      "updated_at": "2017-01-13T14:50:12Z"
+    }
+  ],
+  "links": [
+    {
+      "href": "/services/v4/site_groups?page=2&per_page=10",
+      "rel": "self"
+    },
+    {
+      "href": "/services/v4/site_groups?page=1&per_page=10",
+      "rel": "prev"
+    },
+    {
+      "href": "/services/v4/site_groups?page=3&per_page=10",
+      "rel": "next"
+    },
+    {
+      "href": "/services/v4/site_groups?page=10&per_page=10",
+      "rel": "last"
+    }
+  ],
+  "page": 2,
+  "per_page": 10,
+  "total_count": 96,
+  "total_page": 10
+}

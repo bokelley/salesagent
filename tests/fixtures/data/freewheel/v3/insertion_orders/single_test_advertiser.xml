@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<insertion_order>
+  <id>82421922</id>
+  <campaign_id>82421921</campaign_id>
+  <name>name 50</name>
+  <description>description 2</description>
+  <client_po />
+  <brand_id />
+  <external_id>EXT-00000006</external_id>
+  <primary_sales_person>Person 2</primary_sales_person>
+  <primary_trafficker />
+  <stage>NOT_BOOKED</stage>
+  <schedule />
+  <currency>EUR</currency>
+  <budget>
+    <budget_model>IMPRESSION_TARGET</budget_model>
+    <impression>10000</impression>
+    <over_delivery_value>1</over_delivery_value>
+  </budget>
+</insertion_order>
