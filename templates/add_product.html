@@ -175,20 +175,32 @@
 
         <div class="form-group">
             <label for="allowed_principal_ids">Allowed Principals (Advertisers)</label>
+            {% if principals %}
             <select id="allowed_principal_ids" name="allowed_principal_ids" multiple style="height: 120px;">
-                {% if principals %}
-                    {% for principal in principals %}
-                    <option value="{{ principal.principal_id }}">
-                        {{ principal.name }} ({{ principal.principal_id }})
-                    </option>
-                    {% endfor %}
-                {% else %}
-                    <option disabled>No principals configured</option>
-                {% endif %}
+                {% for principal in principals %}
+                <option value="{{ principal.principal_id }}">
+                    {{ principal.name }} ({{ principal.principal_id }})
+                </option>
+                {% endfor %}
             </select>
             <small style="color: var(--sa-text-muted);">
                 Hold Ctrl/Cmd to select multiple. If none selected, product is visible to all principals.
             </small>
+            {% elif tenant and tenant.is_embedded %}
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i>
+                Buyer agents are provisioned by the platform via the Tenant Management API.
+                Leave this empty to let any authorized advertiser see the product, or wait for
+                the platform to register a buyer agent before restricting access.
+            </div>
+            {% else %}
+            <select id="allowed_principal_ids" name="allowed_principal_ids" multiple style="height: 120px;" disabled>
+                <option disabled>No principals configured</option>
+            </select>
+            <small style="color: var(--sa-text-muted);">
+                Add a buyer agent in Settings → Buyer Agents before restricting product access.
+            </small>
+            {% endif %}
         </div>
 
         <!-- Product Details (AdCP Compliance) -->

@@ -2087,11 +2087,10 @@ Exclude any products that don't match the brand's tone.</pre>
            in src/services/buyer_advertiser_routing.py.
 
            On embedded tenants the directory stays visible (publishers see who's
-           transacting + the resolved GAM advertiser) but write actions are
-           hidden because Principals are auto-created on first request by the
-           embedded-mode auth bypass, which reads X-Identity-Buyer-Principal-Id
-           from the request and provisions the row inline. Manual creation is
-           redundant in embedded mode, not dangerous. #}
+           transacting + the resolved GAM advertiser) but write actions are hidden.
+           Principal provisioning on embedded tenants is platform-managed: the
+           upstream platform creates Principals via the Tenant Management API
+           (initial_principal on /provision, or POST /principals). #}
         <div id="advertisers" class="settings-section">
             <div class="settings-header">
                 <h2>Buyer Agent Management</h2>
@@ -2099,7 +2098,7 @@ Exclude any products that don't match the brand's tone.</pre>
             </div>
 
             {% if embedded_view %}
-            <p class="text-muted">Buyer agents are auto-created from request headers when buys arrive. Routing rules and the default agent are managed in your platform's settings.</p>
+            <p class="text-muted">Buyer agents are provisioned by your platform via the Tenant Management API. Routing rules and the default agent are managed in your platform's settings.</p>
             {% else %}
             {# Standalone-only banner: Sprint 5 demoted (operator, brand) → GAM
                advertiser mapping out of this page and into Buyer Routing. The
