@@ -496,6 +496,23 @@ def _serve_kwargs(
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
         "enable_dns_rebinding_protection": (os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
+        # MCP streamable-HTTP session mode (adcp>=5.0). Stateful (default)
+        # keeps ``StreamableHTTPSessionManager._server_instances`` alive
+        # across requests for session-reuse perf, but the dict is process-
+        # local — multi-replica deployments without sticky LB routing on
+        # ``Mcp-Session-Id`` see ``tools/list`` and ``tools/call`` randomly
+        # 404 when a request lands on a replica that didn't handle
+        # ``initialize``. ``FASTMCP_STATELESS_HTTP`` env alone won't work
+        # — ``adcp.server.serve`` overrides FastMCP's reader by setting
+        # ``mcp.settings.stateless_http`` from this kwarg directly. Flip
+        # to ``true`` only on multi-replica prod deployments where session
+        # affinity isn't configurable; keep stateful in single-replica /
+        # dev / in-process test (the compliance-runner storyboard sweep
+        # is the workload that most benefits from session reuse, so
+        # leaving this off in test runs is intentional). See
+        # https://gofastmcp.com/v2/deployment/http for the upstream
+        # recommendation.
+        "stateless_http": os.environ.get("ADCP_STATELESS_HTTP", "false").lower() == "true",
         # adcp 5.0 ``public_url`` kwarg (#621) — advertises the canonical
         # A2A base URL on /.well-known/agent-card.json. Static string from
         # ``PUBLIC_URL`` env when set; otherwise None and
