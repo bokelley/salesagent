@@ -143,6 +143,14 @@
                         Per AdCP spec, you need three separate keys for different purposes.
                     </p>
 
+                    {% if tenant.is_embedded %}
+                    <div class="alert alert-info mb-0" role="alert">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Managed by platform.</strong>
+                        AXE segment keys for this tenant are configured by the upstream platform via the Tenant Management API.
+                        You can still browse keys and values below to reference them when authoring products.
+                    </div>
+                    {% else %}
                     <!-- Include Segments Row -->
                     <div class="row mb-3 align-items-center">
                         <div class="col-md-3">
@@ -226,6 +234,7 @@
                             </div>
                         </details>
                     </div>
+                    {% endif %}
                 </div>
             </div>
 
@@ -709,9 +718,13 @@ function populateAxeDropdowns() {
     const excludeKey = document.getElementById('axe_exclude_key').value;
     const macroKey = document.getElementById('axe_macro_key').value;
 
-    if (includeKey) document.getElementById('axe-include-key-select').value = includeKey;
-    if (excludeKey) document.getElementById('axe-exclude-key-select').value = excludeKey;
-    if (macroKey) document.getElementById('axe-macro-key-select').value = macroKey;
+    const setIfPresent = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value) el.value = value;
+    };
+    setIfPresent('axe-include-key-select', includeKey);
+    setIfPresent('axe-exclude-key-select', excludeKey);
+    setIfPresent('axe-macro-key-select', macroKey);
 }
 
 // Select a custom targeting key
@@ -986,6 +999,7 @@ async function saveAxeKey(keyType) {
 // Update status display for a specific AXE key type
 function updateAxeKeyStatus(keyType, keyName) {
     const statusElement = document.getElementById(`axe-${keyType}-status`);
+    if (!statusElement) return;
     if (keyName && keyName !== '') {
         statusElement.innerHTML = `<small class="text-success"><i class="bi bi-check-circle-fill"></i> <code>${keyName}</code></small>`;
     } else {
