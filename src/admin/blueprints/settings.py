@@ -931,9 +931,14 @@ def remove_authorized_email(tenant_id):
 # Test route for domain access functionality
 @settings_bp.route("/access/test", methods=["POST"])
 @log_admin_action("test_domain_access")
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_domain_access(tenant_id):
-    """Test email access for this tenant."""
+    """Test email access for this tenant.
+
+    Read-only probe — looks up tenant access for a given email and flashes
+    the result, never writes to tenant state — so it opts into the
+    embedded-write gate.
+    """
     from src.admin.domain_access import get_user_tenant_access
 
     try:

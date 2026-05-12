@@ -269,13 +269,16 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/test-connection", methods=["POST"])
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_freewheel_connection(tenant_id, **kwargs):
     """Verify FreeWheel OAuth credentials by performing a client_credentials token fetch.
 
     Accepts ``client_id``, ``network_id``, ``environment`` (production/staging) and
     ``client_secret`` (optional — falls back to the encrypted secret already stored
     on AdapterConfig.config_json).
+
+    Read-only probe — validates credentials against the upstream provider and
+    never writes to AdapterConfig — so it opts into the embedded-write gate.
     """
     from src.core.utils.encryption import is_encrypted
 
@@ -356,12 +359,15 @@ def test_freewheel_connection(tenant_id, **kwargs):
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/triton/test-connection", methods=["POST"])
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_triton_connection(tenant_id, **kwargs):
     """Verify Triton TAP credentials by performing a JWT login.
 
     Accepts ``username`` (required) and ``password`` (optional — falls back to
     the encrypted password already stored on AdapterConfig.config_json).
+
+    Read-only probe — validates credentials against the upstream provider and
+    never writes to AdapterConfig — so it opts into the embedded-write gate.
     """
     from src.core.utils.encryption import is_encrypted
 
@@ -431,9 +437,13 @@ def test_triton_connection(tenant_id, **kwargs):
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/broadstreet/test-connection", methods=["POST"])
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_broadstreet_connection(tenant_id, **kwargs):
-    """Test Broadstreet API connection with provided credentials."""
+    """Test Broadstreet API connection with provided credentials.
+
+    Read-only probe — validates credentials against the upstream provider and
+    never writes to AdapterConfig — so it opts into the embedded-write gate.
+    """
     try:
         data = request.get_json()
         if not data:
