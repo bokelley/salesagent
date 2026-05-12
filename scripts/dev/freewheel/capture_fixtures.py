@@ -41,6 +41,7 @@ V4_RESOURCES = [
     "videos",
     "video_groups",
     "inventory_packages",
+    "creative_resources",
 ]
 
 V3_RESOURCES = [

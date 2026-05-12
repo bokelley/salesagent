@@ -1,0 +1,275 @@
+{
+  "items": [
+    {
+      "advertiser_ids": [
+        100022
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-12-14T12:32:21Z",
+      "description": "",
+      "duration": 30,
+      "duration_type": "ESTIMATE",
+      "external_id": null,
+      "id": 2494473,
+      "messages": [
+        {
+          "content": "Validation: [The content type of external url/tag for Default asset package of  - 1 should not be blank.]",
+          "type": "error"
+        }
+      ],
+      "name": "name 81",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tag_type": "IAB VAST 2.0",
+      "tag_type_id": 16,
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2016-12-14T12:32:22Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-12-15T13:32:14Z",
+      "description": "description 3",
+      "duration": 30,
+      "duration_type": "ESTIMATE",
+      "external_id": null,
+      "id": 2495978,
+      "name": "name 82",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tag_type": "Other",
+      "tag_type_id": 10000,
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2016-12-15T13:35:11Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-12-15T14:19:44Z",
+      "description": "",
+      "duration": 30,
+      "duration_type": "ESTIMATE",
+      "external_id": null,
+      "id": 2496004,
+      "messages": [
+        {
+          "content": "Validation: [This creative rendition does not have its dimensions set or has dimensions set to 0x0. Please ensure the dimensions are set to match the physical creative.]",
+          "type": "warning"
+        }
+      ],
+      "name": "name 83",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tag_type": "Other",
+      "tag_type_id": 10000,
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2016-12-15T14:19:44Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-12-15T14:21:18Z",
+      "description": "",
+      "duration": 30,
+      "duration_type": "ESTIMATE",
+      "external_id": null,
+      "id": 2496009,
+      "messages": [
+        {
+          "content": "Validation: [This creative rendition does not have its dimensions set or has dimensions set to 0x0. Please ensure the dimensions are set to match the physical creative.]",
+          "type": "warning"
+        }
+      ],
+      "name": "name 84",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tag_type": "Other",
+      "tag_type_id": 10000,
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2016-12-15T14:21:18Z"
+    },
+    {
+      "advertiser_ids": [
+        100025,
+        100022
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-10-25T16:18:37Z",
+      "description": "",
+      "duration": 7,
+      "duration_type": "GUARANTEED",
+      "external_id": null,
+      "id": 2426333,
+      "name": "name 85",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2016-12-21T10:48:56Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-12-15T14:17:22Z",
+      "description": "",
+      "duration": 10,
+      "duration_type": "GUARANTEED",
+      "external_id": null,
+      "id": 2496002,
+      "name": "name 86",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2017-01-06T13:16:21Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2017-01-09T11:23:46Z",
+      "description": "",
+      "duration": 15,
+      "duration_type": "GUARANTEED",
+      "external_id": null,
+      "id": 2526976,
+      "name": "name 87",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2017-01-11T10:34:48Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2016-12-15T13:17:00Z",
+      "description": "",
+      "duration": 30,
+      "duration_type": "GUARANTEED",
+      "external_id": null,
+      "id": 2495975,
+      "name": "name 88",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2017-01-17T13:02:40Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2017-01-23T15:24:48Z",
+      "description": "",
+      "duration": 30,
+      "duration_type": "ESTIMATE",
+      "external_id": null,
+      "id": 2553757,
+      "messages": [
+        {
+          "content": "Validation: [This creative rendition does not have its dimensions set or has dimensions set to 0x0. Please ensure the dimensions are set to match the physical creative.]",
+          "type": "warning"
+        }
+      ],
+      "name": "name 89",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tag_type": "Other",
+      "tag_type_id": 10000,
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2017-01-24T21:21:05Z"
+    },
+    {
+      "advertiser_ids": [
+        100024
+      ],
+      "base_ad_unit": "video",
+      "base_ad_unit_id": 1,
+      "clearcast_approval": "NA",
+      "clearcast_code_ids": null,
+      "clearcast_note": null,
+      "created_at": "2017-01-25T10:51:59Z",
+      "description": "description 4",
+      "duration": 20,
+      "duration_type": "GUARANTEED",
+      "external_id": null,
+      "id": 2556985,
+      "name": "name 90",
+      "rating": "AL0",
+      "rating_id": 72,
+      "status": "ACTIVE",
+      "tag_type": "IAB VAST 2.0",
+      "tag_type_id": 16,
+      "tv_vod_object_id": null,
+      "tv_vod_object_type": null,
+      "updated_at": "2017-01-25T10:51:59Z"
+    }
+  ],
+  "page": 2,
+  "per_page": 10,
+  "total": 70,
+  "total_pages": 7
+}

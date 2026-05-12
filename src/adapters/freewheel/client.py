@@ -16,6 +16,7 @@ from typing import Any
 import requests
 
 from src.adapters.freewheel._commercial import FreeWheelCommercialClient
+from src.adapters.freewheel._creatives import FreeWheelCreativeClient
 from src.adapters.freewheel._inventory import FreeWheelInventoryClient
 from src.adapters.freewheel._transport import (
     DEFAULT_BASE_URL,
@@ -68,6 +69,7 @@ class FreeWheelClient:
         self._transport = FreeWheelTransport(api_token=api_token, base_url=base_url, timeout=timeout, session=session)
         self.inventory = FreeWheelInventoryClient(self._transport)
         self.commercial = FreeWheelCommercialClient(self._transport)
+        self.creatives = FreeWheelCreativeClient(self._transport)
 
     # ----- connectivity -----
 

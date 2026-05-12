@@ -46,6 +46,10 @@ SENSITIVE_FIELDS: dict[str, str] = {
     "tag": "tag_{n}",
     "metadata": "metadata_{n}",
     "url": "https://example.invalid/{n}",
+    # Creative rendition VAST tag / asset URI (third-party ad-server hostname
+    # would otherwise leak the publisher's exchange relationships).
+    "uri": "https://example.invalid/vast/{n}",
+    "clearcast_note": "clearcast_note {n}",
     "title1": "title1 {n}",
     "title2": "title2 {n}",
     "actor": "Actor {n}",
@@ -76,6 +80,10 @@ SENSITIVE_LIST_FIELDS: dict[str, tuple[str, str]] = {
     # field -> (scrub_type, scrub_key); type is "str" or "int"
     "secondary_ids": ("str", "external_id"),
     "content_partner_ids": ("int", "content_owner_id"),
+    # Creative ↔ advertiser linkage; each id maps through the same memo
+    # as the scalar advertiser_id so cross-references stay consistent.
+    "advertiser_ids": ("int", "advertiser_id"),
+    "agency_ids": ("int", "agency_id"),
 }
 
 # In v3 XML, an advertiser's primary key uses the generic <id> tag. Treat <id>

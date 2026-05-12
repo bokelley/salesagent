@@ -34,30 +34,30 @@ Live coverage:
      would either need a one-IO-per-package mapping (a different Mapping
      than A) or per-package budget tracking we don't have.
 
-- ⏳ add_creative_assets / associate_creatives — there are two distinct
-  creative APIs in FreeWheel and neither maps cleanly without scopes
-  that need to be granted:
+- 🟡 add_creative_assets — partial unblock as of 2026-05-12. Creative
+  records themselves are reachable; the placement linkage is not:
 
-  Publisher-side (us, via Talpa's token):
-    * ``PUT /services/v4/mkpl_creatives/{id}`` — unified approval verb;
-      body is ``{approval_status: Approved|Rejected|Pending, approval_notes}``.
-    * Sibling type-specific endpoints exist:
-      ``mkpl_exchange_programmatic_creatives``,
-      ``mkpl_private_direct_sold_creatives``,
-      ``mkpl_private_programmatic_creatives``.
-    * All 403 IAM-deny on our current token — needs publisher scope grant.
-    * Note: this is an *approval* workflow, not creative creation. The
-      buyer registers the creative through their DSP; it appears in the
-      publisher's marketplace queue; we approve it. So AdCP's
-      ``sync_creatives`` (buyer registering creatives) doesn't have a
-      direct publisher-side equivalent. The adapter's approval surface
-      maps to AdCP's creative review/approval flow, not its creation flow.
+    * ✅ ``/services/v4/creative_resources`` (CRUD verified) — manage
+      creative records: name, base_ad_unit, renditions (VAST tag URIs or
+      hosted content), advertiser scoping. Exposed on the client at
+      ``client.creatives``.
+    * ❌ ``/services/v4/creative_instances`` (403 IAM-deny) — the
+      creative-to-placement association. Without scope here, creatives
+      we create are orphans (they exist but don't deliver against any
+      placement).
+    * Marketplace creative approval (``mkpl_creatives``, PUT for
+      Approved/Rejected/Pending) also 403 IAM-deny. That's a separate
+      moderation flow for buyer-uploaded creatives.
 
-  Buyer-side (would need a separate Demand API token, which Talpa as a
-  publisher wouldn't have):
-    * ``POST /demand/v1/accounts/{seat_id}/ads`` — buyer registers a
-      creative in their DSP seat. Requires ``X-Freewheel-Account-Id``.
-    * Out of scope for publisher-token-driven integration.
+  AdCP semantic note: ``sync_creatives`` (buyer registering creatives)
+  partially maps via ``creative_resources`` create. But without
+  ``creative_instances`` to attach them to a placement, the adapter
+  can't complete the round-trip.
+
+  Demand-side path (out of scope for publisher integration): a buyer
+  with their own DSP seat would POST to
+  ``/demand/v1/accounts/{seat_id}/ads`` using a separate Demand API
+  bearer Talpa doesn't have.
 - ⏳ get_media_buy_delivery — reporting lives on a different API surface
   not yet mapped.
 """

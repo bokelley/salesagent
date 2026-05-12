@@ -13,31 +13,19 @@ from unittest.mock import MagicMock
 
 from src.adapters.freewheel._commercial import FreeWheelCommercialClient, _build_xml, _element_to_dict
 from src.adapters.freewheel._transport import FreeWheelTransport
+from tests.helpers.freewheel_replay import make_response, replay_session
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "data" / "freewheel" / "v3"
 
 
 def _make_response(text: str) -> MagicMock:
-    mock = MagicMock()
-    mock.status_code = 200
-    mock.ok = True
-    mock.text = text
-    mock.content = text.encode()
-    return mock
+    # Local alias kept so call sites in tests that already construct ad-hoc
+    # responses (without going through replay_session) stay terse.
+    return make_response(text)
 
 
 def _replay(url_to_fixture: dict[str, Path]) -> FreeWheelCommercialClient:
-    session = MagicMock()
-
-    def fake_request(*, method, url, headers, data=None, timeout=None):
-        path = url.split("?", 1)[0]
-        for suffix, fixture in url_to_fixture.items():
-            if path.endswith(suffix):
-                return _make_response(fixture.read_text() if fixture else "")
-        raise AssertionError(f"No fixture mapped for {url}")
-
-    session.request.side_effect = fake_request
-    return FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+    return FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=replay_session(url_to_fixture)))
 
 
 class TestAdvertiserListing:

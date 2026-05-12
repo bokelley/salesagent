@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Generic, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field
 
 T = TypeVar("T")
 
@@ -59,12 +59,21 @@ class Link(_APIModel):
 
 
 class PaginatedResponse(_APIModel, Generic[T]):
-    """v4 paginated envelope. Field names match the FreeWheel wire shape."""
+    """v4 paginated envelope.
+
+    FreeWheel uses two field-naming conventions across the v4 surface:
+
+    - Inventory taxonomy (sites, videos, etc.) → ``total_count`` / ``total_page``
+    - Creative resources (and family)         → ``total``       / ``total_pages``
+
+    Both are accepted here via ``AliasChoices`` so callers don't have to pick
+    a wrapper per resource.
+    """
 
     page: int = 1
     per_page: int = 10
-    total_count: int = 0
-    total_page: int = 1
+    total_count: int = Field(default=0, validation_alias=AliasChoices("total_count", "total"))
+    total_page: int = Field(default=1, validation_alias=AliasChoices("total_page", "total_pages"))
     items: list[T] = Field(default_factory=list)
     links: list[Link] = Field(default_factory=list)
 
@@ -143,6 +152,79 @@ class VideoGroup(_InventoryEntity):
 
     network_id: int | None = None
     rating: str | None = None
+
+
+class Rendition(_APIModel):
+    """One rendition of a creative — the actual ad payload reference.
+
+    For VAST-tag-forwarding setups (the common pattern observed against
+    Talpa's network), ``uri`` carries a third-party VAST tag URL that the
+    publisher's ad server resolves at delivery time. ``content`` is used
+    for hosted-asset uploads instead.
+    """
+
+    id: int | None = None
+    uri: str | None = None
+    content: str | None = None
+    content_type: str | None = None
+    content_type_id: int | None = None
+    width: int | None = None
+    height: int | None = None
+    quality: str | None = None
+    bitrate: int | None = None
+    device_pixel_ratio: int | None = None
+    https_compatibility: str | None = None
+    file_size: int | None = None
+    status: str | None = None
+    rendition_transcode_profile_id: int | None = None
+    vast_rendition: bool | None = None
+    operator_network_id: int | None = None
+
+
+class CreativeMessage(_APIModel):
+    """Validation / processing message attached to a creative."""
+
+    type: str
+    content: str
+
+
+class Creative(_APIModel):
+    """v4 creative resource — the publisher-side creative record.
+
+    Lives at ``/services/v4/creative_resources``. ``advertiser_ids`` controls
+    which advertisers can attach this creative; the actual delivery linkage
+    (creative ↔ placement) lives in the separate ``creative_instances``
+    endpoint family.
+
+    Renditions are returned inline only when the request includes
+    ``?include=renditions`` — without that query flag, only the creative
+    envelope's metadata is returned.
+    """
+
+    id: int
+    name: str | None = None
+    base_ad_unit: str | None = None
+    base_ad_unit_id: int | None = None
+    external_id: str | None = None
+    description: str | None = None
+    duration: int | None = None
+    duration_type: str | None = None
+    status: str | None = None
+    rating: str | None = None
+    rating_id: int | None = None
+    tag_type: str | None = None
+    tag_type_id: int | None = None
+    tv_vod_object_type: str | None = None
+    tv_vod_object_id: int | None = None
+    clearcast_approval: str | None = None
+    clearcast_code_ids: list[int] | None = None
+    clearcast_note: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    advertiser_ids: list[int] = Field(default_factory=list)
+    agency_ids: list[int] = Field(default_factory=list)
+    renditions: list[Rendition] = Field(default_factory=list)
+    messages: list[CreativeMessage] = Field(default_factory=list)
 
 
 class InventoryPackage(_APIModel):
