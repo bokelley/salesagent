@@ -1167,12 +1167,17 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
 
 @settings_bp.route("/business-rules", methods=["POST"])
 @log_admin_action("update_business_rules")
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def update_business_rules(tenant_id):
     """Update business rules (budget, naming, approvals, features).
 
     This function uses PolicyService for validation and updates. The service layer
     provides clean, testable business logic with comprehensive validation.
+
+    Business rules are publisher-managed (Sprint 5 design); embedded tenants edit
+    them via the proxied admin UI. The model-layer guard's
+    ``PUBLISHER_WRITABLE_FIELDS[Tenant]`` allow-list enforces the per-column
+    boundary as defense-in-depth.
     """
     from src.services.policy_service import PolicyService, ValidationError
 

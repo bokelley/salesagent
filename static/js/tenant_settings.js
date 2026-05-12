@@ -634,55 +634,72 @@ function saveBusinessRules() {
         redirect: 'follow'  // Follow redirects to get flash messages
     })
     .then(response => {
-        // Check if response is HTML (redirect with flash messages) or JSON
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('text/html')) {
-            // Server returned HTML (redirect with flash messages)
-            // Parse the HTML to extract flash messages instead of full reload
-            return response.text().then(html => {
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
+        const contentType = response.headers.get('content-type') || '';
+        const isHtml = contentType.includes('text/html');
+        const isJson = contentType.includes('application/json');
 
-                // Look for flash messages in the returned HTML (only in .flash-messages container)
+        // Non-2xx: surface the error. Previously the HTML branch parsed for flash
+        // messages and fell through to window.location.reload() when none were
+        // found — that masked every 4xx/5xx from this route as success.
+        if (!response.ok) {
+            if (isJson) {
+                return response.json().then(data => {
+                    throw new Error(data.message || data.error || `Server returned status ${response.status}`);
+                });
+            }
+            return response.text().then(body => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(body, 'text/html');
                 const flashContainer = doc.querySelector('.flash-messages');
                 if (flashContainer) {
                     const flashMessages = flashContainer.querySelectorAll('.alert');
                     if (flashMessages.length > 0) {
-                        // Extract and show flash message without reloading
-                        const messages = Array.from(flashMessages).map(el => {
-                            // Get text content and remove the × close button
-                            const text = el.textContent.trim().replace('×', '').trim();
-                            return text;
-                        }).join('\n\n');
+                        const messages = Array.from(flashMessages).map(el =>
+                            el.textContent.trim().replace('×', '').trim()
+                        ).join('\n\n');
+                        throw new Error(messages);
+                    }
+                }
+                throw new Error(`Server returned status ${response.status}`);
+            });
+        }
 
-                        // Check if message is a success message
+        if (isHtml) {
+            // 2xx HTML — parse flash messages from the rendered page
+            return response.text().then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                const flashContainer = doc.querySelector('.flash-messages');
+                if (flashContainer) {
+                    const flashMessages = flashContainer.querySelectorAll('.alert');
+                    if (flashMessages.length > 0) {
+                        const messages = Array.from(flashMessages).map(el =>
+                            el.textContent.trim().replace('×', '').trim()
+                        ).join('\n\n');
+
                         const isSuccess = flashMessages[0].classList.contains('alert-success');
                         if (isSuccess) {
-                            // Success - reload to show updated data
                             window.location.reload();
                         } else {
-                            // Error - show alert and keep form state
                             alert('⚠️ ' + messages);
-                            // Don't reload - keep form state including unsaved currencies
                         }
                         return;
                     }
                 }
-                // No flash messages means success - reload to show updated data
+                // No flash messages on a 2xx HTML response — treat as success
                 window.location.reload();
             });
-        } else if (response.ok) {
-            // JSON response
-            return response.json().then(data => {
-                if (data.success) {
-                    window.location.reload();
-                } else {
-                    alert('Error: ' + (data.error || data.message || 'Unknown error'));
-                }
-            });
-        } else {
-            throw new Error(`Server returned status ${response.status}`);
         }
+
+        // 2xx JSON
+        return response.json().then(data => {
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert('Error: ' + (data.message || data.error || 'Unknown error'));
+            }
+        });
     })
     .catch(error => {
         alert('Error: ' + error.message);

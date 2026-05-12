@@ -72,14 +72,42 @@ class EmbeddedTenantWriteError(Exception):
 
 # Per-table allow-list of fields a non-API caller may still write on an embedded tenant.
 # Anything not in this set (or any platform-managed table not listed at all) is locked.
-# Today's Tenant model has no publisher-writable platform-managed columns — name,
-# billing_plan, is_active, external_* are all platform concerns. Listed empty for clarity.
+#
+# Tenant: platform-identity columns (name, billing_plan, is_active, subdomain,
+# external_*) remain locked. The business-rules surface is publisher-managed per
+# Sprint 5 design (docs/design/embedded-mode-sprint-5.md §"Pattern: shared
+# business logic with the UI") — the publisher edits these in the proxied admin
+# UI; the management API exposes the same writes for automation.
 PUBLISHER_WRITABLE_FIELDS: dict[type, set[str]] = {
-    Tenant: set(),
+    Tenant: {
+        # Business rules — written by /settings/business-rules POST
+        "measurement_providers",
+        "order_name_template",
+        "line_item_name_template",
+        "approval_mode",
+        "creative_review_criteria",
+        "creative_auto_approve_threshold",
+        "creative_auto_reject_threshold",
+        "ai_policy",
+        "advertising_policy",
+        "enable_axe_signals",
+        "brand_manifest_policy",
+        "product_ranking_prompt",
+        "human_review_required",
+    },
     # Sprint 1.8: gam_sandbox_advertiser_id is a runtime cache populated lazily
     # by the routing chain on first sandbox call (not a user-editable surface).
     # Routing-chain writes are internal infrastructure, not publisher UI traffic.
-    AdapterConfig: {"gam_sandbox_advertiser_id"},
+    #
+    # gam_manual_approval_required / mock_manual_approval_required mirror the
+    # tenant.human_review_required business rule onto the adapter config — same
+    # publisher-managed setting, two storage locations kept in sync by the
+    # /settings/business-rules handler.
+    AdapterConfig: {
+        "gam_sandbox_advertiser_id",
+        "gam_manual_approval_required",
+        "mock_manual_approval_required",
+    },
 }
 
 
