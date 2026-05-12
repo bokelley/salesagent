@@ -27,20 +27,44 @@ jobs:
     - name: Scan for vulnerabilities
       # GHSA-5239-wwwm-4pmq: Pygments ReDoS in AdlLexer (CVE-2026-4539) - no fix available;
       #   local-access-only (AV:L, CVSS 3.3); ADL lexer not invoked by this application
-      # --check-direct-dependency-vulnerabilities-only / --check-direct-dependency-maintenance-issues-only:
-      #   pydantic-ai-slim transitively pulls mistralai via its ``mistral`` extra, but
-      #   the package was quarantined on PyPI in May 2026 (all versions removed from
-      #   the JSON API; project-status="quarantined" on the simple index). uv-secure
-      #   errors with HTTP 404 fetching transitive metadata even with --ignore-pkgs.
-      #   Restricting the scan to direct dependencies skips the broken transitive fetch.
-      #   We don't import mistralai anywhere in src/ or core/, and direct deps are
-      #   what we have version control over — so this trade-off is acceptable while
-      #   pydantic-ai-slim still ships the unused mistral extra. Revisit once that
-      #   ships without it or PyPI un-quarantines mistralai.
+      #
+      # Filter mistralai from the lockfile before scanning. ``pydantic-ai-slim``
+      # transitively pulls mistralai via its ``mistral`` extra, but the package
+      # was quarantined on PyPI in May 2026 (all versions removed from the JSON
+      # API; ``project-status="quarantined"`` on the simple index). uv-secure
+      # tries to GET pypi.org/pypi/mistralai/1.9.11/json for EVERY package
+      # (transitives included) regardless of ``--ignore-pkgs`` or
+      # ``--check-direct-dependency-*-only`` — those flags only filter
+      # reporting, not the metadata fetch. The 404 short-circuits with exit 3.
+      #
+      # We don't import mistralai anywhere in src/ or core/ (``grep -rn
+      # mistralai src/ core/`` is empty), and the upstream extra carries no
+      # functionality we use. Stripping mistralai from a temporary lockfile
+      # copy lets the scan complete on every other dependency, including
+      # everything else pydantic-ai-slim pulls in.
+      #
+      # Revert this once pydantic-ai-slim drops the mistral extra or PyPI
+      # un-quarantines the package.
       run: |
-        uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq \
-          --check-direct-dependency-vulnerabilities-only \
-          --check-direct-dependency-maintenance-issues-only
+        # Strip the mistralai ``[[package]]`` block from a temp copy of the
+        # lockfile so uv-secure doesn't choke on the PyPI quarantine 404.
+        # uv-secure requires the file to be named uv.lock / pylock.toml /
+        # requirements.txt, hence the directory.
+        mkdir -p /tmp/uvscan
+        python3 - <<'PY'
+        import re
+        with open("uv.lock") as f:
+            text = f.read()
+        pattern = re.compile(
+            r'^\[\[package\]\]\nname = "mistralai".*?(?=^\[\[|\Z)',
+            re.MULTILINE | re.DOTALL,
+        )
+        out, n = pattern.subn("", text, count=1)
+        assert n == 1, f"expected exactly one mistralai [[package]] block, found {n}"
+        with open("/tmp/uvscan/uv.lock", "w") as f:
+            f.write(out)
+        PY
+        uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq /tmp/uvscan/uv.lock
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
