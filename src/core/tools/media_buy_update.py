@@ -527,17 +527,20 @@ def _update_media_buy_impl(
             # distinguish a deferred update from a noop, and the
             # ``media_buy_state_machine / pause_buy`` storyboard would fail
             # on ``field_present @ /status`` (#353) for tenants that route
-            # update_media_buy through manual approval. Use the persisted
-            # status string directly (rather than ``_compute_status``)
-            # because the date-math fallback for "is the buy live yet"
-            # doesn't matter for a deferred update — what the buyer needs
-            # is the lifecycle position the buy is sitting in.
+            # update_media_buy through manual approval.
+            #
+            # Coerce the persisted status through ``_to_wire_status`` before
+            # emitting — the DB column stores values like ``draft`` /
+            # ``pending_approval`` that the wire enum does not accept (#374).
+            # Without the coercion, those persisted-only values reach
+            # ``UpdateMediaBuySuccess`` and fastmcp rejects the response
+            # with ``INVALID_REQUEST[status]``.
+            from src.core.tools.media_buy_list import _to_wire_status
+
             current_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
-            current_status: str | None = None
-            if current_buy is not None:
-                raw_status = getattr(current_buy, "status", None)
-                if isinstance(raw_status, str):
-                    current_status = raw_status
+            current_status: str | None = _to_wire_status(
+                getattr(current_buy, "status", None) if current_buy is not None else None
+            )
             approval_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 status=current_status,

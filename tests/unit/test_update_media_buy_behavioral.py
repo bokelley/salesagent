@@ -660,6 +660,50 @@ def test_cancel_response_includes_status_canceled(standard_mocks):
     assert getattr(result.status, "value", result.status) == "canceled"
 
 
+def test_manual_approval_response_coerces_non_wire_db_status_to_none(standard_mocks):
+    """Manual-approval response MUST NOT emit a persisted-only DB status
+    that the wire enum rejects (#374).
+
+    The ``MediaBuy.status`` column accepts ``draft`` (model default) and
+    ``pending_approval`` (manual-approval create path) — both are
+    persisted-only and not in the AdCP ``MediaBuyStatus`` enum. Before
+    #374 the manual-approval path read the raw DB status and emitted it,
+    so fastmcp rejected the response with ``INVALID_REQUEST[status]``.
+    """
+    standard_mocks["adapter_instance"].manual_approval_required = True
+    standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
+
+    mock_buy = MagicMock()
+    mock_buy.status = "pending_approval"  # Persisted-only — not in wire enum
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_buy
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_manual_status")
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    # Coerced to None — better than emitting an enum-invalid string.
+    assert result.status is None
+
+
+def test_manual_approval_response_preserves_wire_valid_db_status(standard_mocks):
+    """Manual-approval response preserves a status that IS in the wire enum (#374)."""
+    standard_mocks["adapter_instance"].manual_approval_required = True
+    standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
+
+    mock_buy = MagicMock()
+    mock_buy.status = "pending_creatives"  # Wire-valid
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_buy
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_manual_wire")
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.status is not None
+    assert getattr(result.status, "value", result.status) == "pending_creatives"
+
+
 # ---------------------------------------------------------------------------
 # BUG #1041: Manual approval gate creates no ObjectWorkflowMapping
 # Without the mapping, the admin approval flow cannot find the media buy
