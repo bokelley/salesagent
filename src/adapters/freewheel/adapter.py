@@ -141,6 +141,8 @@ class FreeWheelAdapter(AdServerAdapter):
                 "and no default_advertiser_id is configured"
             )
 
+        self.username = self.config.get("username")
+        self.password = self.config.get("password")
         self.api_token = self.config.get("api_token")
         self.environment = self.config.get("environment", "production")
         self.base_url = FREEWHEEL_HOSTS.get(self.environment, FREEWHEEL_HOSTS["production"])
@@ -149,9 +151,16 @@ class FreeWheelAdapter(AdServerAdapter):
             self.log("Running in dry-run mode — FreeWheel Publisher API calls will be simulated", dry_run_prefix=False)
             self._client: FreeWheelClient | None = None
         else:
-            if not self.api_token:
-                raise ValueError("FreeWheel config is missing 'api_token'")
-            self._client = FreeWheelClient(api_token=self.api_token, base_url=self.base_url)
+            has_password_grant = bool(self.username) and bool(self.password)
+            has_token = bool(self.api_token)
+            if not has_password_grant and not has_token:
+                raise ValueError("FreeWheel config requires either (username + password) or api_token")
+            self._client = FreeWheelClient(
+                username=self.username,
+                password=self.password,
+                api_token=self.api_token,
+                base_url=self.base_url,
+            )
 
     # ----- capabilities -----
 

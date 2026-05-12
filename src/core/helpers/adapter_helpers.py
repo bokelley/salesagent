@@ -157,14 +157,17 @@ def get_adapter(
                         }
                     )
             elif adapter_type == "freewheel":
-                # FreeWheel bearer token lives in config_json. Same plaintext-via-
+                # FreeWheel credentials live in config_json. Same plaintext-via-
                 # attribute-access requirement as Triton above — model_dump()
-                # would re-encrypt api_token before it reaches the HTTP layer.
+                # would re-encrypt password/api_token before they reach the
+                # HTTP layer.
                 stored = config_row.config_json or {}
                 if stored:
                     fw_validated = FreeWheelAdapter.connection_config_class(**stored)
                     adapter_config.update(
                         {
+                            "username": fw_validated.username,
+                            "password": fw_validated.password,
                             "api_token": fw_validated.api_token,
                             "environment": fw_validated.environment,
                             "default_advertiser_id": fw_validated.default_advertiser_id,

@@ -1,12 +1,14 @@
 """High-level FreeWheel client.
 
 Public facade composing :class:`FreeWheelInventoryClient` (v4 JSON inventory
-taxonomy) and :class:`FreeWheelCommercialClient` (v3 XML commercial entities)
-behind a single object so adapter code has one client to wire up.
+taxonomy), :class:`FreeWheelCommercialClient` (v3 XML commercial entities),
+and :class:`FreeWheelCreativeClient` (v4 creative_resources) behind a single
+object so adapter code has one client to wire up.
 
-Authentication is a long-lived bearer token (~7-day TTL, no refresh
-endpoint exposed); see :mod:`._transport` for HTTP details and exception
-classes.
+Construct with either OAuth2 password-grant credentials (``username`` +
+``password`` — canonical, auto-refreshing) or a pre-minted bearer
+(``api_token`` — escape hatch for partner-provisioned tokens). See
+:mod:`._transport` for HTTP details and exception classes.
 """
 
 from __future__ import annotations
@@ -60,13 +62,22 @@ class FreeWheelClient:
 
     def __init__(
         self,
-        api_token: str,
+        api_token: str | None = None,
         *,
+        username: str | None = None,
+        password: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
         session: requests.Session | None = None,
     ):
-        self._transport = FreeWheelTransport(api_token=api_token, base_url=base_url, timeout=timeout, session=session)
+        self._transport = FreeWheelTransport(
+            api_token=api_token,
+            username=username,
+            password=password,
+            base_url=base_url,
+            timeout=timeout,
+            session=session,
+        )
         self.inventory = FreeWheelInventoryClient(self._transport)
         self.commercial = FreeWheelCommercialClient(self._transport)
         self.creatives = FreeWheelCreativeClient(self._transport)

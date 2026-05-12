@@ -3,18 +3,26 @@
 Knows about bearer-token auth, content-type negotiation (v3 paths return XML,
 v4 paths return JSON), and HTTP status -> exception mapping. Does not know
 about pagination, entity shapes, or specific endpoints — those live in
-:mod:`_inventory` and :mod:`_commercial`.
+:mod:`_inventory`, :mod:`_commercial`, and :mod:`_creatives`.
 
-Authentication uses a long-lived bearer token issued by FreeWheel (or by a
-publisher who has minted one on the partner's behalf). Tokens have a ~7-day
-TTL but no refresh flow is exposed; expired tokens 401 and the caller must
-obtain a new one. :meth:`FreeWheelTransport.token_info` provides a cheap
-connectivity probe that also surfaces remaining TTL.
+Two authentication paths are supported (per the FreeWheel docs at
+https://api-docs.freewheel.tv/demand/docs/demand-api-authentication):
+
+1. **OAuth2 password grant (canonical)**: pass ``username`` + ``password`` and
+   the transport mints a bearer at ``POST /auth/token`` on first use, caches
+   it with TTL tracking, and refreshes on 401 or expiry.
+
+2. **Pre-minted bearer (escape hatch)**: pass ``api_token`` directly. Used
+   when a partner provides a token out-of-band. No refresh — 401 propagates
+   to the caller, who must rotate the token.
+
+Exactly one of the two paths must be provided.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import urlencode
@@ -26,6 +34,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.freewheel.tv"
 STAGING_BASE_URL = "https://api.stg.freewheel.tv"
 DEFAULT_TIMEOUT = 30.0
+
+# Refresh a minted token slightly before its documented expiry so an
+# in-flight request never crosses the boundary. FreeWheel issues 7-day
+# tokens; one hour of headroom is comfortable.
+_REFRESH_LEEWAY_SECONDS = 60 * 60
 
 
 class FreeWheelError(Exception):
@@ -62,22 +75,38 @@ class FreeWheelServerError(FreeWheelError):
 
 
 class FreeWheelTransport:
-    """Low-level HTTP layer for the FreeWheel Publisher API."""
+    """Low-level HTTP layer for the FreeWheel Publisher API.
+
+    Construct with either a pre-minted ``api_token`` (escape hatch) or
+    ``username`` + ``password`` (canonical OAuth2 password grant). The
+    password path caches and auto-refreshes; the token path does not.
+    """
 
     def __init__(
         self,
-        api_token: str,
+        api_token: str | None = None,
         *,
+        username: str | None = None,
+        password: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
         session: requests.Session | None = None,
     ):
-        if not api_token:
-            raise ValueError("api_token is required")
-        self.api_token = api_token
+        has_password_grant = bool(username) and bool(password)
+        has_token = bool(api_token)
+        if not has_password_grant and not has_token:
+            raise ValueError("FreeWheelTransport requires either api_token or (username + password)")
+
+        self._static_token = api_token if has_token else None
+        self._username = username
+        self._password = password
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._session = session or requests.Session()
+
+        # Cache for tokens minted from username + password.
+        self._cached_token: str | None = None
+        self._cached_token_expires_at: float = 0.0
 
     # ----- public methods -----
 
@@ -129,6 +158,51 @@ class FreeWheelTransport:
 
     # ----- internals -----
 
+    def _current_token(self) -> str:
+        """Return a valid bearer, minting/refreshing if needed."""
+        if self._static_token is not None:
+            return self._static_token
+        if self._cached_token and time.time() < self._cached_token_expires_at:
+            return self._cached_token
+        return self._mint_token()
+
+    def _mint_token(self) -> str:
+        """OAuth2 password grant: POST /auth/token to mint a fresh bearer."""
+        assert self._username and self._password  # enforced in __init__
+        url = f"{self.base_url}/auth/token"
+        response = self._session.post(
+            url,
+            data={
+                "grant_type": "password",
+                "user_id": self._username,
+                "password": self._password,
+            },
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            raise FreeWheelAuthError(
+                f"FreeWheel /auth/token rejected credentials: HTTP {response.status_code}",
+                status_code=response.status_code,
+                body=response.text,
+            )
+        body = response.json() if response.content else {}
+        token = body.get("access_token")
+        if not token:
+            raise FreeWheelAuthError(
+                "FreeWheel /auth/token response missing access_token",
+                status_code=response.status_code,
+                body=response.text,
+            )
+        # Default to 7-day TTL if expires_in isn't returned. Clamp the leeway
+        # to half the TTL so shorter-lived tokens don't trigger refresh on
+        # every call.
+        expires_in = float(body.get("expires_in", 7 * 24 * 60 * 60))
+        leeway = min(_REFRESH_LEEWAY_SECONDS, expires_in / 2)
+        self._cached_token = token
+        self._cached_token_expires_at = time.time() + expires_in - leeway
+        logger.info("FreeWheel: minted bearer token (expires_in=%s)", int(expires_in))
+        return token
+
     def _request(
         self,
         method: str,
@@ -139,24 +213,42 @@ class FreeWheelTransport:
         body: str | None = None,
         content_type: str | None = None,
     ) -> requests.Response:
+        response = self._do_request(method, path, accept, params, body, content_type)
+        # If we're using a minted token and got a 401, the token might have
+        # rolled prematurely. Try one refresh + retry before propagating.
+        if response.status_code == 401 and self._static_token is None and self._username:
+            logger.info("FreeWheel: 401 with cached token; minting fresh and retrying")
+            self._cached_token = None
+            self._cached_token_expires_at = 0.0
+            response = self._do_request(method, path, accept, params, body, content_type)
+        self._raise_for_status(response, method, path)
+        return response
+
+    def _do_request(
+        self,
+        method: str,
+        path: str,
+        accept: str,
+        params: dict[str, Any] | None,
+        body: str | None,
+        content_type: str | None,
+    ) -> requests.Response:
         url = f"{self.base_url}{path}"
         if params:
             url = f"{url}?{urlencode(params)}"
         headers = {
-            "Authorization": f"Bearer {self.api_token}",
+            "Authorization": f"Bearer {self._current_token()}",
             "accept": accept,
         }
         if content_type:
             headers["Content-Type"] = content_type
-        response = self._session.request(
+        return self._session.request(
             method=method,
             url=url,
             headers=headers,
             data=body,
             timeout=self.timeout,
         )
-        self._raise_for_status(response, method, path)
-        return response
 
     def _raise_for_status(self, response: requests.Response, method: str, path: str) -> None:
         if response.ok:

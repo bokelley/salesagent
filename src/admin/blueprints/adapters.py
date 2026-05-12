@@ -271,29 +271,42 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/test-connection", methods=["POST"])
 @require_tenant_access(role=("admin",))
 def test_freewheel_connection(tenant_id, **kwargs):
-    """Verify a FreeWheel bearer token by calling /auth/token/info.
+    """Verify FreeWheel credentials by minting a bearer (password grant) or
+    validating a pre-minted bearer via /auth/token/info.
 
-    Accepts ``api_token`` (optional — falls back to the encrypted token already
-    stored on ``AdapterConfig.config_json``) and ``environment``
-    (production/staging).
+    Accepts (in priority order):
+      - ``username`` + ``password`` for OAuth2 password grant — the canonical path
+      - ``api_token`` for pre-minted-bearer use (escape hatch)
+
+    Missing fields fall back to the encrypted values already on
+    ``AdapterConfig.config_json``. Submitted ciphertext is rejected to
+    prevent cross-tenant replay (see save_adapter_config).
     """
     from src.core.utils.encryption import is_encrypted
 
     try:
         data = request.get_json() or {}
+        username = data.get("username")
+        password = data.get("password")
         api_token = data.get("api_token")
         environment = data.get("environment", "production")
 
-        # Reject submitted ciphertext — only the DB-fallback path is allowed
-        # to use the stored ciphertext. See cross-tenant smuggling note in
-        # save_adapter_config.
-        if api_token and is_encrypted(api_token):
-            return (
-                jsonify({"success": False, "error": "api_token must be plaintext (encrypted-token replay rejected)"}),
-                400,
-            )
+        # Reject submitted ciphertext on secret fields — only the DB-fallback
+        # path is allowed to use stored ciphertext.
+        for field_name, field_value in [("password", password), ("api_token", api_token)]:
+            if field_value and is_encrypted(field_value):
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"{field_name} must be plaintext (encrypted-token replay rejected)",
+                        }
+                    ),
+                    400,
+                )
 
-        if not api_token:
+        # Fill in missing fields from stored config so partial submissions work.
+        if not (username and password) and not api_token:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             with get_db_session() as session:
@@ -303,12 +316,20 @@ def test_freewheel_connection(tenant_id, **kwargs):
 
                     try:
                         rehydrated = FreeWheelConnectionConfig.model_validate(existing.config_json)
-                        api_token = rehydrated.api_token
+                        username = username or rehydrated.username
+                        password = password or rehydrated.password
+                        api_token = api_token or rehydrated.api_token
                     except ValidationError:
-                        api_token = None
-        if not api_token:
+                        pass
+
+        if not (username and password) and not api_token:
             return (
-                jsonify({"success": False, "error": "api_token is required for first connection test"}),
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Connection test requires either (username + password) or api_token",
+                    }
+                ),
                 400,
             )
 
@@ -316,7 +337,7 @@ def test_freewheel_connection(tenant_id, **kwargs):
         from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
 
         base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
-        client = FreeWheelClient(api_token=api_token, base_url=base_url)
+        client = FreeWheelClient(username=username, password=password, api_token=api_token, base_url=base_url)
         try:
             info = client.token_info()
         except FreeWheelError as exc:
@@ -324,13 +345,14 @@ def test_freewheel_connection(tenant_id, **kwargs):
             # message to the client to avoid echoing reflected request data
             # or hint messages from the auth provider.
             logger.warning("FreeWheel token probe failed: %s body=%s", exc, exc.body)
-            return jsonify({"success": False, "error": "FreeWheel rejected the token"}), 200
+            return jsonify({"success": False, "error": "FreeWheel rejected the credentials"}), 200
 
         return jsonify(
             {
                 "success": True,
                 "environment": environment,
                 "expires_in": info.get("expires_in"),
+                "auth_mode": "password_grant" if (username and password) else "pre_minted_token",
             }
         )
 

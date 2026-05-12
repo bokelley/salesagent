@@ -21,7 +21,7 @@ def is_tenant_ad_server_configured(tenant_id: str) -> bool:
     A tenant is considered configured if:
     - For GAM: OAuth token OR service account credentials exist
     - For Triton: publisher username/password exist in config_json
-    - For FreeWheel: api_token (bearer) exists in config_json
+    - For FreeWheel: either (username + password) or api_token exists in config_json
     - For Mock: Always configured
     - For others: Adapter config exists
 
@@ -81,9 +81,14 @@ def is_tenant_ad_server_configured(tenant_id: str) -> bool:
 
             elif adapter_type == "freewheel":
                 config = adapter_config.config_json or {}
-                has_creds = bool(config.get("api_token"))
+                has_password_grant = bool(config.get("username") and config.get("password"))
+                has_token = bool(config.get("api_token"))
+                has_creds = has_password_grant or has_token
                 if not has_creds:
-                    logger.info(f"Tenant {tenant_id} FreeWheel adapter missing bearer token")
+                    logger.info(
+                        f"Tenant {tenant_id} FreeWheel adapter missing credentials "
+                        "(need username+password or api_token)"
+                    )
                 return has_creds
 
             else:
@@ -167,8 +172,10 @@ def get_tenant_status(tenant_id: str) -> dict:
 
             elif adapter_type == "freewheel":
                 config = adapter_config.config_json or {}
-                if not config.get("api_token"):
-                    missing_config.append("FreeWheel api_token not set")
+                has_password_grant = bool(config.get("username") and config.get("password"))
+                has_token = bool(config.get("api_token"))
+                if not has_password_grant and not has_token:
+                    missing_config.append("FreeWheel credentials not set (username+password or api_token)")
 
             # Mock adapter doesn't need additional config
             status["is_configured"] = len(missing_config) == 0

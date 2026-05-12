@@ -153,15 +153,18 @@ class TestTritonConfigRoundtrip:
 class TestFreeWheelConfigRoundtrip:
     """FreeWheel config persists encrypted, rehydrates plaintext, reports configured."""
 
-    def test_full_roundtrip_staging(self, _tenant):
+    def test_password_grant_roundtrip_staging(self, _tenant):
+        """Canonical auth: username + password persisted encrypted, rehydrates plaintext."""
         validated = FreeWheelConnectionConfig(
-            api_token="fw_bearer_xyz",
+            username="publisher@example.com",
+            password="fw_password_xyz",
             environment="staging",
         )
         _persist_adapter_config(_tenant, "freewheel", validated.model_dump())
 
         on_disk = _read_config_json(_tenant)
-        assert is_encrypted(on_disk["api_token"]), "api_token must be ciphertext at rest"
+        assert is_encrypted(on_disk["password"]), "password must be ciphertext at rest"
+        assert on_disk["username"] == "publisher@example.com"
         assert on_disk["environment"] == "staging"
 
         assert is_tenant_ad_server_configured(_tenant) is True
@@ -170,18 +173,30 @@ class TestFreeWheelConfigRoundtrip:
         assert status["adapter_type"] == "freewheel"
 
         rehydrated = FreeWheelConnectionConfig.model_validate(on_disk)
-        assert rehydrated.api_token == "fw_bearer_xyz"
+        assert rehydrated.password == "fw_password_xyz"
         assert rehydrated.base_url == "https://api.stg.freewheel.tv"
 
-    def test_missing_api_token_reports_unconfigured(self, _tenant):
+    def test_pre_minted_token_roundtrip(self, _tenant):
+        """Escape hatch: api_token persisted encrypted, rehydrates plaintext."""
+        validated = FreeWheelConnectionConfig(api_token="fw_bearer_xyz", environment="staging")
+        _persist_adapter_config(_tenant, "freewheel", validated.model_dump())
+
+        on_disk = _read_config_json(_tenant)
+        assert is_encrypted(on_disk["api_token"]), "api_token must be ciphertext at rest"
+        assert is_tenant_ad_server_configured(_tenant) is True
+
+        rehydrated = FreeWheelConnectionConfig.model_validate(on_disk)
+        assert rehydrated.api_token == "fw_bearer_xyz"
+
+    def test_missing_credentials_reports_unconfigured(self, _tenant):
         _persist_adapter_config(
             _tenant,
             "freewheel",
             {
-                # api_token missing
+                # Neither password grant nor api_token set
                 "environment": "production",
             },
         )
         assert is_tenant_ad_server_configured(_tenant) is False
         status = get_tenant_status(_tenant)
-        assert any("api_token" in m for m in status["missing_config"])
+        assert any("credentials" in m.lower() or "api_token" in m for m in status["missing_config"])

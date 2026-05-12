@@ -18,21 +18,44 @@ def encryption_key():
         yield key
 
 
-class TestFreeWheelConnectionConfig:
-    def test_default_environment_is_production(self):
-        cfg = FreeWheelConnectionConfig(api_token="tok")
+class TestPasswordGrantConfig:
+    """Canonical auth path — username + password — mints/refreshes tokens."""
+
+    def test_accepts_username_and_password(self):
+        cfg = FreeWheelConnectionConfig(username="publisher@example.com", password="hunter2")
+        assert cfg.username == "publisher@example.com"
+        assert cfg.password == "hunter2"
+        assert cfg.api_token is None
         assert cfg.environment == "production"
         assert cfg.base_url == "https://api.freewheel.tv"
 
-    def test_staging_environment_resolves_to_staging_host(self):
-        cfg = FreeWheelConnectionConfig(api_token="tok", environment="staging")
-        assert cfg.base_url == "https://api.stg.freewheel.tv"
+    def test_password_serializes_to_ciphertext(self, encryption_key):
+        cfg = FreeWheelConnectionConfig(username="u", password="super-secret-password")
+        dumped = cfg.model_dump()
+        assert dumped["password"] != "super-secret-password"
+        assert is_encrypted(dumped["password"])
 
-    def test_invalid_environment_rejected(self):
-        from pydantic import ValidationError
+    def test_password_round_trips_through_dump_and_validate(self, encryption_key):
+        original = FreeWheelConnectionConfig(username="u", password="super-secret-password")
+        persisted = original.model_dump()
+        rehydrated = FreeWheelConnectionConfig.model_validate(persisted)
+        assert rehydrated.password == "super-secret-password"
 
-        with pytest.raises(ValidationError):
-            FreeWheelConnectionConfig(api_token="tok", environment="dev")
+    def test_already_encrypted_password_not_double_encrypted(self, encryption_key):
+        cfg = FreeWheelConnectionConfig(username="u", password="super-secret-password")
+        ciphertext = cfg.model_dump()["password"]
+        rehydrated = FreeWheelConnectionConfig.model_validate({"username": "u", "password": ciphertext})
+        assert rehydrated.password == "super-secret-password"
+
+
+class TestPreMintedTokenConfig:
+    """Escape-hatch auth path — pre-minted bearer, no auto-refresh."""
+
+    def test_accepts_api_token_alone(self):
+        cfg = FreeWheelConnectionConfig(api_token="bearer-xyz")
+        assert cfg.api_token == "bearer-xyz"
+        assert cfg.username is None
+        assert cfg.password is None
 
     def test_api_token_serializes_to_ciphertext(self, encryption_key):
         cfg = FreeWheelConnectionConfig(api_token="super-secret-token")
@@ -46,23 +69,62 @@ class TestFreeWheelConnectionConfig:
         rehydrated = FreeWheelConnectionConfig.model_validate(persisted)
         assert rehydrated.api_token == "super-secret-token"
 
-    def test_already_encrypted_token_not_double_encrypted(self, encryption_key):
-        cfg = FreeWheelConnectionConfig(api_token="super-secret-token")
-        ciphertext = cfg.model_dump()["api_token"]
-        rehydrated = FreeWheelConnectionConfig.model_validate({"api_token": ciphertext})
-        assert rehydrated.api_token == "super-secret-token"
 
-    def test_secret_marker_in_schema(self):
-        schema = FreeWheelConnectionConfig.model_json_schema()
-        assert schema["properties"]["api_token"].get("secret") is True
+class TestCredentialRequirement:
+    """Exactly one auth path must be present."""
+
+    def test_no_credentials_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="username \\+ password|api_token"):
+            FreeWheelConnectionConfig()
+
+    def test_username_without_password_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            FreeWheelConnectionConfig(username="u")
+
+    def test_password_without_username_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            FreeWheelConnectionConfig(password="p")
+
+    def test_both_paths_set_is_allowed(self, encryption_key):
+        """Token takes precedence when both are set; this is intentional —
+        partners may temporarily inject a token while keeping creds on file."""
+        cfg = FreeWheelConnectionConfig(username="u", password="p", api_token="t")
+        assert cfg.username == "u"
+        assert cfg.api_token == "t"
+
+
+class TestEnvironmentAndOptional:
+    def test_staging_environment_resolves_to_staging_host(self):
+        cfg = FreeWheelConnectionConfig(api_token="t", environment="staging")
+        assert cfg.base_url == "https://api.stg.freewheel.tv"
+
+    def test_invalid_environment_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            FreeWheelConnectionConfig(api_token="t", environment="dev")
 
     def test_default_advertiser_id_optional(self):
-        cfg = FreeWheelConnectionConfig(api_token="tok")
+        cfg = FreeWheelConnectionConfig(api_token="t")
         assert cfg.default_advertiser_id is None
 
     def test_default_advertiser_id_accepts_string(self):
-        cfg = FreeWheelConnectionConfig(api_token="tok", default_advertiser_id="1356511")
+        cfg = FreeWheelConnectionConfig(api_token="t", default_advertiser_id="1356511")
         assert cfg.default_advertiser_id == "1356511"
+
+    def test_password_field_marked_secret_in_schema(self):
+        schema = FreeWheelConnectionConfig.model_json_schema()
+        assert schema["properties"]["password"].get("secret") is True
+
+    def test_api_token_field_marked_secret_in_schema(self):
+        schema = FreeWheelConnectionConfig.model_json_schema()
+        assert schema["properties"]["api_token"].get("secret") is True
 
     def test_hosts_table_has_both_envs(self):
         assert "production" in FREEWHEEL_HOSTS

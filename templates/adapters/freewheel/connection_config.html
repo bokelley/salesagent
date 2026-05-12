@@ -2,7 +2,9 @@
 FreeWheel Adapter Connection Configuration Template
 
 Included in the settings page when the FreeWheel adapter is selected.
-Bearer-token auth against api.freewheel.tv (or api.stg.freewheel.tv for staging).
+Supports two auth flows: OAuth2 password grant (canonical) and pre-minted
+bearer (escape hatch). Exactly one of (username+password) or api_token
+must be provided.
 
 Expected context:
 - adapter_config: dict with current adapter configuration
@@ -13,20 +15,51 @@ Expected context:
     <div class="form-section">
         <h3>FreeWheel Publisher API Configuration</h3>
         <p class="text-muted" style="margin-bottom: 1.5rem;">
-            Connect to FreeWheel's Publisher API with a bearer token. Tokens are issued by
-            FreeWheel (or by a publisher minting one on a partner's behalf) and have a 7-day TTL.
-            There is no refresh flow — rotate the token here when expiry approaches.
+            Connect to FreeWheel's Publisher API. The recommended setup is to provide your
+            FreeWheel User ID and password — the adapter mints and refreshes bearer tokens
+            automatically. Use the advanced section below only when a partner has provisioned
+            a pre-minted bearer for you (it expires in ~7 days and must be rotated manually).
         </p>
 
+        <h4 style="margin-top: 1rem; margin-bottom: 0.75rem;">Sign-in Credentials (recommended)</h4>
+
         <div class="form-group">
-            <label for="freewheel_api_token">API Token *</label>
-            <input type="password" id="freewheel_api_token" name="freewheel_api_token"
-                   value=""
-                   placeholder="{% if adapter_config and adapter_config.get('api_token') %}(leave blank to keep existing){% else %}Enter bearer token{% endif %}">
+            <label for="freewheel_username">User ID</label>
+            <input type="text" id="freewheel_username" name="freewheel_username"
+                   value="{{ adapter_config.get('username', '') if adapter_config else '' }}"
+                   placeholder="FreeWheel User ID (e.g. publisher@example.com)">
             <small class="form-text text-muted">
-                Stored encrypted at rest. Leave blank to keep the previously saved token.
+                Your FreeWheel sign-in identifier. Used with the password below to mint bearer tokens via OAuth2 password grant.
             </small>
         </div>
+
+        <div class="form-group">
+            <label for="freewheel_password">Password</label>
+            <input type="password" id="freewheel_password" name="freewheel_password"
+                   value=""
+                   placeholder="{% if adapter_config and adapter_config.get('username') %}(leave blank to keep existing){% else %}Enter password{% endif %}">
+            <small class="form-text text-muted">
+                Stored encrypted at rest. Leave blank to keep the previously saved password.
+            </small>
+        </div>
+
+        <details style="margin-top: 1rem; margin-bottom: 1rem;">
+            <summary style="cursor: pointer; font-weight: 500;">Advanced: pre-minted bearer token</summary>
+            <p class="text-muted" style="margin-top: 0.5rem;">
+                Use this when a partner has minted a token on your behalf, or for testing without
+                real credentials. The adapter will use this token directly and won't auto-refresh —
+                rotate manually when it expires (~7-day TTL).
+            </p>
+            <div class="form-group">
+                <label for="freewheel_api_token">API Token</label>
+                <input type="password" id="freewheel_api_token" name="freewheel_api_token"
+                       value=""
+                       placeholder="{% if adapter_config and adapter_config.get('api_token') %}(leave blank to keep existing){% else %}Paste bearer token{% endif %}">
+                <small class="form-text text-muted">
+                    Stored encrypted at rest. When set, takes precedence over username/password.
+                </small>
+            </div>
+        </details>
 
         <div class="form-group">
             <label for="freewheel_environment">Environment</label>
@@ -39,7 +72,7 @@ Expected context:
                 </option>
             </select>
             <small class="form-text text-muted">
-                Tokens are environment-scoped — staging tokens won't work in production and vice versa.
+                Credentials are environment-scoped — staging credentials won't work in production and vice versa.
             </small>
         </div>
 
@@ -78,15 +111,17 @@ Expected context:
 
 <script>
 function _freewheelPayload() {
+    const usernameEl = document.getElementById('freewheel_username');
+    const passwordEl = document.getElementById('freewheel_password');
     const tokenEl = document.getElementById('freewheel_api_token');
     const config = {
+        username: usernameEl.value || null,
         environment: document.getElementById('freewheel_environment').value,
         default_advertiser_id: document.getElementById('freewheel_default_advertiser_id').value || null,
         manual_approval_required: document.getElementById('freewheel_manual_approval_required').checked
     };
-    if (tokenEl.value) {
-        config.api_token = tokenEl.value;
-    }
+    if (passwordEl.value) config.password = passwordEl.value;
+    if (tokenEl.value) config.api_token = tokenEl.value;
     return config;
 }
 
@@ -95,8 +130,12 @@ function saveFreeWheelConfig() {
     const tenantId = '{{ tenant_id }}';
     const config = _freewheelPayload();
 
-    if (!config.api_token && !{{ 'true' if adapter_config and adapter_config.get('api_token') else 'false' }}) {
-        showNotification('API token is required for first-time setup', 'error');
+    const hasStoredPasswordGrant = {{ 'true' if adapter_config and adapter_config.get('username') and adapter_config.get('password') else 'false' }};
+    const hasStoredToken = {{ 'true' if adapter_config and adapter_config.get('api_token') else 'false' }};
+    const submittingPasswordGrant = config.username && (config.password || hasStoredPasswordGrant);
+    const submittingToken = config.api_token || hasStoredToken;
+    if (!submittingPasswordGrant && !submittingToken) {
+        showNotification('Provide either a User ID + Password or an API Token', 'error');
         return;
     }
 
@@ -110,6 +149,7 @@ function saveFreeWheelConfig() {
     .then(data => {
         if (data.success) {
             showNotification('Configuration saved successfully', 'success');
+            document.getElementById('freewheel_password').value = '';
             document.getElementById('freewheel_api_token').value = '';
         } else {
             showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
@@ -124,12 +164,16 @@ function testFreeWheelConnection() {
     const scriptRoot = '{{ request.script_root }}' || '';
     const tenantId = '{{ tenant_id }}';
     const statusEl = document.getElementById('freewheel-connection-status');
+    const username = document.getElementById('freewheel_username').value;
+    const password = document.getElementById('freewheel_password').value;
     const apiToken = document.getElementById('freewheel_api_token').value;
     const environment = document.getElementById('freewheel_environment').value;
 
     statusEl.innerHTML = '<span style="color: #6b7280;">Testing...</span>';
 
     const payload = {environment: environment};
+    if (username) payload.username = username;
+    if (password) payload.password = password;
     if (apiToken) payload.api_token = apiToken;
 
     fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/test-connection', {
@@ -142,8 +186,9 @@ function testFreeWheelConnection() {
     .then(data => {
         if (data.success) {
             const ttl = data.expires_in ? Math.round(data.expires_in / 86400) + ' days' : '';
-            statusEl.innerHTML = '<span style="color: #10b981;">✓ Token valid for ' +
-                data.environment + (ttl ? ' (~' + ttl + ' remaining)' : '') + '</span>';
+            const mode = data.auth_mode === 'password_grant' ? ' via password grant' : ' via pre-minted token';
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Authenticated on ' +
+                data.environment + mode + (ttl ? ' (~' + ttl + ' remaining)' : '') + '</span>';
         } else {
             statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
         }

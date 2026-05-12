@@ -440,16 +440,28 @@ def create_tenant():
                 )
             elif adapter_type == "freewheel":
                 # Validate FreeWheel credentials through FreeWheelConnectionConfig.
-                # Reject submitted ciphertext (cross-tenant smuggling defence).
+                # Reject submitted ciphertext on any secret field
+                # (cross-tenant smuggling defence).
                 from src.adapters.freewheel import FreeWheelConnectionConfig
                 from src.core.utils.encryption import is_encrypted
 
-                if data.get("api_token") and is_encrypted(data["api_token"]):
-                    return (
-                        jsonify({"error": "api_token must be plaintext (encrypted-token replay rejected)"}),
-                        400,
+                for secret_field in ("password", "api_token"):
+                    if data.get(secret_field) and is_encrypted(data[secret_field]):
+                        return (
+                            jsonify({"error": f"{secret_field} must be plaintext (encrypted-token replay rejected)"}),
+                            400,
+                        )
+                fw_payload = {
+                    k: data[k]
+                    for k in (
+                        "username",
+                        "password",
+                        "api_token",
+                        "environment",
+                        "default_advertiser_id",
                     )
-                fw_payload = {k: data[k] for k in ("api_token", "environment", "default_advertiser_id") if k in data}
+                    if k in data
+                }
                 validated = FreeWheelConnectionConfig(**fw_payload)
                 new_adapter = AdapterConfig(
                     tenant_id=tenant_id,
@@ -646,17 +658,23 @@ def update_tenant(tenant_id):
                         attributes.flag_modified(adapter, "config_json")
 
                     elif adapter.adapter_type == "freewheel":
-                        # Reject submitted ciphertext (M1/S7: cross-tenant smuggling).
+                        # Reject submitted ciphertext on any secret field
+                        # (M1/S7: cross-tenant smuggling defence).
                         from src.adapters.freewheel import FreeWheelConnectionConfig
                         from src.core.utils.encryption import is_encrypted
 
-                        if adapter_data.get("api_token") and is_encrypted(adapter_data["api_token"]):
-                            return (
-                                jsonify({"error": "api_token must be plaintext (encrypted-token replay rejected)"}),
-                                400,
-                            )
+                        for secret_field in ("password", "api_token"):
+                            if adapter_data.get(secret_field) and is_encrypted(adapter_data[secret_field]):
+                                return (
+                                    jsonify(
+                                        {"error": f"{secret_field} must be plaintext (encrypted-token replay rejected)"}
+                                    ),
+                                    400,
+                                )
                         merged = dict(adapter.config_json or {})
                         for field_name in (
+                            "username",
+                            "password",
                             "api_token",
                             "environment",
                             "default_advertiser_id",
