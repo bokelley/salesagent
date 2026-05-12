@@ -27,7 +27,14 @@ jobs:
     - name: Scan for vulnerabilities
       # GHSA-5239-wwwm-4pmq: Pygments ReDoS in AdlLexer (CVE-2026-4539) - no fix available;
       #   local-access-only (AV:L, CVSS 3.3); ADL lexer not invoked by this application
-      run: uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq
+      # --ignore-pkgs mistralai: pydantic-ai-slim transitively pulls mistralai via its
+      #   ``mistral`` extra, but the package was quarantined on PyPI in May 2026 (all
+      #   versions removed from the JSON API; project-status="quarantined" on the simple
+      #   index). uv-secure errors with HTTP 404 fetching metadata. We don't import
+      #   mistralai anywhere in src/ or core/ — the dependency is unused dead weight.
+      #   Remove this ignore once pydantic-ai-slim drops the mistral extra or PyPI
+      #   un-quarantines the package.
+      run: uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq --ignore-pkgs mistralai
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
