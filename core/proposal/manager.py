@@ -29,11 +29,14 @@ shapes that don't match the actual proposal flow we want.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, ClassVar
 
 from adcp.decisioning import AdcpError, RequestContext
 from adcp.decisioning.proposal_manager import ProposalCapabilities
 from adcp.types import GetProductsRequest, GetProductsResponse
+from adcp.types.generated_poc.core.product_allocation import ProductAllocation
+from adcp.types.generated_poc.core.proposal import Proposal
 
 from core.platforms._delegate import _build_identity, _coerce_to_request_model, translate_adcp_errors
 from src.core.tools.products import _get_products_impl
@@ -86,7 +89,24 @@ class SalesAgentProposalManager:
         """
         identity = _build_identity(ctx)
         req_model = _coerce_to_request_model(req, GetProductsRequest)
-        return await _get_products_impl(req_model, identity)
+        response = await _get_products_impl(req_model, identity)
+
+        # Decorate brief-mode responses with a v1 proposal (#352).
+        # ``buying_mode='wholesale'`` and ``buying_mode='refine'`` opt out
+        # of curated proposals per the AdCP spec; brief is the only mode
+        # where the seller is expected to offer strategic bundling. The
+        # ``proposals[]`` array is what the
+        # ``media_buy_seller/proposal_finalize/get_products_brief``
+        # storyboard asserts on, and the ``proposal_id`` is what buyers
+        # echo into ``create_media_buy(proposal_id=...)`` to execute the
+        # bundle.
+        buying_mode = getattr(req_model, "buying_mode", None) or getattr(req, "buying_mode", None)
+        buying_mode_str = getattr(buying_mode, "value", buying_mode)
+        if buying_mode_str == "brief":
+            proposal = _build_v1_brief_proposal(response)
+            if proposal is not None:
+                response.proposals = [proposal]
+        return response
 
     async def refine_products(
         self,
@@ -111,3 +131,71 @@ class SalesAgentProposalManager:
                 "get_products for product discovery."
             ),
         )
+
+
+def _build_v1_brief_proposal(response: GetProductsResponse) -> Proposal | None:
+    """Build a v1 ``Proposal`` from a ``get_products`` response (#352).
+
+    Splits budget evenly across every product the publisher returned —
+    minimal but spec-compliant: every product allocation references a
+    ``product_id`` and ``pricing_option_id`` from the response, the
+    percentages sum to 100, and the response carries a
+    ``proposal_id`` buyers can echo into ``create_media_buy``.
+
+    Returns ``None`` when the response has no products (the spec
+    requires ``min_length=1`` on ``allocations`` — an empty proposal
+    would fail Pydantic construction). The caller falls back to
+    products-only output, which is also spec-legal because
+    ``proposals`` is optional.
+
+    Future revisions (refine flow, weighted allocations, persisted
+    drafts) ride the same hook — they only need to swap the allocation
+    strategy.
+    """
+    products = list(getattr(response, "products", []) or [])
+    if not products:
+        return None
+    share = round(100.0 / len(products), 2)
+    # Pin the final allocation to whatever remains so the sum lands on
+    # exactly 100 — Pydantic's ge=0 / le=100 bounds allow this, and the
+    # spec only requires the sum, not equal weighting.
+    allocations: list[ProductAllocation] = []
+    running_total = 0.0
+    for i, product in enumerate(products):
+        if i == len(products) - 1:
+            percentage = round(max(0.0, 100.0 - running_total), 2)
+        else:
+            percentage = share
+            running_total += percentage
+        pricing_option_id = _first_pricing_option_id(product)
+        allocations.append(
+            ProductAllocation(
+                product_id=product.product_id,
+                allocation_percentage=percentage,
+                pricing_option_id=pricing_option_id,
+                rationale=None,
+            )
+        )
+    return Proposal(
+        proposal_id=f"prop_{uuid.uuid4().hex[:12]}",
+        name="Recommended bundle",
+        description=(
+            "Even-budget split across every matched product. v1 strategy — "
+            "refine the allocations via a subsequent get_products call "
+            '(buying_mode="refine") once refine support is wired.'
+        ),
+        allocations=allocations,
+    )
+
+
+def _first_pricing_option_id(product: Any) -> str | None:
+    """Pull the first ``pricing_option_id`` off a product, tolerating
+    library RootModel wrappers and absent pricing options.
+    """
+    options = getattr(product, "pricing_options", None) or []
+    if not options:
+        return None
+    first = options[0]
+    # adcp 2.14.0+ wraps pricing options in a RootModel; unwrap.
+    first = getattr(first, "root", first)
+    return getattr(first, "pricing_option_id", None)
