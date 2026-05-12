@@ -69,19 +69,28 @@ def _parse_collection(root: ET.Element, item_tag: str) -> dict[str, Any]:
     }
 
 
-def _build_xml(root_tag: str, fields: dict[str, str | int]) -> str:
-    """Serialize a flat dict as a v3 XML request body.
+def _build_xml(root_tag: str, fields: dict[str, Any]) -> str:
+    """Serialize a flat-or-shallow-nested dict as a v3 XML request body.
 
-    Only flat fields are supported here — nested structures (budget,
-    schedule) need their own builders when we wire them up.
+    Supports one level of nesting: ``{"budget": {"budget_model": "...",
+    "impression": 100}}`` becomes ``<budget><budget_model>...</budget_model>
+    <impression>100</impression></budget>``. None values are skipped at any
+    level so partial updates send only what they intend to change.
     """
     root = ET.Element(root_tag)
+    _append_fields(root, fields)
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+
+
+def _append_fields(parent: ET.Element, fields: dict[str, Any]) -> None:
     for key, value in fields.items():
         if value is None:
             continue
-        el = ET.SubElement(root, key)
-        el.text = str(value)
-    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+        el = ET.SubElement(parent, key)
+        if isinstance(value, dict):
+            _append_fields(el, value)
+        else:
+            el.text = str(value)
 
 
 class FreeWheelCommercialClient:
@@ -190,6 +199,20 @@ class FreeWheelCommercialClient:
         root = self._transport.post_xml(f"{_BASE}/insertion_order", body)
         return InsertionOrder.model_validate(_element_to_dict(root))
 
+    def update_insertion_order(self, insertion_order_id: int, **fields: Any) -> InsertionOrder:
+        """Partial-update an insertion order via PUT. Verified 2026-05-12.
+
+        Nested fields like ``budget`` accept a dict and serialise into the
+        XML element shape FreeWheel expects::
+
+            client.update_insertion_order(
+                io_id, budget={"budget_model": "IMPRESSION_TARGET", "impression": 20000}
+            )
+        """
+        body = _build_xml("insertion_order", fields)
+        root = self._transport.put_xml(f"{_BASE}/insertion_order/{insertion_order_id}", body)
+        return InsertionOrder.model_validate(_element_to_dict(root))
+
     def delete_insertion_order(self, insertion_order_id: int) -> None:
         """Hard-delete an insertion order. Verified end-to-end."""
         self._transport.delete_xml(f"{_BASE}/insertion_order/{insertion_order_id}")
@@ -218,6 +241,16 @@ class FreeWheelCommercialClient:
         """
         body = _build_xml("placement", {"name": name, "insertion_order_id": insertion_order_id, **extra})
         root = self._transport.post_xml(f"{_BASE}/placement", body)
+        return Placement.model_validate(_element_to_dict(root))
+
+    def update_placement(self, placement_id: int, **fields: Any) -> Placement:
+        """Partial-update a placement via PUT. Verified 2026-05-12.
+
+        Common use case is toggling delivery state by setting ``status`` to
+        ``ACTIVE`` (live) or ``IN_ACTIVE`` (paused).
+        """
+        body = _build_xml("placement", fields)
+        root = self._transport.put_xml(f"{_BASE}/placement/{placement_id}", body)
         return Placement.model_validate(_element_to_dict(root))
 
     def delete_placement(self, placement_id: int) -> None:

@@ -152,6 +152,31 @@ class TestInsertionOrderCreate:
         assert call["method"] == "DELETE"
         assert call["url"].endswith("/services/v3/insertion_order/93935458")
 
+    def test_update_io_with_nested_budget(self):
+        """update_insertion_order serialises nested dicts (budget) into the
+        right XML shape — required for impression-target updates."""
+        session = MagicMock()
+        session.request.return_value = _make_response(
+            "<insertion_order><id>93935458</id><budget>"
+            "<budget_model>IMPRESSION_TARGET</budget_model><impression>20000</impression>"
+            "</budget></insertion_order>"
+        )
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        io = client.update_insertion_order(
+            93935458,
+            budget={"budget_model": "IMPRESSION_TARGET", "impression": 20000},
+        )
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "PUT"
+        assert call["url"].endswith("/services/v3/insertion_order/93935458")
+        # Nested shape rendered correctly
+        assert "<budget>" in call["data"]
+        assert "<budget_model>IMPRESSION_TARGET</budget_model>" in call["data"]
+        assert "<impression>20000</impression>" in call["data"]
+        assert io.budget is not None and io.budget.impression == 20000
+
 
 class TestPlacementCreate:
     def test_create_placement_posts_singular_path_with_io_id(self):
@@ -183,6 +208,23 @@ class TestPlacementCreate:
         call = session.request.call_args.kwargs
         assert call["method"] == "DELETE"
         assert call["url"].endswith("/services/v3/placement/93935461")
+
+    def test_update_placement_pause(self):
+        """update_placement is the delivery-level pause/resume mechanism:
+        setting status to IN_ACTIVE stops delivery; ACTIVE restarts it."""
+        session = MagicMock()
+        session.request.return_value = _make_response(
+            "<placement><id>93935461</id><status>IN_ACTIVE</status><placement_type>NORMAL</placement_type></placement>"
+        )
+        client = FreeWheelCommercialClient(FreeWheelTransport(api_token="t", session=session))
+
+        placement = client.update_placement(93935461, status="IN_ACTIVE")
+
+        call = session.request.call_args.kwargs
+        assert call["method"] == "PUT"
+        assert call["url"].endswith("/services/v3/placement/93935461")
+        assert "<status>IN_ACTIVE</status>" in call["data"]
+        assert placement.status == "IN_ACTIVE"
 
 
 class TestInsertionOrders:

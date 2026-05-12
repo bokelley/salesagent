@@ -12,15 +12,32 @@ is the unit of commerce; the Campaign is a grouping layer above. Reusing a
 single Campaign across many IOs (the publisher-ideal pattern) would require
 state we don't currently have, so v1 creates one Campaign per AdCP MediaBuy.
 
-Live coverage (Phase D):
+Live coverage:
 - ✅ create_media_buy — creates Campaign + IO + Placement(s) and returns
   the IO id as ``media_buy_id``.
 - ✅ check_media_buy_status — reads the IO (not the Campaign).
-- ⏳ update_media_buy — wiring deferred until ``update_insertion_order`` /
-  ``update_placement`` write paths are probed against the live API.
-- ⏳ add_creative_assets / associate_creatives — the v3 creative endpoint
-  isn't at ``/services/v3/creative`` (returns 404). Live mode falls back
-  to "pending" status until we map the real creative surface.
+- ⏳ update_media_buy — write paths verified against the live API and
+  available as ``client.commercial.update_insertion_order`` /
+  ``update_placement``. Adapter wiring is blocked on two data-model
+  gaps that need state we don't currently keep or scopes we don't have:
+
+  1. Per-package pause/resume needs to look up the FW placement_id from
+     the AdCP package_id. The v3 placements endpoint does not honour an
+     ``?insertion_order_id=X`` filter (returns the full network list)
+     and there's no nested-collection endpoint at v3
+     (``/insertion_orders/{id}/placements`` returns 404). The v4 nested
+     form exists (``/services/v4/insertion_orders/{id}/placements``) but
+     our token gets a 403 IAM deny on it — needs publisher scope grant.
+
+  2. Per-package budget changes aren't directly representable: FW's
+     budget lives on the IO, not on the placement. update_package_budget
+     would either need a one-IO-per-package mapping (a different Mapping
+     than A) or per-package budget tracking we don't have.
+
+- ⏳ add_creative_assets / associate_creatives — the creative surface is
+  at v4 (``/services/v4/creatives``, ``creative_assets``, ``assets``,
+  ``ad_assets``, ``asset_versions`` all 403 IAM-deny; v3 has no creative
+  paths). Needs publisher to grant creative scopes on the bearer token.
 - ⏳ get_media_buy_delivery — reporting lives on a different API surface
   not yet mapped.
 """
