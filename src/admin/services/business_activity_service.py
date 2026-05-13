@@ -13,6 +13,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 
+from flask import url_for
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -199,7 +200,11 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                     links.append(
                         {
                             "text": f"View Media Buy {details['media_buy_id']}",
-                            "url": f"/tenant/{tenant_id}/media-buy/{details['media_buy_id']}",
+                            "url": url_for(
+                                "operations.media_buy_detail",
+                                tenant_id=tenant_id,
+                                media_buy_id=details["media_buy_id"],
+                            ),
                             "icon": "💰",
                         }
                     )
@@ -207,7 +212,11 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                     links.append(
                         {
                             "text": f"View Creative {details['creative_id']}",
-                            "url": f"/tenant/{tenant_id}/creative/{details['creative_id']}",
+                            "url": url_for(
+                                "creatives.review_creatives",
+                                tenant_id=tenant_id,
+                                _anchor=str(details["creative_id"]),
+                            ),
                             "icon": "🎨",
                         }
                     )
@@ -216,7 +225,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                 links.append(
                     {
                         "text": "View in Audit Log",
-                        "url": f"/tenant/{tenant_id}/workflows#audit-logs",
+                        "url": url_for("workflows.list_workflows", tenant_id=tenant_id, _anchor="audit-logs"),
                         "icon": "📋",
                     }
                 )

@@ -90,6 +90,8 @@ class TestTemplateUrlValidation:
                             test_params["user_id"] = "test_user"
                         if "account_id" in params:
                             test_params["account_id"] = "test_account"
+                        if "key_id" in params:
+                            test_params["key_id"] = "test_key"
 
                         # Try to build the URL
                         url = url_for(endpoint, **test_params)
@@ -192,6 +194,14 @@ class TestTemplateUrlValidation:
                             # Add user_id for user endpoints
                             if "user" in endpoint and "toggle" in endpoint:
                                 test_params["user_id"] = "test_user"
+
+                            # Add task_id for policy review endpoints
+                            if "review_task" in endpoint or endpoint == "policy.review_task":
+                                test_params["task_id"] = "test_task"
+
+                            # Add key_id for signing-key rotate endpoints
+                            if "rotate_out" in endpoint or "signing_key" in endpoint:
+                                test_params["key_id"] = "test_key"
 
                             url_for(endpoint, **test_params)
                         except BuildError as e:

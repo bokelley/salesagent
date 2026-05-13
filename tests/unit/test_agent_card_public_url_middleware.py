@@ -1,232 +1,142 @@
-"""Unit tests for ``AgentCardPublicUrlMiddleware``.
+"""Unit tests for ``core.main._resolve_public_url``.
 
-Covers #103: the framework's _build_agent_card hardcodes
-``http://localhost:{port}/`` and exposes no hook for public-host injection.
-This middleware rewrites the URL fields in the
-``/.well-known/agent-card.json`` response based on the request's
-``X-Forwarded-Host`` / ``Host`` headers so SDK clients reading the card see
-the public URL instead of the container's internal socket.
+The salesagent-local rewrite middleware was retired in favor of the SDK's
+native ``serve(public_url=callable)`` per-request resolver (adcp 5.3.0 #680
+unblocked the ``transport='both'`` composed-lifespan crash that previously
+forced the middleware workaround).
+
+These tests pin the resolver's behavior. The SDK validates the returned URL
+(absolute + ``https://`` required for non-loopback) before serving the agent
+card; the resolver's job is to make the right URL for this request.
 """
 
 from __future__ import annotations
 
-import json
+import os
+from unittest.mock import patch
 
-import pytest
+from starlette.requests import Request
 
-from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
-from tests.unit._asgi_helpers import capture_asgi_response, http_scope
-
-
-async def _drive(
-    middleware: AgentCardPublicUrlMiddleware,
-    scope: dict,
-    inner_body: bytes,
-    inner_status: int = 200,
-    inner_headers: list[tuple[bytes, bytes]] | None = None,
-) -> tuple[int, dict[bytes, bytes], bytes]:
-    """Drive the rewrite middleware against a stub inner app.
-
-    Thin wrapper over the shared :func:`capture_asgi_response` that
-    discards the ``inner_called`` flag (irrelevant here — we always
-    care about the rewritten body, not whether the inner app ran).
-    The middleware factory ignores its app arg because the test
-    pre-assigned ``middleware.app`` to keep the original stub
-    semantics; we re-bind via the factory pattern instead.
-    """
-    status, headers, body, _inner_called = await capture_asgi_response(
-        lambda inner: type(middleware)(inner),
-        scope,
-        inner_status=inner_status,
-        inner_body=inner_body,
-        inner_headers=inner_headers,
-    )
-    return status, headers, body
+from core.main import _resolve_public_url
 
 
-def _scope(path: str, headers: list[tuple[str, str]] | None = None, scheme: str = "http") -> dict:
-    return http_scope(path, headers=headers, scheme=scheme)
+def _request(headers: dict[str, str] | None = None) -> Request:
+    """Build a synthetic Starlette Request with the given header dict."""
+    raw_headers = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in (headers or {}).items()]
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/.well-known/agent-card.json",
+        "headers": raw_headers,
+    }
+    return Request(scope)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+def _resolve(headers: dict[str, str] | None = None, env: dict[str, str] | None = None) -> str:
+    """Drive the resolver with an isolated env so PUBLIC_URL leaks
+    from CI don't influence the test outcome."""
+    overrides = {"PUBLIC_URL": "", **(env or {})}
+    with patch.dict(os.environ, overrides, clear=False):
+        # patch.dict won't unset PUBLIC_URL when the override is empty
+        # — drop it explicitly so the resolver falls through to headers.
+        if not overrides.get("PUBLIC_URL"):
+            os.environ.pop("PUBLIC_URL", None)
+        return _resolve_public_url(_request(headers))
 
 
-CARD_LOOPBACK = {
-    "name": "salesagent-core",
-    "url": "http://localhost:8080/",
-    "supportedInterfaces": [
-        {"url": "http://localhost:8080/", "protocolBinding": "JSONRPC", "protocolVersion": "0.3"},
-        {"url": "http://localhost:8080/", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
-    ],
-    "preferredTransport": "JSONRPC",
-}
-
-
-class TestAgentCardRewrite:
-    @pytest.mark.asyncio
-    async def test_rewrites_top_level_url_from_x_forwarded(self) -> None:
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[
-                ("host", "internal:8080"),
-                ("x-forwarded-host", "wonderstruck.sales-agent.scope3.com"),
-                ("x-forwarded-proto", "https"),
-            ],
+class TestResolverDerivesFromHeaders:
+    def test_x_forwarded_host_takes_precedence_over_host(self) -> None:
+        url = _resolve(
+            {
+                "host": "internal:8080",
+                "x-forwarded-host": "wonderstruck.sales-agent.scope3.com",
+                "x-forwarded-proto": "https",
+            }
         )
+        assert url == "https://wonderstruck.sales-agent.scope3.com/"
 
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
-        payload = json.loads(out)
+    def test_falls_back_to_host_when_no_xff(self) -> None:
+        url = _resolve({"host": "wonderstruck.sales-agent.scope3.com"})
+        assert url == "https://wonderstruck.sales-agent.scope3.com/"
 
-        assert payload["url"] == "https://wonderstruck.sales-agent.scope3.com/"
-        for iface in payload["supportedInterfaces"]:
-            assert iface["url"] == "https://wonderstruck.sales-agent.scope3.com/"
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_host_header_when_no_xff(self) -> None:
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[("host", "wonderstruck.sales-agent.scope3.com")],
-            scheme="https",
+    def test_strips_extra_xff_entries_from_proxy_chain(self) -> None:
+        url = _resolve(
+            {
+                "x-forwarded-host": "wonderstruck.sales-agent.scope3.com, internal, edge",
+                "x-forwarded-proto": "https",
+            }
         )
+        assert url == "https://wonderstruck.sales-agent.scope3.com/"
 
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
-        payload = json.loads(out)
-
-        assert payload["url"] == "https://wonderstruck.sales-agent.scope3.com/"
-
-    @pytest.mark.asyncio
-    async def test_defaults_to_https_when_no_proto_header(self) -> None:
-        """Production deploys all sit behind TLS — emitting http on a TLS
-        endpoint would break SDK clients that follow https links."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[("host", "agent.example.com")],
-            scheme="",
+    def test_xforwarded_proto_overrides_default_https(self) -> None:
+        url = _resolve(
+            {
+                "x-forwarded-host": "wonderstruck.sales-agent.scope3.com",
+                "x-forwarded-proto": "http",
+            }
         )
+        # Non-loopback host with explicit http — the resolver returns the
+        # caller's stated scheme even though the SDK will then reject it
+        # in ``_validate_card_url``. The resolver's job is fidelity to the
+        # request, not scheme policing.
+        assert url == "http://wonderstruck.sales-agent.scope3.com/"
 
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
-        payload = json.loads(out)
+    def test_defaults_to_https_when_no_proto_header(self) -> None:
+        url = _resolve({"x-forwarded-host": "wonderstruck.sales-agent.scope3.com"})
+        assert url == "https://wonderstruck.sales-agent.scope3.com/"
 
-        assert payload["url"].startswith("https://")
 
-    @pytest.mark.asyncio
-    async def test_passes_through_when_no_host_headers(self) -> None:
-        """If neither X-Forwarded-Host nor Host is present, leak the localhost
-        URL rather than render an empty/garbage one."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope("/.well-known/agent-card.json", headers=[])
+class TestResolverLoopbackSemantics:
+    """Loopback hosts must default to ``http://`` — the SDK's
+    ``_validate_card_url`` accepts ``http`` only for loopback hostnames
+    and rejects ``https://localhost/`` as malformed. The resolver mirrors
+    that exception so the dev path doesn't fail card validation."""
 
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
+    def test_localhost_defaults_to_http(self) -> None:
+        url = _resolve({"host": "localhost:8080"})
+        assert url == "http://localhost:8080/"
 
-        # Body is forwarded unchanged.
-        assert out == body
+    def test_127_0_0_1_defaults_to_http(self) -> None:
+        url = _resolve({"host": "127.0.0.1:8080"})
+        assert url == "http://127.0.0.1:8080/"
 
-    @pytest.mark.asyncio
-    async def test_does_not_rewrite_non_loopback_urls(self) -> None:
-        """If the framework already returned a real public URL (e.g. via a
-        future config hook), pass it through untouched. We only ever swap
-        loopback hosts."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        non_loopback_card = {
-            "url": "https://already-public.example.com/",
-            "supportedInterfaces": [
-                {"url": "https://already-public.example.com/", "protocolVersion": "1.0"},
-            ],
-        }
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[("x-forwarded-host", "different.example.com"), ("x-forwarded-proto", "https")],
+    def test_subdomain_dot_localhost_defaults_to_http(self) -> None:
+        url = _resolve({"host": "wonderstruck.localhost:8080"})
+        assert url == "http://wonderstruck.localhost:8080/"
+
+
+class TestResolverEnvOverride:
+    def test_public_url_env_overrides_request_headers(self) -> None:
+        url = _resolve(
+            headers={"x-forwarded-host": "request-host.example.com"},
+            env={"PUBLIC_URL": "https://configured.example.com"},
         )
+        # PUBLIC_URL wins when set — single-host deploys pin the card URL.
+        assert url == "https://configured.example.com/"
 
-        body = json.dumps(non_loopback_card).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
-        payload = json.loads(out)
+    def test_public_url_env_normalizes_trailing_slash(self) -> None:
+        url = _resolve(env={"PUBLIC_URL": "https://configured.example.com/"})
+        assert url == "https://configured.example.com/"
 
-        assert payload["url"] == "https://already-public.example.com/"
-        assert payload["supportedInterfaces"][0]["url"] == "https://already-public.example.com/"
-
-    @pytest.mark.asyncio
-    async def test_unrelated_paths_pass_through_unchanged(self) -> None:
-        """No buffering overhead for any path other than the agent card."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/some/other/endpoint",
-            headers=[("x-forwarded-host", "wonderstruck.sales-agent.scope3.com")],
+    def test_empty_public_url_env_falls_back_to_headers(self) -> None:
+        # Empty env value must NOT short-circuit the header-derivation path.
+        url = _resolve(
+            headers={"x-forwarded-host": "request-host.example.com"},
+            env={"PUBLIC_URL": ""},
         )
-        body = b'{"hello": "world"}'
+        assert url == "https://request-host.example.com/"
 
-        _status, _headers, out = await _drive(middleware, scope, body)
-        assert out == body
 
-    @pytest.mark.asyncio
-    async def test_legacy_agent_json_alias_passes_through_unchanged(self) -> None:
-        """The 0.3 alias /.well-known/agent.json is handled by the upstream
-        redirect middleware, not this one — it must pass through here
-        without buffering."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent.json",
-            headers=[("x-forwarded-host", "agent.example.com"), ("x-forwarded-proto", "https")],
-        )
+class TestResolverNoHeadersFallback:
+    """When neither X-Forwarded-Host nor Host is present (synthetic
+    requests, broken proxies), the resolver returns the SDK's localhost
+    default rather than raising — keeps boot-time card construction
+    working even if a request arrives with empty headers."""
 
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
-        # Body is forwarded unchanged — no rewrite happens on this path.
-        assert out == body
+    def test_no_headers_returns_localhost_default_port(self) -> None:
+        url = _resolve(headers={})
+        assert url == "http://localhost:3001/"
 
-    @pytest.mark.asyncio
-    async def test_updates_content_length_header(self) -> None:
-        """If the rewritten body has a different size, Content-Length must
-        match — otherwise downstream proxies / clients truncate or hang."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[("x-forwarded-host", "very-long-public-hostname.sales-agent.scope3.com")],
-            scheme="https",
-        )
-
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, headers, out = await _drive(middleware, scope, body)
-        assert headers[b"content-length"] == str(len(out)).encode("latin-1")
-
-    @pytest.mark.asyncio
-    async def test_non_json_body_passes_through_unchanged(self) -> None:
-        """If the framework ever serves a non-JSON response on the agent-card
-        path (e.g. an HTML error page), pass it through rather than corrupt
-        it."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[("x-forwarded-host", "agent.example.com")],
-        )
-
-        body = b"<html>oops</html>"
-        _status, _headers, out = await _drive(middleware, scope, body)
-        assert out == body
-
-    @pytest.mark.asyncio
-    async def test_strips_extra_xff_entries(self) -> None:
-        """X-Forwarded-Host can be a comma-separated list (proxy chain) — use
-        the first value, which is the originating client's request."""
-        middleware = AgentCardPublicUrlMiddleware(app=None)
-        scope = _scope(
-            "/.well-known/agent-card.json",
-            headers=[
-                ("x-forwarded-host", "public.example.com, internal.example.com"),
-                ("x-forwarded-proto", "https"),
-            ],
-        )
-
-        body = json.dumps(CARD_LOOPBACK).encode("utf-8")
-        _status, _headers, out = await _drive(middleware, scope, body)
-        payload = json.loads(out)
-        assert payload["url"] == "https://public.example.com/"
+    def test_no_headers_honors_adcp_port_env(self) -> None:
+        url = _resolve(headers={}, env={"ADCP_PORT": "9999"})
+        assert url == "http://localhost:9999/"

@@ -15,12 +15,14 @@ Salesagent's production wiring is::
 
     BearerTokenAuth(
         validate_token=...,
-        mcp_header_name="x-adcp-auth",
-        mcp_bearer_prefix_required=False,
+        mcp_legacy_header_aliases=["x-adcp-auth"],
     )
 
-A2A defaults to ``Authorization`` + ``bearer_prefix_required=True``, so the
-expected agent-card advertisement on A2A is ``bearerAuth``.
+Both legs default to ``Authorization`` + ``bearer_prefix_required=True``
+(adcp 5.4.0 / #720 — ``Authorization: Bearer`` always-accepted on both legs),
+so the expected agent-card advertisement on A2A is ``bearerAuth``. The MCP
+leg additively accepts ``x-adcp-auth`` for legacy adopters; that doesn't
+affect the A2A card advertisement.
 
 Why this test: a future config tweak that flips A2A defaults would silently
 break a2a-sdk's interceptor, sending unauthenticated requests against an
@@ -37,8 +39,7 @@ def _production_auth() -> BearerTokenAuth:
     """The exact ``BearerTokenAuth`` config ``core.main._serve_kwargs`` passes."""
     return BearerTokenAuth(
         validate_token=lambda t: Principal(caller_identity="x") if t == "v" else None,
-        mcp_header_name="x-adcp-auth",
-        mcp_bearer_prefix_required=False,
+        mcp_legacy_header_aliases=["x-adcp-auth"],
     )
 
 

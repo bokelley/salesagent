@@ -17,6 +17,7 @@ from adcp.types import (
     MediaBuyStatus,
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
+    SchemaVariant,
 )
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import Format as LibraryFormat
@@ -871,10 +872,10 @@ class TargetingOverlay(LibraryTargetingOverlay):
     frequency_cap: FrequencyCap | None = None
 
     # --- Geo exclusion extensions (not in library) ---
-    geo_countries_exclude: list[GeoCountry] | None = None  # type: ignore[assignment]
-    geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
-    geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
-    geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
+    geo_countries_exclude: SchemaVariant[list[GeoCountry] | None] = None
+    geo_regions_exclude: SchemaVariant[list[GeoRegion] | None] = None
+    geo_metros_exclude: SchemaVariant[list[GeoMetro] | None] = None
+    geo_postal_areas_exclude: SchemaVariant[list[GeoPostalArea] | None] = None
 
     # --- Internal dimensions (unchanged) ---
 
@@ -1318,8 +1319,7 @@ class PackageRequest(LibraryPackageRequest):
 
     impressions: float | None = Field(None, description="Legacy: Impression goal (use budget instead)", exclude=True)
     # Override creatives type: parent expects CreativeAsset, we use our extended Creative
-    # Pydantic validates at runtime but mypy sees type mismatch
-    creatives: list["Creative"] | None = Field(  # type: ignore[assignment]
+    creatives: SchemaVariant[list["Creative"] | None] = Field(
         None,
         description="Full creative objects to upload and assign at creation time (alternative to creative_ids)",
     )
@@ -1936,7 +1936,7 @@ class Signal(LibrarySignal):
 
     # signal_type inherited from library as SignalCatalogType enum (members:
     # marketplace, custom, owned). Use `.value` for string comparisons.
-    deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
+    deployments: SchemaVariant[list[SignalDeployment]] = Field(..., description="Array of platform deployments")
 
     # Internal fields — excluded from serialization.
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
@@ -2381,7 +2381,7 @@ class GetMediaBuysRequest(LibraryGetMediaBuysRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    ext: dict | None = Field(  # type: ignore[assignment]
+    ext: SchemaVariant[dict | None] = Field(
         default=None,
         description=(
             "Vendor-namespaced extension object. Recognized keys: "
@@ -2404,9 +2404,7 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysRespon
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    media_buys: list[GetMediaBuysMediaBuy] = Field(  # type: ignore[assignment]
-        ..., description="List of matching media buys"
-    )
+    media_buys: SchemaVariant[list[GetMediaBuysMediaBuy]] = Field(..., description="List of matching media buys")
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)

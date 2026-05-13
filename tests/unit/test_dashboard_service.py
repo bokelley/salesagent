@@ -7,8 +7,19 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from src.admin.app import create_app
 from src.admin.services.dashboard_service import DashboardService
 from src.core.database.models import Tenant
+
+
+@pytest.fixture(autouse=True)
+def _flask_request_context():
+    """DashboardService._needs_attention emits url_for() URLs and the
+    underlying creatives/media-buy routes need a Flask request context to
+    build. These tests call private methods directly, so we provide one."""
+    app = create_app({"TESTING": True, "SECRET_KEY": "test", "WTF_CSRF_ENABLED": False})
+    with app.test_request_context():
+        yield
 
 
 class TestDashboardService:

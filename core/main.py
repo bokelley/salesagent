@@ -66,9 +66,7 @@ from sqlalchemy import select
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
-from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
-from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -76,6 +74,7 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
+from src.core.database.repositories import SalesAgentProposalStore
 from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
@@ -273,11 +272,32 @@ def build_router() -> LazyPlatformRouter:
     # so refine falls through to get_products (the buyer-side wire
     # contract is unchanged).
     proposal_managers = _build_proposal_managers()
+    # Single shared ProposalStore returned by the factory for every
+    # tenant — tenant isolation runs inside the store on
+    # ``expected_account_id`` (the framework passes the principal's
+    # account on every call). Wiring this lets the storyboard's
+    # ``proposal_finalize`` flow work end-to-end: ``get_products(brief)``
+    # persists the proposal, then ``create_media_buy(proposal_id=X)``
+    # resolves it and derives packages from the proposal's allocations.
+    # Without the store wired, the framework's ``proposal_dispatch``
+    # short-circuits at ``hasattr(platform, "proposal_store_for_tenant")``
+    # and the create_media_buy call falls through to a 0-package
+    # payload → INVALID_REQUEST.
+    #
+    # ``proposal_store_factory`` is the lazy-shape kwarg added in
+    # adcp 5.4 (#722) for parity with ``PlatformRouter.proposal_stores=``.
+    # We use the factory shape (not the eager dict) because the store
+    # is a single shared instance — boot-time tenant enumeration would
+    # miss tenants registered after boot, but the factory has no such
+    # coupling. The framework calls this on every dispatch; the
+    # closure return is O(1).
+    proposal_store = SalesAgentProposalStore()
     router = LazyPlatformRouter(
         accounts=SalesagentAccountStore(),
         factory=build_platform_for_tenant,
         capabilities=capabilities,
         proposal_managers=proposal_managers,
+        proposal_store_factory=lambda _tenant_id: proposal_store,
     )
     # validate_idempotency_wiring inspects the platform handed to serve()
     # for @IdempotencyStore.wrap decorators. The router shell has none —
@@ -291,6 +311,49 @@ def build_router() -> LazyPlatformRouter:
     # match the SDK's read-side ergonomics without adding ``type: ignore``.
     setattr(router, "_adcp_idempotency_external", True)  # noqa: B010
     return router
+
+
+def _resolve_public_url(request: Any) -> str:
+    """Per-request agent-card public URL resolver.
+
+    Wired into ``serve(public_url=...)`` (adcp 5.4.0, callable resolver
+    from #650 + composed-lifespan fix from #680). The SDK calls this
+    on every fetch of ``/.well-known/agent-card.json``; the return value
+    is validated as an absolute URL with ``https://`` required for
+    non-loopback hosts.
+
+    Precedence:
+
+    1. ``PUBLIC_URL`` env var when set — single-host deployments pin
+       the card URL explicitly and don't want header-driven rewrites.
+    2. ``X-Forwarded-Host`` (first entry of a comma-chain) — set by
+       load balancers terminating TLS for multi-tenant subdomain
+       deployments.
+    3. ``Host`` header — direct deploys without a proxy.
+    4. ``http://localhost:{port}/`` fallback when no headers are
+       available (unlikely outside synthetic requests).
+
+    Scheme is ``X-Forwarded-Proto`` when present; otherwise ``http``
+    for loopback hosts and ``https`` everywhere else (matches the SDK's
+    own ``_validate_card_url`` rule).
+    """
+    static = os.environ.get("PUBLIC_URL")
+    if static:
+        return static.rstrip("/") + "/"
+
+    headers = request.headers
+    forwarded_host = headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    host = forwarded_host or headers.get("host", "").split(",", 1)[0].strip()
+
+    if not host:
+        port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
+        return f"http://localhost:{port}/"
+
+    forwarded_proto = headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    hostname = host.split(":", 1)[0]
+    is_loopback = hostname in ("localhost", "127.0.0.1", "0.0.0.0") or hostname.endswith(".localhost")
+    scheme = forwarded_proto or ("http" if is_loopback else "https")
+    return f"{scheme}://{host}/"
 
 
 async def _start_schedulers() -> None:
@@ -401,8 +464,9 @@ def _serve_kwargs(
     etc. The hooks that diverge between production and in-process tests:
 
     * ``include_scheduler``: production runs background schedulers via
-      :class:`SchedulerLifespanMiddleware`; tests skip them so background
-      polling doesn't race the test DB lifecycle.
+      :func:`adcp.server.serve`'s ``on_startup`` / ``on_shutdown`` hooks
+      (adcp 5.4.0 #713); tests skip them so background polling doesn't
+      race the test DB lifecycle.
     * ``include_subdomain_routing``: production resolves the tenant from
       the ``Host`` header via :class:`SubdomainTenantMiddleware` (and
       404s on unknown hosts); tests rely on the bearer-token chain to
@@ -429,35 +493,11 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
-        # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
-        # /.well-known/agent-card.json response with the request's public
-        # host (X-Forwarded-Host / Host). adcp 5.1 added a callable
-        # ``public_url=`` resolver (#650) intended to replace this, but
-        # 5.2.0's ``serve(transport="both")`` has a bug where a callable
-        # public_url makes the inner A2A app a function without ``.router``,
-        # breaking ``_composed_lifespan`` (AttributeError on startup).
-        # Until that's fixed upstream, we fall back to the static
-        # ``public_url=PUBLIC_URL`` env var for single-host deploys and
-        # rely on this middleware to rewrite per-request from
-        # ``X-Forwarded-Host`` for multi-tenant subdomain deploys.
-        # Loopback-only rewrite ensures the middleware no-ops cleanly
-        # when ``public_url`` is already set to a non-loopback value. (#103.)
-        (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
         subdomain_router = build_subdomain_router()
         asgi_middleware.append(
             (SubdomainTenantMiddleware, {"router": subdomain_router}),
-        )
-    if include_scheduler:
-        asgi_middleware.append(
-            (
-                SchedulerLifespanMiddleware,
-                {
-                    "startups": [_start_schedulers],
-                    "shutdowns": [_stop_schedulers],
-                },
-            )
         )
     # SigningVerifyMiddleware verifies RFC 9421 signatures on inbound
     # buyer-protocol traffic and stashes verified state on
@@ -469,6 +509,12 @@ def _serve_kwargs(
 
     port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
 
+    # Background schedulers wire as serve()'s native lifespan hooks
+    # (adcp 5.4.0 #713). transport="both" is required for these to fire,
+    # which we already pass below.
+    on_startup = [_start_schedulers] if include_scheduler else None
+    on_shutdown = [_stop_schedulers] if include_scheduler else None
+
     return {
         "router": router,
         "name": "salesagent-core",
@@ -479,15 +525,18 @@ def _serve_kwargs(
         # path also covers signing for non-embedded tenants). Auto-emit on
         # the SDK side would double-fire.
         "auto_emit_completion_webhooks": False,
-        # Bearer-token auth wraps both MCP and A2A legs. Per-leg knobs
-        # (adcp>=4.5.0): MCP keeps the legacy ``x-adcp-auth: <raw>`` header
-        # baked into early adopters; A2A uses the spec-canonical RFC 6750
-        # ``Authorization: Bearer <token>`` (the SDK default), matching what
-        # a2a-sdk clients emit out of the box. No bearer-translation shim.
+        # Bearer-token auth wraps both MCP and A2A legs. adcp 5.4.0
+        # (#720 / #721) makes ``Authorization: Bearer <token>`` the
+        # always-accepted spec-canonical carrier on BOTH legs and turns
+        # the legacy ``x-adcp-auth: <raw>`` header into an additive
+        # opt-in alias on the MCP leg for early adopters that haven't
+        # migrated. New clients use ``Authorization: Bearer`` and
+        # interoperate with off-the-shelf a2a-sdk and MCP buyer SDKs;
+        # legacy MCP clients sending ``x-adcp-auth`` keep working
+        # unchanged. Migration is a one-way drift with no flag day.
         "auth": BearerTokenAuth(
             validate_token=_validate_token,
-            mcp_header_name="x-adcp-auth",
-            mcp_bearer_prefix_required=False,
+            mcp_legacy_header_aliases=["x-adcp-auth"],
         ),
         "asgi_middleware": asgi_middleware,
         "context_factory": auth_context_factory,
@@ -513,17 +562,12 @@ def _serve_kwargs(
         # https://gofastmcp.com/v2/deployment/http for the upstream
         # recommendation.
         "stateless_http": os.environ.get("ADCP_STATELESS_HTTP", "false").lower() == "true",
-        # adcp 5.0 ``public_url`` kwarg (#621) — advertises the canonical
-        # A2A base URL on /.well-known/agent-card.json. Static string from
-        # ``PUBLIC_URL`` env when set; otherwise None and
-        # ``AgentCardPublicUrlMiddleware`` (above) does the per-request
-        # rewrite from ``X-Forwarded-Host`` for multi-tenant subdomain
-        # deploys. The 5.1 callable resolver (#650) would let us drop the
-        # middleware, but ``transport="both"`` in 5.2.0 has a bug —
-        # callable ``public_url`` makes the A2A inner app a function
-        # without ``.router``, breaking ``_composed_lifespan``. Filed
-        # upstream.
-        "public_url": os.environ.get("PUBLIC_URL") or None,
+        # Per-request agent-card public URL resolver. Honors PUBLIC_URL
+        # env when set (single-host) and otherwise derives from
+        # X-Forwarded-Host / Host (multi-tenant subdomain). See
+        # :func:`_resolve_public_url`. adcp 5.4.0 #680 made callable
+        # public_url safe under ``transport='both'``.
+        "public_url": _resolve_public_url,
         # Heuristic backfills for pre-v3 / pre-4.4 buyers — defaults
         # ``get_products.buying_mode='brief'`` when omitted (spec says
         # sellers SHOULD default this for pre-v3 clients) and infers
@@ -541,6 +585,8 @@ def _serve_kwargs(
         # this when 6.0 ships or when we update tests to declare
         # ``adcp_version`` explicitly.
         "pre_validation_hooks": _spec_compat_hooks_impl(),
+        "on_startup": on_startup,
+        "on_shutdown": on_shutdown,
     }
 
 

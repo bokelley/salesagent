@@ -14,6 +14,7 @@ from adcp.types import (
     CreativeAction,
     CreativeStatus,
     Error,
+    SchemaVariant,
 )
 from adcp.types import CreativeApproval as LibraryCreativeApproval
 from adcp.types import CreativeAsset as LibraryCreativeAsset
@@ -404,9 +405,9 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    creatives: list[CreativeAsset] = Field(
+    creatives: SchemaVariant[list[CreativeAsset]] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
-    )  # type: ignore[assignment]
+    )
 
 
 class SyncSummary(SalesAgentBaseModel):
@@ -674,7 +675,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override with local subtypes (each extends its library counterpart)
-    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
+    query_summary: SchemaVariant[QuerySummary] = Field(..., description="Summary of the query that was executed")
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
     creatives: list[Creative] = Field(..., description="Array of creative assets")
 

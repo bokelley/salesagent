@@ -72,7 +72,7 @@
                     <h5 class="mb-0">Review Action</h5>
                 </div>
                 <div class="card-body">
-                    <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/review/{{ task_id }}" method="POST">
+                    <form action="{{ url_for('policy.review_task', tenant_id=tenant_id, task_id=task_id) }}" method="POST">
                         <div class="form-group">
                             <label for="review_notes">Review Notes</label>
                             <textarea class="form-control" id="review_notes" name="review_notes"
@@ -88,7 +88,7 @@
                             </button>
                         </div>
 
-                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy" class="btn btn-secondary btn-block">
+                        <a href="{{ url_for('policy.index', tenant_id=tenant_id) }}" class="btn btn-secondary btn-block">
                             Cancel
                         </a>
                     </form>

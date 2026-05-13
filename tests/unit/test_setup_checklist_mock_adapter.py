@@ -11,6 +11,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.admin.app import create_app
+
+
+@pytest.fixture(autouse=True)
+def _flask_request_context():
+    """SetupChecklistService.action_url uses Flask url_for(), which needs a
+    request context. Tests here call ``get_setup_status()`` outside a real
+    Flask handler, so we provide one."""
+    app = create_app({"TESTING": True, "SECRET_KEY": "test", "WTF_CSRF_ENABLED": False})
+    with app.test_request_context():
+        yield
+
 
 class TestSetupChecklistMockAdapter:
     """Test setup checklist service handles mock adapter correctly."""

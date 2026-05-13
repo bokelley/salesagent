@@ -42,11 +42,17 @@ from starlette.testclient import TestClient
 
 
 def _production_auth() -> BearerTokenAuth:
-    """The exact ``BearerTokenAuth`` config ``core.main._serve_kwargs`` passes."""
+    """The exact ``BearerTokenAuth`` config ``core.main._serve_kwargs`` passes.
+
+    adcp 5.4.0 (#720) made ``Authorization: Bearer`` always-accepted and turned
+    ``x-adcp-auth`` into an additive legacy alias. Tests use the same shape so
+    they exercise the production config — production now ACCEPTS spec-canonical
+    ``Authorization: Bearer`` on the MCP leg AND keeps the legacy header working
+    for early-adopter clients.
+    """
     return BearerTokenAuth(
         validate_token=lambda t: Principal(caller_identity="buyer-1", tenant_id="acme") if t == "valid-token" else None,
-        mcp_header_name="x-adcp-auth",
-        mcp_bearer_prefix_required=False,
+        mcp_legacy_header_aliases=["x-adcp-auth"],
     )
 
 
@@ -65,8 +71,8 @@ def _build_mcp_app(auth: BearerTokenAuth) -> Starlette:
         BearerTokenAuthMiddleware,
         validate_token=auth.validate_token,
         unauthenticated_response=auth.unauthenticated_response,
-        header_name=auth.resolved_mcp_header_name(),
-        bearer_prefix_required=auth.resolved_mcp_bearer_prefix_required(),
+        legacy_header_aliases=auth.resolved_mcp_legacy_aliases(),
+        legacy_aliases_bearer_prefix_required=auth.legacy_aliases_bearer_prefix_required,
     )
     return app
 
