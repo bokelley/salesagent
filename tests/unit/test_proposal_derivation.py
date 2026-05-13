@@ -183,6 +183,62 @@ class TestInvalidInputs:
         assert exc_info.value.code == "INVALID_REQUEST"
 
 
+class TestAllocationSumGuard:
+    """The pin-the-last absorber would silently mask a persistence bug
+    where allocations don't sum to ~100%. Guard fires before the math so
+    the discrepancy surfaces as a server-side error, not as an invoice
+    mismatch six months later."""
+
+    def test_under_100_percent_rejected(self) -> None:
+        """[60, 30] = 90% — silent acceptance would have produced
+        [60, 40] (last absorbs +10%), contradicting the proposal."""
+        with pytest.raises(AdcpError) as exc_info:
+            derive_packages_from_proposal(
+                allocations=[_alloc("prod_a", 60.0), _alloc("prod_b", 30.0)],
+                total_budget=_budget(100.0),
+            )
+        assert exc_info.value.code == "INVALID_REQUEST"
+
+    def test_over_100_percent_rejected(self) -> None:
+        """[60, 50] = 110% — silent acceptance would have clamped the
+        last package to 0 (max(0, total - running)), giving the buyer a
+        phantom $0-budget package."""
+        with pytest.raises(AdcpError) as exc_info:
+            derive_packages_from_proposal(
+                allocations=[_alloc("prod_a", 60.0), _alloc("prod_b", 50.0)],
+                total_budget=_budget(100.0),
+            )
+        assert exc_info.value.code == "INVALID_REQUEST"
+
+    def test_99_99_percent_accepted_within_tolerance(self) -> None:
+        """Three 33.33% allocations legitimately sum to 99.99; tolerance
+        band must permit this without rejecting valid proposals."""
+        packages = derive_packages_from_proposal(
+            allocations=[_alloc(f"prod_{i}", 33.33) for i in range(3)],
+            total_budget=_budget(100.0),
+        )
+        assert len(packages) == 3
+
+
+class TestAllocationCountCap:
+    """Defensive cap on persisted allocation count. SalesAgentProposalManager
+    never mints more than a handful — this is a safety net for corrupted
+    payloads or custom managers that skip validation."""
+
+    def test_over_100_allocations_rejected(self) -> None:
+        # 101 allocations at ~0.99% each sums to ~100% so the sum guard
+        # doesn't fire first. We want the count cap to be the reason.
+        allocations = [_alloc(f"prod_{i}", 100.0 / 101.0) for i in range(101)]
+        with pytest.raises(AdcpError) as exc_info:
+            derive_packages_from_proposal(
+                allocations=allocations,
+                total_budget=_budget(100000.0),
+            )
+        assert exc_info.value.code == "INVALID_REQUEST"
+        # Ensure it's the count guard (not the sum guard) firing.
+        assert "cap" in str(exc_info.value).lower() or "100" in str(exc_info.value)
+
+
 class TestRoundingPrecision:
     """Per-package ``budget`` is rounded to 2 decimal places (cents).
     Carrying fractional cents on every package would push the rounding

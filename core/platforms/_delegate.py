@@ -34,7 +34,9 @@ from adcp.server import current_transport
 from adcp.server.auth import current_principal
 from pydantic import BaseModel, ValidationError
 
+from core.proposal.derivation import derive_packages_from_proposal
 from src.core.config_loader import get_tenant_by_id
+from src.core.database.repositories import SalesAgentProposalStore
 from src.core.exceptions import AdCPError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -495,11 +497,19 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     # the push_notification_config extraction (and before _impl) so the
     # impl's existing package-validation path sees a populated request.
     if getattr(req_model, "proposal_id", None) and not req_model.packages:
-        from core.proposal.derivation import derive_packages_from_proposal
-        from src.core.database.repositories import SalesAgentProposalStore
+        expected_account_id = getattr(getattr(ctx, "account", None), "id", None)
+        if not expected_account_id:
+            # ctx.account is framework-resolved from auth; reaching the
+            # delegate without an account is a routing bug, not a buyer
+            # error. Refuse rather than fall through with the tenant
+            # filter disabled in ``SalesAgentProposalStore.get``.
+            raise AdcpError(
+                "INTERNAL_ERROR",
+                message="create_media_buy dispatched without a resolved account; refusing proposal lookup.",
+                recovery="terminal",
+            )
 
         store = SalesAgentProposalStore()
-        expected_account_id = getattr(getattr(ctx, "account", None), "id", None)
         record = await store.get(req_model.proposal_id, expected_account_id=expected_account_id)
         if record is None:
             # Framework's try_reserve_consumption would have already
@@ -507,12 +517,14 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
             # arriving here with a missing record means the proposal was
             # discarded between reservation and dispatch (rare timing
             # window). Surface buyer-actionably.
-            from src.core.exceptions import AdCPProductNotFoundError
-
-            raise AdCPProductNotFoundError(
-                f"Proposal {req_model.proposal_id!r} not found at create_media_buy dispatch — "
-                "the reservation window may have lapsed. Re-request via get_products to mint a fresh proposal.",
-                details={"proposal_id": req_model.proposal_id, "field": "proposal_id"},
+            raise AdcpError(
+                "PROPOSAL_NOT_FOUND",
+                message=(
+                    f"Proposal {req_model.proposal_id!r} not found at create_media_buy dispatch — "
+                    "the reservation window may have lapsed. Re-request via get_products to mint a fresh proposal."
+                ),
+                recovery="terminal",
+                field="proposal_id",
             )
         allocations = list(record.proposal_payload.get("allocations") or [])
         req_model.packages = derive_packages_from_proposal(

@@ -74,6 +74,19 @@ from adcp.types.generated_poc.media_buy.create_media_buy_request import TotalBud
 
 from src.core.schemas import PackageRequest
 
+# Defensive cap on persisted allocations. The proposal payload is
+# seller-controlled (minted by ``SalesAgentProposalManager``), so this is
+# a safety net for misconfigured / corrupt records — not a buyer-facing
+# limit. 100 is well above any realistic proposal (compliance probes mint
+# ≤5, internal CTV product mixes max out around 12).
+_MAX_ALLOCATIONS = 100
+
+# Tolerance band when validating that allocation_percentage values sum to
+# 100. Seller-minted percentages may not be exact integers (e.g. three
+# 33.33% allocations sum to 99.99); we accept ±0.5pp. Tighter than the
+# arithmetic drift would surface as a false positive on legitimate splits.
+_ALLOCATION_SUM_TOLERANCE = 0.5
+
 
 def derive_packages_from_proposal(
     *,
@@ -111,6 +124,20 @@ def derive_packages_from_proposal(
             recovery="correctable",
             field="proposal_id",
         )
+    if len(allocations) > _MAX_ALLOCATIONS:
+        # Server-side defensive guard. SalesAgentProposalManager never
+        # mints this many — hitting this means the persistence layer is
+        # corrupt or a custom manager skipped validation.
+        raise AdcpError(
+            "INVALID_REQUEST",
+            message=(
+                f"Proposal carries {len(allocations)} allocations; cap is "
+                f"{_MAX_ALLOCATIONS}. Re-request via get_products to mint a "
+                "fresh proposal."
+            ),
+            recovery="terminal",
+            field="proposal_payload.allocations",
+        )
     if total_budget is None or total_budget.amount <= 0:
         raise AdcpError(
             "INVALID_REQUEST",
@@ -124,11 +151,12 @@ def derive_packages_from_proposal(
             field="total_budget.amount",
         )
 
-    total_amount = float(total_budget.amount)
-    packages: list[PackageRequest] = []
-    running_total = 0.0
-    last_idx = len(allocations) - 1
-
+    # Pre-pass: validate per-allocation shape and verify the percentages
+    # land within tolerance of 100. The pin-the-last absorber would
+    # otherwise silently mask a persistence bug — e.g. ``[60, 50]`` would
+    # quietly yield ``[60, 40]`` instead of the 110% the seller stored,
+    # producing an invoice mismatch six months later.
+    pct_sum = 0.0
     for idx, alloc in enumerate(allocations):
         product_id = alloc.get("product_id")
         percentage = alloc.get("allocation_percentage")
@@ -146,7 +174,28 @@ def derive_packages_from_proposal(
                 recovery="terminal",
                 field=f"proposal_payload.allocations[{idx}]",
             )
+        pct_sum += float(percentage)
 
+    if abs(pct_sum - 100.0) > _ALLOCATION_SUM_TOLERANCE:
+        raise AdcpError(
+            "INVALID_REQUEST",
+            message=(
+                f"Proposal allocations sum to {pct_sum:.2f}%, not ~100%. "
+                "This is a server-side persistence bug — accepting it "
+                "would silently shift the discrepancy onto the final "
+                "package and surface as an invoice mismatch. Re-request "
+                "via get_products to mint a fresh proposal."
+            ),
+            recovery="terminal",
+            field="proposal_payload.allocations",
+        )
+
+    total_amount = float(total_budget.amount)
+    packages: list[PackageRequest] = []
+    running_total = 0.0
+    last_idx = len(allocations) - 1
+
+    for idx, alloc in enumerate(allocations):
         if idx == last_idx:
             # Pin the final allocation to absorb rounding drift so the
             # sum lands EXACTLY on the buyer's total. Otherwise three
@@ -155,14 +204,14 @@ def derive_packages_from_proposal(
             # missing cent as a phantom discount.
             pkg_budget = round(max(0.0, total_amount - running_total), 2)
         else:
-            pkg_budget = round(total_amount * (float(percentage) / 100.0), 2)
+            pkg_budget = round(total_amount * (float(alloc["allocation_percentage"]) / 100.0), 2)
             running_total += pkg_budget
 
         packages.append(
             PackageRequest(
-                product_id=str(product_id),
+                product_id=str(alloc["product_id"]),
                 budget=pkg_budget,
-                pricing_option_id=str(pricing_option_id),
+                pricing_option_id=str(alloc["pricing_option_id"]),
             )
         )
 
