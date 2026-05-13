@@ -467,6 +467,16 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     buyers who set ``push_notification_config`` on the request body
     silently get no completion webhooks.
 
+    When the request carries ``proposal_id`` without ``packages``, derive
+    the packages from the reserved proposal's allocations before the
+    impl runs. The framework's ``proposal_dispatch`` already reserved
+    the proposal (state CONSUMING) and hydrated ``ctx.recipes`` —
+    ``proposal_payload.allocations`` is the source of truth for the
+    per-product budget split. See ``core/proposal/derivation.py`` for
+    the rationale and the upstream issue
+    (adcontextprotocol/adcp-client-python#727) that would let us drop
+    this branch.
+
     The framework's idempotency wrap on the caller layer scopes
     retries; the impl's own transactional semantics handle the
     create-once invariant.
@@ -479,6 +489,37 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     """
     identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, CreateMediaBuyRequest)
+
+    # Derive packages from the reserved proposal's allocations when the
+    # buyer references a proposal_id without inline packages. Done before
+    # the push_notification_config extraction (and before _impl) so the
+    # impl's existing package-validation path sees a populated request.
+    if getattr(req_model, "proposal_id", None) and not req_model.packages:
+        from core.proposal.derivation import derive_packages_from_proposal
+        from src.core.database.repositories import SalesAgentProposalStore
+
+        store = SalesAgentProposalStore()
+        expected_account_id = getattr(getattr(ctx, "account", None), "id", None)
+        record = await store.get(req_model.proposal_id, expected_account_id=expected_account_id)
+        if record is None:
+            # Framework's try_reserve_consumption would have already
+            # raised PROPOSAL_NOT_FOUND if the reservation step failed;
+            # arriving here with a missing record means the proposal was
+            # discarded between reservation and dispatch (rare timing
+            # window). Surface buyer-actionably.
+            from src.core.exceptions import AdCPProductNotFoundError
+
+            raise AdCPProductNotFoundError(
+                f"Proposal {req_model.proposal_id!r} not found at create_media_buy dispatch — "
+                "the reservation window may have lapsed. Re-request via get_products to mint a fresh proposal.",
+                details={"proposal_id": req_model.proposal_id, "field": "proposal_id"},
+            )
+        allocations = list(record.proposal_payload.get("allocations") or [])
+        req_model.packages = derive_packages_from_proposal(
+            allocations=allocations,
+            total_budget=req_model.total_budget,
+        )
+
     pnc = req_model.push_notification_config
     pnc_dict: dict[str, Any] | None
     if pnc is None:
