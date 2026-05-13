@@ -15,8 +15,10 @@ from src.admin.api_schemas.tenant_management import (
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
+    BroadstreetAdapterConfig,
     BuyerAdvertiserMapping,
     CreateBuyerAdvertiserMappingRequest,
+    FreeWheelAdapterConfig,
     GAMAdapterConfig,
     InitialPrincipalRequest,
     ListBuyerAdvertiserMappingsResponse,
@@ -27,6 +29,7 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantResponse,
     TenantDetail,
     TenantSummary,
+    TritonAdapterConfig,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
 )
@@ -78,6 +81,80 @@ def test_mock_adapter_config_rejects_extra_field():
 
 
 # ---------------------------------------------------------------------------
+# FreeWheel / Triton / Broadstreet adapter configs
+# ---------------------------------------------------------------------------
+
+
+def test_freewheel_adapter_config_accepts_password_grant():
+    cfg = FreeWheelAdapterConfig(type="freewheel", username="user@example.com", password="hunter2")
+    assert cfg.username == "user@example.com"
+    assert cfg.password.get_secret_value() == "hunter2"
+    assert cfg.environment == "production"
+    assert cfg.api_token is None
+
+
+def test_freewheel_adapter_config_accepts_api_token_alone():
+    cfg = FreeWheelAdapterConfig(type="freewheel", api_token="bearer-xyz")
+    assert cfg.api_token.get_secret_value() == "bearer-xyz"
+    assert cfg.username is None
+    assert cfg.password is None
+
+
+def test_freewheel_adapter_config_rejects_no_credentials():
+    with pytest.raises(ValidationError, match="username \\+ password|api_token"):
+        FreeWheelAdapterConfig(type="freewheel")
+
+
+def test_freewheel_adapter_config_rejects_username_without_password():
+    with pytest.raises(ValidationError):
+        FreeWheelAdapterConfig(type="freewheel", username="user@example.com")
+
+
+def test_freewheel_adapter_config_accepts_staging_environment():
+    cfg = FreeWheelAdapterConfig(type="freewheel", api_token="t", environment="staging")
+    assert cfg.environment == "staging"
+
+
+def test_freewheel_adapter_config_rejects_invalid_environment():
+    with pytest.raises(ValidationError):
+        FreeWheelAdapterConfig(type="freewheel", api_token="t", environment="dev")
+
+
+def test_triton_adapter_config_happy_path():
+    cfg = TritonAdapterConfig(type="triton", username="pub@example.com", password="secret")
+    assert cfg.username == "pub@example.com"
+    assert cfg.password.get_secret_value() == "secret"
+    assert cfg.auth_type == "password"
+    assert cfg.base_url == "https://mbapi.tritondigital.com"
+
+
+def test_triton_adapter_config_accepts_oauth_client_credentials():
+    cfg = TritonAdapterConfig(
+        type="triton",
+        auth_type="oauth_client_credentials",
+        username="client-id-123",
+        password="client-secret-xyz",
+    )
+    assert cfg.auth_type == "oauth_client_credentials"
+
+
+def test_triton_adapter_config_rejects_missing_password():
+    with pytest.raises(ValidationError):
+        TritonAdapterConfig(type="triton", username="pub@example.com")
+
+
+def test_broadstreet_adapter_config_happy_path():
+    cfg = BroadstreetAdapterConfig(type="broadstreet", network_id="net_123", api_key="key_abc")
+    assert cfg.network_id == "net_123"
+    assert cfg.api_key.get_secret_value() == "key_abc"
+
+
+def test_broadstreet_adapter_config_rejects_missing_api_key():
+    with pytest.raises(ValidationError):
+        BroadstreetAdapterConfig(type="broadstreet", network_id="net_123")
+
+
+# ---------------------------------------------------------------------------
 # ProvisionTenantRequest / Response
 # ---------------------------------------------------------------------------
 
@@ -107,6 +184,32 @@ def test_provision_request_happy_path_mock():
     payload = _provision_payload(adapter={"type": "mock"})
     req = ProvisionTenantRequest.model_validate(payload)
     assert isinstance(req.adapter, MockAdapterConfig)
+
+
+def test_provision_request_happy_path_freewheel():
+    payload = _provision_payload(
+        adapter={
+            "type": "freewheel",
+            "username": "pub@example.com",
+            "password": "hunter2",
+            "environment": "staging",
+        }
+    )
+    req = ProvisionTenantRequest.model_validate(payload)
+    assert isinstance(req.adapter, FreeWheelAdapterConfig)
+    assert req.adapter.environment == "staging"
+
+
+def test_provision_request_happy_path_triton():
+    payload = _provision_payload(adapter={"type": "triton", "username": "pub@example.com", "password": "secret"})
+    req = ProvisionTenantRequest.model_validate(payload)
+    assert isinstance(req.adapter, TritonAdapterConfig)
+
+
+def test_provision_request_happy_path_broadstreet():
+    payload = _provision_payload(adapter={"type": "broadstreet", "network_id": "net_123", "api_key": "key_abc"})
+    req = ProvisionTenantRequest.model_validate(payload)
+    assert isinstance(req.adapter, BroadstreetAdapterConfig)
 
 
 def test_provision_request_with_initial_principal():

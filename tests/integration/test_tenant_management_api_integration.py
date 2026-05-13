@@ -116,6 +116,44 @@ class TestTenantManagementAPIIntegration:
         assert response.status_code == 200
         assert response.json["status"] == "healthy"
 
+    def test_list_adapters_returns_supported_catalog(self, client, mock_api_key_auth):
+        """Discovery endpoint surfaces the full adapter catalog so embedders
+        can dynamically render the picker. Verifies every shipped adapter
+        appears with its capabilities + connection JSON Schema."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+
+        assert response.status_code == 200
+        body = response.json
+        assert body["count"] == len(body["adapters"])
+
+        types = {entry["type"] for entry in body["adapters"]}
+        assert types == {"google_ad_manager", "mock", "freewheel", "triton", "broadstreet"}
+
+        # FreeWheel entry exercises every interesting field path
+        fw = next(entry for entry in body["adapters"] if entry["type"] == "freewheel")
+        assert fw["name"] == "FreeWheel"
+        assert "Video and CTV" in fw["description"]
+        assert "olv" in fw["default_channels"]
+        assert "ctv" in fw["default_channels"]
+        assert fw["capabilities"]["supports_inventory_sync"] is True
+        assert "cpm" in fw["capabilities"]["supported_pricing_models"]
+
+        # JSON Schema must carry the discriminator literal so embedders can
+        # validate locally before they POST
+        schema = fw["connection_schema"]
+        type_field = schema["properties"]["type"]
+        # Pydantic v2 emits literals via either ``const`` or ``enum`` —
+        # accept either as long as the value is "freewheel".
+        assert type_field.get("const") == "freewheel" or type_field.get("enum") == ["freewheel"]
+
+    def test_list_adapters_requires_api_key(self, client):
+        """Discovery endpoint is gated by the tenant-management API key."""
+        response = client.get("/api/v1/tenant-management/adapters")
+        assert response.status_code in (401, 403)
+
     def test_create_minimal_gam_tenant(self, client, mock_api_key_auth):
         """Test creating a minimal GAM tenant with just refresh token."""
         tenant_data = {

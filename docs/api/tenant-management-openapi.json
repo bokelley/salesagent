@@ -155,8 +155,11 @@
       "AdapterConfigEnvelope.61b280c": {
         "discriminator": {
           "mapping": {
+            "broadstreet": "#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig",
+            "freewheel": "#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig",
             "google_ad_manager": "#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig",
-            "mock": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig"
+            "mock": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig",
+            "triton": "#/components/schemas/AdapterConfigEnvelope.61b280c.TritonAdapterConfig"
           },
           "propertyName": "type"
         },
@@ -166,9 +169,138 @@
           },
           {
             "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig"
+          },
+          {
+            "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig"
+          },
+          {
+            "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.TritonAdapterConfig"
+          },
+          {
+            "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig"
           }
         ],
         "title": "AdapterConfigEnvelope"
+      },
+      "AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Broadstreet adapter configuration.",
+        "properties": {
+          "api_key": {
+            "format": "password",
+            "title": "Api Key",
+            "type": "string",
+            "writeOnly": true
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "network_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Network Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "broadstreet",
+            "default": "broadstreet",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network_id",
+          "api_key"
+        ],
+        "title": "BroadstreetAdapterConfig",
+        "type": "object"
+      },
+      "AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig": {
+        "additionalProperties": false,
+        "description": "FreeWheel Publisher API adapter configuration.\n\nExactly one auth path is required: ``username`` + ``password`` (OAuth2\npassword grant \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted bearer, escape hatch for partner-provisioned tokens).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "environment": {
+            "default": "production",
+            "enum": [
+              "production",
+              "staging"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "freewheel",
+            "default": "freewheel",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Username"
+          }
+        },
+        "title": "FreeWheelAdapterConfig",
+        "type": "object"
       },
       "AdapterConfigEnvelope.61b280c.GAMAdapterConfig": {
         "additionalProperties": false,
@@ -238,6 +370,70 @@
           }
         },
         "title": "MockAdapterConfig",
+        "type": "object"
+      },
+      "AdapterConfigEnvelope.61b280c.TritonAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Triton Digital TAP Media Buying API adapter configuration.\n\n``auth_type`` selects between username+password login (TAP's default flow)\nand OAuth client_credentials (used when Triton provisions service-account\ncredentials \u2014 the same username/password slots hold the client_id /\nclient_secret pair).",
+        "properties": {
+          "auth_type": {
+            "default": "password",
+            "enum": [
+              "password",
+              "oauth_client_credentials"
+            ],
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "https://mbapi.tritondigital.com",
+            "maxLength": 255,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "login_url": {
+            "default": "https://login.tritondigital.com",
+            "maxLength": 255,
+            "title": "Login Url",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": {
+            "const": "triton",
+            "default": "triton",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "TritonAdapterConfig",
         "type": "object"
       },
       "AdapterConfigResponse.f44f287": {
@@ -854,6 +1050,137 @@
           "advertiser_mapped"
         ],
         "title": "AccountSummary",
+        "type": "object"
+      },
+      "ListAdaptersResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "Response from ``GET /adapters`` \u2014 full catalog of supported adapter types.",
+        "properties": {
+          "adapters": {
+            "items": {
+              "$ref": "#/components/schemas/ListAdaptersResponse.f44f287.AdapterCatalogEntry"
+            },
+            "title": "Adapters",
+            "type": "array"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "adapters",
+          "count"
+        ],
+        "title": "ListAdaptersResponse",
+        "type": "object"
+      },
+      "ListAdaptersResponse.f44f287.AdapterCapabilitiesSummary": {
+        "additionalProperties": false,
+        "description": "Operational capabilities flags surfaced on the discovery endpoint.\n\nMirrors ``src.adapters.base.AdapterCapabilities`` (the class-level\nstatic on each adapter). Each adapter declares its caps; the discovery\nendpoint just surfaces them to embedder clients so they can decide\nwhich adapter to surface and which UI sections to render.",
+        "properties": {
+          "inventory_entity_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inventory Entity Label"
+          },
+          "supported_pricing_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Pricing Models",
+            "type": "array"
+          },
+          "supports_custom_targeting": {
+            "default": false,
+            "title": "Supports Custom Targeting",
+            "type": "boolean"
+          },
+          "supports_dynamic_products": {
+            "default": false,
+            "title": "Supports Dynamic Products",
+            "type": "boolean"
+          },
+          "supports_geo_targeting": {
+            "default": false,
+            "title": "Supports Geo Targeting",
+            "type": "boolean"
+          },
+          "supports_inventory_profiles": {
+            "default": false,
+            "title": "Supports Inventory Profiles",
+            "type": "boolean"
+          },
+          "supports_inventory_sync": {
+            "default": false,
+            "title": "Supports Inventory Sync",
+            "type": "boolean"
+          },
+          "supports_realtime_reporting": {
+            "default": false,
+            "title": "Supports Realtime Reporting",
+            "type": "boolean"
+          },
+          "supports_webhooks": {
+            "default": false,
+            "title": "Supports Webhooks",
+            "type": "boolean"
+          }
+        },
+        "title": "AdapterCapabilitiesSummary",
+        "type": "object"
+      },
+      "ListAdaptersResponse.f44f287.AdapterCatalogEntry": {
+        "additionalProperties": false,
+        "description": "One supported adapter type returned by the discovery endpoint.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ListAdaptersResponse.f44f287.AdapterCapabilitiesSummary"
+          },
+          "connection_schema": {
+            "additionalProperties": true,
+            "description": "JSON Schema for this adapter's typed connection config (the discriminated union member).",
+            "title": "Connection Schema",
+            "type": "object"
+          },
+          "default_channels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Default Channels",
+            "type": "array"
+          },
+          "description": {
+            "description": "Short description of what this adapter does.",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable adapter name.",
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "description": "Adapter type identifier (use as AdapterConfig.type).",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "description",
+          "capabilities",
+          "connection_schema"
+        ],
+        "title": "AdapterCatalogEntry",
         "type": "object"
       },
       "ListAuditLogResponse.f44f287": {
@@ -2079,8 +2406,11 @@
           "adapter": {
             "discriminator": {
               "mapping": {
+                "broadstreet": "#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig",
+                "freewheel": "#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig",
                 "google_ad_manager": "#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig",
-                "mock": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig"
+                "mock": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig",
+                "triton": "#/components/schemas/PreviewAdapterRequest.f44f287.TritonAdapterConfig"
               },
               "propertyName": "type"
             },
@@ -2090,6 +2420,15 @@
               },
               {
                 "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.TritonAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig"
               }
             ],
             "title": "Adapter"
@@ -2099,6 +2438,126 @@
           "adapter"
         ],
         "title": "PreviewAdapterRequest",
+        "type": "object"
+      },
+      "PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Broadstreet adapter configuration.",
+        "properties": {
+          "api_key": {
+            "format": "password",
+            "title": "Api Key",
+            "type": "string",
+            "writeOnly": true
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "network_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Network Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "broadstreet",
+            "default": "broadstreet",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network_id",
+          "api_key"
+        ],
+        "title": "BroadstreetAdapterConfig",
+        "type": "object"
+      },
+      "PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig": {
+        "additionalProperties": false,
+        "description": "FreeWheel Publisher API adapter configuration.\n\nExactly one auth path is required: ``username`` + ``password`` (OAuth2\npassword grant \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted bearer, escape hatch for partner-provisioned tokens).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "environment": {
+            "default": "production",
+            "enum": [
+              "production",
+              "staging"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "freewheel",
+            "default": "freewheel",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Username"
+          }
+        },
+        "title": "FreeWheelAdapterConfig",
         "type": "object"
       },
       "PreviewAdapterRequest.f44f287.GAMAdapterConfig": {
@@ -2169,6 +2628,70 @@
           }
         },
         "title": "MockAdapterConfig",
+        "type": "object"
+      },
+      "PreviewAdapterRequest.f44f287.TritonAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Triton Digital TAP Media Buying API adapter configuration.\n\n``auth_type`` selects between username+password login (TAP's default flow)\nand OAuth client_credentials (used when Triton provisions service-account\ncredentials \u2014 the same username/password slots hold the client_id /\nclient_secret pair).",
+        "properties": {
+          "auth_type": {
+            "default": "password",
+            "enum": [
+              "password",
+              "oauth_client_credentials"
+            ],
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "https://mbapi.tritondigital.com",
+            "maxLength": 255,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "login_url": {
+            "default": "https://login.tritondigital.com",
+            "maxLength": 255,
+            "title": "Login Url",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": {
+            "const": "triton",
+            "default": "triton",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "TritonAdapterConfig",
         "type": "object"
       },
       "PreviewAdapterResponse.f44f287": {
@@ -2258,8 +2781,11 @@
           "adapter": {
             "discriminator": {
               "mapping": {
+                "broadstreet": "#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig",
+                "freewheel": "#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig",
                 "google_ad_manager": "#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig",
-                "mock": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig"
+                "mock": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig",
+                "triton": "#/components/schemas/ProvisionTenantRequest.f44f287.TritonAdapterConfig"
               },
               "propertyName": "type"
             },
@@ -2269,6 +2795,15 @@
               },
               {
                 "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.TritonAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig"
               }
             ],
             "title": "Adapter"
@@ -2362,6 +2897,49 @@
         "title": "ProvisionTenantRequest",
         "type": "object"
       },
+      "ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Broadstreet adapter configuration.",
+        "properties": {
+          "api_key": {
+            "format": "password",
+            "title": "Api Key",
+            "type": "string",
+            "writeOnly": true
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "network_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Network Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "broadstreet",
+            "default": "broadstreet",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network_id",
+          "api_key"
+        ],
+        "title": "BroadstreetAdapterConfig",
+        "type": "object"
+      },
       "ProvisionTenantRequest.f44f287.EmbedBreadcrumbRoot": {
         "additionalProperties": false,
         "description": "First-crumb override for embedded-mode admin pages.\n\nWhen the upstream host renders the salesagent admin UI inside its own\nchrome (``tenant.is_embedded=True``), the first breadcrumb crumb should\npoint back to the host's storefront homepage rather than the\nsalesagent's tenant dashboard. ``label`` is the visible link text;\n``url`` is the absolute HTTPS link the host wants the user dropped at.\n\nValidated at schema boundary so bad input never reaches the rendered\ntemplate; the same model also gates the per-request\n``X-Embed-Breadcrumb-Root`` header value (see\n:func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).",
@@ -2384,6 +2962,83 @@
           "url"
         ],
         "title": "EmbedBreadcrumbRoot",
+        "type": "object"
+      },
+      "ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig": {
+        "additionalProperties": false,
+        "description": "FreeWheel Publisher API adapter configuration.\n\nExactly one auth path is required: ``username`` + ``password`` (OAuth2\npassword grant \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted bearer, escape hatch for partner-provisioned tokens).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "environment": {
+            "default": "production",
+            "enum": [
+              "production",
+              "staging"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "freewheel",
+            "default": "freewheel",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Username"
+          }
+        },
+        "title": "FreeWheelAdapterConfig",
         "type": "object"
       },
       "ProvisionTenantRequest.f44f287.GAMAdapterConfig": {
@@ -2484,6 +3139,70 @@
           }
         },
         "title": "MockAdapterConfig",
+        "type": "object"
+      },
+      "ProvisionTenantRequest.f44f287.TritonAdapterConfig": {
+        "additionalProperties": false,
+        "description": "Triton Digital TAP Media Buying API adapter configuration.\n\n``auth_type`` selects between username+password login (TAP's default flow)\nand OAuth client_credentials (used when Triton provisions service-account\ncredentials \u2014 the same username/password slots hold the client_id /\nclient_secret pair).",
+        "properties": {
+          "auth_type": {
+            "default": "password",
+            "enum": [
+              "password",
+              "oauth_client_credentials"
+            ],
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "https://mbapi.tritondigital.com",
+            "maxLength": 255,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "default_advertiser_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Advertiser Id"
+          },
+          "login_url": {
+            "default": "https://login.tritondigital.com",
+            "maxLength": 255,
+            "title": "Login Url",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": {
+            "const": "triton",
+            "default": "triton",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "TritonAdapterConfig",
         "type": "object"
       },
       "ProvisionTenantResponse.f44f287": {
@@ -3977,6 +4696,47 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/tenant-management/adapters": {
+      "get": {
+        "description": "Embedder clients (Scope3 storefront, etc.) call this to discover what adapters this Sales Agent instance supports. Returns one entry per adapter type that has a typed AdapterConfig member \u2014 covering the full set surfaced to operators in the tenant settings UI.\n\nEach entry carries:   - ``type`` \u2014 the value that goes into ``AdapterConfig.type``   - ``name`` / ``description`` \u2014 human-readable display strings   - ``default_channels`` \u2014 channels this adapter is primarily used for   - ``capabilities`` \u2014 static AdapterCapabilities flags   - ``connection_schema`` \u2014 JSON Schema for the typed connection payload",
+        "operationId": "get__api_v1_tenant-management_adapters",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAdaptersResponse.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Return the full catalog of supported ad-server adapter types.",
+        "tags": []
+      }
+    },
     "/api/v1/tenant-management/health": {
       "get": {
         "description": "",

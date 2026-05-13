@@ -24,17 +24,22 @@ from src.admin.api_schemas.tenant_management import (
     WEBHOOK_EVENT_TYPES,
     AccountDetail,
     AccountSummary,
+    AdapterCapabilitiesSummary,
+    AdapterCatalogEntry,
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
     ApproveWorkflowRequest,
+    BroadstreetAdapterConfig,
     BuyerAdvertiserMapping,
     CreateAccountRequest,
     CreateBuyerAdvertiserMappingRequest,
     CreateWebhookSubscriptionRequest,
+    FreeWheelAdapterConfig,
     GAMAdapterConfig,
     InitialSyncBlock,
     ListAccountsManagedResponse,
+    ListAdaptersResponse,
     ListAuditLogResponse,
     ListBuyerAdvertiserMappingsResponse,
     ListGamAdvertisersResponse,
@@ -58,6 +63,7 @@ from src.admin.api_schemas.tenant_management import (
     TenantStatusResponse,
     TenantSummary,
     TestConnectionResponse,
+    TritonAdapterConfig,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
     WebhookSubscriptionCreatedResponse,
@@ -193,6 +199,32 @@ def _adapter_config_to_dict(adapter: AdapterConfigSchema) -> dict:
         }
     if isinstance(adapter, MockAdapterConfig):
         return {"type": "mock", "dry_run": adapter.dry_run}
+    if isinstance(adapter, FreeWheelAdapterConfig):
+        return {
+            "type": "freewheel",
+            "username": adapter.username,
+            "password": adapter.password.get_secret_value() if adapter.password else None,
+            "api_token": adapter.api_token.get_secret_value() if adapter.api_token else None,
+            "environment": adapter.environment,
+            "default_advertiser_id": adapter.default_advertiser_id,
+        }
+    if isinstance(adapter, TritonAdapterConfig):
+        return {
+            "type": "triton",
+            "auth_type": adapter.auth_type,
+            "username": adapter.username,
+            "password": adapter.password.get_secret_value(),
+            "base_url": adapter.base_url,
+            "login_url": adapter.login_url,
+            "default_advertiser_id": adapter.default_advertiser_id,
+        }
+    if isinstance(adapter, BroadstreetAdapterConfig):
+        return {
+            "type": "broadstreet",
+            "network_id": adapter.network_id,
+            "api_key": adapter.api_key.get_secret_value(),
+            "default_advertiser_id": adapter.default_advertiser_id,
+        }
     raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
 
 
@@ -223,12 +255,61 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
         # Encryption is wired via the property setter (see models.py:AdapterConfig).
         if sa_json is not None:
             ac.gam_service_account_json = sa_json
-    else:  # MockAdapterConfig
+    elif isinstance(adapter, MockAdapterConfig):
         ac = AdapterConfig(
             tenant_id=tenant_id,
             adapter_type="mock",
             mock_dry_run=adapter.dry_run,
         )
+    elif isinstance(adapter, FreeWheelAdapterConfig):
+        # Round-trip through the adapter's own connection schema so secret
+        # encryption (Fernet) lands consistently in config_json — same path
+        # the legacy /api/tenant/<id>/adapter-config endpoint takes.
+        from src.adapters.freewheel import FreeWheelConnectionConfig
+
+        fw_validated = FreeWheelConnectionConfig(
+            username=adapter.username,
+            password=adapter.password.get_secret_value() if adapter.password else None,
+            api_token=adapter.api_token.get_secret_value() if adapter.api_token else None,
+            environment=adapter.environment,
+            default_advertiser_id=adapter.default_advertiser_id,
+        )
+        ac = AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="freewheel",
+            config_json=fw_validated.model_dump(),
+        )
+    elif isinstance(adapter, TritonAdapterConfig):
+        from src.adapters.triton import TritonConnectionConfig
+
+        triton_validated = TritonConnectionConfig(
+            auth_type=adapter.auth_type,
+            username=adapter.username,
+            password=adapter.password.get_secret_value(),
+            base_url=adapter.base_url,
+            login_url=adapter.login_url,
+            default_advertiser_id=adapter.default_advertiser_id,
+        )
+        ac = AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="triton",
+            config_json=triton_validated.model_dump(),
+        )
+    elif isinstance(adapter, BroadstreetAdapterConfig):
+        from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig
+
+        bs_validated = BroadstreetConnectionConfig(
+            network_id=adapter.network_id,
+            api_key=adapter.api_key.get_secret_value(),
+            default_advertiser_id=adapter.default_advertiser_id,
+        )
+        ac = AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="broadstreet",
+            config_json=bs_validated.model_dump(),
+        )
+    else:
+        raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
     session.add(ac)
     return ac
 
@@ -266,6 +347,114 @@ def _surface_urls(tenant_id: str) -> tuple[str, str, str]:
 def health_check():
     """Health check endpoint for the tenant management API."""
     return jsonify({"status": "healthy", "timestamp": datetime.now(UTC).isoformat()})
+
+
+# Display metadata for adapter types. Sourced here rather than from adapter
+# classes so the catalog can carry embedder-facing copy without coupling
+# every adapter to UX strings. Keys mirror ADAPTER_REGISTRY's canonical
+# names (the values that go into AdapterConfig.type).
+_ADAPTER_CATALOG_METADATA: dict[str, dict[str, str]] = {
+    "google_ad_manager": {
+        "name": "Google Ad Manager",
+        "description": "Direct sold inventory via Google Ad Manager — line items, orders, creatives.",
+    },
+    "mock": {
+        "name": "Mock Ad Server",
+        "description": "Simulated ad server for testing and development; no real backend calls.",
+    },
+    "freewheel": {
+        "name": "FreeWheel",
+        "description": "Video and CTV advertising via Comcast/FreeWheel's Publisher API.",
+    },
+    "triton": {
+        "name": "Triton Digital",
+        "description": "Audio and podcast advertising via the Triton TAP Media Buying API.",
+    },
+    "broadstreet": {
+        "name": "Broadstreet",
+        "description": "Direct sold display and email-newsletter inventory via the Broadstreet Ads API.",
+    },
+}
+
+# Map from ADAPTER_REGISTRY key → the typed AdapterConfig member whose
+# JSON Schema describes the connection payload for that adapter.
+_ADAPTER_CONFIG_TYPED = {
+    "google_ad_manager": GAMAdapterConfig,
+    "mock": MockAdapterConfig,
+    "freewheel": FreeWheelAdapterConfig,
+    "triton": TritonAdapterConfig,
+    "broadstreet": BroadstreetAdapterConfig,
+}
+
+
+@tenant_management_api.route("/adapters", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListAdaptersResponse, HTTP_500=ApiError))
+def list_adapters():
+    """Return the full catalog of supported ad-server adapter types.
+
+    Embedder clients (Scope3 storefront, etc.) call this to discover what
+    adapters this Sales Agent instance supports. Returns one entry per
+    adapter type that has a typed AdapterConfig member — covering the
+    full set surfaced to operators in the tenant settings UI.
+
+    Each entry carries:
+      - ``type`` — the value that goes into ``AdapterConfig.type``
+      - ``name`` / ``description`` — human-readable display strings
+      - ``default_channels`` — channels this adapter is primarily used for
+      - ``capabilities`` — static AdapterCapabilities flags
+      - ``connection_schema`` — JSON Schema for the typed connection payload
+    """
+    from src.adapters import ADAPTER_REGISTRY
+
+    seen_types: set[str] = set()
+    entries: list[AdapterCatalogEntry] = []
+
+    # ADAPTER_REGISTRY has multiple aliases per adapter class (e.g. "gam"
+    # and "google_ad_manager"). Dedupe via the registered class identity
+    # so each adapter appears once, keyed by its canonical name (the one
+    # present in _ADAPTER_CATALOG_METADATA).
+    for registry_key, adapter_class in ADAPTER_REGISTRY.items():
+        if registry_key not in _ADAPTER_CATALOG_METADATA:
+            continue
+        if registry_key in seen_types:
+            continue
+        seen_types.add(registry_key)
+
+        metadata = _ADAPTER_CATALOG_METADATA[registry_key]
+        caps_dataclass = getattr(adapter_class, "capabilities", None)
+        capabilities_summary = (
+            AdapterCapabilitiesSummary(
+                supports_inventory_sync=caps_dataclass.supports_inventory_sync,
+                supports_inventory_profiles=caps_dataclass.supports_inventory_profiles,
+                inventory_entity_label=caps_dataclass.inventory_entity_label,
+                supports_custom_targeting=caps_dataclass.supports_custom_targeting,
+                supports_geo_targeting=caps_dataclass.supports_geo_targeting,
+                supports_dynamic_products=caps_dataclass.supports_dynamic_products,
+                supported_pricing_models=list(caps_dataclass.supported_pricing_models or []),
+                supports_webhooks=caps_dataclass.supports_webhooks,
+                supports_realtime_reporting=caps_dataclass.supports_realtime_reporting,
+            )
+            if caps_dataclass is not None
+            else AdapterCapabilitiesSummary()
+        )
+
+        typed_config = _ADAPTER_CONFIG_TYPED.get(registry_key)
+        connection_schema = typed_config.model_json_schema() if typed_config else {}
+
+        entries.append(
+            AdapterCatalogEntry(
+                type=registry_key,
+                name=metadata["name"],
+                description=metadata["description"],
+                default_channels=list(getattr(adapter_class, "default_channels", []) or []),
+                capabilities=capabilities_summary,
+                connection_schema=connection_schema,
+            )
+        )
+
+    entries.sort(key=lambda e: e.type)
+    return jsonify(ListAdaptersResponse(adapters=entries, count=len(entries)).model_dump())
 
 
 @tenant_management_api.route("/tenants", methods=["GET"])

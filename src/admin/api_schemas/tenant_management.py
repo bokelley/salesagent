@@ -12,7 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -87,7 +87,14 @@ class EmbedBreadcrumbRoot(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Adapter config — discriminated union (sprint 1 ships GAM + Mock)
+# Adapter config — discriminated union
+#
+# Discriminated by ``type``; embedder clients (Scope3 storefront) pass the
+# type plus fields specific to that adapter. Secret fields use SecretStr so
+# they're never logged via the model's default repr. Persistence-layer
+# encryption is handled separately by the adapter's own Pydantic schema
+# (e.g. FreeWheelConnectionConfig) when the values land in
+# AdapterConfig.config_json.
 # ---------------------------------------------------------------------------
 
 
@@ -115,11 +122,119 @@ class MockAdapterConfig(BaseModel):
     dry_run: bool = False
 
 
+class FreeWheelAdapterConfig(BaseModel):
+    """FreeWheel Publisher API adapter configuration.
+
+    Exactly one auth path is required: ``username`` + ``password`` (OAuth2
+    password grant — the canonical path, auto-refreshing) or ``api_token``
+    (pre-minted bearer, escape hatch for partner-provisioned tokens).
+    """
+
+    model_config = _config()
+
+    type: Literal["freewheel"] = "freewheel"
+    username: str | None = Field(default=None, max_length=255)
+    password: SecretStr | None = None
+    api_token: SecretStr | None = None
+    environment: Literal["production", "staging"] = "production"
+    default_advertiser_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _require_credentials(self) -> FreeWheelAdapterConfig:
+        has_password_grant = bool(self.username) and bool(self.password)
+        has_token = bool(self.api_token)
+        if not has_password_grant and not has_token:
+            raise ValueError("FreeWheel config requires either (username + password) or api_token")
+        return self
+
+
+class TritonAdapterConfig(BaseModel):
+    """Triton Digital TAP Media Buying API adapter configuration.
+
+    ``auth_type`` selects between username+password login (TAP's default flow)
+    and OAuth client_credentials (used when Triton provisions service-account
+    credentials — the same username/password slots hold the client_id /
+    client_secret pair).
+    """
+
+    model_config = _config()
+
+    type: Literal["triton"] = "triton"
+    auth_type: Literal["password", "oauth_client_credentials"] = "password"
+    username: str = Field(..., min_length=1, max_length=255)
+    password: SecretStr
+    base_url: str = Field(default="https://mbapi.tritondigital.com", max_length=255)
+    login_url: str = Field(default="https://login.tritondigital.com", max_length=255)
+    default_advertiser_id: str | None = Field(default=None, max_length=64)
+
+
+class BroadstreetAdapterConfig(BaseModel):
+    """Broadstreet adapter configuration."""
+
+    model_config = _config()
+
+    type: Literal["broadstreet"] = "broadstreet"
+    network_id: str = Field(..., min_length=1, max_length=64)
+    api_key: SecretStr
+    default_advertiser_id: str | None = Field(default=None, max_length=64)
+
+
 # Public discriminated alias used in request/response schemas.
 AdapterConfig = Annotated[
-    GAMAdapterConfig | MockAdapterConfig,
+    GAMAdapterConfig | MockAdapterConfig | FreeWheelAdapterConfig | TritonAdapterConfig | BroadstreetAdapterConfig,
     Field(discriminator="type"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Adapter discovery — embedder-facing catalog of supported adapter types
+# ---------------------------------------------------------------------------
+
+
+class AdapterCapabilitiesSummary(BaseModel):
+    """Operational capabilities flags surfaced on the discovery endpoint.
+
+    Mirrors ``src.adapters.base.AdapterCapabilities`` (the class-level
+    static on each adapter). Each adapter declares its caps; the discovery
+    endpoint just surfaces them to embedder clients so they can decide
+    which adapter to surface and which UI sections to render.
+    """
+
+    model_config = _config()
+
+    supports_inventory_sync: bool = False
+    supports_inventory_profiles: bool = False
+    inventory_entity_label: str | None = None
+    supports_custom_targeting: bool = False
+    supports_geo_targeting: bool = False
+    supports_dynamic_products: bool = False
+    supported_pricing_models: list[str] = Field(default_factory=list)
+    supports_webhooks: bool = False
+    supports_realtime_reporting: bool = False
+
+
+class AdapterCatalogEntry(BaseModel):
+    """One supported adapter type returned by the discovery endpoint."""
+
+    model_config = _config()
+
+    type: str = Field(..., description="Adapter type identifier (use as AdapterConfig.type).")
+    name: str = Field(..., description="Human-readable adapter name.")
+    description: str = Field(..., description="Short description of what this adapter does.")
+    default_channels: list[str] = Field(default_factory=list)
+    capabilities: AdapterCapabilitiesSummary
+    connection_schema: dict[str, Any] = Field(
+        ..., description="JSON Schema for this adapter's typed connection config (the discriminated union member)."
+    )
+
+
+class ListAdaptersResponse(BaseModel):
+    """Response from ``GET /adapters`` — full catalog of supported adapter types."""
+
+    model_config = _config()
+
+    adapters: list[AdapterCatalogEntry]
+    count: int
 
 
 # ---------------------------------------------------------------------------
