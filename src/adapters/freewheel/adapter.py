@@ -81,17 +81,21 @@ from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS, FreeWheelConnectionC
 from src.adapters.freewheel.targeting import build_targeting, validate_targeting
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
+from src.core.database.repositories.freewheel_placement_stats import FreeWheelPlacementStatsRepository
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AdapterPackageDelivery,
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
+    DeliveryTotals,
     Error,
     MediaPackage,
     Principal,
     ReportingPeriod,
+    Snapshot,
     UpdateMediaBuyResponse,
     UpdateMediaBuySuccess,
 )
@@ -460,19 +464,118 @@ class FreeWheelAdapter(AdServerAdapter):
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
     ) -> AdapterGetMediaBuyDeliveryResponse:
-        """Return delivery totals.
+        """Aggregate delivery totals from the placement-stats cache.
 
-        Live-mode reporting requires hitting FreeWheel's separate reporting
-        API (a different surface from the Publisher API). Skeleton-only:
-        dry-run returns simulated numbers, live mode returns zeros until
-        the reporting flow is wired.
+        Live mode reads ``freewheel_placement_stats`` (populated by the
+        reporting sync job — pending Tier 2 FW scope). When the cache is
+        empty (sync not running yet), returns zeros via the base
+        ``_empty_delivery_response`` helper rather than raising — buyers
+        get an empty-but-valid response and can poll again later.
+
+        Dry-run returns simulated numbers for demo/testing.
         """
-        if not self.dry_run:
+        if self.dry_run:
+            return self._simulated_delivery_response(
+                media_buy_id, date_range, today, target_impressions=750_000, cpm=18.0, completion_rate=0.85
+            )
+
+        insertion_order_id = media_buy_id.removeprefix("freewheel_")
+        with get_db_session() as session:
+            repo = FreeWheelPlacementStatsRepository(session, self.tenant_id or "default")
+            stats_rows = repo.list_by_insertion_order(insertion_order_id)
+
+        if not stats_rows:
             return self._empty_delivery_response(media_buy_id, date_range)
 
-        return self._simulated_delivery_response(
-            media_buy_id, date_range, today, target_impressions=750_000, cpm=18.0, completion_rate=0.85
+        total_impressions = sum(row.impressions or 0 for row in stats_rows)
+        total_spend = sum((row.spend_micros or 0) for row in stats_rows) / 1_000_000.0
+        total_completed = sum((row.completed_views or 0) for row in stats_rows)
+        # Pick a currency: every row should agree, but fall back to the
+        # first non-null if they don't.
+        currency = next((row.currency for row in stats_rows if row.currency), "USD")
+
+        totals = DeliveryTotals(
+            impressions=float(total_impressions),
+            spend=total_spend,
+            completed_views=float(total_completed) if total_completed else None,
+            completion_rate=(total_completed / total_impressions) if total_impressions else None,
         )
+        by_package = [
+            AdapterPackageDelivery(
+                package_id=row.placement_id,
+                impressions=int(row.impressions or 0),
+                spend=(row.spend_micros or 0) / 1_000_000.0,
+                completed_views=int(row.completed_views) if row.completed_views is not None else None,
+            )
+            for row in stats_rows
+        ]
+        return AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id=media_buy_id,
+            reporting_period=date_range,
+            totals=totals,
+            by_package=by_package,
+            currency=currency,
+        )
+
+    def get_packages_snapshot(
+        self, package_refs: list[tuple[str, str, str | None]]
+    ) -> dict[str, dict[str, Snapshot | None]]:
+        """Near-real-time package snapshots from the placement-stats cache.
+
+        Reads ``freewheel_placement_stats`` rows for the FW placement IDs
+        in ``package_refs`` and returns one :class:`Snapshot` per package.
+        Missing rows (no reporting sync data yet, or no scope granted)
+        surface as ``None`` so the caller can render a 'no data' state
+        rather than failing.
+        """
+        from src.core.schemas import DeliveryStatus
+
+        now = datetime.now(UTC)
+        result: dict[str, dict[str, Snapshot | None]] = {}
+        placement_ids = [ref[2] for ref in package_refs if ref[2] is not None]
+
+        if not placement_ids:
+            for media_buy_id, package_id, _ in package_refs:
+                result.setdefault(media_buy_id, {})[package_id] = None
+            return result
+
+        with get_db_session() as session:
+            repo = FreeWheelPlacementStatsRepository(session, self.tenant_id or "default")
+            stats = repo.get_by_placement_ids(placement_ids)
+
+        for media_buy_id, package_id, placement_id in package_refs:
+            row = stats.get(placement_id) if placement_id else None
+            if row is None:
+                result.setdefault(media_buy_id, {})[package_id] = None
+                continue
+
+            as_of = row.as_of if row.as_of.tzinfo else row.as_of.replace(tzinfo=UTC)
+            staleness_seconds = max(0, int((now - as_of).total_seconds()))
+
+            delivery_status: DeliveryStatus | None = None
+            if row.delivery_status:
+                # Trust the FW-reported state when present; map common
+                # values to the AdCP enum, leave unknown ones as None.
+                lower = row.delivery_status.lower()
+                if lower in ("delivering", "active"):
+                    delivery_status = DeliveryStatus.delivering
+                elif lower in ("completed", "complete"):
+                    delivery_status = DeliveryStatus.completed
+                elif lower in ("paused", "not_delivering", "inactive"):
+                    delivery_status = DeliveryStatus.not_delivering
+                elif lower in ("exhausted", "budget_exhausted"):
+                    delivery_status = DeliveryStatus.budget_exhausted
+
+            result.setdefault(media_buy_id, {})[package_id] = Snapshot(
+                as_of=as_of,
+                impressions=float(row.impressions or 0),
+                spend=(row.spend_micros or 0) / 1_000_000.0,
+                clicks=float(row.clicks) if row.clicks is not None else None,
+                staleness_seconds=staleness_seconds,
+                delivery_status=delivery_status,
+                currency=row.currency,
+            )
+        return result
 
     # FreeWheel performance index updates aren't yet wired — base default applies.
 
