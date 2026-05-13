@@ -278,18 +278,24 @@ class DeliveryWebhookScheduler:
                 return
 
             if delivery_response.errors is not None:
-                # media_buy_status_excluded is expected for not-yet-started or
-                # paused buys — the delivery query filters by status_filter and
-                # those buys legitimately have nothing to report yet. Log at
-                # info-level so operators don't see false alarms.
+                # Soft-skip error codes — expected pre-GA / mid-flight states
+                # that should NOT fire a webhook but also shouldn't alarm:
+                # - media_buy_status_excluded: buy is paused / not-yet-started;
+                #   delivery query filtered it out (#48 flag).
+                # - data_unavailable: adapter is healthy but has no cached data
+                #   yet (e.g. FW reporting sync hasn't populated the cache or
+                #   the upstream Reporting API scope is still pending). Firing
+                #   zeros would push misleading "delivering=0" signals.
+                soft_skip_codes = {"media_buy_status_excluded", "data_unavailable"}
                 error_codes = {getattr(e, "code", None) for e in delivery_response.errors}
-                # `<=` so a single status_excluded buy + any other unrelated
-                # error escalates back to WARNING. Empty error_codes never
-                # reaches this branch (outer `is not None` already filtered).
-                if error_codes <= {"media_buy_status_excluded"} and error_codes:
+                # `<=` so a single soft-skip code + any other unrelated error
+                # escalates back to WARNING. Empty error_codes never reaches
+                # this branch (outer `is not None` already filtered).
+                if error_codes <= soft_skip_codes and error_codes:
                     logger.info(
-                        "Skipping delivery webhook for media buy %s — current status outside reporting window: %s",
+                        "Skipping delivery webhook for media buy %s — soft-skip codes %s: %s",
                         media_buy.media_buy_id,
+                        sorted(c for c in error_codes if c is not None),
                         [getattr(e, "message", "") for e in delivery_response.errors],
                     )
                 else:

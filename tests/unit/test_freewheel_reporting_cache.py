@@ -154,7 +154,14 @@ class TestGetPackagesSnapshot:
 class TestGetMediaBuyDelivery:
     """Read path: aggregate cache rows for an IO into one delivery response."""
 
-    def test_empty_cache_returns_empty_response(self, mock_principal, monkeypatch):
+    def test_empty_cache_raises_data_unavailable(self, mock_principal, monkeypatch):
+        """Empty cache must raise so the impl layer can surface
+        ``data_unavailable`` instead of fake zeros. The delivery-webhook
+        scheduler treats ``data_unavailable`` as a soft-skip so we don't
+        push misleading "delivering=0" signals to buyers while reporting
+        sync hasn't run / scope is pending."""
+        from src.adapters.base import DeliveryDataUnavailable
+
         adapter = FreeWheelAdapter(config={"api_token": "t"}, principal=mock_principal, dry_run=False, tenant_id="t1")
 
         mock_repo = MagicMock()
@@ -170,12 +177,9 @@ class TestGetMediaBuyDelivery:
         )
 
         date_range = ReportingPeriod(start=datetime.now(UTC) - timedelta(days=7), end=datetime.now(UTC))
-        resp = adapter.get_media_buy_delivery("freewheel_io_777", date_range, datetime.now(UTC))
-
-        assert resp.media_buy_id == "freewheel_io_777"
-        assert resp.totals.impressions == 0
-        assert resp.totals.spend == 0
-        assert resp.by_package == []
+        with pytest.raises(DeliveryDataUnavailable) as exc_info:
+            adapter.get_media_buy_delivery("freewheel_io_777", date_range, datetime.now(UTC))
+        assert exc_info.value.media_buy_id == "freewheel_io_777"
 
     def test_aggregates_rows_into_totals(self, mock_principal, monkeypatch):
         adapter = FreeWheelAdapter(config={"api_token": "t"}, principal=mock_principal, dry_run=False, tenant_id="t1")

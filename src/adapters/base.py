@@ -169,6 +169,27 @@ class PermissionCheck:
     detail: str | None = None  # human-readable reason when not granted
 
 
+class DeliveryDataUnavailable(Exception):
+    """Adapter signals it has no delivery data for this media buy *yet*.
+
+    Distinct from a hard adapter error: the integration is healthy, we
+    just don't have data to report. Surfaces as an AdCP error with code
+    ``data_unavailable`` so the delivery-webhook scheduler can skip
+    firing a webhook (instead of pushing misleading zero-delivery
+    signals) and so buyers polling delivery see a clear "no data yet"
+    response rather than fake zeros.
+
+    Typical causes: the reporting sync hasn't run yet, or the upstream
+    Reporting API scope is still pending. Both are expected pre-GA
+    states that should fail soft, not loud.
+    """
+
+    def __init__(self, media_buy_id: str, reason: str | None = None) -> None:
+        self.media_buy_id = media_buy_id
+        self.reason = reason
+        super().__init__(f"Delivery data not yet available for {media_buy_id}" + (f": {reason}" if reason else ""))
+
+
 @dataclass
 class PermissionsReport:
     """Adapter's view of which upstream permissions are currently granted.

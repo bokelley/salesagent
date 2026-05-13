@@ -72,6 +72,7 @@ from src.adapters.base import (
     AdapterCapabilities,
     AdServerAdapter,
     CreativeEngineAdapter,
+    DeliveryDataUnavailable,
     PermissionCheck,
     PermissionsReport,
     TargetingCapabilities,
@@ -651,9 +652,14 @@ class FreeWheelAdapter(AdServerAdapter):
 
         Live mode reads ``freewheel_placement_stats`` (populated by the
         reporting sync job — pending Tier 2 FW scope). When the cache is
-        empty (sync not running yet), returns zeros via the base
-        ``_empty_delivery_response`` helper rather than raising — buyers
-        get an empty-but-valid response and can poll again later.
+        empty (sync not running yet, or scope still pending), raises
+        :class:`DeliveryDataUnavailable` so the impl layer can surface a
+        ``data_unavailable`` error rather than a zero-delivery response.
+
+        Returning zeros silently was misleading buyers and the delivery
+        webhook scheduler (which would fire false "delivering=0" signals
+        every hour). Raising lets the AdCP layer respond with a clear
+        "no data yet" error code, which the scheduler skips on.
 
         Dry-run returns simulated numbers for demo/testing.
         """
@@ -668,7 +674,7 @@ class FreeWheelAdapter(AdServerAdapter):
             stats_rows = repo.list_by_insertion_order(insertion_order_id)
 
         if not stats_rows:
-            return self._empty_delivery_response(media_buy_id, date_range)
+            raise DeliveryDataUnavailable(media_buy_id)
 
         total_impressions = sum(row.impressions or 0 for row in stats_rows)
         total_spend = sum((row.spend_micros or 0) for row in stats_rows) / 1_000_000.0

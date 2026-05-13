@@ -49,6 +49,8 @@ def _normalize_reporting_window(start_date: str | None, end_date: str | None) ->
 
 from adcp.types import Error, MediaBuyStatus
 
+from src.adapters.base import DeliveryDataUnavailable
+
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
@@ -332,6 +334,35 @@ def _get_media_buy_delivery_impl(
                         except Exception as snap_err:
                             logger.warning(f"Failed to persist delivery snapshot for {media_buy_id}: {snap_err}")
 
+                    except DeliveryDataUnavailable as soft_err:
+                        # Adapter signals "integration healthy, no data
+                        # yet" (e.g. reporting sync hasn't populated the
+                        # cache, or the upstream Reporting API scope is
+                        # still pending). NOT an error worth audit-logging
+                        # or alerting on — surface as a clean
+                        # data_unavailable response so the webhook
+                        # scheduler skips firing zero signals and buyers
+                        # see a soft "try later" instead of fake zeros.
+                        logger.info(
+                            "Delivery data unavailable for %s (%s) — returning data_unavailable",
+                            media_buy_id,
+                            soft_err.reason or "no cached rows",
+                        )
+                        context_val = req.context
+                        return GetMediaBuyDeliveryResponse(
+                            reporting_period={"start": reporting_period.start, "end": reporting_period.end},
+                            currency=buy.currency,
+                            aggregated_totals=AggregatedTotals(
+                                impressions=0.0,
+                                spend=0.0,
+                                clicks=None,
+                                completed_views=None,
+                                media_buy_count=0,
+                            ),
+                            media_buy_deliveries=[],
+                            errors=[Error(code="data_unavailable", message=str(soft_err))],
+                            context=context_val,
+                        )
                     except Exception as e:
                         logger.error(f"Error getting delivery for {media_buy_id}: {e}")
                         # Write adapter failure to audit trail (NFR-003)
