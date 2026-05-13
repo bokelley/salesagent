@@ -80,3 +80,63 @@ def http_scope(
         "scheme": scheme,
         "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in (headers or [])],
     }
+
+
+# ---------------------------------------------------------------------------
+# Scope-mutation middleware testing
+# ---------------------------------------------------------------------------
+#
+# A second pattern that doesn't fit :func:`capture_asgi_response`: middleware
+# that inspects or mutates the request scope (headers / state) before
+# forwarding to the inner app, without producing a response itself. The
+# helpers below let those tests assert on what scope the inner app received.
+
+
+class CapturingScopeApp:
+    """Minimal ASGI inner app that records the scope it was invoked with.
+
+    For testing scope-mutating middleware (dual-credential audit,
+    multi-header bearer normalization, etc.) where the assertion is
+    "the inner app saw the scope we expected" rather than "the
+    middleware emitted the response we expected".
+    """
+
+    def __init__(self) -> None:
+        self.called = False
+        self.scope: dict[str, Any] | None = None
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        self.called = True
+        self.scope = scope
+
+
+def simple_http_scope(headers: list[tuple[bytes, bytes]], *, path: str = "/", method: str = "POST") -> dict[str, Any]:
+    """Build a minimal HTTP scope with raw byte headers.
+
+    Distinct from :func:`http_scope` (which accepts str headers and
+    encodes) — scope-mutation tests typically already speak the
+    bytes-tuple format the ASGI spec uses.
+    """
+    return {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": headers,
+    }
+
+
+async def drive_asgi(scope: dict[str, Any], app: Any) -> None:
+    """Run one request through ``app`` with a no-op send/receive pair.
+
+    For middleware that mutates / inspects scope but doesn't depend on
+    the response stream. The ``CapturingScopeApp`` inner records what
+    arrived; this helper only handles the receive/send plumbing.
+    """
+
+    async def _receive() -> dict[str, Any]:
+        return {"type": "http.disconnect"}
+
+    async def _send(_message: dict[str, Any]) -> None:
+        pass
+
+    await app(scope, _receive, _send)

@@ -15,35 +15,15 @@ from typing import Any
 import pytest
 
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
+from tests.unit._asgi_helpers import CapturingScopeApp, drive_asgi, simple_http_scope
 
-
-class _CapturingApp:
-    """Minimal ASGI sink — records that it was invoked."""
-
-    def __init__(self) -> None:
-        self.called = False
-
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        self.called = True
-
-
-def _http_scope(headers: list[tuple[bytes, bytes]], path: str = "/") -> dict[str, Any]:
-    return {
-        "type": "http",
-        "method": "POST",
-        "path": path,
-        "headers": headers,
-    }
-
-
-async def _drive(scope: dict[str, Any], app: Any) -> None:
-    async def _receive() -> dict[str, Any]:
-        return {"type": "http.disconnect"}
-
-    async def _send(_message: dict[str, Any]) -> None:
-        pass
-
-    await app(scope, _receive, _send)
+# Local aliases — `_drive` / `_http_scope` are the test-body verbs everyone
+# in this file uses; the shared module names are slightly different to
+# disambiguate from :func:`http_scope` (the str-headers variant used by
+# response-capture middleware tests).
+_drive = drive_asgi
+_http_scope = simple_http_scope
+_CapturingApp = CapturingScopeApp
 
 
 @pytest.mark.asyncio

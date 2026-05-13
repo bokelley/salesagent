@@ -68,6 +68,7 @@ import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
+from core.middleware.multi_header_bearer import MultiHeaderBearerMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.middleware.www_authenticate import WWWAuthenticateMiddleware
 from core.platforms.gam import GamPlatform
@@ -447,6 +448,18 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
+        # MultiHeaderBearerMiddleware copies ``Authorization: Bearer
+        # <token>`` into ``x-adcp-auth`` when only the RFC 6750 header is
+        # present on the MCP leg. The SDK's ``BearerTokenAuthMiddleware``
+        # is configured with ``mcp_header_name="x-adcp-auth"`` so it only
+        # validates tokens on the legacy header that early adopters baked
+        # in. Without this normalizer, every spec-conformant buyer agent
+        # (``@adcp/sdk`` clients, the compliance probe's
+        # ``security_baseline/probe_api_key``) gets 401 on every MCP call
+        # because it sends the token on ``Authorization: Bearer`` per
+        # RFC 6750. Both-headers requests pass through unchanged — the
+        # dual-credential audit above already observes that case.
+        (MultiHeaderBearerMiddleware, {}),
         # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
         # /.well-known/agent-card.json response with the request's public
         # host (X-Forwarded-Host / Host). adcp 5.1 added a callable
