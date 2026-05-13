@@ -57,19 +57,29 @@ def _make_stats_row(
     return row
 
 
-class TestReportingSyncStub:
-    """The sync stub raises until FW Tier 2 scope is granted. Schedulers can
-    catch this and degrade gracefully — the read paths already tolerate
-    an empty cache."""
+class TestReportingSyncScopeHandling:
+    """When the upstream API still IAM-denies the /reporting/* endpoints,
+    :meth:`run` traps the 403 once at the top and raises
+    :class:`ReportingScopeNotGranted` so schedulers see a clean signal."""
 
-    def test_run_raises_until_scope_granted(self):
+    def test_run_raises_scope_not_granted_on_forbidden(self):
+        from src.adapters.freewheel._transport import FreeWheelForbiddenError
+
         client = MagicMock()
+        # post_json on the underlying transport raises FreeWheelForbiddenError
+        # for IAM-denied users — that's the production behaviour today.
+        client._transport.post_json.side_effect = FreeWheelForbiddenError(
+            "User is not authorized to access this resource"
+        )
         sync = FreeWheelReportingSync(client=client, tenant_id="t1")
         with pytest.raises(ReportingScopeNotGranted):
             sync.run()
 
     def test_error_message_points_to_scope_request_doc(self):
+        from src.adapters.freewheel._transport import FreeWheelForbiddenError
+
         client = MagicMock()
+        client._transport.post_json.side_effect = FreeWheelForbiddenError("denied")
         sync = FreeWheelReportingSync(client=client, tenant_id="t1")
         try:
             sync.run()

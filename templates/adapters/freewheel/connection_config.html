@@ -125,6 +125,28 @@ Expected context:
 
         <hr style="margin: 2rem 0 1rem 0;">
 
+        <h4>Reporting Sync</h4>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Pull a fresh delivery report from FreeWheel into the placement-stats cache —
+            populates impressions, completed views, clicks, and spend for the AdCP
+            delivery surfaces (<code>get_packages_snapshot</code> +
+            <code>get_media_buy_delivery</code>). Defaults to today's pacing across
+            all placements; usually finishes in 10-30 seconds.
+        </p>
+        <p class="text-muted" style="margin-bottom: 1rem; font-size: 0.85rem;">
+            Note: the Query Reporting API scope is still pending on most accounts —
+            if you see "scope not granted", run the API Permissions check below to
+            see the exact endpoints awaiting grant.
+        </p>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="syncFreeWheelReporting()" class="btn btn-secondary">
+                Sync Reporting Now
+            </button>
+            <span id="freewheel-reporting-sync-status"></span>
+        </div>
+
+        <hr style="margin: 2rem 0 1rem 0;">
+
         <h4>API Permissions</h4>
         <p class="text-muted" style="margin-bottom: 1rem;">
             Probe FreeWheel's API to verify the configured credentials have every scope
@@ -216,6 +238,36 @@ function syncFreeWheelInventory() {
             const counts = Object.entries(data.counts).map(([k, v]) => k + '=' + v).join(', ');
             const errors = Object.entries(data.errors || {}).map(([k, v]) => k + ': ' + v).join('; ');
             statusEl.innerHTML = '<span style="color: #f59e0b;">⚠ Partial: synced ' + counts + ' but failed: ' + errors + '</span>';
+        } else {
+            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Sync failed') + '</span>';
+        }
+    })
+    .catch(error => {
+        statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
+    });
+}
+
+function syncFreeWheelReporting() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('freewheel-reporting-sync-status');
+
+    statusEl.innerHTML = '<span style="color: #6b7280;">Submitting + polling… (10-30s typical)</span>';
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/sync-reporting', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({}),  // defaults to today, all placements
+    })
+    .then(response => response.json().then(data => ({status: response.status, data: data})))
+    .then(({status, data}) => {
+        if (data.success) {
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Synced ' +
+                (data.placements_updated || 0) + ' placement(s) — job_id ' + (data.job_id || 'n/a') + '</span>';
+        } else if (status === 503 && data.scope_pending) {
+            statusEl.innerHTML = '<span style="color: #f59e0b;">⚠ Reporting API scope pending. ' +
+                'Check API Permissions for the exact denied endpoints.</span>';
         } else {
             statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Sync failed') + '</span>';
         }

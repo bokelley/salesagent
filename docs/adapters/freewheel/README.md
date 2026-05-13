@@ -150,8 +150,8 @@ targeting via the Publisher API. Use Nielsen DMA (`geo_metros`) or
 | `associate_creatives` | 🟡 wired-ready | `creative_instances` works (see live verification). Adapter wiring pending — needs ad_unit_node lookup chain from cache. |
 | `update_media_buy` (pause/resume) | 🟡 client-ready | `update_placement` verified at v3; adapter wiring needs IO-scoped placement listing (scope grant pending) |
 | `update_media_buy` (per-package budget) | ❌ data-model | FW budget lives on the IO, not placement — would require a different mapping |
-| `get_media_buy_delivery` | ⏳ stub | Needs Query Reporting API (separate surface, scope grant pending) |
-| `get_packages_snapshot` | ⏳ stub | Same root cause as `get_media_buy_delivery` |
+| `get_media_buy_delivery` | 🟡 wired | Reads from `freewheel_placement_stats` cache; populated by the Reporting sync once scope arrives. Empty cache → zeros. |
+| `get_packages_snapshot` | 🟡 wired | Same cache as above; missing rows → `None`. |
 | `get_available_inventory` | ✅ live | Surfaces synced cache: placements (ad_unit_packages), ad_units (sites + sections), targeting groups, creative specs |
 | `get_creative_formats` | ✅ static | 6 canonical VAST video formats |
 

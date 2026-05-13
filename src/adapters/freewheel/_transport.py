@@ -148,6 +148,23 @@ class FreeWheelTransport:
         """DELETE a v3 resource. Response body (if any) is discarded."""
         self._request("DELETE", path, accept="application/xml")
 
+    def post_json(self, path: str, json_body: dict[str, Any]) -> dict[str, Any]:
+        """POST a JSON body, parse JSON response. Used for v4 + Reporting."""
+        import json as _json
+
+        response = self._request(
+            "POST",
+            path,
+            accept="application/json",
+            body=_json.dumps(json_body),
+            content_type="application/json",
+        )
+        return response.json() if response.content else {}
+
+    def delete_json(self, path: str) -> None:
+        """DELETE a v4/JSON resource. Response body (if any) is discarded."""
+        self._request("DELETE", path, accept="application/json")
+
     def token_info(self) -> dict[str, Any]:
         """Connectivity probe — returns ``{user_id, expires_in, created_at}``.
 
