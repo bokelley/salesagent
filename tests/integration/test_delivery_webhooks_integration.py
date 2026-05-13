@@ -254,6 +254,69 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
+@freeze_time("2026-06-15 12:00:00", tz_offset=0)
+async def test_delivery_webhook_handles_multiple_media_buys_without_detached_instance_error(integration_db):
+    """Regression for production trace 2026-05-08: when two or more media
+    buys with reporting_webhook are processed in one batch, the second
+    iteration raised DetachedInstanceError on ``media_buy.tenant``.
+
+    Root cause: ``_get_media_buy_delivery_impl`` opens its own
+    ``with get_db_session()`` context. The inner ``scoped.remove()``
+    detaches every MediaBuy loaded by the outer batch session, so the
+    next iteration's ``media_buy.tenant`` relationship access blows up.
+
+    Fix: eager-load tenant via ``joinedload`` so the relationship is
+    cached in the instance state and survives detach.
+    """
+    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+    from tests.helpers.managed_tenant_api import bind_factories_to_session
+
+    start = datetime.now(UTC).date() - timedelta(days=7)
+    end = datetime.now(UTC).date() + timedelta(days=7)
+    webhook_payload = {
+        "packages": [{"product_id": "prod_multi"}],
+        "reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"},
+    }
+
+    # Two media buys, both with reporting_webhook configured. The bug only
+    # manifests on the second-and-later iterations of the batch loop.
+    with bind_factories_to_session():
+        tenant = TenantFactory(tenant_id="tenant_multi_detached", subdomain="multi-detached")
+        principal = PrincipalFactory(tenant=tenant)
+        for mb_id in ("mb_multi_a", "mb_multi_b"):
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id=mb_id,
+                start_date=start,
+                end_date=end,
+                status="active",
+                raw_request=webhook_payload,
+            )
+
+    scheduler = DeliveryWebhookScheduler()
+
+    with patch.object(
+        scheduler.webhook_service,
+        "send_notification",
+        new_callable=AsyncMock,
+    ) as mock_send_notification:
+        await scheduler._send_reports()
+
+        # Both media buys must round-trip — before the fix, the second
+        # iteration raised DetachedInstanceError and was logged as an error
+        # rather than completing the send.
+        assert mock_send_notification.await_count == 2, (
+            f"Expected both media buys to send webhooks; got {mock_send_notification.await_count}"
+        )
+        sent_media_buy_ids = {
+            call.kwargs["metadata"]["media_buy_id"] for call in mock_send_notification.await_args_list
+        }
+        assert sent_media_buy_ids == {"mb_multi_a", "mb_multi_b"}
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
 async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_available_time(integration_db):
     """
     Scheduler should call webhook only when data is fresh enough and not have been called for the exact period already
