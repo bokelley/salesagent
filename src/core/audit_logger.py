@@ -95,15 +95,18 @@ class AuditLogger:
         # Build log message in security documentation format
         message = f"{self.adapter_name}.{operation} for principal '{principal_name}' ({self.adapter_name} advertiser ID: {adapter_id})"
 
+        # One log line per audit event — the per-key fan-out was readable in
+        # local tail but flooded production stdout. Full details are still
+        # persisted to AuditLog.details below for structured queries.
         if success:
-            audit_logger.info(message)
             if details:
-                for key, value in details.items():
-                    audit_logger.info(f"  {key}: {value}")
+                audit_logger.info("%s | %s", message, details)
+            else:
+                audit_logger.info(message)
+        elif error:
+            audit_logger.error("%s - FAILED | %s", message, error)
         else:
             audit_logger.error(f"{message} - FAILED")
-            if error:
-                audit_logger.error(f"  Error: {error}")
 
         # Write to database
         try:

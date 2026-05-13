@@ -81,7 +81,7 @@ def get_adapter(
         # ORM model (Tenant) — use attribute access
         tenant_id = tenant.tenant_id
         selected_adapter = tenant.ad_server or "mock"
-    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
+    logger.debug(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
     # Get adapter config via repository
     from src.core.database.repositories.adapter_config import AdapterConfigRepository
@@ -96,11 +96,11 @@ def get_adapter(
         adapter_config: dict[str, Any] = {"enabled": True}
         if config_row:
             adapter_type = config_row.adapter_type
-            logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
+            logger.debug(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
             # Use adapter_type from AdapterConfig as the source of truth
             if adapter_type:
                 selected_adapter = adapter_type
-                logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
+                logger.debug(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
             if adapter_type == "mock":
                 adapter_config["dry_run"] = config_row.mock_dry_run or False
                 # Default to True (require approval) for safety
@@ -121,20 +121,20 @@ def get_adapter(
                     # Try nested format first
                     gam_mappings = principal.platform_mappings.get("google_ad_manager", {})
                     advertiser_id = gam_mappings.get("advertiser_id")
-                    logger.info(
+                    logger.debug(
                         f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, platform_mappings={principal.platform_mappings}, gam_mappings={gam_mappings}, advertiser_id={advertiser_id}"
                     )
 
                     # Fall back to root-level format if nested not found
                     if not advertiser_id:
                         advertiser_id = principal.platform_mappings.get("gam_advertiser_id")
-                        logger.info(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
+                        logger.debug(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
 
                     adapter_config["company_id"] = advertiser_id
-                    logger.info(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
+                    logger.debug(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
                 else:
                     adapter_config["company_id"] = None
-                    logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
+                    logger.debug("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
             elif adapter_type in {"triton", "triton_digital"}:
                 # Triton credentials live in config_json. Rehydrate via the
                 # connection schema so the field validator decrypts password,
@@ -182,9 +182,9 @@ def get_adapter(
             adapter_config = {"enabled": True}
 
     # Create the appropriate adapter instance with tenant_id and testing context
-    logger.info(f"[ADAPTER_SELECT] FINAL selected_adapter: {selected_adapter}")
+    logger.debug(f"[ADAPTER_SELECT] FINAL selected_adapter: {selected_adapter}")
     if selected_adapter == "mock":
-        logger.info("[ADAPTER_SELECT] Instantiating MockAdServerAdapter")
+        logger.debug("[ADAPTER_SELECT] Instantiating MockAdServerAdapter")
         return MockAdServerAdapter(
             adapter_config, principal, dry_run, tenant_id=tenant_id, strategy_context=testing_context
         )
@@ -194,8 +194,8 @@ def get_adapter(
         if not network_code or not isinstance(network_code, str):
             raise ValueError("network_code is required for GoogleAdManager adapter")
 
-        logger.info("[ADAPTER_SELECT] Instantiating GoogleAdManager")
-        logger.info(
+        logger.debug("[ADAPTER_SELECT] Instantiating GoogleAdManager")
+        logger.debug(
             f"[ADAPTER_SELECT] GAM params: network_code={adapter_config.get('network_code')}, advertiser_id={adapter_config.get('company_id')}, trafficker_id={adapter_config.get('trafficker_id')}, dry_run={dry_run}"
         )
         return GoogleAdManager(

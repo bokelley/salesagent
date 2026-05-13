@@ -29,7 +29,6 @@ def _coerce_task_type(raw: str | None) -> TaskType | None:
         return None
 
 
-from rich.console import Console
 from sqlalchemy import select
 
 from src.core.database.database_session import DatabaseManager
@@ -38,8 +37,6 @@ from src.core.database.models import Context as DBContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
-
-console = Console()
 
 
 class ContextManager(DatabaseManager):
@@ -80,15 +77,15 @@ class ContextManager(DatabaseManager):
         try:
             self.session.add(context)
             self.session.commit()
-            console.print(f"[green]Created context {context_id} for principal {principal_id}[/green]")
+            logger.debug("Created context %s for principal %s", context_id, principal_id)
             # Refresh to get any database-generated values
             self.session.refresh(context)
             # Detach from session
             self.session.expunge(context)
             return context
-        except Exception as e:
+        except Exception:
             self.session.rollback()
-            console.print(f"[red]Failed to create context: {e}[/red]")
+            logger.exception("Failed to create context")
             raise
         finally:
             # DatabaseManager handles session cleanup differently
@@ -245,11 +242,11 @@ class ContextManager(DatabaseManager):
             session.refresh(step)
             # Detach from session
             session.expunge(step)
-            console.print(f"[green]Created workflow step {step_id} for context {context_id}[/green]")
+            logger.debug("Created workflow step %s for context %s", step_id, context_id)
             return step
-        except Exception as e:
+        except Exception:
             session.rollback()
-            console.print(f"[red]Failed to create workflow step: {e}[/red]")
+            logger.exception("Failed to create workflow step")
             raise
         finally:
             session.close()
@@ -313,35 +310,17 @@ class ContextManager(DatabaseManager):
                     )
                     step.comments = new_comments
 
-                # DEBUG: Log the condition check values BEFORE commit
-                console.print("[magenta]🔍 PRE-COMMIT WEBHOOK DEBUG:[/magenta]")
-                console.print("[magenta]   update_workflow_step called with:[/magenta]")
-                console.print(f"[magenta]     step_id={step_id}[/magenta]")
-                console.print(f"[magenta]     status parameter={status}[/magenta]")
-                console.print("[magenta]   Database state BEFORE commit:[/magenta]")
-                console.print(f"[magenta]     old_status={old_status}[/magenta]")
-                console.print(f"[magenta]     new step.status={step.status}[/magenta]")
-                console.print("[magenta]   Condition evaluation:[/magenta]")
-                console.print(f"[magenta]     status parameter truthy? {bool(status)}[/magenta]")
-                console.print(f"[magenta]     step object exists? {step is not None}[/magenta]")
-                console.print(f"[magenta]     Will trigger webhook? {status and step}[/magenta]")
-
                 session.commit()
-                console.print(f"[green]✅ Updated workflow step {step_id} (committed to database)[/green]")
-
-                # DEBUG: Log the condition check values AFTER commit
-                console.print("[yellow]🔍 POST-COMMIT WEBHOOK DEBUG:[/yellow]")
-                console.print(f"[yellow]   status={status}[/yellow]")
-                console.print(f"[yellow]   old_status={old_status}[/yellow]")
-                console.print(f"[yellow]   step exists={step is not None}[/yellow]")
-                console.print(f"[yellow]   Webhook trigger condition (status and step): {status and step}[/yellow]")
+                logger.debug(
+                    "Updated workflow step %s: %s -> %s",
+                    step_id,
+                    old_status,
+                    step.status,
+                )
 
                 # Send push notifications if status changed
                 if status and step:
-                    console.print(f"[blue]🚀 WEBHOOK: Calling _send_push_notifications for step {step_id}[/blue]")
                     self._send_push_notifications(step, status, session)
-                else:
-                    console.print(f"[yellow]⚠️ WEBHOOK SKIPPED: status={status}, step={step is not None}[/yellow]")
         finally:
             session.close()
 
@@ -608,7 +587,7 @@ class ContextManager(DatabaseManager):
             step = session.scalars(stmt).first()
 
             if not step:
-                console.print(f"[yellow]⚠️ Step {step_id} not found, cannot link object[/yellow]")
+                logger.warning("Step %s not found, cannot link object", step_id)
                 return
 
             obj_mapping = ObjectWorkflowMapping(
@@ -620,10 +599,10 @@ class ContextManager(DatabaseManager):
             )
             session.add(obj_mapping)
             session.commit()
-            console.print(f"[green]✅ Linked {object_type} {object_id} to workflow step {step_id}[/green]")
-        except Exception as e:
+            logger.debug("Linked %s %s to workflow step %s", object_type, object_id, step_id)
+        except Exception:
             session.rollback()
-            console.print(f"[red]Failed to link object to workflow: {e}[/red]")
+            logger.exception("Failed to link object to workflow")
             raise
         finally:
             session.close()
@@ -646,14 +625,14 @@ class ContextManager(DatabaseManager):
             mappings = session.scalars(stmt).all()
 
             if not mappings:
-                console.print(f"[yellow]No object mappings found for step {step.step_id}[/yellow]")
+                logger.debug("No object mappings found for step %s", step.step_id)
                 return
 
             # Get context to find tenant_id
             context_stmt = select(Context).filter_by(context_id=step.context_id)
             context = session.scalars(context_stmt).first()
             if not context:
-                console.print(f"[yellow]No context found for step {step.step_id}[/yellow]")
+                logger.warning("No context found for step %s", step.step_id)
                 return
 
             tenant_id = context.tenant_id
@@ -669,12 +648,15 @@ class ContextManager(DatabaseManager):
             )
             webhooks = session.scalars(webhook_stmt).all()
 
-            console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
+            logger.debug("Found %d active webhook configs for principal %s", len(webhooks), principal_id)
 
             # Send notifications for each mapping (media buy, creative, etc.)
             for mapping in mappings:
-                console.print(
-                    f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
+                logger.debug(
+                    "Processing mapping: %s %s action=%s",
+                    mapping.object_type,
+                    mapping.object_id,
+                    mapping.action,
                 )
 
                 for _webhook_config in webhooks:
@@ -684,7 +666,7 @@ class ContextManager(DatabaseManager):
                     cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
                     url = cfg_dict.get("url")
                     if not url:
-                        console.print("[red]No push notification URL present; skipping webhook[/red]")
+                        logger.warning("No push notification URL present; skipping webhook")
                         continue
 
                     authentication = cfg_dict.get("authentication") or {}
@@ -709,8 +691,11 @@ class ContextManager(DatabaseManager):
 
                     service = get_protocol_webhook_service()
 
-                    console.print(
-                        f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
+                    logger.debug(
+                        "Sending webhook to %s for %s %s",
+                        push_notification_config.url,
+                        mapping.object_type,
+                        mapping.object_id,
                     )
 
                     # Build webhook payload based on protocol type. Source of
@@ -785,9 +770,9 @@ class ContextManager(DatabaseManager):
                             ) -> None:
                                 try:
                                     t.result()
-                                    console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
-                                except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
+                                    logger.debug("Webhook sent successfully for %s", config_url)
+                                except Exception as exc:
+                                    logger.error("Webhook failed for %s: %s", config_url, exc)
 
                             task.add_done_callback(_log_task_result)
                         except RuntimeError:
@@ -799,21 +784,16 @@ class ContextManager(DatabaseManager):
                                     metadata=metadata,
                                 )
                             )
-                            console.print(
-                                f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                            )
+                            logger.debug("Webhook sent successfully for %s", push_notification_config.url)
 
                     except requests.exceptions.Timeout:
-                        console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
+                        logger.error("Webhook timeout for %s", push_notification_config.url)
                     except requests.exceptions.RequestException as e:
-                        console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
+                        logger.error("Webhook failed for %s: %s", push_notification_config.url, e)
 
-        except Exception as e:
-            console.print(f"[red]Error sending push notifications: {e}[/red]")
+        except Exception:
+            logger.exception("Error sending push notifications")
             # Don't fail the workflow update if notifications fail
-            import traceback
-
-            traceback.print_exc()
 
 
 # Singleton instance getter for compatibility
