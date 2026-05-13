@@ -14,6 +14,7 @@ from adcp.types import DeliveryMetrics as LibraryDeliveryMetrics
 from adcp.types import (
     DeliveryStatus,  # noqa: F401 — re-exported for backward compat
     PricingModel,
+    SchemaVariant,
 )
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
@@ -248,7 +249,7 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     aggregated_totals: AggregatedTotals = Field(..., description="Combined metrics across all returned media buys")
-    media_buy_deliveries: list[MediaBuyDeliveryData] = Field(  # type: ignore[assignment]
+    media_buy_deliveries: SchemaVariant[list[MediaBuyDeliveryData]] = Field(
         ..., description="Array of delivery data for each media buy"
     )
 
@@ -437,9 +438,7 @@ class GetCreativeDeliveryResponse(NestedModelSerializerMixin, LibraryGetCreative
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    creatives: list[CreativeDeliveryData] = Field(  # type: ignore[assignment]
-        ..., description="Array of creative delivery data"
-    )
+    creatives: SchemaVariant[list[CreativeDeliveryData]] = Field(..., description="Array of creative delivery data")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
