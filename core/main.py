@@ -66,7 +66,6 @@ from sqlalchemy import select
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
-from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
@@ -314,6 +313,49 @@ def build_router() -> LazyPlatformRouter:
     return router
 
 
+def _resolve_public_url(request: Any) -> str:
+    """Per-request agent-card public URL resolver.
+
+    Wired into ``serve(public_url=...)`` (adcp 5.4.0, callable resolver
+    from #650 + composed-lifespan fix from #680). The SDK calls this
+    on every fetch of ``/.well-known/agent-card.json``; the return value
+    is validated as an absolute URL with ``https://`` required for
+    non-loopback hosts.
+
+    Precedence:
+
+    1. ``PUBLIC_URL`` env var when set — single-host deployments pin
+       the card URL explicitly and don't want header-driven rewrites.
+    2. ``X-Forwarded-Host`` (first entry of a comma-chain) — set by
+       load balancers terminating TLS for multi-tenant subdomain
+       deployments.
+    3. ``Host`` header — direct deploys without a proxy.
+    4. ``http://localhost:{port}/`` fallback when no headers are
+       available (unlikely outside synthetic requests).
+
+    Scheme is ``X-Forwarded-Proto`` when present; otherwise ``http``
+    for loopback hosts and ``https`` everywhere else (matches the SDK's
+    own ``_validate_card_url`` rule).
+    """
+    static = os.environ.get("PUBLIC_URL")
+    if static:
+        return static.rstrip("/") + "/"
+
+    headers = request.headers
+    forwarded_host = headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    host = forwarded_host or headers.get("host", "").split(",", 1)[0].strip()
+
+    if not host:
+        port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
+        return f"http://localhost:{port}/"
+
+    forwarded_proto = headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    hostname = host.split(":", 1)[0]
+    is_loopback = hostname in ("localhost", "127.0.0.1", "0.0.0.0") or hostname.endswith(".localhost")
+    scheme = forwarded_proto or ("http" if is_loopback else "https")
+    return f"{scheme}://{host}/"
+
+
 async def _start_schedulers() -> None:
     """Boot background schedulers when the ASGI server comes up."""
     from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
@@ -451,20 +493,6 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
-        # AgentCardPublicUrlMiddleware rewrites localhost URLs in the
-        # /.well-known/agent-card.json response with the request's public
-        # host (X-Forwarded-Host / Host). adcp 5.1 added a callable
-        # ``public_url=`` resolver (#650) intended to replace this, but
-        # 5.2.0's ``serve(transport="both")`` has a bug where a callable
-        # public_url makes the inner A2A app a function without ``.router``,
-        # breaking ``_composed_lifespan`` (AttributeError on startup).
-        # Until that's fixed upstream, we fall back to the static
-        # ``public_url=PUBLIC_URL`` env var for single-host deploys and
-        # rely on this middleware to rewrite per-request from
-        # ``X-Forwarded-Host`` for multi-tenant subdomain deploys.
-        # Loopback-only rewrite ensures the middleware no-ops cleanly
-        # when ``public_url`` is already set to a non-loopback value. (#103.)
-        (AgentCardPublicUrlMiddleware, {}),
     ]
     if include_subdomain_routing:
         subdomain_router = build_subdomain_router()
@@ -534,17 +562,12 @@ def _serve_kwargs(
         # https://gofastmcp.com/v2/deployment/http for the upstream
         # recommendation.
         "stateless_http": os.environ.get("ADCP_STATELESS_HTTP", "false").lower() == "true",
-        # adcp 5.0 ``public_url`` kwarg (#621) — advertises the canonical
-        # A2A base URL on /.well-known/agent-card.json. Static string from
-        # ``PUBLIC_URL`` env when set; otherwise None and
-        # ``AgentCardPublicUrlMiddleware`` (above) does the per-request
-        # rewrite from ``X-Forwarded-Host`` for multi-tenant subdomain
-        # deploys. The 5.1 callable resolver (#650) would let us drop the
-        # middleware, but ``transport="both"`` in 5.2.0 has a bug —
-        # callable ``public_url`` makes the A2A inner app a function
-        # without ``.router``, breaking ``_composed_lifespan``. Filed
-        # upstream.
-        "public_url": os.environ.get("PUBLIC_URL") or None,
+        # Per-request agent-card public URL resolver. Honors PUBLIC_URL
+        # env when set (single-host) and otherwise derives from
+        # X-Forwarded-Host / Host (multi-tenant subdomain). See
+        # :func:`_resolve_public_url`. adcp 5.4.0 #680 made callable
+        # public_url safe under ``transport='both'``.
+        "public_url": _resolve_public_url,
         # Heuristic backfills for pre-v3 / pre-4.4 buyers — defaults
         # ``get_products.buying_mode='brief'`` when omitted (spec says
         # sellers SHOULD default this for pre-v3 clients) and infers

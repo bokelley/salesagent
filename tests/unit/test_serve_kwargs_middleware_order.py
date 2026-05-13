@@ -19,7 +19,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
-from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
 
@@ -51,18 +50,28 @@ def test_admin_wsgi_mount_runs_first(middleware_classes):
     )
 
 
-def test_agent_card_public_url_middleware_present(middleware_classes):
-    """``AgentCardPublicUrlMiddleware`` must be in the chain — without it,
-    ``/.well-known/agent-card.json`` advertises the container's localhost
-    URL and SDK clients can't discover the public A2A endpoint (#103).
+def test_public_url_resolver_is_callable():
+    """The agent-card public URL must be a per-request callable so
+    multi-tenant subdomain deploys advertise the right URL per request
+    (#103). The salesagent middleware-based rewrite was retired in favor
+    of the SDK's native ``serve(public_url=callable)`` after adcp 5.3.0
+    #680 fixed the ``transport='both'`` composed-lifespan crash.
 
-    The 5.1 callable ``public_url`` resolver (#650) is the eventual
-    replacement, but ``transport="both"`` in 5.2.0 has a bug where a
-    callable ``public_url`` breaks ``_composed_lifespan`` with
-    ``AttributeError: 'function' object has no attribute 'router'``."""
-    assert AgentCardPublicUrlMiddleware in middleware_classes, (
-        "AgentCardPublicUrlMiddleware missing from asgi_middleware — A2A "
-        "agent card will leak the localhost URL and SDK discovery breaks."
+    The behavior of the resolver itself is covered in
+    ``test_agent_card_public_url_middleware.py``; this test only pins
+    that ``_serve_kwargs`` keeps the resolver wired."""
+    from core import main as core_main
+
+    with (
+        patch.object(core_main, "build_router", return_value=MagicMock()),
+        patch("src.admin.app.create_app", return_value=MagicMock()),
+        patch("core.main.build_subdomain_router", return_value=MagicMock()),
+    ):
+        kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
+    public_url = kwargs.get("public_url")
+    assert callable(public_url), (
+        f"public_url must be a per-request callable (PublicUrlResolver), got {type(public_url).__name__!r}. "
+        "Static strings can't carry X-Forwarded-Host for multi-tenant subdomain deploys."
     )
 
 
