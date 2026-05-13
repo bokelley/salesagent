@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from adcp.decisioning.proposal_store import ProposalRecord, ProposalState
@@ -323,6 +323,26 @@ class SalesAgentProposalStore:
                     recovery="correctable",
                     field="proposal_id",
                 )
+            # Defense-in-depth: explicit ``expires_at`` check inside the
+            # row lock. The framework's
+            # ``proposal_dispatch._hydrate_proposal_context`` checks
+            # expiry on the get-side, but ``try_reserve_consumption`` is
+            # reachable from dispatch paths that bypass that filter
+            # (and from adopter callers that go straight to the store).
+            # Mirrors upstream :class:`InMemoryProposalStore.
+            # _evict_expired_locked` but surfaces the event explicitly
+            # rather than silently deleting so audit trails survive.
+            if row.expires_at is not None and row.expires_at < datetime.now(UTC):
+                raise AdcpError(
+                    "PROPOSAL_EXPIRED",
+                    message=(
+                        f"try_reserve_consumption on proposal {proposal_id!r} past "
+                        f"expires_at={row.expires_at.isoformat()}. Re-request via "
+                        "get_products to mint a fresh proposal."
+                    ),
+                    recovery="correctable",
+                    field="proposal_id",
+                )
             row.state = ProposalState.CONSUMING.value
             session.commit()
             session.refresh(row)
@@ -415,33 +435,64 @@ class SalesAgentProposalStore:
         *,
         media_buy_id: str,
     ) -> None:
-        """Legacy v1.5-alpha ``committed`` → ``consumed`` transition —
-        intentionally **not implemented** in the salesagent store.
+        """Legacy v1.5-alpha direct ``committed`` → ``consumed``.
 
-        The Protocol signature doesn't accept ``expected_account_id``,
-        which means an internal caller (or a future framework version)
-        could mark *any* tenant's proposal as consumed and bind it to a
-        ``media_buy_id`` from another tenant — the partial unique index
-        on ``(account_id, media_buy_id)`` would still let the write
-        succeed because the tuple is per-account. New dispatch code
-        uses the two-phase :meth:`try_reserve_consumption` +
-        :meth:`finalize_consumption` (both account-scoped), so failing
-        this method closed has no functional cost today. Surfaces
-        loudly if a future framework version begins calling it.
+        Equivalent to :meth:`try_reserve_consumption` +
+        :meth:`finalize_consumption` against a single-threaded write;
+        new dispatch code uses the two-phase methods. Matches the
+        upstream :class:`InMemoryProposalStore.mark_consumed` shape
+        verbatim.
+
+        **Protocol gap (audited).** The Protocol signature doesn't
+        accept ``expected_account_id``, so an internal caller with a
+        guessed ``proposal_id`` could mark a foreign tenant's proposal
+        consumed. The framework's adcp 5.4 dispatch doesn't call this
+        method from any buyer-reachable path; every invocation is
+        logged at WARNING so unexpected calls surface in operator
+        audits. Filed upstream as the same Protocol-signature gap
+        :meth:`discard` has.
         """
-        logger.error(
+        logger.warning(
             "SalesAgentProposalStore.mark_consumed called for proposal_id=%r "
-            "media_buy_id=%r — this Protocol method has no tenant scoping "
-            "and is intentionally not implemented. New framework callers "
-            "should use try_reserve_consumption + finalize_consumption.",
+            "media_buy_id=%r — Protocol method has no tenant scoping; "
+            "audit caller. The framework's dispatch uses the two-phase "
+            "try_reserve_consumption + finalize_consumption path instead.",
             proposal_id,
             media_buy_id,
         )
-        raise NotImplementedError(
-            "SalesAgentProposalStore intentionally does not implement "
-            "mark_consumed; the Protocol signature lacks tenant scoping. "
-            "Use try_reserve_consumption + finalize_consumption."
-        )
+        with get_db_session() as session:
+            row = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id).with_for_update()).first()
+            if row is None:
+                raise AdcpError(
+                    "INTERNAL_ERROR",
+                    message=f"Cannot mark_consumed proposal {proposal_id!r}: not in store.",
+                    recovery="terminal",
+                )
+            if row.state == ProposalState.CONSUMED.value:
+                if row.media_buy_id == media_buy_id:
+                    return
+                raise AdcpError(
+                    "INTERNAL_ERROR",
+                    message=(
+                        f"Proposal {proposal_id!r} already consumed by "
+                        f"media_buy_id={row.media_buy_id!r}; cannot "
+                        f"re-consume as {media_buy_id!r}."
+                    ),
+                    recovery="terminal",
+                )
+            if row.state != ProposalState.COMMITTED.value:
+                raise AdcpError(
+                    "INTERNAL_ERROR",
+                    message=(
+                        f"Cannot mark_consumed proposal {proposal_id!r} "
+                        f"from state {row.state!r}; mark_consumed "
+                        "requires COMMITTED."
+                    ),
+                    recovery="terminal",
+                )
+            row.state = ProposalState.CONSUMED.value
+            row.media_buy_id = media_buy_id
+            session.commit()
 
     async def discard(self, proposal_id: str) -> None:
         """Idempotent delete — intentionally **not implemented**.

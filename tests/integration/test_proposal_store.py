@@ -469,6 +469,107 @@ class TestReservationLifecycle:
             # Never reserved — release should no-op without raising.
             await store.release_consumption("prop_idem", expected_account_id="tenant_idem")
 
+    async def test_release_silent_no_op_on_missing(self, integration_db):
+        """The framework's adapter-failure rollback path is
+        unconditional — it runs ``release_consumption`` in a ``finally``
+        block whether or not the reserve succeeded. Raising on missing
+        would blow up that rollback path on transient lookups; silent
+        no-op matches the upstream :class:`InMemoryProposalStore`
+        shape."""
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_release_missing")
+            store = SalesAgentProposalStore()
+            # No raise — the rollback path stays unconditional.
+            await store.release_consumption("prop_does_not_exist", expected_account_id="tenant_release_missing")
+
+    async def test_release_silent_no_op_on_cross_account(self, integration_db):
+        """Same rollback-path invariant for cross-account: a foreign
+        tenant's ``release`` call is a no-op, and the legitimate
+        owner's CONSUMING reservation stays intact."""
+        from adcp.decisioning.proposal_store import ProposalState
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_release_x_owner")
+            TenantFactory(tenant_id="tenant_release_x_probe")
+            store = SalesAgentProposalStore()
+            await self._put_and_commit(store, proposal_id="prop_release_x", account_id="tenant_release_x_owner")
+            await store.try_reserve_consumption("prop_release_x", expected_account_id="tenant_release_x_owner")
+            # Foreign tenant — silent no-op; the real reserve stays CONSUMING.
+            await store.release_consumption("prop_release_x", expected_account_id="tenant_release_x_probe")
+            record = await store.get("prop_release_x", expected_account_id="tenant_release_x_owner")
+            assert record is not None
+            assert record.state == ProposalState.CONSUMING
+
+    async def test_finalize_idempotent_on_consumed_matching_media_buy(self, integration_db):
+        """A retried finalize after a successful one is a no-op when
+        the same ``media_buy_id`` is supplied — protects against
+        webhook re-delivery / framework dispatch retries that would
+        otherwise raise on the second finalize. Matches upstream."""
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_fin_idem")
+            store = SalesAgentProposalStore()
+            await self._put_and_commit(store, proposal_id="prop_fin_idem", account_id="tenant_fin_idem")
+            await store.try_reserve_consumption("prop_fin_idem", expected_account_id="tenant_fin_idem")
+            await store.finalize_consumption(
+                "prop_fin_idem", media_buy_id="mb_idem", expected_account_id="tenant_fin_idem"
+            )
+            # Second finalize with the same media_buy_id — must NOT raise.
+            await store.finalize_consumption(
+                "prop_fin_idem", media_buy_id="mb_idem", expected_account_id="tenant_fin_idem"
+            )
+
+    async def test_finalize_mismatched_media_buy_raises(self, integration_db):
+        """A re-finalize with a DIFFERENT ``media_buy_id`` violates the
+        one-buy-per-proposal invariant — framework bug,
+        ``INTERNAL_ERROR``."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_fin_mis")
+            store = SalesAgentProposalStore()
+            await self._put_and_commit(store, proposal_id="prop_fin_mis", account_id="tenant_fin_mis")
+            await store.try_reserve_consumption("prop_fin_mis", expected_account_id="tenant_fin_mis")
+            await store.finalize_consumption(
+                "prop_fin_mis", media_buy_id="mb_first", expected_account_id="tenant_fin_mis"
+            )
+            with pytest.raises(AdcpError) as exc:
+                await store.finalize_consumption(
+                    "prop_fin_mis", media_buy_id="mb_second", expected_account_id="tenant_fin_mis"
+                )
+            assert exc.value.code == "INTERNAL_ERROR"
+
+    async def test_reserve_past_expires_at_raises_expired(self, integration_db):
+        """Defense-in-depth TTL check inside the row lock — a proposal
+        held past its ``expires_at`` can't be reserved, even if the
+        framework's get-side filter was bypassed. Mirrors upstream
+        :meth:`InMemoryProposalStore._evict_expired_locked` but reports
+        rather than silently deleting so audit trails survive."""
+        from datetime import timedelta as _td
+
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_expired")
+            store = SalesAgentProposalStore()
+            payload = _make_payload("prop_expired")
+            await store.put_draft(
+                proposal_id="prop_expired",
+                account_id="tenant_expired",
+                recipes={},
+                proposal_payload=payload,
+            )
+            # Commit with an already-past expiry — simulates clock skew /
+            # very long-lived COMMITTED proposals.
+            await store.commit(
+                "prop_expired",
+                expires_at=datetime.now(UTC) - _td(seconds=1),
+                proposal_payload=payload,
+            )
+
+            with pytest.raises(AdcpError) as exc:
+                await store.try_reserve_consumption("prop_expired", expected_account_id="tenant_expired")
+            assert exc.value.code == "PROPOSAL_EXPIRED"
+
 
 class TestReverseIndex:
     """``get_by_media_buy_id`` requires ``expected_account_id`` per Protocol."""
@@ -520,13 +621,13 @@ class TestReverseIndex:
             assert (await store.get_by_media_buy_id("mb_shared", expected_account_id="tenant_rev_probe")) is None
 
 
-class TestProtocolMethodsWithoutTenantScoping:
-    """``discard`` and ``mark_consumed`` have Protocol signatures with no
-    ``expected_account_id``. Implementing them would let any caller
-    with a guessed ``proposal_id`` delete or terminate another tenant's
-    proposal. We fail closed; the framework's dispatch (adcp 5.4)
-    doesn't call them today, so this surfaces loudly if a future
-    framework version adds them as callable surfaces."""
+class TestDiscardFailsClosed:
+    """``discard`` Protocol signature has no ``expected_account_id``.
+    Implementing it would let any caller with a guessed ``proposal_id``
+    destroy another tenant's reservable proposal. We fail closed; the
+    framework's dispatch (adcp 5.4) doesn't call it today, so this
+    surfaces loudly if a future framework version adds it as a
+    callable surface."""
 
     async def test_discard_raises_not_implemented(self, integration_db):
         """``discard`` is fail-closed pending an upstream Protocol fix
@@ -538,13 +639,82 @@ class TestProtocolMethodsWithoutTenantScoping:
             with pytest.raises(NotImplementedError):
                 await store.discard("prop_any")
 
-    async def test_mark_consumed_raises_not_implemented(self, integration_db):
-        """``mark_consumed`` is fail-closed for the same reason as
-        :meth:`discard` — Protocol signature lacks tenant scoping.
-        The two-phase ``try_reserve_consumption`` +
-        ``finalize_consumption`` path (both account-scoped) is what
-        the framework dispatch actually uses."""
+
+class TestMarkConsumed:
+    """Legacy direct ``committed`` → ``consumed`` transition (v1.5 alpha
+    back-compat). The Protocol signature lacks ``expected_account_id``
+    — the framework's adcp 5.4 dispatch doesn't call this path, but
+    we implement it for upstream Protocol compatibility with a
+    WARNING audit log on every call (see store docstring).
+
+    Behavior locked here matches the upstream
+    :class:`InMemoryProposalStore.mark_consumed` shape verbatim.
+    """
+
+    async def _committed(self, store: SalesAgentProposalStore, *, proposal_id: str, account_id: str) -> None:
+        payload = _make_payload(proposal_id)
+        await store.put_draft(
+            proposal_id=proposal_id,
+            account_id=account_id,
+            recipes={},
+            proposal_payload=payload,
+        )
+        await store.commit(proposal_id, expires_at=_seven_days_from_now(), proposal_payload=payload)
+
+    async def test_mark_consumed_promotes_to_consumed(self, integration_db):
+        """Happy path: COMMITTED → CONSUMED in one call. Records the
+        ``media_buy_id`` back-reference (same as the two-phase
+        finalize path)."""
+        from adcp.decisioning.proposal_store import ProposalState
+
         with _BareEnv():
+            TenantFactory(tenant_id="tenant_mc_a")
             store = SalesAgentProposalStore()
-            with pytest.raises(NotImplementedError):
-                await store.mark_consumed("prop_any", media_buy_id="mb_any")
+            await self._committed(store, proposal_id="prop_mc_a", account_id="tenant_mc_a")
+            await store.mark_consumed("prop_mc_a", media_buy_id="mb_mc_a")
+
+            record = await store.get("prop_mc_a", expected_account_id="tenant_mc_a")
+            assert record is not None
+            assert record.state == ProposalState.CONSUMED
+            assert record.media_buy_id == "mb_mc_a"
+
+    async def test_mark_consumed_idempotent_on_matching(self, integration_db):
+        """Re-marking with the same ``media_buy_id`` is a no-op — the
+        framework's dispatch retry on transient errors must not raise
+        on the second call."""
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_mc_b")
+            store = SalesAgentProposalStore()
+            await self._committed(store, proposal_id="prop_mc_b", account_id="tenant_mc_b")
+            await store.mark_consumed("prop_mc_b", media_buy_id="mb_mc_b")
+            # Second call: must NOT raise.
+            await store.mark_consumed("prop_mc_b", media_buy_id="mb_mc_b")
+
+    async def test_mark_consumed_mismatched_raises(self, integration_db):
+        """A second ``mark_consumed`` with a DIFFERENT ``media_buy_id``
+        violates the one-buy-per-proposal invariant — framework /
+        adopter bug, raise ``INTERNAL_ERROR``."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_mc_c")
+            store = SalesAgentProposalStore()
+            await self._committed(store, proposal_id="prop_mc_c", account_id="tenant_mc_c")
+            await store.mark_consumed("prop_mc_c", media_buy_id="mb_first")
+            with pytest.raises(AdcpError) as exc:
+                await store.mark_consumed("prop_mc_c", media_buy_id="mb_second")
+            assert exc.value.code == "INTERNAL_ERROR"
+
+    async def test_mark_consumed_unknown_raises_internal_error(self, integration_db):
+        """Framework-only path — missing record is a framework / adopter
+        bug, not a buyer-visible error. Distinct from
+        :meth:`try_reserve_consumption`'s ``PROPOSAL_NOT_FOUND`` which
+        IS buyer-reachable."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_mc_d")
+            store = SalesAgentProposalStore()
+            with pytest.raises(AdcpError) as exc:
+                await store.mark_consumed("prop_unknown", media_buy_id="mb_x")
+            assert exc.value.code == "INTERNAL_ERROR"
