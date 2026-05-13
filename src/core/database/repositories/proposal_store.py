@@ -16,23 +16,20 @@ every read (the AdCP account id, which the salesagent maps 1-1 with
 Protocol's defense against principal-enumeration via ``proposal_id``
 guessing.
 
-v1 lifecycle compromise: ``put_draft`` writes the row in ``committed``
-state with a 7-day ``expires_at`` instead of ``draft``. The
-storyboard's ``proposal_finalize`` flow goes brief → create_media_buy
-WITHOUT an explicit finalize call, but the framework's
-:meth:`try_reserve_consumption` requires ``committed``. Auto-committing
-at issuance unblocks the flow today; when the manager declares
-``finalize=True`` (v2) the store will swap to canonical
-``draft`` + explicit commit. The lifecycle compromise is internal to
-the store — the Protocol surface (``put_draft`` / ``commit`` /
-``try_reserve_consumption`` / etc.) is unchanged from the spec.
+Lifecycle: ``put_draft`` writes DRAFT state per spec; the framework
+calls :meth:`commit` immediately after when the manager declares
+``ProposalCapabilities.auto_commit_on_put_draft=True`` (adcp 5.4+,
+#723), promoting DRAFT → COMMITTED in a single dispatch so the next
+``create_media_buy(proposal_id=X)`` finds a COMMITTED record. The
+v1 store-side auto-commit workaround landed before #723 and is
+gone — the framework owns the lifecycle.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy import select
@@ -45,13 +42,6 @@ if TYPE_CHECKING:
     from adcp.decisioning.recipe import Recipe
 
 logger = logging.getLogger(__name__)
-
-
-#: Default hold window for v1 auto-committed proposals. The framework
-#: rejects ``try_reserve_consumption`` past ``expires_at`` (plus the
-#: adopter's grace window). 7 days matches the upstream
-#: ``InMemoryProposalStore`` ``_DEFAULT_COMMITTED_GRACE``.
-_DEFAULT_COMMITTED_HOLD = timedelta(days=7)
 
 
 def _to_record(row: ProposalRow) -> ProposalRecord:
@@ -133,16 +123,6 @@ class SalesAgentProposalStore:
     #: in-flight proposals on worker rotation).
     is_durable: ClassVar[bool] = True
 
-    def __init__(self, *, committed_hold: timedelta = _DEFAULT_COMMITTED_HOLD) -> None:
-        """Construct the store.
-
-        :param committed_hold: Default hold window applied to
-            v1-auto-committed proposals at ``put_draft`` time. The
-            framework rejects ``create_media_buy(proposal_id=X)`` past
-            this deadline. 7 days matches the upstream reference impl.
-        """
-        self._committed_hold = committed_hold
-
     async def put_draft(
         self,
         *,
@@ -151,25 +131,24 @@ class SalesAgentProposalStore:
         recipes: Mapping[str, Recipe],
         proposal_payload: Mapping[str, Any],
     ) -> None:
-        """Persist a proposal so :meth:`create_media_buy(proposal_id=X)`
-        can resolve it later.
+        """Persist a proposal in ``draft`` state per Protocol spec.
 
-        v1 compromise: writes the row in ``committed`` state with a
-        7-day ``expires_at`` (instead of ``draft`` per spec). The
-        storyboard flow brief → create_media_buy has no intermediate
-        finalize step today; auto-committing unblocks
-        ``try_reserve_consumption`` without forcing the buyer to issue
-        a finalize call. Switch to canonical ``draft`` when the manager
-        declares ``finalize=True`` in v2.
+        The framework's ``proposal_dispatch`` calls this for every
+        proposal returned from ``get_products`` / ``refine_products``.
+        Managers that declare ``auto_commit_on_put_draft=True`` (adcp
+        5.4+, #723) get a synthetic :meth:`commit` call from the
+        framework immediately after — DRAFT → COMMITTED in a single
+        dispatch — so the next ``create_media_buy(proposal_id=X)``
+        finds a COMMITTED record.
 
         Idempotent on the same ``proposal_id``: refine iterations
-        overwrite the prior payload + recipes but preserve
-        ``created_at`` (and the v1 hold deadline anchors to the most
-        recent put — refine extends the hold).
+        overwrite the prior payload + recipes. The Protocol forbids
+        ``put_draft`` against COMMITTED / CONSUMED records — those are
+        framework / adopter bugs and surface as ``INTERNAL_ERROR``.
         """
         from adcp.decisioning.proposal_store import ProposalState
+        from adcp.decisioning.types import AdcpError
 
-        now = datetime.now(UTC)
         recipes_json = _serialize_recipes(recipes)
         payload_dict = dict(proposal_payload)
 
@@ -177,27 +156,24 @@ class SalesAgentProposalStore:
             existing = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id).with_for_update()).first()
 
             if existing is not None:
-                # Reject overwrite of a consumed proposal — the buyer
-                # has already used this proposal_id to create a media
-                # buy. Letting refine overwrite would silently strand
-                # the consumed buy's recipe linkage.
-                if existing.state == ProposalState.CONSUMED.value:
-                    from adcp.decisioning.types import AdcpError
-
+                # Per Protocol: refine iterations are only legal on
+                # DRAFT records. Once committed or consumed the
+                # proposal_id is immutable.
+                if existing.state != ProposalState.DRAFT.value:
                     raise AdcpError(
                         "INTERNAL_ERROR",
                         message=(
-                            f"Cannot put_draft on proposal {proposal_id!r}: "
-                            f"already consumed by media_buy_id="
-                            f"{existing.media_buy_id!r}."
+                            f"Cannot put_draft on proposal {proposal_id!r} "
+                            f"in state {existing.state!r}; refine iterations "
+                            "are only valid on draft proposals. Once "
+                            "committed or consumed, a proposal_id is "
+                            "immutable."
                         ),
                         recovery="terminal",
                     )
                 existing.account_id = account_id
-                existing.state = ProposalState.COMMITTED.value
                 existing.recipes = recipes_json
                 existing.proposal_payload = payload_dict
-                existing.expires_at = now + self._committed_hold
                 # tenant_id stays pinned to the original tenant — refine
                 # within a tenant is fine; cross-tenant overwrite would
                 # mean a colliding proposal_id, which our id mint
@@ -210,10 +186,14 @@ class SalesAgentProposalStore:
                 proposal_id=proposal_id,
                 tenant_id=tenant_id,
                 account_id=account_id,
-                state=ProposalState.COMMITTED.value,
+                state=ProposalState.DRAFT.value,
                 recipes=recipes_json,
                 proposal_payload=payload_dict,
-                expires_at=now + self._committed_hold,
+                # expires_at is set by :meth:`commit` — DRAFT records
+                # have no hold window per spec; the framework's
+                # auto-commit (when wired) supplies expires_at from
+                # ``ProposalCapabilities.auto_commit_ttl_seconds``.
+                expires_at=None,
             )
             session.add(row)
             session.commit()

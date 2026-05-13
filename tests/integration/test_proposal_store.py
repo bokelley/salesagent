@@ -2,18 +2,21 @@
 
 Exercises the Postgres-backed :class:`adcp.decisioning.ProposalStore`
 implementation against a real database. The store implements the
-v1.5 ``ProposalStore`` Protocol so the framework's
-``proposal_dispatch`` can persist ``get_products`` proposals and
-resolve them on ``create_media_buy(proposal_id=X)``.
+v1.5 ``ProposalStore`` Protocol — the framework's
+``proposal_dispatch`` calls into it to persist ``get_products``
+proposals (as DRAFT) and resolve them on
+``create_media_buy(proposal_id=X)``.
 
-v1 lifecycle compromise covered: ``put_draft`` writes ``committed``
-(not ``draft``) so the storyboard's brief→create_media_buy flow
-works without an intermediate finalize call.
+Lifecycle promotion (DRAFT → COMMITTED) is owned by the framework:
+managers declaring
+:attr:`ProposalCapabilities.auto_commit_on_put_draft=True` get a
+synthetic :meth:`commit` call from the framework right after
+:meth:`put_draft`. The store doesn't bake any lifecycle shortcuts in.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -41,14 +44,25 @@ def _make_payload(proposal_id: str = "prop_test") -> dict:
     }
 
 
-class TestPutDraft:
-    """``put_draft`` persists the proposal and auto-commits per v1 spec."""
+def _seven_days_from_now() -> datetime:
+    """Default ``expires_at`` matching the manager's
+    ``auto_commit_ttl_seconds=604800``. The framework computes
+    ``expires_at`` from the capability when it calls
+    ``store.commit`` after ``put_draft``; tests synthesize the same
+    value directly when exercising commit out-of-band."""
+    return datetime.now(UTC) + timedelta(days=7)
 
-    async def test_writes_row_in_committed_state(self, integration_db):
-        """v1 compromise: ``put_draft`` writes ``committed`` instead of
-        ``draft`` so :meth:`try_reserve_consumption` succeeds without
-        an intermediate finalize call. The Protocol surface is
-        unchanged; only the internal lifecycle state differs."""
+
+class TestPutDraft:
+    """``put_draft`` persists in DRAFT state per spec; the framework
+    owns the DRAFT → COMMITTED promotion via ``auto_commit_on_put_draft``."""
+
+    async def test_writes_row_in_draft_state(self, integration_db):
+        """The store writes spec-canonical ``draft`` — no hidden
+        promotion. Managers that want the brief→create_media_buy flow
+        to work without an explicit finalize step declare
+        ``auto_commit_on_put_draft=True`` on their capabilities; the
+        framework's dispatch calls :meth:`commit` immediately after."""
         from adcp.decisioning.proposal_store import ProposalState
 
         with _BareEnv():
@@ -64,11 +78,10 @@ class TestPutDraft:
 
             record = await store.get("prop_1", expected_account_id="tenant_proposal_a")
             assert record is not None
-            assert record.state == ProposalState.COMMITTED, (
-                "v1 store auto-commits at put_draft time; record should land in COMMITTED, not DRAFT"
+            assert record.state == ProposalState.DRAFT, (
+                "put_draft must write DRAFT per Protocol; DRAFT → COMMITTED is the framework's job"
             )
-            assert record.expires_at is not None, "v1 auto-commit must set expires_at for the framework's hold window"
-            assert record.expires_at > datetime.now(UTC), "expires_at must be in the future"
+            assert record.expires_at is None, "DRAFT records have no hold window; commit sets expires_at"
 
     async def test_payload_round_trips(self, integration_db):
         """The wire ``Proposal`` payload survives persist + reload —
@@ -88,10 +101,10 @@ class TestPutDraft:
             assert record is not None
             assert dict(record.proposal_payload) == payload
 
-    async def test_refine_iteration_overwrites_existing(self, integration_db):
-        """``put_draft`` on an existing record overwrites the payload —
-        refine iterations re-issue the same ``proposal_id`` and the
-        buyer expects the latest content to win."""
+    async def test_refine_iteration_overwrites_existing_draft(self, integration_db):
+        """``put_draft`` on an existing DRAFT record overwrites the
+        payload — refine iterations re-issue the same ``proposal_id``
+        and the buyer expects the latest content to win."""
         with _BareEnv():
             TenantFactory(tenant_id="tenant_proposal_c")
             store = SalesAgentProposalStore()
@@ -112,6 +125,110 @@ class TestPutDraft:
             record = await store.get("prop_3", expected_account_id="tenant_proposal_c")
             assert record is not None
             assert record.proposal_payload["name"] == "Updated bundle"
+
+    async def test_put_draft_on_committed_raises(self, integration_db):
+        """Per Protocol, ``put_draft`` is only legal on DRAFT records.
+        A COMMITTED proposal_id is immutable — overwrite would mean
+        the buyer's prior commit/expires_at silently rolls back."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_putd_committed")
+            store = SalesAgentProposalStore()
+            await store.put_draft(
+                proposal_id="prop_c",
+                account_id="tenant_putd_committed",
+                recipes={},
+                proposal_payload=_make_payload("prop_c"),
+            )
+            await store.commit(
+                "prop_c",
+                expires_at=_seven_days_from_now(),
+                proposal_payload=_make_payload("prop_c"),
+            )
+            with pytest.raises(AdcpError) as exc:
+                await store.put_draft(
+                    proposal_id="prop_c",
+                    account_id="tenant_putd_committed",
+                    recipes={},
+                    proposal_payload=_make_payload("prop_c"),
+                )
+            assert exc.value.code == "INTERNAL_ERROR"
+
+
+class TestCommit:
+    """``commit`` promotes DRAFT → COMMITTED and sets ``expires_at``."""
+
+    async def test_commit_advances_state_and_sets_expires_at(self, integration_db):
+        """The framework calls this right after :meth:`put_draft` when
+        the manager declares ``auto_commit_on_put_draft=True``. The
+        TTL applied here comes from
+        ``ProposalCapabilities.auto_commit_ttl_seconds``."""
+        from adcp.decisioning.proposal_store import ProposalState
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_commit")
+            store = SalesAgentProposalStore()
+            payload = _make_payload("prop_commit")
+            await store.put_draft(
+                proposal_id="prop_commit",
+                account_id="tenant_commit",
+                recipes={},
+                proposal_payload=payload,
+            )
+            expires_at = _seven_days_from_now()
+            await store.commit("prop_commit", expires_at=expires_at, proposal_payload=payload)
+
+            record = await store.get("prop_commit", expected_account_id="tenant_commit")
+            assert record is not None
+            assert record.state == ProposalState.COMMITTED
+            assert record.expires_at == expires_at
+
+    async def test_commit_is_idempotent_on_equal_values(self, integration_db):
+        """Per Protocol: re-commit with the same ``expires_at`` +
+        payload is a no-op; mismatch is an ``INTERNAL_ERROR``. The
+        idempotency case lets the framework's auto-commit dispatch
+        re-run safely on transient retries."""
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_commit_idem")
+            store = SalesAgentProposalStore()
+            payload = _make_payload("prop_idem")
+            await store.put_draft(
+                proposal_id="prop_idem",
+                account_id="tenant_commit_idem",
+                recipes={},
+                proposal_payload=payload,
+            )
+            expires_at = _seven_days_from_now()
+            await store.commit("prop_idem", expires_at=expires_at, proposal_payload=payload)
+            # Same values — no raise.
+            await store.commit("prop_idem", expires_at=expires_at, proposal_payload=payload)
+
+    async def test_commit_rejects_changed_payload(self, integration_db):
+        """Re-commit with a different payload raises ``INTERNAL_ERROR``
+        — adopter / framework bug, not buyer-fixable."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_commit_drift")
+            store = SalesAgentProposalStore()
+            await store.put_draft(
+                proposal_id="prop_drift",
+                account_id="tenant_commit_drift",
+                recipes={},
+                proposal_payload=_make_payload("prop_drift"),
+            )
+            expires_at = _seven_days_from_now()
+            await store.commit(
+                "prop_drift",
+                expires_at=expires_at,
+                proposal_payload=_make_payload("prop_drift"),
+            )
+            drifted = _make_payload("prop_drift")
+            drifted["name"] = "Different bundle"
+            with pytest.raises(AdcpError) as exc:
+                await store.commit("prop_drift", expires_at=expires_at, proposal_payload=drifted)
+            assert exc.value.code == "INTERNAL_ERROR"
 
 
 class TestGet:
@@ -151,6 +268,20 @@ class TestGet:
 class TestReservationLifecycle:
     """Two-phase consumption: ``committed`` → ``consuming`` → ``consumed``."""
 
+    async def _put_and_commit(self, store: SalesAgentProposalStore, *, proposal_id: str, account_id: str) -> None:
+        """Helper: put_draft + commit, the two-step the framework runs
+        when ``auto_commit_on_put_draft=True``. Tests exercising
+        consumption assume a COMMITTED starting state — this seeds it
+        the same way the framework would."""
+        payload = _make_payload(proposal_id)
+        await store.put_draft(
+            proposal_id=proposal_id,
+            account_id=account_id,
+            recipes={},
+            proposal_payload=payload,
+        )
+        await store.commit(proposal_id, expires_at=_seven_days_from_now(), proposal_payload=payload)
+
     async def test_try_reserve_consumption_advances_state(self, integration_db):
         """The reservation flips the record from ``committed`` to
         ``consuming``; framework runs the adapter against this
@@ -161,14 +292,29 @@ class TestReservationLifecycle:
         with _BareEnv():
             TenantFactory(tenant_id="tenant_reserve_a")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_reserve",
-                account_id="tenant_reserve_a",
-                recipes={},
-                proposal_payload=_make_payload("prop_reserve"),
-            )
+            await self._put_and_commit(store, proposal_id="prop_reserve", account_id="tenant_reserve_a")
             reserved = await store.try_reserve_consumption("prop_reserve", expected_account_id="tenant_reserve_a")
             assert reserved.state == ProposalState.CONSUMING
+
+    async def test_reserve_on_draft_raises_not_committed(self, integration_db):
+        """A DRAFT proposal (no commit yet) must raise
+        ``PROPOSAL_NOT_COMMITTED`` on reserve — sanity check that the
+        store's lifecycle enforcement matches the Protocol contract
+        (the prior v1 workaround skipped DRAFT entirely)."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_reserve_draft")
+            store = SalesAgentProposalStore()
+            await store.put_draft(
+                proposal_id="prop_unc",
+                account_id="tenant_reserve_draft",
+                recipes={},
+                proposal_payload=_make_payload("prop_unc"),
+            )
+            with pytest.raises(AdcpError) as exc:
+                await store.try_reserve_consumption("prop_unc", expected_account_id="tenant_reserve_draft")
+            assert exc.value.code == "PROPOSAL_NOT_COMMITTED"
 
     async def test_second_reservation_raises(self, integration_db):
         """A second :meth:`try_reserve_consumption` on a reserved
@@ -180,12 +326,7 @@ class TestReservationLifecycle:
         with _BareEnv():
             TenantFactory(tenant_id="tenant_reserve_b")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_double",
-                account_id="tenant_reserve_b",
-                recipes={},
-                proposal_payload=_make_payload("prop_double"),
-            )
+            await self._put_and_commit(store, proposal_id="prop_double", account_id="tenant_reserve_b")
             await store.try_reserve_consumption("prop_double", expected_account_id="tenant_reserve_b")
             with pytest.raises(AdcpError) as exc:
                 await store.try_reserve_consumption("prop_double", expected_account_id="tenant_reserve_b")
@@ -203,12 +344,7 @@ class TestReservationLifecycle:
             TenantFactory(tenant_id="tenant_owner_r")
             TenantFactory(tenant_id="tenant_probe_r")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_cross",
-                account_id="tenant_owner_r",
-                recipes={},
-                proposal_payload=_make_payload("prop_cross"),
-            )
+            await self._put_and_commit(store, proposal_id="prop_cross", account_id="tenant_owner_r")
             with pytest.raises(AdcpError) as exc:
                 await store.try_reserve_consumption("prop_cross", expected_account_id="tenant_probe_r")
             assert exc.value.code == "PROPOSAL_NOT_FOUND"
@@ -222,12 +358,7 @@ class TestReservationLifecycle:
         with _BareEnv():
             TenantFactory(tenant_id="tenant_finalize")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_final",
-                account_id="tenant_finalize",
-                recipes={},
-                proposal_payload=_make_payload("prop_final"),
-            )
+            await self._put_and_commit(store, proposal_id="prop_final", account_id="tenant_finalize")
             await store.try_reserve_consumption("prop_final", expected_account_id="tenant_finalize")
             await store.finalize_consumption("prop_final", media_buy_id="mb_123", expected_account_id="tenant_finalize")
             record = await store.get("prop_final", expected_account_id="tenant_finalize")
@@ -244,12 +375,7 @@ class TestReservationLifecycle:
         with _BareEnv():
             TenantFactory(tenant_id="tenant_release")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_release",
-                account_id="tenant_release",
-                recipes={},
-                proposal_payload=_make_payload("prop_release"),
-            )
+            await self._put_and_commit(store, proposal_id="prop_release", account_id="tenant_release")
             await store.try_reserve_consumption("prop_release", expected_account_id="tenant_release")
             await store.release_consumption("prop_release", expected_account_id="tenant_release")
             record = await store.get("prop_release", expected_account_id="tenant_release")
@@ -264,12 +390,7 @@ class TestReservationLifecycle:
         with _BareEnv():
             TenantFactory(tenant_id="tenant_idem")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_idem",
-                account_id="tenant_idem",
-                recipes={},
-                proposal_payload=_make_payload("prop_idem"),
-            )
+            await self._put_and_commit(store, proposal_id="prop_idem", account_id="tenant_idem")
             # Never reserved — release should no-op without raising.
             await store.release_consumption("prop_idem", expected_account_id="tenant_idem")
 
@@ -284,12 +405,14 @@ class TestReverseIndex:
         with _BareEnv():
             TenantFactory(tenant_id="tenant_reverse")
             store = SalesAgentProposalStore()
+            payload = _make_payload("prop_rev")
             await store.put_draft(
                 proposal_id="prop_rev",
                 account_id="tenant_reverse",
                 recipes={},
-                proposal_payload=_make_payload("prop_rev"),
+                proposal_payload=payload,
             )
+            await store.commit("prop_rev", expires_at=_seven_days_from_now(), proposal_payload=payload)
             await store.try_reserve_consumption("prop_rev", expected_account_id="tenant_reverse")
             await store.finalize_consumption("prop_rev", media_buy_id="mb_rev", expected_account_id="tenant_reverse")
             record = await store.get_by_media_buy_id("mb_rev", expected_account_id="tenant_reverse")
@@ -305,12 +428,14 @@ class TestReverseIndex:
             TenantFactory(tenant_id="tenant_rev_owner")
             TenantFactory(tenant_id="tenant_rev_probe")
             store = SalesAgentProposalStore()
+            payload = _make_payload("prop_rev_secret")
             await store.put_draft(
                 proposal_id="prop_rev_secret",
                 account_id="tenant_rev_owner",
                 recipes={},
-                proposal_payload=_make_payload("prop_rev_secret"),
+                proposal_payload=payload,
             )
+            await store.commit("prop_rev_secret", expires_at=_seven_days_from_now(), proposal_payload=payload)
             await store.try_reserve_consumption("prop_rev_secret", expected_account_id="tenant_rev_owner")
             await store.finalize_consumption(
                 "prop_rev_secret",
