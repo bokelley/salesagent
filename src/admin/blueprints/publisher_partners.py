@@ -239,6 +239,11 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         if not publisher_domain:
             return jsonify({"error": "Publisher domain is required"}), 400
 
+        # Bound the display_name so a hostile or buggy caller can't persist
+        # multi-MB strings that later render into the admin UI / API responses.
+        if len(display_name) > 255:
+            return jsonify({"error": "Display name must be 255 characters or fewer"}), 400
+
         # Remove http:// or https:// if present
         publisher_domain = publisher_domain.replace("https://", "").replace("http://", "")
         # Remove trailing slash

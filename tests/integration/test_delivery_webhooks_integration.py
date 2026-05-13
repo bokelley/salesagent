@@ -255,7 +255,7 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 @freeze_time("2026-06-15 12:00:00", tz_offset=0)
-async def test_delivery_webhook_handles_multiple_media_buys_without_detached_instance_error(integration_db):
+async def test_delivery_webhook_handles_multiple_media_buys_without_detached_instance_error(integration_db, caplog):
     """Regression for production trace 2026-05-08: when two or more media
     buys with reporting_webhook are processed in one batch, the second
     iteration raised DetachedInstanceError on ``media_buy.tenant``.
@@ -301,11 +301,24 @@ async def test_delivery_webhook_handles_multiple_media_buys_without_detached_ins
         "send_notification",
         new_callable=AsyncMock,
     ) as mock_send_notification:
-        await scheduler._send_reports()
+        import logging
 
-        # Both media buys must round-trip — before the fix, the second
-        # iteration raised DetachedInstanceError and was logged as an error
-        # rather than completing the send.
+        with caplog.at_level(logging.ERROR, logger="src.services.delivery_webhook_scheduler"):
+            await scheduler._send_reports()
+
+        # Tie the test to the actual failure mode: the scheduler's broad
+        # ``except Exception`` swallows DetachedInstanceError and increments
+        # ``errors`` rather than letting it propagate. Assert directly that
+        # no detached-instance error was logged.
+        detached_errors = [r for r in caplog.records if "DetachedInstanceError" in (r.exc_text or "")]
+        assert not detached_errors, (
+            "Scheduler logged DetachedInstanceError — the inner get_db_session() context "
+            f"detached the outer batch's MediaBuy rows.\n"
+            f"First error: {detached_errors[0].message if detached_errors else ''}"
+        )
+
+        # Both media buys must round-trip — second-order check that the
+        # batch completed past the iteration where the bug manifested.
         assert mock_send_notification.await_count == 2, (
             f"Expected both media buys to send webhooks; got {mock_send_notification.await_count}"
         )

@@ -555,3 +555,61 @@ class TestEmbeddedGatePolarityNotInverted:
             headers=_identity_headers(preview_tenant["external_org_id"]),
         )
         assert resp.status_code == 403
+
+
+class TestEmbeddedGuardLayerConsistency:
+    """The route-level ``allow_embedded_writes=True`` opt-in and the
+    model-layer ``embedded_tenant_guard`` lock set must agree about which
+    tables are publisher-managed.
+
+    If someone adds a new model to the guard's locked set (Tenant,
+    AdapterConfig, TenantSigningPolicy, TenantSigningCredential today),
+    they must also remove ``allow_embedded_writes=True`` from any route
+    that writes that model — otherwise the request passes the decorator
+    gate but 500s at the model event listener.
+    """
+
+    @pytest.mark.requires_db
+    def test_publisher_partner_not_locked_at_model_layer(self, managed_tenant):
+        """``PublisherPartner`` writes succeed on an embedded tenant without
+        the ``management_api_caller`` bypass — i.e., the model-layer guard
+        does NOT treat the partner table as platform-managed.
+
+        If this test starts raising ``EmbeddedTenantWriteError``, the model
+        was added to the locked set. To restore consistency, also remove
+        ``allow_embedded_writes=True`` from the four publisher_partners
+        routes — see the note in src/core/database/embedded_tenant_guard.py.
+        """
+        from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
+        from src.core.database.models import PublisherPartner
+        from tests.factories import PublisherPartnerFactory
+        from tests.helpers.managed_tenant_api import bind_factories_to_session
+
+        tid = managed_tenant["tenant_id"]
+        with bind_factories_to_session() as session:
+            # Re-load the tenant inside the factory's session so the SubFactory
+            # parent is attached. No management_api_caller flag is set on the
+            # session — that's the point: this write must succeed without the
+            # platform-managed bypass.
+            from src.core.database.models import Tenant
+
+            attached_tenant = session.scalars(select(Tenant).filter_by(tenant_id=tid)).one()
+            try:
+                PublisherPartnerFactory(
+                    tenant=attached_tenant,
+                    publisher_domain="contract-pin.example",
+                    display_name="Contract Pin",
+                )
+            except EmbeddedTenantWriteError as e:
+                pytest.fail(
+                    f"PublisherPartner is now platform-managed (got {e!r}). "
+                    "If intentional, remove allow_embedded_writes=True from "
+                    "src/admin/blueprints/publisher_partners.py."
+                )
+
+        # Verify the row landed.
+        with get_db_session() as verify_session:
+            row = verify_session.scalars(
+                select(PublisherPartner).filter_by(tenant_id=tid, publisher_domain="contract-pin.example")
+            ).one()
+            assert row is not None
