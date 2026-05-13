@@ -36,7 +36,7 @@ All methods are sync; the framework awaits them via ``_await_maybe``
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from adcp.decisioning import AdcpError
@@ -184,9 +184,14 @@ class SalesAgentProposalStore:
         with get_db_session() as session:
             row = self._lookup(session, proposal_id)
             if row is None:
+                # Framework-only path — buyer never invokes commit directly.
+                # Missing here means a framework / adopter bug (commit
+                # dispatched without a prior put_draft), so the wire code
+                # is INTERNAL_ERROR not PROPOSAL_NOT_FOUND. Matches the
+                # upstream :class:`InMemoryProposalStore` shape.
                 raise AdcpError(
-                    "PROPOSAL_NOT_FOUND",
-                    message=f"commit on unknown proposal {proposal_id!r}",
+                    "INTERNAL_ERROR",
+                    message=(f"commit on unknown proposal {proposal_id!r} — framework must put_draft before commit."),
                     field="proposal_id",
                 )
             current_state = row.state.lower()
@@ -256,6 +261,26 @@ class SalesAgentProposalStore:
                     ),
                     field="proposal_id",
                 )
+            # Defense-in-depth TTL check inside the row lock. The framework's
+            # ``proposal_dispatch._hydrate_proposal_context`` already filters
+            # expired proposals at the ``get`` hop, but a reserve call that
+            # bypasses that path (legacy adapters, in-process tests) would
+            # otherwise consume past the buyer's stated expiry. Inline check
+            # mirrors the upstream :class:`InMemoryProposalStore`'s
+            # ``_evict_expired_locked`` shape but surfaces the event as
+            # ``PROPOSAL_EXPIRED`` rather than silently deleting the row —
+            # adopters auditing the table can see the timeline.
+            if row.expires_at is not None and row.expires_at < datetime.now(UTC):
+                raise AdcpError(
+                    "PROPOSAL_EXPIRED",
+                    message=(
+                        f"try_reserve_consumption on proposal {proposal_id!r} past "
+                        f"expires_at={row.expires_at.isoformat()}. Re-request via "
+                        "get_products to mint a fresh proposal."
+                    ),
+                    recovery="correctable",
+                    field="proposal_id",
+                )
             row.state = ProposalState.CONSUMING.value.upper()
             session.commit()
             return _record_from_row(row)
@@ -267,7 +292,14 @@ class SalesAgentProposalStore:
         media_buy_id: str,
         expected_account_id: str,
     ) -> None:
-        """Promote CONSUMING → CONSUMED and stamp media_buy_id."""
+        """Promote CONSUMING → CONSUMED and stamp media_buy_id.
+
+        Idempotent on CONSUMED with the same ``media_buy_id`` — a retried
+        finalize after a successful one returns silently (matches the
+        upstream :class:`InMemoryProposalStore` shape). A re-finalize
+        with a *different* ``media_buy_id`` against an already-CONSUMED
+        record is a framework / adopter bug and raises INTERNAL_ERROR.
+        """
         with get_db_session() as session:
             row = self._lookup(session, proposal_id, expected_account_id=expected_account_id)
             if row is None:
@@ -284,7 +316,26 @@ class SalesAgentProposalStore:
                     ),
                     field="proposal_id",
                 )
-            if row.state.lower() != ProposalState.CONSUMING.value:
+            current_state = row.state.lower()
+            if current_state == ProposalState.CONSUMED.value:
+                # Idempotent: same media_buy_id is a no-op (retry-safe
+                # against framework dispatch quirks like webhook
+                # re-delivery). Different media_buy_id collides on the
+                # one-buy-per-proposal invariant — framework bug.
+                if row.media_buy_id == media_buy_id:
+                    return
+                raise AdcpError(
+                    "INTERNAL_ERROR",
+                    message=(
+                        f"finalize_consumption on proposal {proposal_id!r} already "
+                        f"CONSUMED with media_buy_id={row.media_buy_id!r}; got "
+                        f"{media_buy_id!r}. The framework / adapter dispatch "
+                        "should not finalize the same proposal under two distinct "
+                        "media_buy_ids."
+                    ),
+                    field="proposal_id",
+                )
+            if current_state != ProposalState.CONSUMING.value:
                 raise AdcpError(
                     "INTERNAL_ERROR",
                     message=(
@@ -303,20 +354,22 @@ class SalesAgentProposalStore:
         *,
         expected_account_id: str,
     ) -> None:
-        """Rollback CONSUMING → COMMITTED. Idempotent on COMMITTED."""
+        """Rollback CONSUMING → COMMITTED. Idempotent on missing /
+        cross-account / already-COMMITTED.
+
+        Matches the upstream :class:`InMemoryProposalStore` shape: the
+        framework's adapter-failure rollback path is unconditional —
+        ``release_consumption`` runs in a ``finally`` block whether or
+        not the reserve succeeded. Raising on missing / cross-account
+        would blow up that rollback path on transient lookups; silent
+        no-op keeps the adapter-failure recovery clean.
+        """
         with get_db_session() as session:
             row = self._lookup(session, proposal_id, expected_account_id=expected_account_id)
             if row is None:
-                # Same INTERNAL_ERROR rationale as finalize.
-                raise AdcpError(
-                    "INTERNAL_ERROR",
-                    message=(
-                        f"release_consumption on unknown / cross-account proposal "
-                        f"{proposal_id!r}. Called outside the reserve / finalize "
-                        "/ release cycle — framework / adopter bug."
-                    ),
-                    field="proposal_id",
-                )
+                # Silent no-op — matches upstream's "rollback path can
+                # be unconditional" rationale.
+                return
             current_state = row.state.lower()
             if current_state == ProposalState.COMMITTED.value:
                 # Already-rolled-back idempotency.
@@ -347,9 +400,14 @@ class SalesAgentProposalStore:
         with get_db_session() as session:
             row = self._lookup(session, proposal_id)
             if row is None:
+                # Framework-only path; missing here means a framework /
+                # adopter bug, not a buyer-visible error. Matches upstream.
                 raise AdcpError(
-                    "PROPOSAL_NOT_FOUND",
-                    message=f"mark_consumed on unknown proposal {proposal_id!r}",
+                    "INTERNAL_ERROR",
+                    message=(
+                        f"mark_consumed on unknown proposal {proposal_id!r} — "
+                        "framework must put_draft + commit before mark_consumed."
+                    ),
                     field="proposal_id",
                 )
             current_state = row.state.lower()

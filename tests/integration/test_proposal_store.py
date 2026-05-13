@@ -189,14 +189,19 @@ class TestCommitLifecycle:
             proposal_store.commit("prop_012", expires_at=expires_b, proposal_payload={"v": 1})
         assert exc_info.value.code == "INTERNAL_ERROR"
 
-    def test_commit_unknown_raises_proposal_not_found(self, proposal_store: SalesAgentProposalStore) -> None:
+    def test_commit_unknown_raises_internal_error(self, proposal_store: SalesAgentProposalStore) -> None:
+        """commit is a framework-only path — buyer never invokes it directly.
+        Missing record means a put_draft step was skipped (framework bug),
+        not a buyer-supplied bad id, so the canonical code is
+        INTERNAL_ERROR (matches upstream :class:`InMemoryProposalStore`).
+        """
         with pytest.raises(AdcpError) as exc_info:
             proposal_store.commit(
                 "prop_unknown",
                 expires_at=datetime.now(UTC) + timedelta(days=7),
                 proposal_payload={},
             )
-        assert exc_info.value.code == "PROPOSAL_NOT_FOUND"
+        assert exc_info.value.code == "INTERNAL_ERROR"
 
 
 @pytest.mark.requires_db
@@ -266,6 +271,71 @@ class TestConsumptionLifecycle:
         # Second release: must NOT raise.
         proposal_store.release_consumption("prop_020", expected_account_id="acct_a")
 
+    def test_release_silent_no_op_on_missing(self, proposal_store: SalesAgentProposalStore) -> None:
+        """The framework's adapter-failure rollback path is unconditional
+        — it runs ``release_consumption`` in a ``finally`` block whether
+        or not the reserve succeeded. Raising on missing would blow up
+        that rollback path on transient lookups; silent no-op matches
+        the upstream :class:`InMemoryProposalStore` shape."""
+        proposal_store.release_consumption("prop_does_not_exist", expected_account_id="acct_a")
+
+    def test_release_silent_no_op_on_cross_account(self, proposal_store: SalesAgentProposalStore) -> None:
+        """Same rollback-path invariant for cross-account."""
+        self._committed(proposal_store)
+        proposal_store.try_reserve_consumption("prop_020", expected_account_id="acct_a")
+        # Different account — silent no-op, the real reserve stays
+        # in CONSUMING for the legitimate caller.
+        proposal_store.release_consumption("prop_020", expected_account_id="acct_other")
+        record = proposal_store.get("prop_020", expected_account_id="acct_a")
+        assert record is not None
+        assert record.state == ProposalState.CONSUMING
+
+    def test_finalize_idempotent_on_consumed_matching_media_buy(self, proposal_store: SalesAgentProposalStore) -> None:
+        """A retried finalize after a successful one is a no-op when the
+        same media_buy_id is supplied — protects against webhook
+        re-delivery / framework dispatch retries that would otherwise
+        raise on the second finalize. Matches upstream."""
+        self._committed(proposal_store)
+        proposal_store.try_reserve_consumption("prop_020", expected_account_id="acct_a")
+        proposal_store.finalize_consumption("prop_020", media_buy_id="mb_x", expected_account_id="acct_a")
+        # Second finalize with the same media_buy_id — must NOT raise.
+        proposal_store.finalize_consumption("prop_020", media_buy_id="mb_x", expected_account_id="acct_a")
+
+    def test_finalize_mismatched_media_buy_raises(self, proposal_store: SalesAgentProposalStore) -> None:
+        """A re-finalize with a DIFFERENT media_buy_id collides on the
+        one-buy-per-proposal invariant — framework bug, INTERNAL_ERROR."""
+        self._committed(proposal_store)
+        proposal_store.try_reserve_consumption("prop_020", expected_account_id="acct_a")
+        proposal_store.finalize_consumption("prop_020", media_buy_id="mb_first", expected_account_id="acct_a")
+
+        with pytest.raises(AdcpError) as exc_info:
+            proposal_store.finalize_consumption("prop_020", media_buy_id="mb_second", expected_account_id="acct_a")
+        assert exc_info.value.code == "INTERNAL_ERROR"
+
+    def test_reserve_past_expires_at_raises_expired(self, proposal_store: SalesAgentProposalStore) -> None:
+        """Defense-in-depth TTL check inside the row lock — a proposal
+        held past its expires_at can't be reserved, even if the
+        framework's get-side filter was bypassed. Matches the upstream
+        ``_evict_expired_locked`` shape (we report rather than silently
+        delete so audit trails survive)."""
+        proposal_store.put_draft(
+            proposal_id="prop_expired",
+            account_id="acct_a",
+            recipes={"prod_a": _make_recipe()},
+            proposal_payload={},
+        )
+        # Commit with an already-past expiry — simulates clock skew /
+        # very long-lived COMMITTED proposals.
+        proposal_store.commit(
+            "prop_expired",
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            proposal_payload={},
+        )
+
+        with pytest.raises(AdcpError) as exc_info:
+            proposal_store.try_reserve_consumption("prop_expired", expected_account_id="acct_a")
+        assert exc_info.value.code == "PROPOSAL_EXPIRED"
+
 
 @pytest.mark.requires_db
 class TestReverseIndex:
@@ -303,6 +373,49 @@ class TestReverseIndex:
 
     def test_reverse_lookup_unknown_returns_none(self, proposal_store: SalesAgentProposalStore) -> None:
         assert proposal_store.get_by_media_buy_id("mb_unknown", expected_account_id="acct_a") is None
+
+
+@pytest.mark.requires_db
+class TestMarkConsumed:
+    """Legacy direct COMMITTED → CONSUMED transition (v1.5 alpha back-compat)."""
+
+    def _committed(self, store: SalesAgentProposalStore, proposal_id: str = "prop_050") -> None:
+        store.put_draft(
+            proposal_id=proposal_id,
+            account_id="acct_a",
+            recipes={"prod_a": _make_recipe()},
+            proposal_payload={"v": 1},
+        )
+        store.commit(proposal_id, expires_at=datetime.now(UTC) + timedelta(days=7), proposal_payload={"v": 1})
+
+    def test_mark_consumed_promotes_to_consumed(self, proposal_store: SalesAgentProposalStore) -> None:
+        self._committed(proposal_store)
+        proposal_store.mark_consumed("prop_050", media_buy_id="mb_050")
+
+        record = proposal_store.get("prop_050")
+        assert record is not None
+        assert record.state == ProposalState.CONSUMED
+        assert record.media_buy_id == "mb_050"
+
+    def test_mark_consumed_idempotent_on_matching(self, proposal_store: SalesAgentProposalStore) -> None:
+        """Re-marking with the same media_buy_id is a no-op."""
+        self._committed(proposal_store)
+        proposal_store.mark_consumed("prop_050", media_buy_id="mb_050")
+        # Second call: must NOT raise.
+        proposal_store.mark_consumed("prop_050", media_buy_id="mb_050")
+
+    def test_mark_consumed_mismatched_raises(self, proposal_store: SalesAgentProposalStore) -> None:
+        self._committed(proposal_store)
+        proposal_store.mark_consumed("prop_050", media_buy_id="mb_050")
+        with pytest.raises(AdcpError) as exc_info:
+            proposal_store.mark_consumed("prop_050", media_buy_id="mb_other")
+        assert exc_info.value.code == "INTERNAL_ERROR"
+
+    def test_mark_consumed_unknown_raises_internal_error(self, proposal_store: SalesAgentProposalStore) -> None:
+        """Framework-only path — missing record is framework bug, not buyer error."""
+        with pytest.raises(AdcpError) as exc_info:
+            proposal_store.mark_consumed("prop_unknown", media_buy_id="mb_x")
+        assert exc_info.value.code == "INTERNAL_ERROR"
 
 
 @pytest.mark.requires_db
