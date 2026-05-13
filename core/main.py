@@ -30,6 +30,7 @@ For development without DNS::
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
@@ -72,6 +73,7 @@ from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
+from core.proposal.store import SalesAgentProposalStore
 from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
@@ -228,6 +230,28 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
     return {row.tenant_id: shared for row in rows}
 
 
+@functools.lru_cache(maxsize=512)
+def _proposal_store_for_tenant(tenant_id: str) -> SalesAgentProposalStore:
+    """Return the :class:`SalesAgentProposalStore` for ``tenant_id``.
+
+    Called by the framework on every ``proposal_dispatch`` invocation
+    (2-3× per request on the proposal path) — the upstream contract
+    expects adopters to memoize, otherwise the per-call construction
+    re-opens DB sessions and shreds connection-pool latency. We use
+    ``functools.lru_cache`` for the same reason
+    :class:`adcp.server.idempotency.PgBackend` is cached at module
+    scope.
+
+    The store is per-tenant, but the underlying Postgres connection
+    pool is process-wide (managed by ``get_db_session`` /
+    ``DATABASE_URL``). Cache size 512 matches
+    :class:`CallableSubdomainTenantRouter`'s 512 — bounded for
+    multi-tenant deployments without forcing every store ever
+    instantiated to stay resident.
+    """
+    return SalesAgentProposalStore(tenant_id=tenant_id)
+
+
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
@@ -278,6 +302,19 @@ def build_router() -> LazyPlatformRouter:
         factory=build_platform_for_tenant,
         capabilities=capabilities,
         proposal_managers=proposal_managers,
+        # adcp 5.4.0 / #722 — proposal_store_factory lazy-binds a
+        # :class:`SalesAgentProposalStore` per tenant. Required because
+        # ``capabilities.refine=True`` + ``auto_commit_on_put_draft=True``
+        # mean the framework calls ``store.put_draft`` / ``commit`` on
+        # every get_products/refine_products response and
+        # ``try_reserve_consumption`` / ``finalize_consumption`` on
+        # ``create_media_buy(proposal_id=…)``. Without a wired store the
+        # framework defaults to no persistence and proposal-finalize
+        # storyboards fail because the buyer's proposal_id can't be
+        # hydrated. Factory is LRU-memoized at module scope — upstream
+        # calls it 2-3× per request and adopters who don't memoize
+        # re-open connection pools on every call.
+        proposal_store_factory=_proposal_store_for_tenant,
     )
     # validate_idempotency_wiring inspects the platform handed to serve()
     # for @IdempotencyStore.wrap decorators. The router shell has none —

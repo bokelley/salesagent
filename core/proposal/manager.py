@@ -70,9 +70,18 @@ class SalesAgentProposalManager:
 
     # Match the platform's specialism declaration; v1 ships only the
     # non-guaranteed sales path (CPM auctions, no fixed-quantity holds).
+    #
+    # ``auto_commit_on_put_draft=True`` (adcp 5.4.0 / #723) skips the
+    # explicit buyer-driven commit step — proposals from get_products /
+    # refine_products are committed-on-issuance so ``create_media_buy
+    # (proposal_id=…)`` can immediately reserve. Matches our v1 shape:
+    # proposals are stateless echoes of get_products' allocations, not
+    # finalize-gated artifacts a buyer accepts in a separate round-trip.
+    # Mutually exclusive with ``finalize=True`` (we don't ship that).
     capabilities: ClassVar[ProposalCapabilities] = ProposalCapabilities(
         sales_specialism="sales-non-guaranteed",
         refine=True,
+        auto_commit_on_put_draft=True,
     )
 
     @translate_adcp_errors

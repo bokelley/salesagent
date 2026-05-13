@@ -2600,3 +2600,58 @@ class TenantSigningCredential(Base):
             postgresql_where=text("is_active = TRUE"),
         ),
     )
+
+
+class ProposalDraft(Base):
+    """Persisted proposal across the AdCP v1.5 proposal lifecycle.
+
+    Backs :class:`core.proposal.store.SalesAgentProposalStore` (adcp
+    5.4.0 ``LazyPlatformRouter(proposal_store_factory=…)``). Each row
+    holds one proposal across the four states the framework drives:
+    ``DRAFT`` (just put), ``COMMITTED`` (firm pricing), ``CONSUMING``
+    (reserved against a pending ``create_media_buy``), ``CONSUMED``
+    (media buy created, ``media_buy_id`` populated).
+
+    Multi-tenant scoping is at the composite primary key — every
+    ``ProposalStore`` Protocol method that accepts
+    ``expected_account_id`` enforces it row-level. The framework's
+    contract is: cross-tenant probes return None, never the raw
+    record.
+    """
+
+    __tablename__ = "proposal_drafts"
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(100),
+        primary_key=True,
+    )
+    proposal_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    proposal_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    recipes: Mapped[dict] = mapped_column(JSONType, nullable=False)
+
+    media_buy_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_proposal_drafts_media_buy_id",
+            "tenant_id",
+            "media_buy_id",
+            unique=True,
+            postgresql_where=text("media_buy_id IS NOT NULL"),
+        ),
+        Index("ix_proposal_drafts_account_id", "tenant_id", "account_id"),
+        Index(
+            "ix_proposal_drafts_expires_at",
+            "expires_at",
+            postgresql_where=text("state IN ('DRAFT', 'COMMITTED')"),
+        ),
+    )
