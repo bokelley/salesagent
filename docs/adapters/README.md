@@ -41,12 +41,20 @@ Connect to Triton Digital's TAP Media Buying API for streaming audio and podcast
 
 Connect to Comcast/FreeWheel's Publisher API for video and CTV advertising.
 
-- OAuth2 `client_credentials` authentication (7-day bearer token)
-- Campaign + line item creation against `api.freewheel.tv`
-- Placement, targeting profile, and custom key-value targeting
+- OAuth2 password-grant authentication (with pre-minted bearer escape hatch)
+- Campaign + Insertion Order + Placement creation against `api.freewheel.tv`
+- 18-dimension product targeting (inventory, audience, content, delivery, privacy)
+- Local cache of the full FreeWheel inventory taxonomy (2,500+ entities synced)
 - CPM and FLAT_RATE pricing
 
 [Get started with FreeWheel](freewheel/)
+
+## Adding a New Adapter
+
+Building support for a new ad server? See the [adapter playbook](adding-a-new-adapter.md) —
+a phase-by-phase checklist of every file you need to touch (registry, typed
+API config, admin UI, migrations, repository, tests, docs) plus common
+gotchas. FreeWheel is the reference implementation.
 
 ## Choosing an Adapter
 
