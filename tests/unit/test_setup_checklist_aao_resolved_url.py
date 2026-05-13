@@ -17,7 +17,20 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
+from src.admin.app import create_app
 from src.services.setup_checklist_service import SetupChecklistService
+
+
+@pytest.fixture(autouse=True)
+def _flask_request_context():
+    """SetupChecklistService.action_url uses Flask url_for(), which needs a
+    request context. Tests in this file call private build methods directly
+    rather than through a Flask handler, so we provide one."""
+    app = create_app({"TESTING": True, "SECRET_KEY": "test", "WTF_CSRF_ENABLED": False})
+    with app.test_request_context():
+        yield
 
 
 def _tenant(

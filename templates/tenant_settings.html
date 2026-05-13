@@ -326,7 +326,7 @@
         <p class="sa-page-header__subtitle">Configure {{ tenant.name }}</p>
     </div>
     <div class="sa-page-header__actions">
-        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" class="btn btn-ghost">
+        <a href="{{ url_for('tenants.dashboard', tenant_id=tenant.tenant_id) }}" class="btn btn-ghost">
             ← Back to Dashboard
         </a>
     </div>
@@ -444,7 +444,7 @@
                 <p>Organization identity, virtual host configuration, and access control</p>
             </div>
 
-            <form id="account-settings-form" method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/general">
+            <form id="account-settings-form" method="POST" action="{{ url_for('settings.update_general', tenant_id=tenant.tenant_id) }}">
                 <div class="form-section">
                     <h3>Organization Information</h3>
                     <div class="form-grid">
@@ -2051,7 +2051,7 @@ Exclude any products that don't match the brand's tone.</pre>
                             Create your first advertising product to start offering inventory to buyers.
                         </p>
                     </div>
-                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/products/add" class="btn btn-success">
+                    <a href="{{ url_for('products.add_product', tenant_id=tenant.tenant_id) }}" class="btn btn-success">
                         <i class="fas fa-plus"></i> Create Product
                     </a>
                 </div>
@@ -2067,8 +2067,8 @@ Exclude any products that don't match the brand's tone.</pre>
                         </p>
                     </div>
                     <div style="display: flex; gap: 0.5rem;">
-                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/products" class="btn btn-small">Manage</a>
-                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/products/add" class="btn btn-primary btn-small">Add New</a>
+                        <a href="{{ url_for('products.list_products', tenant_id=tenant.tenant_id) }}" class="btn btn-small">Manage</a>
+                        <a href="{{ url_for('products.add_product', tenant_id=tenant.tenant_id) }}" class="btn btn-primary btn-small">Add New</a>
                     </div>
                 </div>
             </div>
@@ -2129,7 +2129,7 @@ Exclude any products that don't match the brand's tone.</pre>
                         </p>
                     </div>
                     {% if not embedded_view %}
-                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary btn-small">
+                    <a href="{{ url_for('principals.create_principal', tenant_id=tenant.tenant_id) }}" class="btn btn-primary btn-small">
                         Add Buyer Agent
                     </a>
                     {% endif %}
@@ -2243,7 +2243,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 <div class="card-body text-center text-muted">
                     <p>No buyer agents registered yet.</p>
                     {% if not embedded_view %}
-                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary">
+                    <a href="{{ url_for('principals.create_principal', tenant_id=tenant.tenant_id) }}" class="btn btn-primary">
                         Create First Buyer Agent
                     </a>
                     {% endif %}
@@ -2286,7 +2286,7 @@ Exclude any products that don't match the brand's tone.</pre>
                     </div>
                 </details>
 
-                <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/slack">
+                <form method="POST" action="{{ url_for('settings.update_slack', tenant_id=tenant.tenant_id) }}">
                     <div class="form-group">
                         <label for="slack_webhook_url">Task Notifications Webhook URL</label>
                         <input type="url" id="slack_webhook_url" name="slack_webhook_url"
@@ -2344,7 +2344,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 </div>
                 {% endif %}
 
-                <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/ai">
+                <form method="POST" action="{{ url_for('settings.update_ai', tenant_id=tenant.tenant_id) }}">
                     <div class="form-group">
                         <label for="ai_provider">AI Provider</label>
                         <select id="ai_provider" name="ai_provider" onchange="updateModelOptions()">
@@ -2735,6 +2735,9 @@ result = await client.tools.get_products(brief="video ads")</pre>
 
             <div class="form-section">
                 <h3>Raw Configuration (JSON)</h3>
+                {# FIXME(salesagent-issue-357-followup): /settings/raw has no route handler — form submission 404s.
+                   Kept on the request.script_root pattern (not url_for) because url_for would raise BuildError.
+                   Either implement settings.update_raw or remove this section. #}
                 <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/raw">
                     <div class="form-group">
                         <textarea id="raw_config" name="config" rows="20"
@@ -2772,7 +2775,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
 
             <div class="form-section" style="margin-bottom: 1rem;">
                 <form method="POST"
-                      action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/signing-keys/generate"
+                      action="{{ url_for('tenants.generate_webhook_signing_key', tenant_id=tenant.tenant_id) }}"
                       onsubmit="return confirm('Generate a new Ed25519 keypair? Any existing active webhook-signing key will be rotated out — you must publish the new public JWK to your JWKS endpoint before buyers can verify.');">
                     <button type="submit" class="btn btn-primary">
                         🔐 Generate Ed25519 keypair
@@ -2828,7 +2831,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
                             <td>
                                 {% if cred.is_active and cred.purpose == 'webhook-signing' %}
                                 <form method="POST"
-                                      action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/signing-keys/{{ cred.key_id }}/rotate-out"
+                                      action="{{ url_for('tenants.rotate_out_webhook_signing_key', tenant_id=tenant.tenant_id, key_id=cred.key_id) }}"
                                       style="display: inline;"
                                       onsubmit="return confirm('Rotate out kid={{ cred.key_id }}? The salesagent will stop signing webhooks with this key immediately. Generate a replacement first if you need uninterrupted signing.');">
                                     <button type="submit" class="btn btn-sm btn-outline-warning">Rotate out</button>
@@ -2875,7 +2878,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
                     <li><strong>Preserve all data</strong> - you can reactivate later by contacting support</li>
                 </ul>
 
-                <form id="deactivate-form" method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/deactivate" onsubmit="return confirmDeactivation()">
+                <form id="deactivate-form" method="POST" action="{{ url_for('tenants.deactivate_tenant', tenant_id=tenant.tenant_id) }}" onsubmit="return confirmDeactivation()">
                     <div class="form-group">
                         <label for="confirm-name" style="color: #991b1b;">
                             Type <strong>{{ tenant.name }}</strong> to confirm:

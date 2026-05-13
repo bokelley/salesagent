@@ -8,10 +8,20 @@ from unittest.mock import patch
 
 import pytest
 
+from src.admin.app import create_app
 from src.admin.services.dashboard_service import DashboardService
 from src.core.database.health_check import check_database_health
 
 pytestmark = [pytest.mark.integration]
+
+
+@pytest.fixture(autouse=True)
+def _flask_request_context():
+    """DashboardService._needs_attention uses url_for(); these tests call
+    service methods directly outside a Flask handler."""
+    app = create_app({"TESTING": True, "SECRET_KEY": "test", "WTF_CSRF_ENABLED": False})
+    with app.test_request_context():
+        yield
 
 
 class TestDashboardReliability:

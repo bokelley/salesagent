@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
+from src.admin.app import create_app
 from src.core.database.models import (
     AdapterConfig,
     AuthorizedProperty,
@@ -26,6 +27,16 @@ from src.services.setup_checklist_service import (
 from tests.helpers.adcp_factories import create_test_db_product
 
 pytestmark = pytest.mark.requires_db
+
+
+@pytest.fixture(autouse=True)
+def _flask_request_context():
+    """SetupChecklistService.action_url uses Flask url_for(), which needs a
+    request context. These tests invoke the service outside a real Flask
+    handler, so we provide one."""
+    app = create_app({"TESTING": True, "SECRET_KEY": "test", "WTF_CSRF_ENABLED": False})
+    with app.test_request_context():
+        yield
 
 
 @pytest.fixture

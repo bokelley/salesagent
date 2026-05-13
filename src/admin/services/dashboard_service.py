@@ -10,6 +10,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from typing import cast as type_cast
 
+from flask import url_for
+
 from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
@@ -602,14 +604,14 @@ class DashboardService:
     def _needs_attention(self, session, repo: MediaBuyRepository) -> list[dict[str, Any]]:
         """Bullet-list items for the right-rail attention panel.
 
-        Each item includes a ``url`` (script_name-relative path) so the
-        template can wrap the row in an anchor — the rail is the operator's
-        entry point into the queue, so every row must lead somewhere.
+        Each item includes a ``url`` already rooted at the request's
+        SCRIPT_NAME (built via ``url_for``) so the template can render it
+        directly — the rail is the operator's entry point into the queue,
+        so every row must lead somewhere.
         """
         from sqlalchemy import func, select
 
         items = []
-        tenant_path = f"/tenant/{self.tenant_id}"
 
         pending_creatives_count = (
             session.scalar(
@@ -626,7 +628,7 @@ class DashboardService:
                     "level": "amber",
                     "title": f"{pending_creatives_count} creative{'s' if pending_creatives_count != 1 else ''} need approval",
                     "sub": "Creative review queue",
-                    "url": f"{tenant_path}/creatives/review",
+                    "url": url_for("creatives.review_creatives", tenant_id=self.tenant_id),
                 }
             )
 
@@ -639,9 +641,13 @@ class DashboardService:
         if expiring:
             # Single buy → deep-link to its detail; multiple → filtered list.
             expiring_url = (
-                f"{tenant_path}/media-buy/{expiring[0].media_buy_id}"
+                url_for(
+                    "operations.media_buy_detail",
+                    tenant_id=self.tenant_id,
+                    media_buy_id=expiring[0].media_buy_id,
+                )
                 if len(expiring) == 1
-                else f"{tenant_path}/media-buys?status=live"
+                else url_for("tenants.media_buys_list", tenant_id=self.tenant_id, status="live")
             )
             items.append(
                 {
@@ -667,7 +673,7 @@ class DashboardService:
                     "level": "amber",
                     "title": f"{name} pacing under",
                     "sub": f"{int(dpct * 100)}% delivered · should be {int(fpct * 100)}%",
-                    "url": f"{tenant_path}/media-buy/{buy_id}",
+                    "url": url_for("operations.media_buy_detail", tenant_id=self.tenant_id, media_buy_id=buy_id),
                 }
             )
 

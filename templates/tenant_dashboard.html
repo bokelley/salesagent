@@ -934,7 +934,7 @@
         <div class="sa-label" style="margin-bottom: 12px;">Needs your attention</div>
         {% for item in ledger.needs_attention %}
             {% if item.url %}
-            <a class="ld-attention-row" href="{{ script_name }}{{ item.url }}">
+            <a class="ld-attention-row" href="{{ item.url }}">
             {% else %}
             <div class="ld-attention-row">
             {% endif %}

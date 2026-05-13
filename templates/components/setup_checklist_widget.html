@@ -193,7 +193,7 @@
                     <div class="ld-setup__task-name">{{ task.name }}</div>
                     <div class="ld-setup__task-desc">{{ task.description }}</div>
                     {% if task.action_url %}
-                        <a href="{{ request.script_root }}{{ task.action_url }}" class="ld-setup__task-cta">
+                        <a href="{{ task.action_url }}" class="ld-setup__task-cta">
                             Configure
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
                         </a>
@@ -248,6 +248,6 @@
         </div>
     </div>
 
-    <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/setup-checklist" class="ld-setup__view-all">View full setup checklist →</a>
+    <a href="{{ url_for('tenants.setup_checklist', tenant_id=tenant_id) }}" class="ld-setup__view-all">View full setup checklist →</a>
 </div>
 {% endif %}
