@@ -180,17 +180,29 @@ class GoogleAdManager(AdServerAdapter):
             # Legacy client property for backward compatibility
             self.client = self.client_manager.get_client()
 
-            # Auto-detect trafficker_id if not provided
+            # Auto-detect trafficker_id if not provided.
+            #
+            # The googleads SOAP client returns a zeep complex object — it
+            # supports __getitem__ (``current_user["id"]``) and attribute
+            # access (``current_user.name``), but NOT ``.get()`` like a dict.
+            # The previous code called ``.get('name', 'Unknown')`` for the
+            # log message, which raised ``AttributeError: User instance has
+            # no attribute 'get'`` AFTER ``self.trafficker_id`` was already
+            # assigned — the warning logged on every request even though
+            # the ID was detected fine. Use ``getattr`` for optional fields.
             if not self.trafficker_id:
                 try:
                     user_service = self.client.GetService("UserService")
                     current_user = user_service.getCurrentUser()
                     self.trafficker_id = str(current_user["id"])
+                    user_name = getattr(current_user, "name", None) or "Unknown"
                     logger.info(
-                        f"Auto-detected trafficker_id: {self.trafficker_id} ({current_user.get('name', 'Unknown')})"
+                        "Auto-detected trafficker_id: %s (%s)",
+                        self.trafficker_id,
+                        user_name,
                     )
                 except Exception as e:
-                    logger.warning(f"Could not auto-detect trafficker_id: {e}")
+                    logger.warning("Could not auto-detect trafficker_id: %s", e)
 
             # Initialize manager components with pre-loaded config
             self.targeting_manager = GAMTargetingManager(

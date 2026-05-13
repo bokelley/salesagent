@@ -12,6 +12,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Module-level flag so the missing-geo-mappings warning fires once per
+# process lifetime, not once per targeting-manager instantiation. Each
+# adapter selection builds a fresh GAMTargetingManager, so without this
+# guard the same two-line warning floods the log on every request.
+_GEO_MAPPINGS_WARNED = False
+
 
 class GAMTargetingManager:
     """Manages targeting operations for Google Ad Manager."""
@@ -94,8 +100,14 @@ class GAMTargetingManager:
                 f"{len(self.geo_metro_map)} metros"
             )
         except Exception as e:
-            logger.warning(f"Could not load geo mappings file: {e}")
-            logger.warning("Using empty geo mappings - geo targeting will not work properly")
+            global _GEO_MAPPINGS_WARNED
+            if not _GEO_MAPPINGS_WARNED:
+                logger.warning(
+                    "Could not load geo mappings file (%s) — geo targeting will not work properly. "
+                    "This message is suppressed for the rest of the process lifetime.",
+                    e,
+                )
+                _GEO_MAPPINGS_WARNED = True
             self.geo_country_map = {}
             self.geo_region_map = {}
             self.geo_metro_map = {}
