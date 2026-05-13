@@ -74,18 +74,18 @@ class TestCheckPermissionsLive:
         assert all(c.granted for c in report.checks)
 
     def test_required_denial_blocks_fully_operational(self, mock_principal):
-        """A 403 on /services/v4/ads (required) flips fully_operational to False
-        even when every other probe passes."""
+        """A 403 on /services/v4/creative_instances (required) flips
+        fully_operational to False even when every other probe passes."""
         adapter = self._adapter_with_probe_responses(
             mock_principal,
-            {"/services/v4/ads": 403, "/": 200},
+            {"/services/v4/creative_instances": 403, "/": 200},
         )
         report = adapter.check_permissions()
         assert report.fully_operational is False
-        ads = next(c for c in report.checks if c.name == "v4_ads")
-        assert ads.granted is False
-        assert ads.required is True
-        assert ads.detail is not None and "403" in ads.detail
+        ci = next(c for c in report.checks if c.name == "v4_creative_instances")
+        assert ci.granted is False
+        assert ci.required is True
+        assert ci.detail is not None and "403" in ci.detail
 
     def test_optional_denial_does_not_block_fully_operational(self, mock_principal):
         """Nice-to-haves like reporting deny without breaking ``fully_operational``."""
@@ -106,21 +106,21 @@ class TestCheckPermissionsLive:
         so 4xx validation responses are expected on some probes."""
         adapter = self._adapter_with_probe_responses(
             mock_principal,
-            {"/services/v4/ads": status, "/": 200},
+            {"/services/v4/creative_instances": status, "/": 200},
         )
         report = adapter.check_permissions()
-        ads = next(c for c in report.checks if c.name == "v4_ads")
-        assert ads.granted is True
+        ci = next(c for c in report.checks if c.name == "v4_creative_instances")
+        assert ci.granted is True
         assert report.fully_operational is True
 
     def test_401_counts_as_denial(self, mock_principal):
         adapter = self._adapter_with_probe_responses(
             mock_principal,
-            {"/services/v4/ads": 401, "/": 200},
+            {"/services/v4/creative_instances": 401, "/": 200},
         )
         report = adapter.check_permissions()
-        ads = next(c for c in report.checks if c.name == "v4_ads")
-        assert ads.granted is False
+        ci = next(c for c in report.checks if c.name == "v4_creative_instances")
+        assert ci.granted is False
 
     def test_auth_failure_bails_with_error_set(self, mock_principal):
         """If the bearer is invalid the whole pass aborts; we don't pretend

@@ -122,6 +122,22 @@ Expected context:
             </button>
             <span id="freewheel-inventory-sync-status"></span>
         </div>
+
+        <hr style="margin: 2rem 0 1rem 0;">
+
+        <h4>API Permissions</h4>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Probe FreeWheel's API to verify the configured credentials have every scope
+            this adapter needs. Surfaces any IAM gaps before they bite mid-campaign —
+            each check is a cheap read, nothing is mutated upstream.
+        </p>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="checkFreeWheelPermissions()" class="btn btn-secondary">
+                Check API Permissions
+            </button>
+            <span id="freewheel-permissions-summary"></span>
+        </div>
+        <div id="freewheel-permissions-detail" style="margin-top: 1rem; display: none;"></div>
     </div>
 </div>
 
@@ -206,6 +222,95 @@ function syncFreeWheelInventory() {
     })
     .catch(error => {
         statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
+    });
+}
+
+function checkFreeWheelPermissions() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const summaryEl = document.getElementById('freewheel-permissions-summary');
+    const detailEl = document.getElementById('freewheel-permissions-detail');
+
+    summaryEl.innerHTML = '<span style="color: #6b7280;">Probing… (~5-10s)</span>';
+    detailEl.style.display = 'none';
+    detailEl.innerHTML = '';
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/check-permissions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data.success || !data.report) {
+            summaryEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Probe failed') + '</span>';
+            return;
+        }
+        const report = data.report;
+        if (report.error) {
+            summaryEl.innerHTML = '<span style="color: #ef4444;">✗ ' + report.error + '</span>';
+            return;
+        }
+
+        const checks = report.checks || [];
+        const requiredChecks = checks.filter(c => c.required);
+        const requiredGranted = requiredChecks.filter(c => c.granted).length;
+        const optionalChecks = checks.filter(c => !c.required);
+        const optionalGranted = optionalChecks.filter(c => c.granted).length;
+
+        if (report.fully_operational) {
+            summaryEl.innerHTML = '<span style="color: #10b981;">✓ Fully operational — ' +
+                requiredGranted + '/' + requiredChecks.length + ' required, ' +
+                optionalGranted + '/' + optionalChecks.length + ' nice-to-haves</span>';
+        } else {
+            const missing = requiredChecks.filter(c => !c.granted).map(c => c.description).join(', ');
+            summaryEl.innerHTML = '<span style="color: #f59e0b;">⚠ Missing required: ' + missing + '</span>';
+        }
+
+        // Group checks by feature for the operator-facing detail table.
+        const byFeature = {};
+        for (const c of checks) {
+            const key = c.feature || 'other';
+            if (!byFeature[key]) byFeature[key] = [];
+            byFeature[key].push(c);
+        }
+
+        const rows = [];
+        rows.push('<table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.9rem;">');
+        rows.push('<thead><tr style="text-align: left; border-bottom: 1px solid #e5e7eb;">' +
+                  '<th style="padding: 0.5rem;">Feature</th>' +
+                  '<th style="padding: 0.5rem;">Check</th>' +
+                  '<th style="padding: 0.5rem;">Required</th>' +
+                  '<th style="padding: 0.5rem; text-align: center;">Status</th>' +
+                  '<th style="padding: 0.5rem;">Detail</th>' +
+                  '</tr></thead><tbody>');
+
+        const features = Object.keys(byFeature).sort();
+        for (const feature of features) {
+            for (const c of byFeature[feature]) {
+                const statusIcon = c.granted ? '✓' : '✗';
+                const statusColor = c.granted ? '#10b981' : (c.required ? '#ef4444' : '#9ca3af');
+                const reqLabel = c.required ? 'yes' : 'no';
+                const detailText = c.detail ? c.detail : (c.granted ? '' : 'denied');
+                rows.push('<tr style="border-bottom: 1px solid #f3f4f6;">' +
+                    '<td style="padding: 0.5rem; color: #6b7280;">' + feature + '</td>' +
+                    '<td style="padding: 0.5rem;">' + c.description +
+                    '<br><small style="color: #9ca3af; font-family: monospace;">' + (c.probe_target || '') + '</small></td>' +
+                    '<td style="padding: 0.5rem; color: ' + (c.required ? '#374151' : '#9ca3af') + ';">' + reqLabel + '</td>' +
+                    '<td style="padding: 0.5rem; text-align: center; font-size: 1.1rem; color: ' + statusColor + ';">' + statusIcon + '</td>' +
+                    '<td style="padding: 0.5rem; color: #6b7280; font-size: 0.85rem;">' + detailText + '</td>' +
+                    '</tr>');
+            }
+        }
+        rows.push('</tbody></table>');
+        const checkedAt = new Date(report.checked_at).toLocaleString();
+        rows.push('<p style="margin-top: 0.75rem; color: #9ca3af; font-size: 0.85rem;">Checked ' + checkedAt + '</p>');
+
+        detailEl.innerHTML = rows.join('');
+        detailEl.style.display = 'block';
+    })
+    .catch(error => {
+        summaryEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
     });
 }
 

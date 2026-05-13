@@ -349,18 +349,16 @@ class FreeWheelAdapter(AdServerAdapter):
                 "sync_creatives",
             ),
             (
+                # FW's docs name the field ad_id but the description says
+                # "The Ad Unit Node ID to link Creative" — there's no
+                # separate Ad object. POSTing creative_instances with
+                # ad_id=<ad_unit_node_id from inventory sync> binds the
+                # creative to the placement (FW auto-populates placement_id).
+                # Verified live: 201 Created.
                 "v4_creative_instances",
-                "Bind creatives to ads (creative trafficking)",
+                "Bind creatives to ad_unit_nodes (creative trafficking)",
                 "GET",
                 "/services/v4/creative_instances?ad_id=1",
-                True,
-                "creative_trafficking",
-            ),
-            (
-                "v4_ads",
-                "Create Ads (line items) on placements",
-                "GET",
-                "/services/v4/ads?page=1&per_page=1",
                 True,
                 "creative_trafficking",
             ),

@@ -14,7 +14,7 @@ Orders, Placements, and Creative Resources.
 | Package | Placement (delivery unit, one per package) |
 | Product `implementation_config` | Inventory + targeting selectors (sites, sections, video groups, series, ad-unit packages, audiences, content classification, …) |
 | Creative | `creative_resources` (the asset record) |
-| Creative-to-package assignment | `creative_instances` *(scope grant pending)* |
+| Creative-to-package assignment | `creative_instances` — POST with `ad_id=<ad_unit_node_id>` and `creative_id=<creative_resource_id>` |
 
 A FreeWheel Campaign sits above the IO as a grouping layer; the adapter
 auto-creates one Campaign per AdCP MediaBuy. The IO is the unit of commerce;
@@ -146,8 +146,8 @@ targeting via the Publisher API. Use Nielsen DMA (`geo_metros`) or
 |---|---|---|
 | `create_media_buy` | ✅ live | Campaign + IO + Placement(s) cycle verified against Talpa |
 | `check_media_buy_status` | ✅ live | Reads IO `stage`/`status` |
-| `add_creative_assets` | 🟡 partial | `creative_resources` CRUD verified; `creative_instances` blocked by IAM scope |
-| `associate_creatives` | ⏳ blocked | Blocked on `creative_instances` scope |
+| `add_creative_assets` | ✅ unblocked | `creative_resources` CRUD verified; `creative_instances` POST verified (201 Created against Talpa) |
+| `associate_creatives` | 🟡 wired-ready | `creative_instances` works (see live verification). Adapter wiring pending — needs ad_unit_node lookup chain from cache. |
 | `update_media_buy` (pause/resume) | 🟡 client-ready | `update_placement` verified at v3; adapter wiring needs IO-scoped placement listing (scope grant pending) |
 | `update_media_buy` (per-package budget) | ❌ data-model | FW budget lives on the IO, not placement — would require a different mapping |
 | `get_media_buy_delivery` | ⏳ stub | Needs Query Reporting API (separate surface, scope grant pending) |
@@ -168,30 +168,44 @@ There is **no self-serve sandbox**. To get credentials:
 
 ### Scope grants still needed
 
-For a production-grade integration, request these v4 IAM scopes:
+Core buyer-facing flow is fully unblocked today. Remaining asks are
+nice-to-haves that improve operator UX and unlock reporting:
 
-**Tier 1 — unblocks core lifecycle:**
-- `creative_instances` (write) — binds creatives to placements
-- `insertion_orders/{id}/placements` (read) — per-IO placement listing
-- `ad_unit_nodes` (write) — placement→ad_unit binding
+**Tier 1 — reporting (highest publisher value):**
+- Query Reporting API access (path TBD — FW reporting doesn't live at
+  v3 or v4 of `api.freewheel.tv/services/*`; need Mathijs to point us
+  at the right host/path). Unlocks `get_media_buy_delivery` and
+  `get_packages_snapshot`.
 
-**Tier 2 — unblocks reporting:**
-- `reports` / `insertion_orders/{id}/delivery` (read) — Query Reporting API
-  → unblocks both `get_media_buy_delivery` and `get_packages_snapshot`
-
-**Tier 3 — improves operator UX:**
+**Tier 2 — improves operator UX:**
 - `targeting_profiles` (read) — attach saved FW targeting to products
 - `audiences` + `audience_segments` (read) — richer audience surfacing
 - `webhooks` (write) — push state-change notifications, replaces polling
 
-**Tier 4 — future:**
+**Tier 3 — future feature expansion:**
 - `forecasts`, `avails`, `inventory_forecast` (read) — pre-buy projections
 - `marketplace_deals` / `programmatic` (write) — PMP deal lifecycle
 
-Every probed-but-denied endpoint returns the AWS API Gateway response
-`{"Message": "User is not authorized... explicit deny in an identity-based
-policy"}`, confirming the surface exists and only an IAM policy update is
-needed.
+### What we no longer need to ask for
+
+These were on earlier scope-ask drafts but the live probe + FW docs review
+showed they were misdirected:
+
+- **`/services/v4/ads`** — looked like a separate "Ad" object was needed
+  to bind creatives to placements. FW's docs revealed `ad_id` in the
+  `creative_instances` payload is *actually* an `ad_unit_node_id` (their
+  param description literally says "The Ad Unit Node ID to link Creative").
+  We already have full v3 read access to `ad_unit_nodes`. Verified live:
+  POSTing creative_instances with `ad_id=<ad_unit_node_id>` returns 201
+  with FW auto-deriving `placement_id` on the response.
+- **v4 commercial endpoints** (`/services/v4/campaigns`, `insertion_orders`,
+  `placements`) — v4 doesn't exist for the commercial API yet. We use the
+  v3 commercial API (singular endpoint names for writes:
+  `/services/v3/insertion_order/{id}`, `/services/v3/placement/{id}`).
+
+Use the **Check API Permissions** button in the adapter settings UI for
+the live state of each probe. Each denied probe lists the AWS API Gateway
+deny payload so it's clear when an IAM update has actually landed.
 
 ## Constraints
 
