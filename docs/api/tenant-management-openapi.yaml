@@ -790,6 +790,17 @@ components:
           description: Human-readable adapter name.
           title: Name
           type: string
+        tier:
+          default: live
+          description: "Whether this adapter is meant for production use. ``live``\
+            \ = real ad-server integration intended for production pickers. ``test``\
+            \ = simulated/dev-only adapter (Mock) \u2014 embedders should filter these\
+            \ out of production UI by default."
+          enum:
+          - live
+          - test
+          title: Tier
+          type: string
         type:
           description: Adapter type identifier (use as AdapterConfig.type).
           title: Type
@@ -3312,10 +3323,15 @@ paths:
         \ adapter type that has a typed AdapterConfig member \u2014 covering the full\
         \ set surfaced to operators in the tenant settings UI.\n\nEach entry carries:\
         \   - ``type`` \u2014 the value that goes into ``AdapterConfig.type``   -\
-        \ ``name`` / ``description`` \u2014 human-readable display strings   - ``default_channels``\
-        \ \u2014 channels this adapter is primarily used for   - ``capabilities``\
-        \ \u2014 static AdapterCapabilities flags   - ``connection_schema`` \u2014\
-        \ JSON Schema for the typed connection payload"
+        \ ``name`` / ``description`` \u2014 human-readable display strings   - ``tier``\
+        \ \u2014 ``\"live\"`` for production adapters, ``\"test\"`` for     simulated/dev-only\
+        \ adapters (Mock). Embedders should filter     ``tier=\"test\"`` out of production\
+        \ pickers.   - ``default_channels`` \u2014 channels this adapter is primarily\
+        \ used for   - ``capabilities`` \u2014 static AdapterCapabilities flags  \
+        \ - ``connection_schema`` \u2014 JSON Schema for the typed connection payload\n\
+        \nOptional query params:   - ``tier=live`` to return only production-grade\
+        \ adapters (omit     Mock). Useful for production storefronts that should\
+        \ never offer     a simulated picker option."
       operationId: get__api_v1_tenant-management_adapters
       parameters: []
       responses:

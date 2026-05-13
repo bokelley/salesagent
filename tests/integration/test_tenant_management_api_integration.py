@@ -136,6 +136,7 @@ class TestTenantManagementAPIIntegration:
         fw = next(entry for entry in body["adapters"] if entry["type"] == "freewheel")
         assert fw["name"] == "FreeWheel"
         assert "Video and CTV" in fw["description"]
+        assert fw["tier"] == "live"
         assert "olv" in fw["default_channels"]
         assert "ctv" in fw["default_channels"]
         assert fw["capabilities"]["supports_inventory_sync"] is True
@@ -148,6 +149,41 @@ class TestTenantManagementAPIIntegration:
         # Pydantic v2 emits literals via either ``const`` or ``enum`` —
         # accept either as long as the value is "freewheel".
         assert type_field.get("const") == "freewheel" or type_field.get("enum") == ["freewheel"]
+
+    def test_list_adapters_tier_filter_excludes_mock_from_live(self, client, mock_api_key_auth):
+        """?tier=live filters out simulated/dev-only adapters (Mock) so
+        production storefronts can render the picker without offering
+        a fake option."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters?tier=live",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+        assert response.status_code == 200
+        types = {entry["type"] for entry in response.json["adapters"]}
+        assert "mock" not in types
+        assert types == {"google_ad_manager", "freewheel", "triton", "broadstreet"}
+        # And every returned entry is tier=live
+        assert all(entry["tier"] == "live" for entry in response.json["adapters"])
+
+    def test_list_adapters_tier_filter_test_returns_only_mock(self, client, mock_api_key_auth):
+        """?tier=test returns just the simulated adapters — useful for dev
+        consoles that want to show the test surface explicitly."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters?tier=test",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+        assert response.status_code == 200
+        types = {entry["type"] for entry in response.json["adapters"]}
+        assert types == {"mock"}
+
+    def test_list_adapters_tier_filter_rejects_unknown_value(self, client, mock_api_key_auth):
+        """Unknown tier values must be rejected — silently ignoring them
+        would mask client bugs."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters?tier=beta",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+        assert response.status_code == 400
 
     def test_list_adapters_requires_api_key(self, client):
         """Discovery endpoint is gated by the tenant-management API key."""

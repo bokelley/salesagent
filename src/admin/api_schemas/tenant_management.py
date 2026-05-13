@@ -221,6 +221,14 @@ class AdapterCatalogEntry(BaseModel):
     type: str = Field(..., description="Adapter type identifier (use as AdapterConfig.type).")
     name: str = Field(..., description="Human-readable adapter name.")
     description: str = Field(..., description="Short description of what this adapter does.")
+    tier: Literal["live", "test"] = Field(
+        default="live",
+        description=(
+            "Whether this adapter is meant for production use. ``live`` = real ad-server "
+            "integration intended for production pickers. ``test`` = simulated/dev-only "
+            "adapter (Mock) — embedders should filter these out of production UI by default."
+        ),
+    )
     default_channels: list[str] = Field(default_factory=list)
     capabilities: AdapterCapabilitiesSummary
     connection_schema: dict[str, Any] = Field(

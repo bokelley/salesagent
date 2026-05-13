@@ -353,26 +353,35 @@ def health_check():
 # classes so the catalog can carry embedder-facing copy without coupling
 # every adapter to UX strings. Keys mirror ADAPTER_REGISTRY's canonical
 # names (the values that go into AdapterConfig.type).
+#
+# ``tier="test"`` flags adapters that are simulated/dev-only (Mock). Embedders
+# should filter these out of production pickers; default behaviour is to show
+# them so dev consoles still see the full set.
 _ADAPTER_CATALOG_METADATA: dict[str, dict[str, str]] = {
     "google_ad_manager": {
         "name": "Google Ad Manager",
         "description": "Direct sold inventory via Google Ad Manager — line items, orders, creatives.",
+        "tier": "live",
     },
     "mock": {
         "name": "Mock Ad Server",
         "description": "Simulated ad server for testing and development; no real backend calls.",
+        "tier": "test",
     },
     "freewheel": {
         "name": "FreeWheel",
         "description": "Video and CTV advertising via Comcast/FreeWheel's Publisher API.",
+        "tier": "live",
     },
     "triton": {
         "name": "Triton Digital",
         "description": "Audio and podcast advertising via the Triton TAP Media Buying API.",
+        "tier": "live",
     },
     "broadstreet": {
         "name": "Broadstreet",
         "description": "Direct sold display and email-newsletter inventory via the Broadstreet Ads API.",
+        "tier": "live",
     },
 }
 
@@ -401,11 +410,23 @@ def list_adapters():
     Each entry carries:
       - ``type`` — the value that goes into ``AdapterConfig.type``
       - ``name`` / ``description`` — human-readable display strings
+      - ``tier`` — ``"live"`` for production adapters, ``"test"`` for
+        simulated/dev-only adapters (Mock). Embedders should filter
+        ``tier="test"`` out of production pickers.
       - ``default_channels`` — channels this adapter is primarily used for
       - ``capabilities`` — static AdapterCapabilities flags
       - ``connection_schema`` — JSON Schema for the typed connection payload
+
+    Optional query params:
+      - ``tier=live`` to return only production-grade adapters (omit
+        Mock). Useful for production storefronts that should never offer
+        a simulated picker option.
     """
     from src.adapters import ADAPTER_REGISTRY
+
+    tier_filter = request.args.get("tier")
+    if tier_filter is not None and tier_filter not in ("live", "test"):
+        return jsonify({"error": "invalid_tier", "message": "tier must be 'live' or 'test'"}), 400
 
     seen_types: set[str] = set()
     entries: list[AdapterCatalogEntry] = []
@@ -422,6 +443,9 @@ def list_adapters():
         seen_types.add(registry_key)
 
         metadata = _ADAPTER_CATALOG_METADATA[registry_key]
+        tier = metadata.get("tier", "live")
+        if tier_filter is not None and tier != tier_filter:
+            continue
         caps_dataclass = getattr(adapter_class, "capabilities", None)
         capabilities_summary = (
             AdapterCapabilitiesSummary(
@@ -447,6 +471,7 @@ def list_adapters():
                 type=registry_key,
                 name=metadata["name"],
                 description=metadata["description"],
+                tier=tier,
                 default_channels=list(getattr(adapter_class, "default_channels", []) or []),
                 capabilities=capabilities_summary,
                 connection_schema=connection_schema,
