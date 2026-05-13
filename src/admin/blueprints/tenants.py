@@ -532,9 +532,13 @@ def update_slack(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])
 @log_admin_action("test_slack")
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_slack(tenant_id):
-    """Test Slack webhook."""
+    """Test Slack webhook.
+
+    Read-only probe — sends a test message to the configured webhook and
+    never writes to tenant state — so it opts into the embedded-write gate.
+    """
     try:
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()

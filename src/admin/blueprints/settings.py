@@ -594,9 +594,14 @@ def update_ai(tenant_id):
 
 
 @settings_bp.route("/ai/test", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin",))
+@require_tenant_access(api_mode=True, role=("admin",), allow_embedded_writes=True)
 def test_ai_connection(tenant_id):
-    """Test AI connection with current configuration."""
+    """Test AI connection with current configuration.
+
+    This endpoint is a read-only probe — it validates credentials against the
+    upstream provider and never writes to tenant state — so it opts into the
+    embedded-write gate. The verb-based gate would otherwise misclassify it.
+    """
     import asyncio
     import concurrent.futures
 
@@ -686,9 +691,12 @@ def test_ai_connection(tenant_id):
 
 
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
-@require_tenant_access(api_mode=True, role=("admin",))
+@require_tenant_access(api_mode=True, role=("admin",), allow_embedded_writes=True)
 def test_logfire_connection(tenant_id):
-    """Test Logfire connection with provided token."""
+    """Test Logfire connection with provided token.
+
+    Read-only probe — see `test_ai_connection` above for rationale.
+    """
     try:
         data = request.get_json() or {}
         logfire_token = data.get("logfire_token", "").strip()
@@ -931,9 +939,14 @@ def remove_authorized_email(tenant_id):
 # Test route for domain access functionality
 @settings_bp.route("/access/test", methods=["POST"])
 @log_admin_action("test_domain_access")
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_domain_access(tenant_id):
-    """Test email access for this tenant."""
+    """Test email access for this tenant.
+
+    Read-only probe — looks up tenant access for a given email and flashes
+    the result, never writes to tenant state — so it opts into the
+    embedded-write gate.
+    """
     from src.admin.domain_access import get_user_tenant_access
 
     try:
@@ -1167,12 +1180,17 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
 
 @settings_bp.route("/business-rules", methods=["POST"])
 @log_admin_action("update_business_rules")
-@require_tenant_access(role=("admin",))
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def update_business_rules(tenant_id):
     """Update business rules (budget, naming, approvals, features).
 
     This function uses PolicyService for validation and updates. The service layer
     provides clean, testable business logic with comprehensive validation.
+
+    Business rules are publisher-managed (Sprint 5 design); embedded tenants edit
+    them via the proxied admin UI. The model-layer guard's
+    ``PUBLISHER_WRITABLE_FIELDS[Tenant]`` allow-list enforces the per-column
+    boundary as defense-in-depth.
     """
     from src.services.policy_service import PolicyService, ValidationError
 

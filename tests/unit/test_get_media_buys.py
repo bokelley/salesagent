@@ -36,6 +36,7 @@ from src.core.tools.media_buy_list import (
     _get_media_buys_impl,
     _map_creative_status,
     _resolve_status_filter,
+    _to_wire_status,
 )
 
 # ---------------------------------------------------------------------------
@@ -214,6 +215,41 @@ class TestComputeStatusPersistedPrecedence:
         buy_none = make_media_buy(start_date=date(2099, 1, 1), end_date=date(2099, 12, 31), status=None)
         assert _compute_status(buy_active, self.TODAY) == MediaBuyStatus.active
         assert _compute_status(buy_none, self.TODAY) == MediaBuyStatus.pending_start
+
+
+class TestToWireStatus:
+    """``_to_wire_status`` coerces arbitrary input to a wire-valid string (#374).
+
+    The persisted ``MediaBuy.status`` column stores values beyond the wire
+    enum (``draft``, ``pending_approval``). Response-construction sites that
+    read the column directly MUST funnel the value through this helper so
+    a non-wire string never reaches the response model.
+    """
+
+    def test_returns_wire_string_for_enum_member(self):
+        assert _to_wire_status(MediaBuyStatus.active) == "active"
+        assert _to_wire_status(MediaBuyStatus.pending_creatives) == "pending_creatives"
+
+    def test_returns_wire_string_for_valid_string(self):
+        assert _to_wire_status("active") == "active"
+        assert _to_wire_status("pending_creatives") == "pending_creatives"
+
+    def test_case_insensitive(self):
+        assert _to_wire_status("Active") == "active"
+        assert _to_wire_status("PENDING_CREATIVES") == "pending_creatives"
+
+    def test_returns_none_for_persisted_only_values(self):
+        # These values are valid in the DB column but not in the wire enum.
+        assert _to_wire_status("draft") is None
+        assert _to_wire_status("pending_approval") is None
+
+    def test_returns_none_for_none_and_empty(self):
+        assert _to_wire_status(None) is None
+        assert _to_wire_status("") is None
+
+    def test_returns_none_for_non_string_non_enum(self):
+        assert _to_wire_status(42) is None
+        assert _to_wire_status(["active"]) is None
 
 
 class TestGetMediaBuysImplPersistedStatusPrecedence:

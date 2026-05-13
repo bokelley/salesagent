@@ -419,6 +419,36 @@ _BLOCKER_STATUSES: frozenset[str] = frozenset(
 )
 
 
+def _to_wire_status(value: Any) -> str | None:
+    """Coerce arbitrary status input to a wire-valid ``MediaBuyStatus`` string.
+
+    Returns ``None`` for values that don't map onto a wire enum member —
+    including persisted-only DB statuses like ``draft`` and ``pending_approval``
+    that the wire schema does not accept.
+
+    Use this at every ``response.status`` emission site that reads from
+    ``MediaBuy.status`` directly (rather than via :func:`_compute_status`).
+    Without this coercion, a legacy persisted value reaches the wire and
+    fastmcp rejects the response with ``INVALID_REQUEST[status]`` (#374).
+
+    The persisted ``MediaBuy.status`` column accepts a broader set than the
+    wire enum: ``draft`` (model default), ``pending_approval`` (manual-approval
+    create path), etc. The wire schema (``MediaBuyStatus``) accepts only the
+    seven AdCP-spec values. Callers that need a guaranteed-non-None status
+    should fall back to :func:`_compute_status` (date-derived).
+    """
+    if value is None:
+        return None
+    if isinstance(value, MediaBuyStatus):
+        return value.value
+    if isinstance(value, str):
+        try:
+            return MediaBuyStatus(value.lower()).value
+        except ValueError:
+            return None
+    return None
+
+
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
     """Compute the current AdCP status of a media buy.
 

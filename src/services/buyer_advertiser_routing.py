@@ -367,12 +367,14 @@ def create_account_from_routing(
     # provisioning step. Operator-billed accounts (no principal_id)
     # skip this — access is governed by tenant-wide auth instead.
     #
-    # Defense-in-depth: only grant if the Principal row exists. The
-    # embedded-mode auth bypass creates Principals on first identity-
-    # header request, so in production this should always be true.
-    # Skipping the FK insert avoids killing the buy flow if the auth
-    # path drifts; the access check downstream will surface as a
-    # cleaner authorization error than an FK violation.
+    # Defense-in-depth: only grant if the Principal row exists. On
+    # embedded tenants Principals are provisioned out-of-band by the
+    # platform via the Tenant Management API (initial_principal on
+    # /provision, or POST /principals); on open instances they're
+    # created in the admin UI. Skipping the FK insert when the row is
+    # missing avoids killing the buy flow if provisioning is racy or
+    # incomplete; the access check downstream surfaces as a cleaner
+    # authorization error than an FK violation.
     if principal_id:
         principal_exists = session.scalars(
             select(Principal.principal_id).filter_by(tenant_id=tenant_id, principal_id=principal_id)

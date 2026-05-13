@@ -11,7 +11,7 @@ defensively — missing rows surface as ``None`` snapshots / zero delivery,
 not errors.
 
 Revision ID: 190d6e98754b
-Revises: 7c3073bd70cf
+Revises: 7c3073bd70cf, 8820c87e8ae3
 Create Date: 2026-05-12 21:01:41.886673
 """
 
@@ -23,7 +23,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "190d6e98754b"
-down_revision: str | Sequence[str] | None = "7c3073bd70cf"
+# Merge revision: joins the FW inventory cache lineage (7c3073bd70cf) and the
+# publisher_partner aao_status_kind lineage (8820c87e8ae3) from main into one
+# head after merging origin/main into this branch.
+down_revision: str | Sequence[str] | None = ("7c3073bd70cf", "8820c87e8ae3")
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

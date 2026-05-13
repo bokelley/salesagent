@@ -102,3 +102,62 @@ def test_signing_verify_runs_last(middleware_classes):
         f"SigningVerifyMiddleware must be last in asgi_middleware; got "
         f"order: {[c.__name__ for c in middleware_classes]}"
     )
+
+
+def _kwargs_with(env: dict[str, str]) -> dict:
+    """Build ``_serve_kwargs`` output with the given env overrides applied."""
+    from core import main as core_main
+
+    with (
+        patch.object(core_main, "build_router", return_value=MagicMock()),
+        patch("src.admin.app.create_app", return_value=MagicMock()),
+        patch("core.main.build_subdomain_router", return_value=MagicMock()),
+        patch.dict("os.environ", env, clear=False),
+    ):
+        return core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", "True"])
+def test_stateless_http_env_var_enables_stateless_mode(value):
+    """``ADCP_STATELESS_HTTP`` flips the MCP transport to stateless mode.
+
+    Required on multi-replica deployments without sticky LB routing on
+    ``Mcp-Session-Id``: each replica owns its own in-memory
+    ``_server_instances`` dict, so a session created on Instance A can't
+    be looked up on Instance B and ``tools/list`` randomly 404s after a
+    successful ``initialize`` lands elsewhere.
+
+    ``FASTMCP_STATELESS_HTTP`` alone is insufficient — the adcp wrapper
+    overrides FastMCP's env-var read by assigning
+    ``mcp.settings.stateless_http`` from this kwarg unconditionally.
+    """
+    kwargs = _kwargs_with({"ADCP_STATELESS_HTTP": value})
+    assert kwargs["stateless_http"] is True, (
+        f"ADCP_STATELESS_HTTP={value!r} must produce stateless_http=True; got {kwargs.get('stateless_http')!r}"
+    )
+
+
+@pytest.mark.parametrize("value", ["false", "0", "", "no", "anything-else"])
+def test_stateless_http_defaults_off(value):
+    """Single-replica dev / test / single-pod prod gets stateful sessions
+    by default — preserves the session-reuse perf for chatty workloads
+    (compliance sweeps, BDD, local dev) and matches the upstream
+    FastMCP default."""
+    kwargs = _kwargs_with({"ADCP_STATELESS_HTTP": value})
+    assert kwargs["stateless_http"] is False, (
+        f"ADCP_STATELESS_HTTP={value!r} must leave stateless_http=False; got {kwargs.get('stateless_http')!r}"
+    )
+
+
+def test_stateless_http_unset_is_stateful():
+    """Unset env var must yield stateful mode — no surprise behavior on
+    deployments that haven't opted in."""
+    import os as _os
+
+    saved = _os.environ.pop("ADCP_STATELESS_HTTP", None)
+    try:
+        kwargs = _kwargs_with({})
+        assert kwargs["stateless_http"] is False
+    finally:
+        if saved is not None:
+            _os.environ["ADCP_STATELESS_HTTP"] = saved

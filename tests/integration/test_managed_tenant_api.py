@@ -645,6 +645,45 @@ class TestWriteGuard:
                 session.commit()
             session.rollback()
 
+    def test_business_rules_fields_writable_on_managed_tenant(self, managed_tenant):
+        # Business rules are publisher-managed per Sprint 5 design — writing them
+        # from a UI session (no auth flags) must succeed on an embedded tenant.
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+            tenant.order_name_template = "publisher-edited-{date}"
+            tenant.brand_manifest_policy = "require_brand"
+            tenant.human_review_required = True
+            tenant.creative_auto_approve_threshold = 0.95
+            session.commit()
+        with get_db_session() as session:
+            t = session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+            assert t.order_name_template == "publisher-edited-{date}"
+            assert t.brand_manifest_policy == "require_brand"
+            assert t.human_review_required is True
+            assert t.creative_auto_approve_threshold == 0.95
+
+    def test_platform_identity_fields_still_blocked_on_managed_tenant(self, managed_tenant):
+        # Opening up business rules must NOT relax the lock on platform-identity
+        # columns. `name` is still platform-managed.
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+            tenant.name = "Publisher Tried To Rename"
+            with pytest.raises(EmbeddedTenantWriteError):
+                session.commit()
+            session.rollback()
+
+    def test_manual_approval_adapter_fields_writable_on_managed_tenant(self, managed_tenant):
+        # human_review_required syncs to adapter_config.{gam,mock}_manual_approval_required.
+        # Both adapter fields must pass the guard for the sync to land.
+        with get_db_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert adapter is not None
+            adapter.mock_manual_approval_required = True
+            session.commit()
+        with get_db_session() as session:
+            a = session.scalars(select(AdapterConfig).filter_by(tenant_id=managed_tenant)).first()
+            assert a.mock_manual_approval_required is True
+
     def test_platform_background_worker_flag_allows_adapter_config_update(self, managed_tenant):
         # Guard-layer contract: a session marked with
         # platform_background_worker=True must be allowed to write
