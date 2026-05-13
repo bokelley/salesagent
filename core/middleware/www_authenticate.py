@@ -8,6 +8,16 @@ tokens — the A2A leg and :class:`SigningVerifyMiddleware` already emit it
 correctly. Storyboard ``security_baseline/probe_unauth`` (universal phase)
 asserts on header presence.
 
+**This middleware is a workaround for an upstream library defect.** The
+right fix lives in ``adcp/server/auth.py:411`` (``BearerTokenAuthMiddleware
+._unauthenticated``) — filed at
+``adcontextprotocol/adcp-client-python#712``. When that ships and we bump
+``adcp``, this middleware becomes a no-op (the upstream 401 will already
+carry ``WWW-Authenticate`` and the case-insensitive presence check below
+will skip injection). Delete this module and its registration in
+``core/main.py:_serve_kwargs`` in the same PR that bumps to the fixed
+release.
+
 Design:
 
 * Wraps the ASGI ``send`` callable and inspects the ``http.response.start``

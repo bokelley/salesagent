@@ -428,12 +428,17 @@ def _serve_kwargs(
         # Bearer-scheme challenge is wrong for those paths. For buyer-protocol
         # traffic that flows past AdminWSGIMount, it wraps every inner
         # middleware that can emit 401 and injects ``WWW-Authenticate: Bearer``
-        # (RFC 6750 §3) if missing. The MCP-leg's BearerTokenAuthMiddleware in
-        # upstream ``adcp.server.auth`` returns 401 without the header for
-        # missing/invalid tokens; the A2A leg and SigningVerifyMiddleware
-        # already emit it. No-op when the header is already present (case-
-        # insensitive lookup), so stacking is safe. Storyboard
-        # ``security_baseline/probe_unauth`` asserts header presence.
+        # (RFC 6750 §3) if missing.
+        #
+        # FIXME(adcp-client-python#712): workaround for an upstream defect in
+        # ``BearerTokenAuthMiddleware._unauthenticated`` (the MCP-leg 401 path
+        # emits a ``JSONResponse`` without ``WWW-Authenticate``; the sibling
+        # A2A leg ``_send_unauthenticated`` does it correctly). Drop this
+        # middleware and its registration once the upstream fix ships and
+        # we bump ``adcp``. The case-insensitive presence check makes the
+        # middleware a no-op once upstream emits the header, so the order
+        # of operations is safe: bump adcp → re-probe → remove middleware
+        # in a follow-up PR if everything stays green.
         (WWWAuthenticateMiddleware, {}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
