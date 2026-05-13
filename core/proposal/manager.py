@@ -152,7 +152,7 @@ class SalesAgentProposalManager:
         proposal = _build_v1_brief_proposal(response)
         if proposal is not None:
             response.proposals = [proposal]
-        refine_entries = getattr(req_model, "refine", None) or getattr(req, "refine", None) or []
+        refine_entries = getattr(req_model, "refine", None) or []
         response.refinement_applied = _build_v1_refinement_applied(refine_entries)
         return response
 
@@ -231,6 +231,24 @@ _V1_REFINE_ACK_NOTE = (
     "ask semantically (drop / shift / retarget) once ProposalStore is wired."
 )
 
+# Defensive caps on buyer-supplied refine echo. ``RefinementApplied2.product_id``
+# and ``RefinementApplied3.proposal_id`` are typed ``str`` with no length cap
+# in the adcp library, so an adversarial buyer could ship 10MB ids and force
+# us to hold them through Pydantic validation and echo them back. Real AdCP
+# ids look like ``prop_abc123`` / ``prod_video_outdoor`` — 256 chars leaves
+# generous headroom. Oversize/missing ids are DROPPED, not truncated:
+# truncation would corrupt id semantics for downstream correlation.
+_MAX_REFINE_ID_LEN = 256
+# Cap the refine array itself so an N-million-entry payload can't drive
+# memory pressure even before per-entry processing. Storyboard sample sends
+# 2; real flows are unlikely to exceed a handful. 50 leaves headroom.
+_MAX_REFINE_ENTRIES = 50
+
+
+def _is_safe_id(value: Any) -> bool:
+    """True when ``value`` is a non-empty str within the echo length cap."""
+    return isinstance(value, str) and 0 < len(value) <= _MAX_REFINE_ID_LEN
+
 
 def _build_v1_refinement_applied(refine_entries: Any) -> list[RefinementApplied]:
     """Echo each refine entry back as a ``RefinementApplied`` with
@@ -248,10 +266,17 @@ def _build_v1_refinement_applied(refine_entries: Any) -> list[RefinementApplied]
 
     Each variant is a discriminated union by ``scope`` — we dispatch on
     the entry's ``scope`` to instantiate the matching ``RefinementApplied{1,2,3}``
-    wrapped in the top-level RootModel.
+    wrapped in the top-level RootModel. Buyer-supplied id strings are
+    length-capped before echo to bound request-driven memory pressure
+    (the adcp library types impose no cap; this is the defensive layer).
+    Unknown scopes and malformed entries (missing id, oversized id) are
+    silently dropped — known v1 behaviour, tracked for v2 telemetry.
     """
     applied: list[RefinementApplied] = []
-    for entry in refine_entries or []:
+    # Cap entry count up front so an N-million-entry array can't drive
+    # allocation pressure even before the per-entry loop runs.
+    iterable = list(refine_entries or [])[:_MAX_REFINE_ENTRIES]
+    for entry in iterable:
         # Refine and RefinementApplied are RootModel wrappers; unwrap if so.
         inner = getattr(entry, "root", entry)
         scope = getattr(inner, "scope", None)
@@ -262,7 +287,7 @@ def _build_v1_refinement_applied(refine_entries: Any) -> list[RefinementApplied]
             )
         elif scope_str == "product":
             product_id = getattr(inner, "product_id", None)
-            if product_id is None:
+            if not _is_safe_id(product_id):
                 continue
             applied.append(
                 RefinementApplied(
@@ -273,7 +298,7 @@ def _build_v1_refinement_applied(refine_entries: Any) -> list[RefinementApplied]
             )
         elif scope_str == "proposal":
             proposal_id = getattr(inner, "proposal_id", None)
-            if proposal_id is None:
+            if not _is_safe_id(proposal_id):
                 continue
             applied.append(
                 RefinementApplied(
@@ -282,7 +307,6 @@ def _build_v1_refinement_applied(refine_entries: Any) -> list[RefinementApplied]
                     )
                 )
             )
-        # Unknown scopes are silently dropped — a future scope addition
-        # in the spec would surface here as missing telemetry rather
-        # than crash the response.
+        # Unknown scope variants are silently dropped — forward-compat
+        # for spec additions.
     return applied

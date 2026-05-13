@@ -158,6 +158,90 @@ class TestBuildV1RefinementApplied:
         assert applied[0].root.scope == "request"
 
 
+class TestRefineEchoLengthCaps:
+    """Defensive caps on buyer-supplied refine echo.
+
+    The adcp library doesn't constrain ``RefinementApplied{2,3}`` id
+    string lengths, so without these caps a malicious buyer could send
+    a 10MB ``product_id`` and force the server to hold it through
+    Pydantic validation and echo it back. Verify oversize ids and
+    oversize arrays are silently dropped rather than echoed.
+    """
+
+    def test_oversized_product_id_dropped(self) -> None:
+        """A ``product_id`` longer than the cap is dropped from the
+        echo, not truncated. Truncation would corrupt the id for
+        downstream correlation; drop is safer."""
+        oversize = "x" * 257  # _MAX_REFINE_ID_LEN + 1
+        entries = [
+            SimpleNamespace(scope="product", product_id=oversize, action=None, ask="drop"),
+            SimpleNamespace(scope="request", ask="legit ask"),
+        ]
+
+        applied = _build_v1_refinement_applied(entries)
+
+        assert len(applied) == 1
+        assert applied[0].root.scope == "request"
+
+    def test_oversized_proposal_id_dropped(self) -> None:
+        """Same cap applies to ``proposal_id``."""
+        oversize = "y" * 257
+        entries = [
+            SimpleNamespace(scope="proposal", proposal_id=oversize, action=None, ask="x"),
+            SimpleNamespace(scope="request", ask="legit"),
+        ]
+
+        applied = _build_v1_refinement_applied(entries)
+
+        assert len(applied) == 1
+        assert applied[0].root.scope == "request"
+
+    def test_empty_product_id_dropped(self) -> None:
+        """Zero-length id is not a meaningful echo — drop alongside
+        the oversize case so the cap is symmetric."""
+        entries = [SimpleNamespace(scope="product", product_id="", action=None, ask="drop")]
+
+        applied = _build_v1_refinement_applied(entries)
+
+        assert applied == []
+
+    def test_max_length_id_accepted(self) -> None:
+        """Boundary: exactly at the cap is accepted. Off-by-one guard."""
+        at_cap = "z" * 256  # _MAX_REFINE_ID_LEN
+        entries = [SimpleNamespace(scope="product", product_id=at_cap, action=None, ask="x")]
+
+        applied = _build_v1_refinement_applied(entries)
+
+        assert len(applied) == 1
+        assert applied[0].root.product_id == at_cap
+
+    def test_excess_array_length_truncated(self) -> None:
+        """Refine arrays longer than ``_MAX_REFINE_ENTRIES`` are
+        truncated to the cap; the prefix is echoed, the tail is
+        dropped. Caps the request-driven memory before the per-entry
+        loop runs."""
+        # 100 entries — twice the cap.
+        entries = [SimpleNamespace(scope="request", ask=f"ask {i}") for i in range(100)]
+
+        applied = _build_v1_refinement_applied(entries)
+
+        assert len(applied) == 50  # _MAX_REFINE_ENTRIES
+
+    def test_non_string_product_id_dropped(self) -> None:
+        """Pydantic should already reject these upstream, but the
+        defensive layer holds for callers bypassing model validation
+        (e.g. in-process tests, future RootModel shape drift)."""
+        entries = [
+            SimpleNamespace(scope="product", product_id=12345, action=None, ask="x"),  # int, not str
+            SimpleNamespace(scope="request", ask="legit"),
+        ]
+
+        applied = _build_v1_refinement_applied(entries)
+
+        assert len(applied) == 1
+        assert applied[0].root.scope == "request"
+
+
 class TestRefinementAppliedNote:
     """The acknowledgement note is the buyer-facing breadcrumb that
     distinguishes v1 echo-only behaviour from v2 semantic refinement."""
