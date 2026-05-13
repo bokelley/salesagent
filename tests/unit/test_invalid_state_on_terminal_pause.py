@@ -45,20 +45,29 @@ class TestAdCPInvalidStateError:
 class TestPauseCanceledBuyGuard:
     """Behavioral coverage: ``_update_media_buy_impl`` raises
     ``AdCPInvalidStateError`` when called with ``paused=True/False`` against
-    a media buy whose status is terminal."""
+    a media buy whose status is terminal.
 
-    @pytest.mark.parametrize("terminal_status", ["canceled", "completed"])
+    The "is this state terminal?" decision delegates to the upstream AdCP
+    graph (:data:`adcp.decisioning.state_machines.MEDIA_BUY_TRANSITIONS`):
+    any state with an empty legal-next set is rejected. The earlier
+    hand-rolled tuple covered only ``("canceled", "completed")`` and
+    missed ``rejected`` (the third terminal in the spec graph). The
+    parametrize matrix below pins every terminal in the graph so a
+    future spec addition forces the test author to acknowledge the new
+    state explicitly.
+    """
+
+    @pytest.mark.parametrize("terminal_status", ["canceled", "completed", "rejected"])
     @pytest.mark.parametrize("paused_value", [True, False])
     def test_pause_or_resume_on_terminal_buy_raises_invalid_state(
         self, terminal_status: str, paused_value: bool
     ) -> None:
         """Both pause (``paused=True``) and resume (``paused=False``) on
-        either terminal state (``canceled``, ``completed``) must raise
+        any terminal state per :data:`MEDIA_BUY_TRANSITIONS` must raise
         ``AdCPInvalidStateError`` before any adapter dispatch.
 
-        Parametrized so a future change that handles only one of the
-        four (state, action) combinations correctly is caught by the
-        other three."""
+        Parametrized over every (state, action) combination so a future
+        change that handles only some correctly is caught by the others."""
         from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
         with MediaBuyUpdateEnv() as env:
@@ -70,6 +79,34 @@ class TestPauseCanceledBuyGuard:
             assert terminal_status in str(excinfo.value), (
                 f"Error message must name the offending terminal state; got {excinfo.value!s}"
             )
+
+    def test_terminal_states_match_upstream_graph(self) -> None:
+        """The set of states the guard rejects must equal the set of
+        terminal states in the upstream AdCP graph.
+
+        Lock-in regression: if upstream adds (or removes) a terminal
+        state, this test fails and forces the parametrize list above to
+        be updated. The hand-rolled tuple this refactor replaced had
+        drifted silently — this test prevents the same drift from
+        happening to the parametrize."""
+        from adcp.decisioning.state_machines import MEDIA_BUY_TRANSITIONS
+
+        upstream_terminals = {state for state, legal_next in MEDIA_BUY_TRANSITIONS.items() if not legal_next}
+        # Read the parametrize values straight off the method so the
+        # source of truth is the test's own decoration — adding a state
+        # there without adding it here (or vice-versa) is the failure
+        # mode this test catches.
+        marker = next(
+            m
+            for m in self.test_pause_or_resume_on_terminal_buy_raises_invalid_state.pytestmark  # type: ignore[attr-defined]
+            if m.name == "parametrize" and m.args[0] == "terminal_status"
+        )
+        tested_terminals = set(marker.args[1])
+        assert tested_terminals == upstream_terminals, (
+            f"Test parametrize {tested_terminals!r} drifted from upstream "
+            f"MEDIA_BUY_TRANSITIONS terminals {upstream_terminals!r}. Update "
+            "the parametrize to cover every state with no outgoing edges."
+        )
 
     @pytest.mark.parametrize("non_terminal_status", ["active", "paused", "pending_approval", "draft"])
     def test_pause_on_non_terminal_buy_does_not_raise_invalid_state(self, non_terminal_status: str) -> None:

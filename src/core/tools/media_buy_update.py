@@ -22,6 +22,7 @@ from typing import Any
 #: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
+from adcp.decisioning.state_machines import MEDIA_BUY_TRANSITIONS
 from adcp.types import CreativeAction, Error
 from sqlalchemy import select
 
@@ -57,6 +58,31 @@ from src.core.tools._gam_projection import (
     is_projected_media_buy_id,
     log_materialization_audit,
 )
+
+
+def _is_terminal_media_buy_state(status: str | None) -> bool:
+    """Return True iff ``status`` is a terminal state per the AdCP spec graph.
+
+    Reads :data:`adcp.decisioning.state_machines.MEDIA_BUY_TRANSITIONS` as
+    the single source of truth — terminal states are those mapping to an
+    empty ``frozenset()`` of legal next states. The upstream graph
+    currently lists ``canceled``, ``completed``, and ``rejected``;
+    earlier this branch hard-coded ``("canceled", "completed")``, which
+    silently drifts the moment the spec adds a new terminal state (e.g.
+    ``rejected``, which the inline tuple missed).
+
+    Statuses outside the spec's vocabulary (our DB models include
+    ``pending_approval`` / ``draft`` ahead of the lifecycle handoff to
+    the spec graph) are NOT terminal — they're pre-lifecycle internal
+    states that the spec's state machine doesn't model, and the
+    pause/resume guard MUST NOT reject them on the basis of being
+    "unknown". The upstream :func:`assert_media_buy_transition` raises
+    ``INVALID_STATE`` for unknown ``from_state`` values; that's the
+    wrong shape here.
+    """
+    if status is None:
+        return False
+    return status in MEDIA_BUY_TRANSITIONS and not MEDIA_BUY_TRANSITIONS[status]
 
 
 class _MaterializationAuditCtx:
@@ -735,17 +761,26 @@ def _update_media_buy_impl(
         if req.paused is not None:
             # Pre-validation: pause/resume on a terminal-state buy violates the
             # AdCP state machine. The cancel branch (above) already guards
-            # cancel-of-canceled with AdCPNotCancellableError; the symmetric
-            # guard for pause/resume raises AdCPInvalidStateError so buyers
-            # see the spec-canonical INVALID_STATE wire code on
+            # cancel-of-canceled with the narrower AdCPNotCancellableError;
+            # the broader pause/resume case raises AdCPInvalidStateError so
+            # buyers see the spec-canonical INVALID_STATE wire code on
             # ``/adcp_error/code`` (storyboard
             # ``media_buy_state_machine/pause_canceled_buy``). Runs BEFORE
             # adapter dispatch so the rejection is idempotency-spec friendly
             # — same payload yields the same wire code on retry regardless
             # of which adapter would have handled the transition.
+            #
+            # The "is this state terminal?" predicate reads the upstream
+            # AdCP graph (:data:`MEDIA_BUY_TRANSITIONS`) so a future spec
+            # addition of a new terminal state (e.g. ``rejected``, already
+            # there since adcp 5.3) is picked up by construction. The
+            # earlier hand-rolled tuple ``("canceled", "completed")`` had
+            # already drifted: ``rejected`` is terminal per spec but was
+            # not in the tuple, so pause/resume of a rejected buy would
+            # fall through to the adapter and return a less-typed error.
             current_mb = uow.media_buys.get_by_id(req.media_buy_id)
             current_status = str(current_mb.status) if current_mb else None
-            if current_status in ("canceled", "completed"):
+            if _is_terminal_media_buy_state(current_status):
                 action_name = "pause" if req.paused else "resume"
                 error_msg = (
                     f"media_buy_id={req.media_buy_id!r} is in terminal state {current_status!r} — "
