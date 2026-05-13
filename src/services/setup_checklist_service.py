@@ -11,6 +11,7 @@ from typing import Any
 
 from flask import url_for
 from sqlalchemy import func, select
+from werkzeug.routing.exceptions import BuildError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -103,26 +104,34 @@ class SetupChecklistService:
         return self._build_url(endpoint)
 
     def _build_url(self, endpoint: str, **kwargs: Any) -> str | None:
-        """Build a URL via Flask ``url_for``, tolerating no-context callers.
+        """Build a URL via Flask ``url_for``, tolerating callers whose
+        Flask context can't resolve admin-blueprint endpoints.
 
-        The service runs from two transports:
+        The service runs from three contexts:
 
-        * **Admin UI** (Flask) — admin pages need real URLs to render.
-        * **MCP/A2A** — ``validate_setup_complete`` runs inside
-          ``_create_media_buy_impl`` (transport-agnostic business logic
-          served by Starlette via :func:`adcp.server.serve`). No Flask
-          request stack exists there, so ``url_for`` would raise
-          ``RuntimeError``. ``validate_setup_complete`` reads only
-          ``task['name']`` to compose its error message, so an absent
-          URL is harmless on that path.
+        * **Admin UI** (full Flask app) — admin pages need real URLs to
+          render.
+        * **Tenant Management API** (standalone Flask app, only the
+          ``tenant_management_api`` blueprint registered) — ``url_for``
+          raises ``werkzeug.routing.BuildError`` because the admin-UI
+          endpoints aren't registered in that app. The API never reads
+          ``action_url`` anyway (it surfaces ``configure_path`` from a
+          static map in ``tenant_status_service._CONFIGURE_PATHS``), so
+          ``None`` is correct.
+        * **MCP/A2A** (Starlette via :func:`adcp.server.serve`) —
+          ``validate_setup_complete`` runs inside
+          ``_create_media_buy_impl``. No Flask request stack exists, so
+          ``url_for`` raises ``RuntimeError``.
+          ``validate_setup_complete`` reads only ``task['name']``, so an
+          absent URL is harmless.
 
         The completion gate (``is_complete`` evaluation) is unaffected
         by this fallback — only the cosmetic "Configure" link
-        disappears on the out-of-context path.
+        disappears on the non-admin-UI paths.
         """
         try:
             return url_for(endpoint, tenant_id=self.tenant_id, **kwargs)
-        except RuntimeError:
+        except (RuntimeError, BuildError):
             return None
 
     @staticmethod
