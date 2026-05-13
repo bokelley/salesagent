@@ -77,6 +77,37 @@ async def test_passthrough_when_x_adcp_auth_already_present():
 
 
 @pytest.mark.asyncio
+async def test_passthrough_when_both_headers_present_reversed_order():
+    """Both headers present, but ``Authorization`` arrives *before*
+    ``x-adcp-auth`` in the headers list. The middleware's single-pass
+    scan captures the bearer token first, then sees ``x-adcp-auth``
+    and short-circuits to passthrough. Pin this so a future refactor
+    of the scan loop doesn't accidentally inject when both headers
+    are present in a different order — the dual-credential audit
+    middleware (which logs the divergence) sees the same ordering and
+    we must agree."""
+    inner = CapturingScopeApp()
+    middleware = MultiHeaderBearerMiddleware(inner)
+
+    headers = [
+        # Reversed order vs. test_passthrough_when_x_adcp_auth_already_present.
+        (b"authorization", b"Bearer different-token-bbb"),
+        (b"x-adcp-auth", b"legacy-token-aaa"),
+    ]
+    await drive_asgi(_scope(list(headers)), middleware)
+
+    assert inner.called
+    assert inner.scope is not None
+    forwarded = inner.scope.get("headers") or []
+    x_adcp_entries = [v for n, v in forwarded if n == b"x-adcp-auth"]
+    assert x_adcp_entries == [b"legacy-token-aaa"], (
+        "Header order must not change the outcome — when x-adcp-auth is "
+        "present anywhere in the headers list, the middleware must "
+        "passthrough without injecting a second entry"
+    )
+
+
+@pytest.mark.asyncio
 async def test_passthrough_when_no_credential_present():
     """Unauthenticated requests pass through untouched — the inner SDK
     bearer middleware emits the canonical 401, and
