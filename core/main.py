@@ -77,6 +77,7 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
+from src.core.database.repositories import SalesAgentProposalStore
 from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,39 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
     return {row.tenant_id: shared for row in rows}
 
 
+class _LazyPlatformRouterWithStore(LazyPlatformRouter):
+    """:class:`LazyPlatformRouter` extended with a :meth:`proposal_store_for_tenant`
+    accessor for :mod:`adcp.decisioning.proposal_dispatch`.
+
+    The upstream :class:`PlatformRouter` (eager) exposes
+    ``proposal_store_for_tenant`` via its ``proposal_stores=`` kwarg,
+    but :class:`LazyPlatformRouter` does not — the kwarg only exists on
+    the eager variant. The framework's ``proposal_dispatch`` duck-types
+    the accessor via ``hasattr(platform, "proposal_store_for_tenant")``,
+    so adding it here is sufficient to plug the lazy router into the
+    proposal-lifecycle dispatch.
+
+    Single shared store across tenants: the
+    :class:`SalesAgentProposalStore` row is keyed on
+    ``(account_id, proposal_id)`` and the framework passes
+    ``expected_account_id`` on every read — tenant isolation is
+    enforced inside the store, not by handing each tenant a different
+    instance. Per-tenant store fan-out would mean a `dict[tenant_id,
+    Store]` keyed off boot-time tenant enumeration, which would miss
+    tenants registered after boot; the shared store has no such
+    boot-time coupling.
+    """
+
+    def __init__(self, *args: object, proposal_store: SalesAgentProposalStore | None = None, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._proposal_store = proposal_store
+
+    def proposal_store_for_tenant(self, tenant_id: str) -> SalesAgentProposalStore | None:
+        """Return the shared store for every tenant; ``None`` when no
+        store is wired (legacy callers that haven't migrated)."""
+        return self._proposal_store
+
+
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
@@ -274,11 +308,24 @@ def build_router() -> LazyPlatformRouter:
     # so refine falls through to get_products (the buyer-side wire
     # contract is unchanged).
     proposal_managers = _build_proposal_managers()
-    router = LazyPlatformRouter(
+    # Single shared ProposalStore for every tenant — tenant isolation
+    # runs inside the store on ``expected_account_id`` (the framework
+    # passes the principal's account on every call). Wiring this lets
+    # the storyboard's ``proposal_finalize`` flow work end-to-end:
+    # ``get_products(brief)`` persists the proposal, then
+    # ``create_media_buy(proposal_id=X)`` resolves it and derives
+    # packages from the proposal's allocations. Without the store
+    # wired, the framework's ``proposal_dispatch`` short-circuits at
+    # ``hasattr(platform, "proposal_store_for_tenant")`` and the
+    # create_media_buy call falls through to a 0-package payload
+    # → INVALID_REQUEST.
+    proposal_store = SalesAgentProposalStore()
+    router = _LazyPlatformRouterWithStore(
         accounts=SalesagentAccountStore(),
         factory=build_platform_for_tenant,
         capabilities=capabilities,
         proposal_managers=proposal_managers,
+        proposal_store=proposal_store,
     )
     # validate_idempotency_wiring inspects the platform handed to serve()
     # for @IdempotencyStore.wrap decorators. The router shell has none —
