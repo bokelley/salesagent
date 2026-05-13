@@ -91,11 +91,11 @@ class TestCheckPermissionsLive:
         """Nice-to-haves like reporting deny without breaking ``fully_operational``."""
         adapter = self._adapter_with_probe_responses(
             mock_principal,
-            {"/services/v4/reports": 403, "/": 200},
+            {"/reporting/": 403, "/": 200},
         )
         report = adapter.check_permissions()
         assert report.fully_operational is True
-        reporting = next(c for c in report.checks if c.name == "v4_reporting")
+        reporting = next(c for c in report.checks if c.name == "reporting_jobs")
         assert reporting.granted is False
         assert reporting.required is False
 

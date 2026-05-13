@@ -1,12 +1,27 @@
 """FreeWheel Query Reporting API sync — skeleton.
 
-When the FW Reporting API scope (Tier 2) is granted, this module will:
+FW's Reporting API lives at ``/reporting/*`` (singular) at the host root,
+NOT under ``/services/v*``. Verified live: every variant returns AWS API
+Gateway IAM-deny for our test user, confirming the resources exist and
+just need a scope grant.
 
-1. Submit a Query Reporting job covering all placements for the tenant
-   (impressions, completed_views, spend, by placement, today or
-   today-minus-N hours).
+Surface map (probed 2026-05-13):
+    POST /reporting/jobs                         — submit async report
+    GET  /reporting/jobs                         — list jobs
+    GET  /reporting/jobs/{id}                    — poll status
+    GET  /reporting/jobs/{id}/result(s)/download — fetch CSV/JSON output
+    GET  /reporting/queries                      — saved queries (CRUD)
+    GET  /reporting/saved_queries                — same family
+    GET  /reporting/dimensions                   — list available report dimensions
+    GET  /reporting/metrics                      — list available metrics
+    GET  /reporting/fields, /schema              — full schema introspection
+
+When the FW Reporting API scope is granted, this module will:
+
+1. Submit a job covering all placements for the tenant (impressions,
+   completed_views, spend, by placement, today or today-minus-N hours).
 2. Poll the job until COMPLETE.
-3. Fetch the result (CSV/JSON).
+3. Fetch the result.
 4. Bulk-upsert into ``freewheel_placement_stats`` via
    :class:`FreeWheelPlacementStatsRepository`.
 

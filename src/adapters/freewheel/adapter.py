@@ -363,10 +363,22 @@ class FreeWheelAdapter(AdServerAdapter):
                 "creative_trafficking",
             ),
             (
-                "v4_reporting",
-                "Query Reporting API for delivery metrics",
+                # The Reporting API lives at /reporting/* (singular) at the
+                # host root, NOT under /services/v*. Probing the schema
+                # endpoint is cheap and tells us if scope is granted at all;
+                # /reporting/jobs is the actual submit URL when wired.
+                "reporting_schema",
+                "Query Reporting API (introspect available dimensions)",
                 "GET",
-                "/services/v4/reports",
+                "/reporting/dimensions",
+                False,
+                "delivery_reporting",
+            ),
+            (
+                "reporting_jobs",
+                "Query Reporting API (submit + poll delivery report jobs)",
+                "GET",
+                "/reporting/jobs",
                 False,
                 "delivery_reporting",
             ),

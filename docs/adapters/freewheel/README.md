@@ -172,10 +172,24 @@ Core buyer-facing flow is fully unblocked today. Remaining asks are
 nice-to-haves that improve operator UX and unlock reporting:
 
 **Tier 1 — reporting (highest publisher value):**
-- Query Reporting API access (path TBD — FW reporting doesn't live at
-  v3 or v4 of `api.freewheel.tv/services/*`; need Mathijs to point us
-  at the right host/path). Unlocks `get_media_buy_delivery` and
-  `get_packages_snapshot`.
+- Query Reporting API at `api.freewheel.tv/reporting/*` (singular,
+  host root — NOT under `/services/v*`). Specific endpoints needed:
+  - `POST /reporting/jobs` — submit async report jobs
+  - `GET /reporting/jobs/{id}` — poll job status
+  - `GET /reporting/jobs/{id}/result(s)/download` — fetch results
+  - `GET /reporting/dimensions` + `/reporting/metrics` — introspect
+    available report fields (used to render schema-driven product
+    config in the AdCP product UI)
+  - `GET /reporting/queries` + `/reporting/saved_queries` — saved
+    query CRUD (lets publishers reuse named report shapes)
+
+  Verified live: every `/reporting/*` path returns AWS API Gateway
+  IAM-deny (`{"Message": "User is not authorized... explicit deny in
+  identity-based policy"}`), confirming the resources exist and only
+  an IAM policy update is needed for user `35696`.
+
+  Unlocks `get_media_buy_delivery` (historical) and
+  `get_packages_snapshot` (near-real-time pacing) — both AdCP-required.
 
 **Tier 2 — improves operator UX:**
 - `targeting_profiles` (read) — attach saved FW targeting to products
