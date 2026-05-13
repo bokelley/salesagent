@@ -233,8 +233,8 @@ def save_adapter_config(tenant_id, **kwargs):
                 adapter_config.mock_manual_approval_required = getattr(
                     validated_config, "manual_approval_required", False
                 )
-            # Note: GAM will be added as its schema is created. Triton + FreeWheel
-            # already use config_json via their connection schemas.
+            # Note: GAM will be added as its schema is created. FreeWheel
+            # already uses config_json via its connection schema.
 
             session.commit()
             logger.info(f"Saved adapter config for tenant {tenant_id}: {adapter_type}")
@@ -456,82 +456,10 @@ def sync_freewheel_inventory(tenant_id, **kwargs):
         return jsonify({"success": False, "error": "Sync failed (see server logs)"}), 500
 
 
-# Triton-specific endpoints
-
-
-@adapters_bp.route("/api/tenant/<tenant_id>/adapters/triton/test-connection", methods=["POST"])
-@require_tenant_access(role=("admin",), allow_embedded_writes=True)
-def test_triton_connection(tenant_id, **kwargs):
-    """Verify Triton TAP credentials by performing a JWT login.
-
-    Accepts ``username`` (required) and ``password`` (optional — falls back to
-    the encrypted password already stored on AdapterConfig.config_json).
-
-    Read-only probe — validates credentials against the upstream provider and
-    never writes to AdapterConfig — so it opts into the embedded-write gate.
-    """
-    from src.core.utils.encryption import is_encrypted
-
-    try:
-        data = request.get_json() or {}
-        username = data.get("username")
-        password = data.get("password")
-        base_url = data.get("base_url") or "https://mbapi.tritondigital.com"
-        login_url = data.get("login_url") or "https://login.tritondigital.com"
-
-        if not username:
-            return jsonify({"success": False, "error": "username is required"}), 400
-
-        # https-only — prevent the form from redirecting credential POST to an
-        # attacker-controlled host.
-        if not base_url.startswith("https://") or not login_url.startswith("https://"):
-            return jsonify({"success": False, "error": "base_url and login_url must be https://"}), 400
-
-        # Reject submitted ciphertext — see cross-tenant smuggling note in
-        # save_adapter_config.
-        if password and is_encrypted(password):
-            return (
-                jsonify({"success": False, "error": "password must be plaintext (encrypted-token replay rejected)"}),
-                400,
-            )
-
-        if not password:
-            from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-            with get_db_session() as session:
-                existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
-                if existing and existing.config_json:
-                    from src.adapters.triton import TritonConnectionConfig
-
-                    try:
-                        rehydrated = TritonConnectionConfig.model_validate(existing.config_json)
-                        password = rehydrated.password
-                    except ValidationError:
-                        password = None
-        if not password:
-            return jsonify({"success": False, "error": "password is required for first connection test"}), 400
-
-        from src.adapters.triton import TritonAPIError, TritonClient
-
-        client = TritonClient(username=username, password=password, base_url=base_url, login_url=login_url)
-        try:
-            client.login()
-        except TritonAPIError as exc:
-            logger.warning("Triton auth probe failed: %s body=%s", exc, exc.body)
-            return jsonify({"success": False, "error": "Triton rejected the credentials"}), 200
-
-        publisher_name: str | None = None
-        try:
-            publisher = client.get_publisher()
-            publisher_name = publisher.get("name") or publisher.get("displayName")
-        except TritonAPIError:
-            pass  # JWT works; publisher endpoint specifics may vary
-
-        return jsonify({"success": True, "publisher_name": publisher_name})
-
-    except Exception as e:
-        logger.error(f"Triton connection test failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
+# Triton test-connection endpoint removed — adapter parked while their APIs
+# aren't production-ready. Source remains under src/adapters/triton/ so
+# restoring the endpoint is a single revert; templates/adapters/triton/ also
+# preserved.
 
 
 # Broadstreet-specific endpoints

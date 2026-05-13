@@ -130,7 +130,9 @@ class TestTenantManagementAPIIntegration:
         assert body["count"] == len(body["adapters"])
 
         types = {entry["type"] for entry in body["adapters"]}
-        assert types == {"google_ad_manager", "mock", "freewheel", "triton", "broadstreet"}
+        assert types == {"google_ad_manager", "mock", "freewheel", "broadstreet"}
+        # Triton is parked — must not appear in the discovery catalog.
+        assert "triton" not in types
 
         # FreeWheel entry exercises every interesting field path
         fw = next(entry for entry in body["adapters"] if entry["type"] == "freewheel")
@@ -161,7 +163,7 @@ class TestTenantManagementAPIIntegration:
         assert response.status_code == 200
         types = {entry["type"] for entry in response.json["adapters"]}
         assert "mock" not in types
-        assert types == {"google_ad_manager", "freewheel", "triton", "broadstreet"}
+        assert types == {"google_ad_manager", "freewheel", "broadstreet"}
         # And every returned entry is tier=live
         assert all(entry["tier"] == "live" for entry in response.json["adapters"])
 

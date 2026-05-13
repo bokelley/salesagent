@@ -759,14 +759,8 @@
                         <p>Simple ad serving for local publishers</p>
                     </div>
 
-                    <div class="adapter-card {% if active_adapter == 'triton' %}current{% endif %}"
-                         onclick="selectAdapter('triton')">
-                        {% if active_adapter == 'triton' %}
-                        <span class="adapter-badge">Current</span>
-                        {% endif %}
-                        <h4>Triton Digital</h4>
-                        <p>Audio and podcast advertising via the TAP Media Buying API</p>
-                    </div>
+                    {# Triton picker hidden — adapter parked while their APIs aren't production-ready.
+                       Source remains under src/adapters/triton/; restore the card + registry entry to bring it back. #}
 
                     <div class="adapter-card {% if active_adapter == 'freewheel' %}current{% endif %}"
                          onclick="selectAdapter('freewheel')">

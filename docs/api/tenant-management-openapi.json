@@ -158,8 +158,7 @@
             "broadstreet": "#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig",
             "freewheel": "#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig",
             "google_ad_manager": "#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig",
-            "mock": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig",
-            "triton": "#/components/schemas/AdapterConfigEnvelope.61b280c.TritonAdapterConfig"
+            "mock": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig"
           },
           "propertyName": "type"
         },
@@ -172,9 +171,6 @@
           },
           {
             "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig"
-          },
-          {
-            "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.TritonAdapterConfig"
           },
           {
             "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig"
@@ -370,70 +366,6 @@
           }
         },
         "title": "MockAdapterConfig",
-        "type": "object"
-      },
-      "AdapterConfigEnvelope.61b280c.TritonAdapterConfig": {
-        "additionalProperties": false,
-        "description": "Triton Digital TAP Media Buying API adapter configuration.\n\n``auth_type`` selects between username+password login (TAP's default flow)\nand OAuth client_credentials (used when Triton provisions service-account\ncredentials \u2014 the same username/password slots hold the client_id /\nclient_secret pair).",
-        "properties": {
-          "auth_type": {
-            "default": "password",
-            "enum": [
-              "password",
-              "oauth_client_credentials"
-            ],
-            "title": "Auth Type",
-            "type": "string"
-          },
-          "base_url": {
-            "default": "https://mbapi.tritondigital.com",
-            "maxLength": 255,
-            "title": "Base Url",
-            "type": "string"
-          },
-          "default_advertiser_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Default Advertiser Id"
-          },
-          "login_url": {
-            "default": "https://login.tritondigital.com",
-            "maxLength": 255,
-            "title": "Login Url",
-            "type": "string"
-          },
-          "password": {
-            "format": "password",
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
-          },
-          "type": {
-            "const": "triton",
-            "default": "triton",
-            "title": "Type",
-            "type": "string"
-          },
-          "username": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Username",
-            "type": "string"
-          }
-        },
-        "required": [
-          "username",
-          "password"
-        ],
-        "title": "TritonAdapterConfig",
         "type": "object"
       },
       "AdapterConfigResponse.f44f287": {
@@ -2419,8 +2351,7 @@
                 "broadstreet": "#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig",
                 "freewheel": "#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig",
                 "google_ad_manager": "#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig",
-                "mock": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig",
-                "triton": "#/components/schemas/PreviewAdapterRequest.f44f287.TritonAdapterConfig"
+                "mock": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig"
               },
               "propertyName": "type"
             },
@@ -2433,9 +2364,6 @@
               },
               {
                 "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig"
-              },
-              {
-                "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.TritonAdapterConfig"
               },
               {
                 "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig"
@@ -2640,70 +2568,6 @@
         "title": "MockAdapterConfig",
         "type": "object"
       },
-      "PreviewAdapterRequest.f44f287.TritonAdapterConfig": {
-        "additionalProperties": false,
-        "description": "Triton Digital TAP Media Buying API adapter configuration.\n\n``auth_type`` selects between username+password login (TAP's default flow)\nand OAuth client_credentials (used when Triton provisions service-account\ncredentials \u2014 the same username/password slots hold the client_id /\nclient_secret pair).",
-        "properties": {
-          "auth_type": {
-            "default": "password",
-            "enum": [
-              "password",
-              "oauth_client_credentials"
-            ],
-            "title": "Auth Type",
-            "type": "string"
-          },
-          "base_url": {
-            "default": "https://mbapi.tritondigital.com",
-            "maxLength": 255,
-            "title": "Base Url",
-            "type": "string"
-          },
-          "default_advertiser_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Default Advertiser Id"
-          },
-          "login_url": {
-            "default": "https://login.tritondigital.com",
-            "maxLength": 255,
-            "title": "Login Url",
-            "type": "string"
-          },
-          "password": {
-            "format": "password",
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
-          },
-          "type": {
-            "const": "triton",
-            "default": "triton",
-            "title": "Type",
-            "type": "string"
-          },
-          "username": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Username",
-            "type": "string"
-          }
-        },
-        "required": [
-          "username",
-          "password"
-        ],
-        "title": "TritonAdapterConfig",
-        "type": "object"
-      },
       "PreviewAdapterResponse.f44f287": {
         "additionalProperties": false,
         "description": "Adapter preview with network metadata for the Storefront UX.\n\n``ok=False`` (bad creds) is returned with HTTP 200 \u2014 Storefront renders\nthis inline. Hard errors (malformed body, missing API key) still surface\nvia the normal 4xx path.",
@@ -2794,8 +2658,7 @@
                 "broadstreet": "#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig",
                 "freewheel": "#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig",
                 "google_ad_manager": "#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig",
-                "mock": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig",
-                "triton": "#/components/schemas/ProvisionTenantRequest.f44f287.TritonAdapterConfig"
+                "mock": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig"
               },
               "propertyName": "type"
             },
@@ -2808,9 +2671,6 @@
               },
               {
                 "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig"
-              },
-              {
-                "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.TritonAdapterConfig"
               },
               {
                 "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig"
@@ -3149,70 +3009,6 @@
           }
         },
         "title": "MockAdapterConfig",
-        "type": "object"
-      },
-      "ProvisionTenantRequest.f44f287.TritonAdapterConfig": {
-        "additionalProperties": false,
-        "description": "Triton Digital TAP Media Buying API adapter configuration.\n\n``auth_type`` selects between username+password login (TAP's default flow)\nand OAuth client_credentials (used when Triton provisions service-account\ncredentials \u2014 the same username/password slots hold the client_id /\nclient_secret pair).",
-        "properties": {
-          "auth_type": {
-            "default": "password",
-            "enum": [
-              "password",
-              "oauth_client_credentials"
-            ],
-            "title": "Auth Type",
-            "type": "string"
-          },
-          "base_url": {
-            "default": "https://mbapi.tritondigital.com",
-            "maxLength": 255,
-            "title": "Base Url",
-            "type": "string"
-          },
-          "default_advertiser_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Default Advertiser Id"
-          },
-          "login_url": {
-            "default": "https://login.tritondigital.com",
-            "maxLength": 255,
-            "title": "Login Url",
-            "type": "string"
-          },
-          "password": {
-            "format": "password",
-            "title": "Password",
-            "type": "string",
-            "writeOnly": true
-          },
-          "type": {
-            "const": "triton",
-            "default": "triton",
-            "title": "Type",
-            "type": "string"
-          },
-          "username": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Username",
-            "type": "string"
-          }
-        },
-        "required": [
-          "username",
-          "password"
-        ],
-        "title": "TritonAdapterConfig",
         "type": "object"
       },
       "ProvisionTenantResponse.f44f287": {

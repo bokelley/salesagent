@@ -1,4 +1,15 @@
-# Triton Digital Adapter
+# Triton Digital Adapter — PARKED
+
+> **This adapter is currently parked.** Triton has indicated their APIs aren't
+> production-ready (2026-05). The adapter is deregistered from the
+> `ADAPTER_REGISTRY` and the typed `AdapterConfig` union, hidden from the
+> tenant-settings picker, and excluded from `GET /api/v1/tenant-management/adapters`.
+>
+> The source under `src/adapters/triton/` and the unit tests are preserved so
+> restoration is a one-commit revert when Triton's APIs come back. The historical
+> design notes below remain for reference.
+
+---
 
 The Triton adapter integrates the Prebid Sales Agent with Triton Digital's
 **TAP Media Buying API** (`mbapi.tritondigital.com`) for streaming audio and

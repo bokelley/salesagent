@@ -9,7 +9,6 @@ import pytest
 
 from src.adapters import get_adapter_default_channels, get_adapter_schemas
 from src.adapters.triton import TritonAdapter, TritonAPIError, TritonClient
-from src.adapters.triton.schemas import TritonConnectionConfig, TritonProductConfig
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adapter_test_helpers import invoke_create_media_buy
@@ -53,20 +52,25 @@ def sample_packages():
 
 
 class TestRegistry:
-    def test_get_adapter_schemas_returns_triton_classes(self):
-        schemas = get_adapter_schemas("triton")
-        assert schemas is not None
-        assert schemas.connection_config is TritonConnectionConfig
-        assert schemas.product_config is TritonProductConfig
-        assert schemas.capabilities.inventory_entity_label == "Stations"
+    """Triton is parked while its APIs aren't production-ready — deregistered
+    from ``ADAPTER_REGISTRY``. These tests pin the parked behaviour so
+    re-introducing the entry has a fixed point to flip against.
 
-    def test_triton_digital_alias_resolves(self):
-        assert get_adapter_schemas("triton_digital") is not None
+    The adapter source under ``src/adapters/triton/`` is preserved, so the
+    rest of the file's direct-construction tests (TestAdapterDryRun etc.)
+    still exercise the adapter — just not via the registry."""
 
-    def test_default_channels(self):
-        channels = get_adapter_default_channels("triton")
-        assert "streaming_audio" in channels
-        assert "podcast" in channels
+    def test_triton_not_registered(self):
+        """``get_adapter_schemas`` returns ``None`` for unregistered adapter types.
+        Both the canonical name and the alias must miss."""
+        assert get_adapter_schemas("triton") is None
+        assert get_adapter_schemas("triton_digital") is None
+
+    def test_default_channels_empty_when_deregistered(self):
+        """``get_adapter_default_channels`` returns an empty list for any
+        adapter type not in the registry — surfaces the parked state at
+        every channel-resolution call site."""
+        assert get_adapter_default_channels("triton") == []
 
 
 class TestAdapterDryRun:

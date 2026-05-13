@@ -29,7 +29,6 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantResponse,
     TenantDetail,
     TenantSummary,
-    TritonAdapterConfig,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
 )
@@ -120,29 +119,6 @@ def test_freewheel_adapter_config_rejects_invalid_environment():
         FreeWheelAdapterConfig(type="freewheel", api_token="t", environment="dev")
 
 
-def test_triton_adapter_config_happy_path():
-    cfg = TritonAdapterConfig(type="triton", username="pub@example.com", password="secret")
-    assert cfg.username == "pub@example.com"
-    assert cfg.password.get_secret_value() == "secret"
-    assert cfg.auth_type == "password"
-    assert cfg.base_url == "https://mbapi.tritondigital.com"
-
-
-def test_triton_adapter_config_accepts_oauth_client_credentials():
-    cfg = TritonAdapterConfig(
-        type="triton",
-        auth_type="oauth_client_credentials",
-        username="client-id-123",
-        password="client-secret-xyz",
-    )
-    assert cfg.auth_type == "oauth_client_credentials"
-
-
-def test_triton_adapter_config_rejects_missing_password():
-    with pytest.raises(ValidationError):
-        TritonAdapterConfig(type="triton", username="pub@example.com")
-
-
 def test_broadstreet_adapter_config_happy_path():
     cfg = BroadstreetAdapterConfig(type="broadstreet", network_id="net_123", api_key="key_abc")
     assert cfg.network_id == "net_123"
@@ -200,16 +176,19 @@ def test_provision_request_happy_path_freewheel():
     assert req.adapter.environment == "staging"
 
 
-def test_provision_request_happy_path_triton():
-    payload = _provision_payload(adapter={"type": "triton", "username": "pub@example.com", "password": "secret"})
-    req = ProvisionTenantRequest.model_validate(payload)
-    assert isinstance(req.adapter, TritonAdapterConfig)
-
-
 def test_provision_request_happy_path_broadstreet():
     payload = _provision_payload(adapter={"type": "broadstreet", "network_id": "net_123", "api_key": "key_abc"})
     req = ProvisionTenantRequest.model_validate(payload)
     assert isinstance(req.adapter, BroadstreetAdapterConfig)
+
+
+def test_provision_request_rejects_parked_triton_adapter():
+    """Triton is parked — typed embedder clients must NOT be able to provision
+    tenants on it. The discriminated union rejects type='triton' the same way
+    it rejects any unknown adapter type."""
+    payload = _provision_payload(adapter={"type": "triton", "username": "u", "password": "p"})
+    with pytest.raises(ValidationError):
+        ProvisionTenantRequest.model_validate(payload)
 
 
 def test_provision_request_with_initial_principal():

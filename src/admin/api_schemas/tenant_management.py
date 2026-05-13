@@ -148,26 +148,6 @@ class FreeWheelAdapterConfig(BaseModel):
         return self
 
 
-class TritonAdapterConfig(BaseModel):
-    """Triton Digital TAP Media Buying API adapter configuration.
-
-    ``auth_type`` selects between username+password login (TAP's default flow)
-    and OAuth client_credentials (used when Triton provisions service-account
-    credentials — the same username/password slots hold the client_id /
-    client_secret pair).
-    """
-
-    model_config = _config()
-
-    type: Literal["triton"] = "triton"
-    auth_type: Literal["password", "oauth_client_credentials"] = "password"
-    username: str = Field(..., min_length=1, max_length=255)
-    password: SecretStr
-    base_url: str = Field(default="https://mbapi.tritondigital.com", max_length=255)
-    login_url: str = Field(default="https://login.tritondigital.com", max_length=255)
-    default_advertiser_id: str | None = Field(default=None, max_length=64)
-
-
 class BroadstreetAdapterConfig(BaseModel):
     """Broadstreet adapter configuration."""
 
@@ -180,8 +160,12 @@ class BroadstreetAdapterConfig(BaseModel):
 
 
 # Public discriminated alias used in request/response schemas.
+# Triton (``type="triton"``) is intentionally absent — the adapter is parked
+# while Triton's APIs aren't production-ready. Restoring is a one-line union
+# addition + registry re-add when their APIs come back; the source module
+# under src/adapters/triton/ is preserved.
 AdapterConfig = Annotated[
-    GAMAdapterConfig | MockAdapterConfig | FreeWheelAdapterConfig | TritonAdapterConfig | BroadstreetAdapterConfig,
+    GAMAdapterConfig | MockAdapterConfig | FreeWheelAdapterConfig | BroadstreetAdapterConfig,
     Field(discriminator="type"),
 ]
 

@@ -21,11 +21,13 @@ class TestAdapterDefaultChannels:
         assert "olv" in channels  # V3: video → olv
         assert "social" in channels  # V3: native → social
 
-    def test_triton_supports_streaming_audio_podcast(self):
-        """Test that Triton adapter supports streaming_audio and podcast."""
+    def test_triton_is_parked_so_returns_no_channels(self):
+        """Triton is parked while their APIs aren't production-ready —
+        deregistered from ADAPTER_REGISTRY. ``get_adapter_default_channels``
+        returns an empty list for unregistered adapters, surfacing the
+        parked state at the lookup boundary."""
         channels = get_adapter_default_channels("triton")
-        assert "streaming_audio" in channels  # V3: audio → streaming_audio
-        assert "podcast" in channels
+        assert channels == []
 
     def test_freewheel_supports_olv_ctv(self):
         """Test that FreeWheel adapter supports olv (online video) and ctv."""

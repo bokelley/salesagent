@@ -63,7 +63,6 @@ from src.admin.api_schemas.tenant_management import (
     TenantStatusResponse,
     TenantSummary,
     TestConnectionResponse,
-    TritonAdapterConfig,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
     WebhookSubscriptionCreatedResponse,
@@ -208,16 +207,6 @@ def _adapter_config_to_dict(adapter: AdapterConfigSchema) -> dict:
             "environment": adapter.environment,
             "default_advertiser_id": adapter.default_advertiser_id,
         }
-    if isinstance(adapter, TritonAdapterConfig):
-        return {
-            "type": "triton",
-            "auth_type": adapter.auth_type,
-            "username": adapter.username,
-            "password": adapter.password.get_secret_value(),
-            "base_url": adapter.base_url,
-            "login_url": adapter.login_url,
-            "default_advertiser_id": adapter.default_advertiser_id,
-        }
     if isinstance(adapter, BroadstreetAdapterConfig):
         return {
             "type": "broadstreet",
@@ -278,22 +267,6 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             tenant_id=tenant_id,
             adapter_type="freewheel",
             config_json=fw_validated.model_dump(),
-        )
-    elif isinstance(adapter, TritonAdapterConfig):
-        from src.adapters.triton import TritonConnectionConfig
-
-        triton_validated = TritonConnectionConfig(
-            auth_type=adapter.auth_type,
-            username=adapter.username,
-            password=adapter.password.get_secret_value(),
-            base_url=adapter.base_url,
-            login_url=adapter.login_url,
-            default_advertiser_id=adapter.default_advertiser_id,
-        )
-        ac = AdapterConfig(
-            tenant_id=tenant_id,
-            adapter_type="triton",
-            config_json=triton_validated.model_dump(),
         )
     elif isinstance(adapter, BroadstreetAdapterConfig):
         from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig
@@ -373,11 +346,6 @@ _ADAPTER_CATALOG_METADATA: dict[str, dict[str, str]] = {
         "description": "Video and CTV advertising via Comcast/FreeWheel's Publisher API.",
         "tier": "live",
     },
-    "triton": {
-        "name": "Triton Digital",
-        "description": "Audio and podcast advertising via the Triton TAP Media Buying API.",
-        "tier": "live",
-    },
     "broadstreet": {
         "name": "Broadstreet",
         "description": "Direct sold display and email-newsletter inventory via the Broadstreet Ads API.",
@@ -391,7 +359,6 @@ _ADAPTER_CONFIG_TYPED = {
     "google_ad_manager": GAMAdapterConfig,
     "mock": MockAdapterConfig,
     "freewheel": FreeWheelAdapterConfig,
-    "triton": TritonAdapterConfig,
     "broadstreet": BroadstreetAdapterConfig,
 }
 
@@ -535,6 +502,24 @@ def create_tenant():
                 if field not in data:
                     return jsonify({"error": f"Missing required field: {field}"}), 400
 
+            # Reject any ad_server not in ADAPTER_REGISTRY so deregistered
+            # adapters (currently Triton — APIs not production-ready) can't
+            # create tenants via the legacy non-spectree path. The spectree
+            # POST /tenants/provision is already gated by the typed
+            # AdapterConfig discriminated union.
+            from src.adapters import ADAPTER_REGISTRY
+
+            if data["ad_server"] not in ADAPTER_REGISTRY:
+                return (
+                    jsonify(
+                        {
+                            "error": f"Unsupported ad_server: {data['ad_server']!r}",
+                            "supported": sorted(k for k in ADAPTER_REGISTRY if k != "creative_engine"),
+                        }
+                    ),
+                    400,
+                )
+
             # Validate webhook URLs for SSRF protection
             webhook_fields = {
                 "slack_webhook_url": "Slack webhook URL",
@@ -622,36 +607,6 @@ def create_tenant():
                     updated_at=datetime.now(UTC),
                 )
                 # NOTE: gam_company_id removed - advertiser_id is per-principal in platform_mappings
-            elif adapter_type in {"triton", "triton_digital"}:
-                # Validate Triton credentials through TritonConnectionConfig (encrypts password).
-                # Reject submitted ciphertext to close the cross-tenant smuggling
-                # vector — same defence as the admin/blueprints/adapters.py
-                # save_adapter_config endpoint. See M1/S7 in security review.
-                from src.adapters.triton import TritonConnectionConfig
-                from src.core.utils.encryption import is_encrypted
-
-                if data.get("password") and is_encrypted(data["password"]):
-                    return jsonify({"error": "password must be plaintext (encrypted-token replay rejected)"}), 400
-                triton_payload = {
-                    k: data[k]
-                    for k in (
-                        "auth_type",
-                        "username",
-                        "password",
-                        "base_url",
-                        "login_url",
-                        "default_advertiser_id",
-                    )
-                    if k in data
-                }
-                validated = TritonConnectionConfig(**triton_payload)
-                new_adapter = AdapterConfig(
-                    tenant_id=tenant_id,
-                    adapter_type=adapter_type,
-                    config_json=validated.model_dump(),
-                    created_at=datetime.now(UTC),
-                    updated_at=datetime.now(UTC),
-                )
             elif adapter_type == "freewheel":
                 # Validate FreeWheel credentials through FreeWheelConnectionConfig.
                 # Reject submitted ciphertext on any secret field
@@ -706,8 +661,6 @@ def create_tenant():
                 if adapter_type == "google_ad_manager":
                     # For GAM, add a placeholder advertiser ID
                     default_mappings = {"google_ad_manager": {"advertiser_id": "placeholder"}}
-                elif adapter_type in {"triton", "triton_digital"}:
-                    default_mappings = {"triton": {"advertiser_id": "placeholder"}}
                 elif adapter_type == "freewheel":
                     default_mappings = {"freewheel": {"advertiser_id": "placeholder"}}
                 else:

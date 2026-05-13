@@ -120,7 +120,7 @@ Skip if the adapter doesn't need a synced inventory taxonomy. Most do.
 
 ## Phase 3 — Reporting cache (if the platform has separate reporting API)
 
-Many platforms (FW, GAM, Triton…) put delivery metrics on a separate API
+Many platforms (FW, GAM, etc.) put delivery metrics on a separate API
 surface. If yours does, build the **read path first** anchored on AdCP's
 contract; you can ship the actual reporting client later.
 
@@ -200,8 +200,8 @@ Three places. Miss any one and the adapter is unreachable.
 
 ## Phase 6 — Admin API endpoints
 
-In `src/admin/blueprints/adapters.py`. Pre-existing routes for FW/Triton are
-the precedent.
+In `src/admin/blueprints/adapters.py`. Pre-existing FreeWheel + Broadstreet
+routes are the precedent.
 
 - [ ] **`POST /api/tenant/<tenant_id>/adapters/<name>/test-connection`** —
       validates submitted credentials by minting a token / hitting a probe

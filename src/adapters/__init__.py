@@ -10,7 +10,12 @@ from .creative_engine import CreativeEngineAdapter
 from .freewheel import FreeWheelAdapter
 from .google_ad_manager import GoogleAdManager as GAMAdapter
 from .mock_ad_server import MockAdServer as MockAdapter
-from .triton import TritonAdapter
+
+# Triton is parked — module is preserved (see src/adapters/triton/) and tests
+# still run, but the adapter is intentionally NOT registered: Triton told us
+# their APIs aren't production-ready (2026-05). Restoring is a registry-only
+# revert when their APIs come back. No tenants can select "triton" as their
+# ad_server while it's deregistered.
 
 # Map of adapter type strings to adapter classes
 ADAPTER_REGISTRY = {
@@ -19,8 +24,6 @@ ADAPTER_REGISTRY = {
     "broadstreet": BroadstreetAdapter,
     "freewheel": FreeWheelAdapter,
     "mock": MockAdapter,
-    "triton": TritonAdapter,
-    "triton_digital": TritonAdapter,
     "creative_engine": CreativeEngineAdapter,
 }
 
