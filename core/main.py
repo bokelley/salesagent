@@ -68,7 +68,6 @@ import src.services.webhook_signing  # noqa: F401
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
-from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -423,8 +422,9 @@ def _serve_kwargs(
     etc. The hooks that diverge between production and in-process tests:
 
     * ``include_scheduler``: production runs background schedulers via
-      :class:`SchedulerLifespanMiddleware`; tests skip them so background
-      polling doesn't race the test DB lifecycle.
+      :func:`adcp.server.serve`'s ``on_startup`` / ``on_shutdown`` hooks
+      (adcp 5.4.0 #713); tests skip them so background polling doesn't
+      race the test DB lifecycle.
     * ``include_subdomain_routing``: production resolves the tenant from
       the ``Host`` header via :class:`SubdomainTenantMiddleware` (and
       404s on unknown hosts); tests rely on the bearer-token chain to
@@ -471,16 +471,6 @@ def _serve_kwargs(
         asgi_middleware.append(
             (SubdomainTenantMiddleware, {"router": subdomain_router}),
         )
-    if include_scheduler:
-        asgi_middleware.append(
-            (
-                SchedulerLifespanMiddleware,
-                {
-                    "startups": [_start_schedulers],
-                    "shutdowns": [_stop_schedulers],
-                },
-            )
-        )
     # SigningVerifyMiddleware verifies RFC 9421 signatures on inbound
     # buyer-protocol traffic and stashes verified state on
     # ``scope["state"]``. AdminWSGIMount runs first so the admin paths
@@ -490,6 +480,12 @@ def _serve_kwargs(
     asgi_middleware.append((SigningVerifyMiddleware, {}))
 
     port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
+
+    # Background schedulers wire as serve()'s native lifespan hooks
+    # (adcp 5.4.0 #713). transport="both" is required for these to fire,
+    # which we already pass below.
+    on_startup = [_start_schedulers] if include_scheduler else None
+    on_shutdown = [_stop_schedulers] if include_scheduler else None
 
     return {
         "router": router,
@@ -566,6 +562,8 @@ def _serve_kwargs(
         # this when 6.0 ships or when we update tests to declare
         # ``adcp_version`` explicitly.
         "pre_validation_hooks": _spec_compat_hooks_impl(),
+        "on_startup": on_startup,
+        "on_shutdown": on_shutdown,
     }
 
 
