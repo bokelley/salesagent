@@ -209,3 +209,92 @@ class TestClientConstruction:
         assert call_kwargs["url"].endswith("/auth/token/info")
         assert call_kwargs["headers"]["Authorization"] == "Bearer t"
         assert call_kwargs["headers"]["accept"] == "application/json"
+
+
+class TestGetAvailableInventory:
+    """``get_available_inventory()`` surfaces the locally-synced FW taxonomy
+    so the AI product configurator can recommend targeting without round-trips
+    to the FW API."""
+
+    @pytest.fixture
+    def mock_inventory_rows(self):
+        """Build a small set of FreeWheelInventory-shaped rows covering each
+        entity_type the adapter consumes. Returned as MagicMocks so the test
+        doesn't need a live DB."""
+
+        def row(entity_type, entity_id, name, parent_id=None):
+            r = MagicMock()
+            r.entity_type = entity_type
+            r.entity_id = entity_id
+            r.name = name
+            r.parent_id = parent_id
+            return r
+
+        return {
+            "site": [row("site", "973371", "Talpa NL | Site"), row("site", "973372", "Sanoma NL | Site")],
+            "site_section": [row("site_section", "12345", "Sports Section", parent_id="973371")],
+            "video_group": [row("video_group", "1843152716", "Soccer Highlights")],
+            "series": [row("series", "1824258494", "Soccer Show")],
+            "ad_unit_package": [row("ad_unit_package", "51949", "Pre-Mid Bundle")],
+            "standard_attribute": [
+                row("standard_attribute", "1", "American English", parent_id="languages"),
+                row("standard_attribute", "11", "TV-14", parent_id="tv_ratings"),
+                row("standard_attribute", "100", "Action", parent_id="genres"),
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_returns_synced_inventory_shape(self, mock_principal, mock_inventory_rows, monkeypatch):
+        """The adapter pulls from FreeWheelInventoryRepository, grouped by entity_type."""
+        from src.adapters.freewheel import FreeWheelAdapter
+
+        # Patch the repository so we don't need a real DB session.
+        mock_repo = MagicMock()
+
+        def list_by_type(entity_type, parent_id=None):
+            return mock_inventory_rows.get(entity_type, [])
+
+        mock_repo.list_by_type.side_effect = list_by_type
+
+        monkeypatch.setattr(
+            "src.adapters.freewheel.adapter.FreeWheelInventoryRepository",
+            lambda session, tenant_id: mock_repo,
+        )
+        # Avoid the real get_db_session — return a no-op context manager.
+        monkeypatch.setattr(
+            "src.adapters.freewheel.adapter.get_db_session",
+            lambda: __import__("contextlib").nullcontext(MagicMock()),
+        )
+
+        adapter = FreeWheelAdapter(
+            config={"api_token": "t"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="t1",
+        )
+        inventory = await adapter.get_available_inventory()
+
+        # ad_units = FW sites + site_sections (where ads can run)
+        ad_unit_paths = [u["path"] for u in inventory["ad_units"]]
+        assert "site:973371" in ad_unit_paths
+        assert "site_section:12345" in ad_unit_paths
+
+        # placements = FW ad_unit_packages (the buyer-facing inventory bundles)
+        placement_ids = [p["id"] for p in inventory["placements"]]
+        assert "ad_unit_package:51949" in placement_ids
+
+        # targeting_options derived from standard_attributes, grouped by parent_id
+        # (parent_id is the taxonomy key, e.g. "tv_ratings")
+        assert "tv_ratings" in inventory["targeting_options"]
+        assert any(opt["name"] == "TV-14" for opt in inventory["targeting_options"]["tv_ratings"])
+        assert "genres" in inventory["targeting_options"]
+        assert "languages" in inventory["targeting_options"]
+
+        # creative_specs surfaces the static VAST format declarations
+        assert len(inventory["creative_specs"]) == 6
+        assert any("pre_roll" in s["format_id"]["id"] for s in inventory["creative_specs"])
+
+        # properties carries network/inventory metadata
+        assert inventory["properties"]["sites_count"] == 2
+        assert inventory["properties"]["series_count"] == 1
+        assert inventory["properties"]["video_groups_count"] == 1

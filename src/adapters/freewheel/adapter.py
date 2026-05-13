@@ -79,6 +79,8 @@ from src.adapters.freewheel.client import FreeWheelClient, FreeWheelError
 from src.adapters.freewheel.formats import freewheel_creative_formats
 from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS, FreeWheelConnectionConfig, FreeWheelProductConfig
 from src.adapters.freewheel.targeting import build_targeting, validate_targeting
+from src.core.database.database_session import get_db_session
+from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -184,6 +186,77 @@ class FreeWheelAdapter(AdServerAdapter):
             geo_regions=True,
             nielsen_dma=True,
         )
+
+    async def get_available_inventory(self) -> dict[str, Any]:
+        """Surface the locally-synced FW taxonomy for AI product configuration.
+
+        Reads from the ``freewheel_inventory`` cache (refreshed via the
+        Sync Inventory button or :class:`FreeWheelInventorySync`). No FW
+        API calls happen here — everything is served from the local cache
+        so the AI product configurator can run offline.
+
+        Shape follows the base ``get_available_inventory`` contract:
+
+        * ``placements`` — FW ``ad_unit_packages`` (the buyer-facing bundles)
+        * ``ad_units``   — FW sites + site_sections (where ads can run)
+        * ``targeting_options`` — ``standard_attributes`` grouped by parent
+          taxonomy key (genres, tv_ratings, languages, device_types, …)
+        * ``creative_specs`` — the static VAST format declarations
+        * ``properties`` — counts and metadata about the synced cache
+        """
+        with get_db_session() as session:
+            repo = FreeWheelInventoryRepository(session, self.tenant_id or "default")
+            sites = repo.list_by_type("site")
+            site_sections = repo.list_by_type("site_section")
+            video_groups = repo.list_by_type("video_group")
+            series = repo.list_by_type("series")
+            ad_unit_packages = repo.list_by_type("ad_unit_package")
+            standard_attrs = repo.list_by_type("standard_attribute")
+
+            placements = [
+                {
+                    "id": f"ad_unit_package:{row.entity_id}",
+                    "name": row.name or row.entity_id,
+                    "type": "ad_unit_package",
+                }
+                for row in ad_unit_packages
+            ]
+
+            ad_units = [
+                {"path": f"site:{row.entity_id}", "name": row.name or row.entity_id, "type": "site"} for row in sites
+            ] + [
+                {
+                    "path": f"site_section:{row.entity_id}",
+                    "name": row.name or row.entity_id,
+                    "type": "site_section",
+                    "parent": row.parent_id,
+                }
+                for row in site_sections
+            ]
+
+            targeting_options: dict[str, list[dict[str, Any]]] = {}
+            for row in standard_attrs:
+                bucket = row.parent_id or "uncategorized"
+                targeting_options.setdefault(bucket, []).append(
+                    {"id": row.entity_id, "name": row.name or row.entity_id}
+                )
+
+            properties = {
+                "sites_count": len(sites),
+                "site_sections_count": len(site_sections),
+                "series_count": len(series),
+                "video_groups_count": len(video_groups),
+                "ad_unit_packages_count": len(ad_unit_packages),
+                "standard_attributes_count": len(standard_attrs),
+            }
+
+        return {
+            "placements": placements,
+            "ad_units": ad_units,
+            "targeting_options": targeting_options,
+            "creative_specs": freewheel_creative_formats(self.tenant_id),
+            "properties": properties,
+        }
 
     # ----- helpers -----
 
