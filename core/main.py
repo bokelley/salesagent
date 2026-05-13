@@ -69,7 +69,6 @@ from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
-from core.middleware.www_authenticate import WWWAuthenticateMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -423,23 +422,6 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
-        # WWWAuthenticateMiddleware runs after AdminWSGIMount so admin Flask
-        # paths (Google-OAuth-gated) short-circuit before it sees them — the
-        # Bearer-scheme challenge is wrong for those paths. For buyer-protocol
-        # traffic that flows past AdminWSGIMount, it wraps every inner
-        # middleware that can emit 401 and injects ``WWW-Authenticate: Bearer``
-        # (RFC 6750 §3) if missing.
-        #
-        # FIXME(adcp-client-python#712): workaround for an upstream defect in
-        # ``BearerTokenAuthMiddleware._unauthenticated`` (the MCP-leg 401 path
-        # emits a ``JSONResponse`` without ``WWW-Authenticate``; the sibling
-        # A2A leg ``_send_unauthenticated`` does it correctly). Drop this
-        # middleware and its registration once the upstream fix ships and
-        # we bump ``adcp``. The case-insensitive presence check makes the
-        # middleware a no-op once upstream emits the header, so the order
-        # of operations is safe: bump adcp → re-probe → remove middleware
-        # in a follow-up PR if everything stays green.
-        (WWWAuthenticateMiddleware, {}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
         # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores
@@ -497,15 +479,18 @@ def _serve_kwargs(
         # path also covers signing for non-embedded tenants). Auto-emit on
         # the SDK side would double-fire.
         "auto_emit_completion_webhooks": False,
-        # Bearer-token auth wraps both MCP and A2A legs. Per-leg knobs
-        # (adcp>=4.5.0): MCP keeps the legacy ``x-adcp-auth: <raw>`` header
-        # baked into early adopters; A2A uses the spec-canonical RFC 6750
-        # ``Authorization: Bearer <token>`` (the SDK default), matching what
-        # a2a-sdk clients emit out of the box. No bearer-translation shim.
+        # Bearer-token auth wraps both MCP and A2A legs. adcp 5.4.0
+        # (#720 / #721) makes ``Authorization: Bearer <token>`` the
+        # always-accepted spec-canonical carrier on BOTH legs and turns
+        # the legacy ``x-adcp-auth: <raw>`` header into an additive
+        # opt-in alias on the MCP leg for early adopters that haven't
+        # migrated. New clients use ``Authorization: Bearer`` and
+        # interoperate with off-the-shelf a2a-sdk and MCP buyer SDKs;
+        # legacy MCP clients sending ``x-adcp-auth`` keep working
+        # unchanged. Migration is a one-way drift with no flag day.
         "auth": BearerTokenAuth(
             validate_token=_validate_token,
-            mcp_header_name="x-adcp-auth",
-            mcp_bearer_prefix_required=False,
+            mcp_legacy_header_aliases=["x-adcp-auth"],
         ),
         "asgi_middleware": asgi_middleware,
         "context_factory": auth_context_factory,
