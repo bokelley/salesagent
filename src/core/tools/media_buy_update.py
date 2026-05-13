@@ -79,6 +79,10 @@ def _is_terminal_media_buy_state(status: str | None) -> bool:
     "unknown". The upstream :func:`assert_media_buy_transition` raises
     ``INVALID_STATE`` for unknown ``from_state`` values; that's the
     wrong shape here.
+
+    The ``None`` guard is for the type narrower: mypy can't infer ``str``
+    from ``status in MEDIA_BUY_TRANSITIONS`` and would reject the
+    subscript ``MEDIA_BUY_TRANSITIONS[status]`` without it.
     """
     if status is None:
         return False
