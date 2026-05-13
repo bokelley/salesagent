@@ -69,6 +69,7 @@ from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.agent_card_public_url import AgentCardPublicUrlMiddleware
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.middleware.scheduler_lifespan import SchedulerLifespanMiddleware
+from core.middleware.www_authenticate import WWWAuthenticateMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -422,6 +423,18 @@ def _serve_kwargs(
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
+        # WWWAuthenticateMiddleware runs after AdminWSGIMount so admin Flask
+        # paths (Google-OAuth-gated) short-circuit before it sees them — the
+        # Bearer-scheme challenge is wrong for those paths. For buyer-protocol
+        # traffic that flows past AdminWSGIMount, it wraps every inner
+        # middleware that can emit 401 and injects ``WWW-Authenticate: Bearer``
+        # (RFC 6750 §3) if missing. The MCP-leg's BearerTokenAuthMiddleware in
+        # upstream ``adcp.server.auth`` returns 401 without the header for
+        # missing/invalid tokens; the A2A leg and SigningVerifyMiddleware
+        # already emit it. No-op when the header is already present (case-
+        # insensitive lookup), so stacking is safe. Storyboard
+        # ``security_baseline/probe_unauth`` asserts header presence.
+        (WWWAuthenticateMiddleware, {}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
         # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores

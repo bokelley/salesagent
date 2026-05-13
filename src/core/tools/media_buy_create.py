@@ -2406,10 +2406,18 @@ async def _create_media_buy_impl(
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
-        # Return error response with failed status
+        # ``INVALID_REQUEST`` per AdCP 3.0 standard error-code enum (core/error.json):
+        # the canonical code for buyer-fixable shape / business-rule violations
+        # surfaced by the pre-dispatch validation pass above (past start_time,
+        # reversed dates, empty product_ids, duplicate product_ids, targeting
+        # validation failure, currency/budget validation failure). ``VALIDATION_ERROR``
+        # is not in the spec enum and gets dropped by buyer agents walking
+        # ``STANDARD_ERROR_CODES`` for self-correction. Storyboard
+        # ``error_compliance/nonexistent_product`` accepts INVALID_REQUEST in its
+        # allowed_values; ``error_compliance/reversed_dates_error`` also accepts it.
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="VALIDATION_ERROR", message=str(e), details=None)],
+                errors=[Error(code="INVALID_REQUEST", message=str(e), details=None)],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
