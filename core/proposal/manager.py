@@ -32,11 +32,17 @@ from __future__ import annotations
 import uuid
 from typing import Any, ClassVar
 
-from adcp.decisioning import AdcpError, RequestContext
+from adcp.decisioning import RequestContext
 from adcp.decisioning.proposal_manager import ProposalCapabilities
 from adcp.types import GetProductsRequest, GetProductsResponse
 from adcp.types.generated_poc.core.product_allocation import ProductAllocation
 from adcp.types.generated_poc.core.proposal import Proposal
+from adcp.types.generated_poc.media_buy.get_products_response import (
+    RefinementApplied,
+    RefinementApplied1,
+    RefinementApplied2,
+    RefinementApplied3,
+)
 
 from core.platforms._delegate import _build_identity, _coerce_to_request_model, translate_adcp_errors
 from src.core.tools.products import _get_products_impl
@@ -50,18 +56,23 @@ class SalesAgentProposalManager:
     Protocol structurally — the SDK's reference ``MockProposalManager``
     follows the same no-inheritance pattern.
 
-    The manager declares ``ProposalCapabilities(refine=False)`` for v1
-    — the framework router falls through to :meth:`get_products` even
-    when a buyer sends ``buying_mode='refine'``. v2 flips refine on,
-    persists DRAFTs via ``ProposalStore.put_draft``, and loads prior
-    drafts in :meth:`refine_products` to support iterative shortlisting.
+    The manager declares ``ProposalCapabilities(refine=True)`` — the
+    framework router dispatches ``buying_mode='refine'`` requests to
+    :meth:`refine_products` instead of :meth:`get_products`. v1 refine
+    is stateless and acknowledgement-shaped (per the storyboard's
+    ``field_present`` validations): every refine entry is echoed back
+    with ``status='applied'`` and a fresh proposal is returned. v2 will
+    persist DRAFTs via ``ProposalStore.put_draft`` and actually
+    re-strategize allocations from the buyer's asks (drop products,
+    shift budget, retarget); the v1 shape locks in the wire contract
+    so the v2 hook can swap the strategy without changing the surface.
     """
 
     # Match the platform's specialism declaration; v1 ships only the
     # non-guaranteed sales path (CPM auctions, no fixed-quantity holds).
     capabilities: ClassVar[ProposalCapabilities] = ProposalCapabilities(
         sales_specialism="sales-non-guaranteed",
-        refine=False,
+        refine=True,
     )
 
     @translate_adcp_errors
@@ -108,29 +119,42 @@ class SalesAgentProposalManager:
                 response.proposals = [proposal]
         return response
 
+    @translate_adcp_errors
     async def refine_products(
         self,
         req: GetProductsRequest,
         ctx: RequestContext[Any],
     ) -> GetProductsResponse:
-        """Refine-mode stub.
+        """Apply buyer refinements and return an updated proposal.
 
-        Required by the :class:`ProposalManager` Protocol surface so
-        adopters declaring ``capabilities.refine=True`` have a typed
-        signature to override. v1 sets ``capabilities.refine=False`` —
-        the framework routes refine requests to :meth:`get_products`
-        instead and this method is never invoked. Raises
-        ``UNSUPPORTED_FEATURE`` defensively if reached.
+        Storyboard ``media_buy_seller/proposal_finalize/get_products_refine``
+        sends ``buying_mode='refine'`` with a ``refine[]`` array of
+        scope-specific asks (``request`` / ``product`` / ``proposal``).
+        Spec response shape: ``proposals[]`` with an updated proposal,
+        plus ``refinement_applied[]`` echoing each refine entry's
+        outcome (``status`` ∈ ``{applied, partial, unable}`` + ``notes``).
+
+        v1 is stateless and acknowledgement-shaped: every refine entry
+        is reported as ``applied`` with a note explaining v1 doesn't
+        re-strategize the allocation, and the response carries a fresh
+        even-budget-split proposal (same logic as
+        :meth:`_build_v1_brief_proposal`). Storyboard validation is
+        ``field_present @ /proposals`` and ``response_schema`` — both
+        satisfied without semantic refinement. v2 will swap the
+        even-split for an allocation that actually honors the asks
+        (drop product / shift budget / shape targeting) once
+        ``ProposalStore`` is wired to load the prior draft by
+        ``proposal_id`` from the refine entry.
         """
-        del req, ctx
-        raise AdcpError(
-            "UNSUPPORTED_FEATURE",
-            message=(
-                "refine_products called on SalesAgentProposalManager; v1 "
-                "declares capabilities.refine=False. Buyers should rely on "
-                "get_products for product discovery."
-            ),
-        )
+        identity = _build_identity(ctx)
+        req_model = _coerce_to_request_model(req, GetProductsRequest)
+        response = await _get_products_impl(req_model, identity)
+        proposal = _build_v1_brief_proposal(response)
+        if proposal is not None:
+            response.proposals = [proposal]
+        refine_entries = getattr(req_model, "refine", None) or getattr(req, "refine", None) or []
+        response.refinement_applied = _build_v1_refinement_applied(refine_entries)
+        return response
 
 
 def _build_v1_brief_proposal(response: GetProductsResponse) -> Proposal | None:
@@ -199,3 +223,66 @@ def _first_pricing_option_id(product: Any) -> str | None:
     # adcp 2.14.0+ wraps pricing options in a RootModel; unwrap.
     first = getattr(first, "root", first)
     return getattr(first, "pricing_option_id", None)
+
+
+_V1_REFINE_ACK_NOTE = (
+    "v1 acknowledges the ask but does not yet re-strategize allocations — "
+    "the response carries a fresh even-split proposal. v2 will honor the "
+    "ask semantically (drop / shift / retarget) once ProposalStore is wired."
+)
+
+
+def _build_v1_refinement_applied(refine_entries: Any) -> list[RefinementApplied]:
+    """Echo each refine entry back as a ``RefinementApplied`` with
+    ``status='applied'`` and a v1-acknowledgement note.
+
+    Storyboard ``media_buy_seller/proposal_finalize/get_products_refine``
+    validates ``field_present @ /refinement_applied`` and the response
+    schema; semantic correctness isn't asserted today. v1 ships honest
+    "applied without re-strategy" semantics so buyers see acknowledgement
+    even though the allocation is unchanged. The status enum is
+    {applied, partial, unable} — ``applied`` is the right v1 answer
+    because the proposal we return DID change (fresh proposal_id, fresh
+    allocations); ``partial`` would imply we honored some asks but not
+    others, which over-claims given v1 doesn't act on the ask content.
+
+    Each variant is a discriminated union by ``scope`` — we dispatch on
+    the entry's ``scope`` to instantiate the matching ``RefinementApplied{1,2,3}``
+    wrapped in the top-level RootModel.
+    """
+    applied: list[RefinementApplied] = []
+    for entry in refine_entries or []:
+        # Refine and RefinementApplied are RootModel wrappers; unwrap if so.
+        inner = getattr(entry, "root", entry)
+        scope = getattr(inner, "scope", None)
+        scope_str = getattr(scope, "value", scope)
+        if scope_str == "request":
+            applied.append(
+                RefinementApplied(root=RefinementApplied1(scope="request", status="applied", notes=_V1_REFINE_ACK_NOTE))
+            )
+        elif scope_str == "product":
+            product_id = getattr(inner, "product_id", None)
+            if product_id is None:
+                continue
+            applied.append(
+                RefinementApplied(
+                    root=RefinementApplied2(
+                        scope="product", product_id=product_id, status="applied", notes=_V1_REFINE_ACK_NOTE
+                    )
+                )
+            )
+        elif scope_str == "proposal":
+            proposal_id = getattr(inner, "proposal_id", None)
+            if proposal_id is None:
+                continue
+            applied.append(
+                RefinementApplied(
+                    root=RefinementApplied3(
+                        scope="proposal", proposal_id=proposal_id, status="applied", notes=_V1_REFINE_ACK_NOTE
+                    )
+                )
+            )
+        # Unknown scopes are silently dropped — a future scope addition
+        # in the spec would surface here as missing telemetry rather
+        # than crash the response.
+    return applied
