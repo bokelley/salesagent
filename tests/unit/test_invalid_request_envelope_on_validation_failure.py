@@ -1,19 +1,21 @@
 """``create_media_buy`` validation failures surface as AdCP-canonical
-``INVALID_REQUEST`` on the wire, not the non-spec ``VALIDATION_ERROR``.
+``INVALID_REQUEST`` on the wire — the only code accepted by both the
+``error_compliance/nonexistent_product`` and ``error_compliance/reversed_dates_error``
+storyboards.
 
 The pre-dispatch validation pass in ``_create_media_buy_impl`` raises
 ``ValueError`` on past-start_time, reversed dates, empty product_ids,
 duplicate product_ids, and targeting validation failures. The outer
 ``except (ValueError, PermissionError)`` handler used to wrap these as
-``Error(code="VALIDATION_ERROR")`` — but that code isn't in the AdCP 3.0
-``STANDARD_ERROR_CODES`` enum, so buyer agents walking the enum for
-self-correction silently drop the error.
+``Error(code="VALIDATION_ERROR")``. Both ``VALIDATION_ERROR`` and
+``INVALID_REQUEST`` are in the AdCP 3.0 standard error-code enum
+(``adcp/types/generated_poc/enums/error_code.py``); the distinction is that
+``INVALID_REQUEST`` is the canonical code per ``core/error.json`` for buyer-
+fixable shape issues and is the intersection value of the two storyboards'
+``allowed_values``:
 
-Storyboard ``error_compliance/nonexistent_product`` accepts
-``PRODUCT_NOT_FOUND``, ``PRODUCT_UNAVAILABLE``, or ``INVALID_REQUEST`` at
-``/adcp_error/code``. Storyboard ``error_compliance/reversed_dates_error``
-accepts ``VALIDATION_ERROR`` or ``INVALID_REQUEST``. ``INVALID_REQUEST`` is
-the only value in the intersection.
+- ``error_compliance/nonexistent_product`` → ``{PRODUCT_NOT_FOUND, PRODUCT_UNAVAILABLE, INVALID_REQUEST}``
+- ``error_compliance/reversed_dates_error`` → ``{VALIDATION_ERROR, INVALID_REQUEST}``
 """
 
 from __future__ import annotations

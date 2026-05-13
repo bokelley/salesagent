@@ -2410,11 +2410,17 @@ async def _create_media_buy_impl(
         # the canonical code for buyer-fixable shape / business-rule violations
         # surfaced by the pre-dispatch validation pass above (past start_time,
         # reversed dates, empty product_ids, duplicate product_ids, targeting
-        # validation failure, currency/budget validation failure). ``VALIDATION_ERROR``
-        # is not in the spec enum and gets dropped by buyer agents walking
-        # ``STANDARD_ERROR_CODES`` for self-correction. Storyboard
-        # ``error_compliance/nonexistent_product`` accepts INVALID_REQUEST in its
-        # allowed_values; ``error_compliance/reversed_dates_error`` also accepts it.
+        # validation failure, currency/budget validation failure). Storyboard
+        # ``error_compliance/nonexistent_product`` requires one of
+        # {PRODUCT_NOT_FOUND, PRODUCT_UNAVAILABLE, INVALID_REQUEST};
+        # ``error_compliance/reversed_dates_error`` requires {VALIDATION_ERROR,
+        # INVALID_REQUEST}. ``INVALID_REQUEST`` is the only value in the
+        # intersection and matches the spec preference for buyer-fixable
+        # shape issues. Note: ``PermissionError`` is caught here too but
+        # currently no path inside the try raises it; if a future
+        # principal-ownership check moves into this try, split the except
+        # so PermissionError maps to PERMISSION_DENIED (the semantically
+        # correct code) rather than riding the INVALID_REQUEST jacket.
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
                 errors=[Error(code="INVALID_REQUEST", message=str(e), details=None)],
