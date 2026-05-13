@@ -150,6 +150,42 @@ class AdapterCapabilities:
     supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
 
 
+@dataclass
+class PermissionCheck:
+    """Result of probing one permission an adapter needs.
+
+    Used by ``AdServerAdapter.check_permissions()`` so operators (and embedders)
+    can see at-connect time whether the upstream credentials have the scopes
+    every AdCP feature path depends on — rather than discovering a missing
+    permission mid-campaign.
+    """
+
+    name: str  # short, machine-stable identifier (e.g. "read_creative_resources")
+    description: str  # human-readable, "Read creative resources"
+    granted: bool
+    required: bool = True  # True = blocks a core flow; False = nice-to-have
+    feature: str | None = None  # AdCP feature this enables (e.g. "creative_trafficking")
+    probe_target: str | None = None  # endpoint/method probed, for operator debugging
+    detail: str | None = None  # human-readable reason when not granted
+
+
+@dataclass
+class PermissionsReport:
+    """Adapter's view of which upstream permissions are currently granted.
+
+    Returned by ``AdServerAdapter.check_permissions()``. ``fully_operational``
+    rolls up to True only when every ``required`` check passes; surface this in
+    admin UIs so operators see one-glance status.
+    """
+
+    adapter: str
+    tenant_id: str | None
+    checked_at: datetime
+    fully_operational: bool
+    checks: list[PermissionCheck]
+    error: str | None = None  # set when the probe itself couldn't run (e.g. bad creds)
+
+
 class BaseConnectionConfig(BaseModel):
     """Base schema for adapter connection configuration."""
 
@@ -682,6 +718,27 @@ class AdServerAdapter(ABC):
         """
         # Default implementation returns empty inventory
         return {"placements": [], "ad_units": [], "targeting_options": {}, "creative_specs": [], "properties": {}}
+
+    def check_permissions(self) -> PermissionsReport:
+        """Probe the upstream API for the scopes this adapter needs.
+
+        Returns a :class:`PermissionsReport` listing each permission this
+        adapter depends on along with whether the configured credentials
+        currently have it. Operators see this in the admin UI; embedders
+        can read it via the tenant-management API.
+
+        Default implementation reports zero checks — adapters with real
+        upstream APIs should override and probe their actual endpoints.
+        Probes should be cheap (single GET with a 1-row page filter is
+        ideal) and should NOT mutate upstream state.
+        """
+        return PermissionsReport(
+            adapter=getattr(self.__class__, "adapter_name", self.__class__.__name__),
+            tenant_id=self.tenant_id,
+            checked_at=datetime.now(UTC),
+            fully_operational=True,  # no checks declared → no failures
+            checks=[],
+        )
 
     def get_creative_formats(self) -> list[dict[str, Any]]:
         """Return creative formats provided by this adapter.

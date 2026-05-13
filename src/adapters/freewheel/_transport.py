@@ -156,6 +156,20 @@ class FreeWheelTransport:
         """
         return self.get_json("/auth/token/info")
 
+    def probe(self, method: str, path: str, *, accept: str = "application/json") -> tuple[int, str]:
+        """Cheap permission-check probe — return ``(status_code, body)`` without
+        raising on non-2xx. Used by ``check_permissions()`` so a single 403
+        on one endpoint doesn't kill the whole probe pass.
+
+        Auth/token-mint failures still raise (the probe can't run at all
+        without a valid token) — callers should treat that as a fatal
+        precondition and surface it as a transport-level error.
+        """
+        url = f"{self.base_url}{path}"
+        headers = {"Authorization": f"Bearer {self._current_token()}", "accept": accept}
+        response = self._session.request(method=method, url=url, headers=headers, timeout=self.timeout)
+        return response.status_code, (response.text[:200] if response.text else "")
+
     # ----- internals -----
 
     def _current_token(self) -> str:

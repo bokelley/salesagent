@@ -72,6 +72,8 @@ from src.adapters.base import (
     AdapterCapabilities,
     AdServerAdapter,
     CreativeEngineAdapter,
+    PermissionCheck,
+    PermissionsReport,
     TargetingCapabilities,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
@@ -261,6 +263,177 @@ class FreeWheelAdapter(AdServerAdapter):
             "creative_specs": freewheel_creative_formats(self.tenant_id),
             "properties": properties,
         }
+
+    def check_permissions(self) -> PermissionsReport:
+        """Probe every FW endpoint the adapter depends on, return a report.
+
+        Probes are cheap GETs with one-row pagination where supported. The
+        permission is considered granted unless the upstream returns a hard
+        deny (401/403). 4xx validation errors (400/404/422) prove the
+        endpoint accepts the call — just with a missing query param or
+        body — so they count as granted.
+
+        Auth-level failures (no token, expired refresh, bad credentials)
+        surface on the report as ``error=...`` with all checks granted=False
+        — separating a credentials problem from a per-endpoint scope gap.
+        """
+        report = PermissionsReport(
+            adapter=self.adapter_name,
+            tenant_id=self.tenant_id,
+            checked_at=datetime.now(UTC),
+            fully_operational=False,
+            checks=[],
+        )
+
+        if self.dry_run or self._client is None:
+            report.error = "Dry-run mode — no live FreeWheel client to probe with."
+            return report
+
+        # Each tuple: (name, description, method, path, required, feature)
+        probes = [
+            ("auth_token_info", "Validate bearer token", "GET", "/auth/token/info", True, "auth"),
+            (
+                "v4_inventory_sites",
+                "Read inventory taxonomy (v4 sites)",
+                "GET",
+                "/services/v4/sites?page=1&per_page=1",
+                True,
+                "inventory_sync",
+            ),
+            (
+                "v4_inventory_ad_unit_packages",
+                "Read inventory ad unit packages",
+                "GET",
+                "/services/v4/ad_unit_packages?page=1&per_page=1",
+                True,
+                "inventory_sync",
+            ),
+            (
+                "v3_commercial_campaigns",
+                "Read/create campaigns (v3 commercial)",
+                "GET",
+                "/services/v3/campaigns?per_page=1",
+                True,
+                "create_media_buy",
+            ),
+            (
+                "v3_commercial_insertion_orders",
+                "Read/create insertion orders",
+                "GET",
+                "/services/v3/insertion_orders?per_page=1",
+                True,
+                "create_media_buy",
+            ),
+            (
+                "v3_commercial_placements",
+                "Read/create placements",
+                "GET",
+                "/services/v3/placements?per_page=1",
+                True,
+                "create_media_buy",
+            ),
+            (
+                "v3_ad_unit_nodes_read",
+                "Read placement→inventory bindings",
+                "GET",
+                "/services/v3/ad_unit_nodes?per_page=1",
+                True,
+                "inventory_sync",
+            ),
+            (
+                "v4_creative_resources",
+                "Read/create creative resources",
+                "GET",
+                "/services/v4/creative_resources?page=1&per_page=1",
+                True,
+                "sync_creatives",
+            ),
+            (
+                "v4_creative_instances",
+                "Bind creatives to ads (creative trafficking)",
+                "GET",
+                "/services/v4/creative_instances?ad_id=1",
+                True,
+                "creative_trafficking",
+            ),
+            (
+                "v4_ads",
+                "Create Ads (line items) on placements",
+                "GET",
+                "/services/v4/ads?page=1&per_page=1",
+                True,
+                "creative_trafficking",
+            ),
+            (
+                "v4_reporting",
+                "Query Reporting API for delivery metrics",
+                "GET",
+                "/services/v4/reports",
+                False,
+                "delivery_reporting",
+            ),
+            (
+                "v4_targeting_profiles",
+                "Read saved targeting profiles",
+                "GET",
+                "/services/v4/targeting_profiles?page=1&per_page=1",
+                False,
+                "advanced_targeting",
+            ),
+            (
+                "v4_audiences",
+                "Read audience definitions",
+                "GET",
+                "/services/v4/audiences?page=1&per_page=1",
+                False,
+                "audience_targeting",
+            ),
+            (
+                "v4_webhooks",
+                "Push state-change notifications via webhooks",
+                "GET",
+                "/services/v4/webhooks?page=1&per_page=1",
+                False,
+                "webhooks",
+            ),
+        ]
+
+        from src.adapters.freewheel.client import FreeWheelAuthError
+
+        try:
+            for name, description, method, path, required, feature in probes:
+                try:
+                    accept = "application/xml" if "/services/v3/" in path else "application/json"
+                    status, body = self._client._transport.probe(method, path, accept=accept)
+                except FreeWheelAuthError as exc:
+                    # Auth failure invalidates the whole pass — bail
+                    report.error = f"Authentication failed: {exc}"
+                    return report
+
+                granted = status not in (401, 403)
+                detail: str | None = None
+                if not granted:
+                    snippet = body.strip().replace("\n", " ")[:120]
+                    detail = f"{status}: {snippet}" if snippet else f"HTTP {status}"
+
+                report.checks.append(
+                    PermissionCheck(
+                        name=name,
+                        description=description,
+                        granted=granted,
+                        required=required,
+                        feature=feature,
+                        probe_target=f"{method} {path.split('?', 1)[0]}",
+                        detail=detail,
+                    )
+                )
+        except Exception as exc:
+            logger.warning("FreeWheel permissions probe failed unexpectedly: %s", exc)
+            report.error = f"Permissions probe failed: {type(exc).__name__}: {exc}"
+            return report
+
+        report.fully_operational = all(c.granted for c in report.checks if c.required)
+        return report
 
     # ----- helpers -----
 

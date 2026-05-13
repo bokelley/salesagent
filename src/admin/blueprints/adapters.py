@@ -265,6 +265,82 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
         return jsonify({})
 
 
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/<adapter_type>/check-permissions", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+def check_adapter_permissions(tenant_id, adapter_type, **kwargs):
+    """Probe upstream API for permission gaps before they bite us in production.
+
+    Instantiates the configured adapter and calls its ``check_permissions()``
+    method, which probes every endpoint the adapter depends on with cheap
+    GETs. Returns a structured report — operators see at-connect time which
+    AdCP features will work vs which need additional upstream IAM grants.
+
+    Read-only by design — every probe is a GET. Opts into the embedded-write
+    gate accordingly. Adapter must be configured on the tenant; an unconfigured
+    adapter returns 400.
+    """
+    from dataclasses import asdict
+
+    from src.adapters import ADAPTER_REGISTRY
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+    adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
+    if not adapter_class:
+        return jsonify({"success": False, "error": f"Unknown adapter type: {adapter_type}"}), 404
+
+    with get_db_session() as session:
+        repo = AdapterConfigRepository(session, tenant_id)
+        config_row = repo.find_by_tenant()
+        if config_row is None or config_row.adapter_type != adapter_type.lower():
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"No {adapter_type} adapter configured for tenant {tenant_id}",
+                    }
+                ),
+                400,
+            )
+        adapter_config = dict(config_row.config_json or {})
+
+    # The probe only needs a minimal principal — no real advertiser-scoped
+    # calls happen. A stub principal_id keeps the adapter constructor happy.
+    from src.core.schemas import Principal
+
+    stub_principal = Principal(
+        tenant_id=tenant_id,
+        principal_id="__permissions_probe__",
+        name="permissions-probe",
+        platform_mappings={adapter_type: {"advertiser_id": "0"}},
+    )
+
+    try:
+        adapter = adapter_class(
+            config=adapter_config,
+            principal=stub_principal,
+            dry_run=False,
+            tenant_id=tenant_id,
+        )
+        report = adapter.check_permissions()
+    except Exception as exc:
+        logger.warning("Permissions probe failed for tenant=%s adapter=%s: %s", tenant_id, adapter_type, exc)
+        return jsonify({"success": False, "error": f"Could not run probe: {exc}"}), 500
+
+    return jsonify(
+        {
+            "success": True,
+            "report": {
+                "adapter": report.adapter,
+                "tenant_id": report.tenant_id,
+                "checked_at": report.checked_at.isoformat(),
+                "fully_operational": report.fully_operational,
+                "error": report.error,
+                "checks": [asdict(c) for c in report.checks],
+            },
+        }
+    )
+
+
 # FreeWheel-specific endpoints
 
 
