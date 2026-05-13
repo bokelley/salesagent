@@ -126,6 +126,38 @@ class TestPutDraft:
             assert record is not None
             assert record.proposal_payload["name"] == "Updated bundle"
 
+    async def test_put_draft_handles_compound_account_id(self, integration_db):
+        """The framework passes ``ctx.account.id`` straight into the
+        store. :class:`SalesagentAccountStore` mints
+        ``f"{tenant_id}:{ref}"`` (``ref`` defaults to ``"default"``;
+        storyboard runs use ``"acct_demo"``), so the store has to split
+        the compound string back into the ``tenant_id`` for the
+        ``proposals.tenant_id`` FK. Regression: pre-fix, every prod
+        ``put_draft`` would FK-violate because the column would receive
+        the full compound string."""
+        from adcp.decisioning.proposal_store import ProposalState
+
+        with _BareEnv():
+            TenantFactory(tenant_id="my_tenant")
+            store = SalesAgentProposalStore()
+            await store.put_draft(
+                proposal_id="prop_compound",
+                # SalesagentAccountStore.resolve() shape — what the
+                # framework actually passes at runtime.
+                account_id="my_tenant:default",
+                recipes={},
+                proposal_payload=_make_payload("prop_compound"),
+            )
+            # No FK violation. account_id preserved verbatim for the
+            # cross-tenant defense; tenant_id derived from the prefix.
+            record = await store.get("prop_compound", expected_account_id="my_tenant:default")
+            assert record is not None
+            assert record.account_id == "my_tenant:default", (
+                "account_id must be stored verbatim — every cross-tenant "
+                "defense compares against the full compound string"
+            )
+            assert record.state == ProposalState.DRAFT
+
     async def test_put_draft_on_committed_raises(self, integration_db):
         """Per Protocol, ``put_draft`` is only legal on DRAFT records.
         A COMMITTED proposal_id is immutable — overwrite would mean
@@ -384,6 +416,49 @@ class TestReservationLifecycle:
                 "release must roll back to COMMITTED so the buyer's retry succeeds"
             )
 
+    async def test_finalize_cross_tenant_collapses_to_internal_error(self, integration_db):
+        """:meth:`finalize_consumption` filters ``account_id`` in the
+        WHERE clause so cross-tenant probes never take the ``FOR UPDATE``
+        row lock. A foreign tenant attempting to finalize another
+        tenant's reserved proposal gets ``INTERNAL_ERROR`` without
+        acquiring the lock (the same wire code a missing record
+        produces — no existence disclosure)."""
+        from adcp.decisioning.types import AdcpError
+
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_owner_f")
+            TenantFactory(tenant_id="tenant_probe_f")
+            store = SalesAgentProposalStore()
+            await self._put_and_commit(store, proposal_id="prop_cross_f", account_id="tenant_owner_f")
+            await store.try_reserve_consumption("prop_cross_f", expected_account_id="tenant_owner_f")
+            with pytest.raises(AdcpError) as exc:
+                await store.finalize_consumption(
+                    "prop_cross_f", media_buy_id="mb_foreign", expected_account_id="tenant_probe_f"
+                )
+            assert exc.value.code == "INTERNAL_ERROR"
+
+    async def test_release_cross_tenant_is_noop(self, integration_db):
+        """:meth:`release_consumption` is idempotent on miss — including
+        cross-tenant misses. WHERE-clause filtering ensures the
+        foreign tenant never takes the lock; the silent no-op
+        preserves the unconditional-rollback contract."""
+        with _BareEnv():
+            TenantFactory(tenant_id="tenant_owner_rel")
+            TenantFactory(tenant_id="tenant_probe_rel")
+            store = SalesAgentProposalStore()
+            await self._put_and_commit(store, proposal_id="prop_cross_rel", account_id="tenant_owner_rel")
+            await store.try_reserve_consumption("prop_cross_rel", expected_account_id="tenant_owner_rel")
+            # Foreign tenant calls release — must no-op, must NOT roll
+            # back the legitimate tenant's CONSUMING reservation.
+            await store.release_consumption("prop_cross_rel", expected_account_id="tenant_probe_rel")
+            record = await store.get("prop_cross_rel", expected_account_id="tenant_owner_rel")
+            assert record is not None
+            from adcp.decisioning.proposal_store import ProposalState
+
+            assert record.state == ProposalState.CONSUMING, (
+                "Foreign tenant's release must not roll back the owner's reservation"
+            )
+
     async def test_release_on_committed_is_idempotent(self, integration_db):
         """Releasing a record already in ``committed`` is a no-op so
         the adapter-failure rollback path can fire unconditionally."""
@@ -445,30 +520,31 @@ class TestReverseIndex:
             assert (await store.get_by_media_buy_id("mb_shared", expected_account_id="tenant_rev_probe")) is None
 
 
-class TestDiscard:
-    """Idempotent delete — unknown ids no-op so caller doesn't need to
-    branch on existence."""
+class TestProtocolMethodsWithoutTenantScoping:
+    """``discard`` and ``mark_consumed`` have Protocol signatures with no
+    ``expected_account_id``. Implementing them would let any caller
+    with a guessed ``proposal_id`` delete or terminate another tenant's
+    proposal. We fail closed; the framework's dispatch (adcp 5.4)
+    doesn't call them today, so this surfaces loudly if a future
+    framework version adds them as callable surfaces."""
 
-    async def test_discard_unknown_is_noop(self, integration_db):
-        """``discard`` on an unknown ``proposal_id`` returns cleanly —
-        the Protocol contract says rollback paths use this method
-        unconditionally."""
+    async def test_discard_raises_not_implemented(self, integration_db):
+        """``discard`` is fail-closed pending an upstream Protocol fix
+        that adds ``expected_account_id``. Calling it must raise
+        ``NotImplementedError`` (not silently succeed) so any future
+        framework regression is loud."""
         with _BareEnv():
-            TenantFactory(tenant_id="tenant_discard_a")
             store = SalesAgentProposalStore()
-            await store.discard("prop_does_not_exist")  # no raise
+            with pytest.raises(NotImplementedError):
+                await store.discard("prop_any")
 
-    async def test_discard_removes_record(self, integration_db):
-        """``discard`` deletes the record so subsequent
-        :meth:`get` returns ``None``."""
+    async def test_mark_consumed_raises_not_implemented(self, integration_db):
+        """``mark_consumed`` is fail-closed for the same reason as
+        :meth:`discard` — Protocol signature lacks tenant scoping.
+        The two-phase ``try_reserve_consumption`` +
+        ``finalize_consumption`` path (both account-scoped) is what
+        the framework dispatch actually uses."""
         with _BareEnv():
-            TenantFactory(tenant_id="tenant_discard_b")
             store = SalesAgentProposalStore()
-            await store.put_draft(
-                proposal_id="prop_to_discard",
-                account_id="tenant_discard_b",
-                recipes={},
-                proposal_payload=_make_payload("prop_to_discard"),
-            )
-            await store.discard("prop_to_discard")
-            assert await store.get("prop_to_discard", expected_account_id="tenant_discard_b") is None
+            with pytest.raises(NotImplementedError):
+                await store.mark_consumed("prop_any", media_buy_id="mb_any")

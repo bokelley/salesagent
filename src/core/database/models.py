@@ -2620,9 +2620,7 @@ class Proposal(Base):
 
     State machine: ``state`` is one of ``draft`` / ``committed`` /
     ``consuming`` / ``consumed`` per :class:`adcp.decisioning.
-    proposal_store.ProposalState`. v1 auto-commits at ``put_draft``
-    time (see :class:`SalesAgentProposalStore`); the ``draft`` value is
-    modeled for v2 finalize semantics.
+    proposal_store.ProposalState`.
     """
 
     __tablename__ = "proposals"

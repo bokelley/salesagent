@@ -11,18 +11,17 @@ allocations.
 
 Multi-tenancy: a single ``SalesAgentProposalStore`` instance is shared
 across every tenant — the framework passes ``expected_account_id`` on
-every read (the AdCP account id, which the salesagent maps 1-1 with
-``tenant_id``). Cross-tenant probes collapse to ``None`` per the
-Protocol's defense against principal-enumeration via ``proposal_id``
-guessing.
+every call and every read filters on it in the WHERE clause (not
+after fetch — fetch-then-check leaks existence via row-lock timing).
+Cross-tenant probes collapse to ``None`` / ``PROPOSAL_NOT_FOUND`` per
+the Protocol's defense against principal-enumeration via
+``proposal_id`` guessing.
 
 Lifecycle: ``put_draft`` writes DRAFT state per spec; the framework
 calls :meth:`commit` immediately after when the manager declares
 ``ProposalCapabilities.auto_commit_on_put_draft=True`` (adcp 5.4+,
 #723), promoting DRAFT → COMMITTED in a single dispatch so the next
-``create_media_buy(proposal_id=X)`` finds a COMMITTED record. The
-v1 store-side auto-commit workaround landed before #723 and is
-gone — the framework owns the lifecycle.
+``create_media_buy(proposal_id=X)`` finds a COMMITTED record.
 """
 
 from __future__ import annotations
@@ -32,13 +31,14 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from adcp.decisioning.proposal_store import ProposalRecord, ProposalState
+from adcp.decisioning.types import AdcpError
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Proposal as ProposalRow
 
 if TYPE_CHECKING:
-    from adcp.decisioning.proposal_store import ProposalRecord
     from adcp.decisioning.recipe import Recipe
 
 logger = logging.getLogger(__name__)
@@ -49,11 +49,6 @@ def _to_record(row: ProposalRow) -> ProposalRecord:
     :class:`ProposalRecord` dataclass. The framework only reads
     ``ProposalRecord`` — never writes back through the Protocol — so
     the conversion is unidirectional."""
-    # Lazy import: keeps the framework type out of module-load
-    # circular-import risk (the store is wired in
-    # ``core/main.py:build_router`` which imports the adcp library).
-    from adcp.decisioning.proposal_store import ProposalRecord, ProposalState
-
     return ProposalRecord(
         proposal_id=row.proposal_id,
         account_id=row.account_id,
@@ -66,18 +61,23 @@ def _to_record(row: ProposalRow) -> ProposalRecord:
     )
 
 
-def _resolve_tenant_id_for_account(session, account_id: str) -> str:
-    """Map an AdCP account_id to a salesagent ``tenant_id``.
+def _resolve_tenant_id_for_account(account_id: str) -> str:
+    """Map an AdCP ``account_id`` to a salesagent ``tenant_id``.
 
-    The salesagent's :class:`SalesagentAccountStore` maps tenant rows
-    1:1 with AdCP accounts — ``account_id`` IS the ``tenant_id`` value
-    today (see :class:`core.stores.accounts.SalesagentAccountStore`).
-    Lookups via the Account store are the source of truth, but the
-    1:1 mapping is stable enough that we can short-circuit. If the
-    mapping ever diverges (e.g., one tenant hosts multiple accounts),
-    this resolver swaps to a real lookup without changing the store
-    surface.
+    :class:`SalesagentAccountStore` (``core/stores/accounts.py:89``)
+    mints ``account_id`` as ``f"{tenant_id}:{ref}"`` (``ref`` defaults
+    to ``"default"``; storyboard runs use ``"acct_demo"``). The
+    framework passes ``ctx.account.id`` — the full compound string —
+    into :meth:`ProposalStore.put_draft`, so the store has to split it
+    back into the ``tenant_id`` for the ``proposals.tenant_id`` FK.
+
+    Direct-string ``account_id`` values (legacy callers / tests) with
+    no ``":"`` are returned verbatim. If the result isn't a real
+    ``tenant_id`` the FK enforces it at insert time.
     """
+    if ":" in account_id:
+        tenant_id, _ = account_id.split(":", 1)
+        return tenant_id
     return account_id
 
 
@@ -94,28 +94,38 @@ def _serialize_recipes(recipes: Mapping[str, Recipe]) -> dict[str, Any]:
         return {}
     out: dict[str, Any] = {}
     for product_id, recipe in recipes.items():
-        # ``Recipe`` is a pydantic model; ``model_dump`` gives a
-        # round-trippable dict. The store keeps the data shape-agnostic
-        # so future Recipe subclasses don't need a store migration.
-        out[str(product_id)] = recipe.model_dump(mode="json") if hasattr(recipe, "model_dump") else recipe
+        if not hasattr(recipe, "model_dump"):
+            # Caller is supposed to pass typed Pydantic ``Recipe``
+            # instances. Silently passing dicts through would land
+            # arbitrary JSON in the store and surface as a deserialize
+            # error far from the source. Fail loudly here.
+            raise TypeError(
+                f"recipes[{product_id!r}] is {type(recipe).__name__}, expected a Recipe "
+                "instance (pydantic BaseModel). Refusing to silently persist "
+                "untyped data."
+            )
+        out[str(product_id)] = recipe.model_dump(mode="json")
     return out
 
 
 class SalesAgentProposalStore:
     """Postgres-backed :class:`adcp.decisioning.proposal_store.ProposalStore`.
 
-    Wired into :class:`core.main._LazyPlatformRouterWithStore` as the
-    single shared store across every tenant. The framework's
+    Wired into :class:`adcp.decisioning.LazyPlatformRouter` via the
+    ``proposal_store_factory=`` kwarg (adcp 5.4+, #722) as the single
+    shared store across every tenant. The framework's
     ``proposal_dispatch`` calls into this instance via the router's
     :meth:`proposal_store_for_tenant` accessor.
 
     Concurrency: each method opens a short-lived session via
     :func:`get_db_session`; cross-method state isn't shared. Atomic
     CAS operations (:meth:`try_reserve_consumption`,
-    :meth:`finalize_consumption`) use ``SELECT … FOR UPDATE`` to
-    serialize against parallel callers — two concurrent
-    ``create_media_buy(proposal_id=X)`` calls produce exactly one
-    successful reservation per the Protocol contract.
+    :meth:`finalize_consumption`) use ``SELECT … FOR UPDATE`` keyed
+    on ``(proposal_id, account_id)`` to serialize against parallel
+    callers AND prevent cross-tenant lock acquisition — two concurrent
+    same-tenant ``create_media_buy(proposal_id=X)`` calls produce
+    exactly one successful reservation per the Protocol contract;
+    cross-tenant probes never acquire the lock.
     """
 
     #: The Protocol's production-mode gate reads this attribute. ``True``
@@ -146,8 +156,6 @@ class SalesAgentProposalStore:
         ``put_draft`` against COMMITTED / CONSUMED records — those are
         framework / adopter bugs and surface as ``INTERNAL_ERROR``.
         """
-        from adcp.decisioning.proposal_store import ProposalState
-        from adcp.decisioning.types import AdcpError
 
         recipes_json = _serialize_recipes(recipes)
         payload_dict = dict(proposal_payload)
@@ -181,7 +189,7 @@ class SalesAgentProposalStore:
                 session.commit()
                 return
 
-            tenant_id = _resolve_tenant_id_for_account(session, account_id)
+            tenant_id = _resolve_tenant_id_for_account(account_id)
             row = ProposalRow(
                 proposal_id=proposal_id,
                 tenant_id=tenant_id,
@@ -229,8 +237,6 @@ class SalesAgentProposalStore:
         second commit with different values raises ``INTERNAL_ERROR``
         (adopter / framework bug, not buyer-fixable).
         """
-        from adcp.decisioning.proposal_store import ProposalState
-        from adcp.decisioning.types import AdcpError
 
         payload_dict = dict(proposal_payload)
         with get_db_session() as session:
@@ -285,12 +291,18 @@ class SalesAgentProposalStore:
         ``PROPOSAL_NOT_COMMITTED`` per the Protocol — same outcome the
         InMemory reference impl produces from its asyncio.Lock.
         """
-        from adcp.decisioning.proposal_store import ProposalState
-        from adcp.decisioning.types import AdcpError
 
         with get_db_session() as session:
-            row = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id).with_for_update()).first()
-            if row is None or row.account_id != expected_account_id:
+            # Filter ``account_id`` in the WHERE clause (not after fetch) so
+            # cross-tenant probes never acquire the ``FOR UPDATE`` row lock.
+            # Fetch-then-check would (a) leak existence via timing — lock
+            # acquisition is slower than a clean miss — and (b) hand a
+            # DoS primitive to an adversary who can block another
+            # tenant's reservations by spamming guessed proposal_ids.
+            row = session.scalars(
+                select(ProposalRow).filter_by(proposal_id=proposal_id, account_id=expected_account_id).with_for_update()
+            ).first()
+            if row is None:
                 # Cross-tenant probe collapses to PROPOSAL_NOT_FOUND —
                 # never disclose existence of another tenant's record.
                 raise AdcpError(
@@ -327,12 +339,13 @@ class SalesAgentProposalStore:
         ``media_buy_id`` back-reference for
         :meth:`get_by_media_buy_id` lookups.
         """
-        from adcp.decisioning.proposal_store import ProposalState
-        from adcp.decisioning.types import AdcpError
 
         with get_db_session() as session:
-            row = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id).with_for_update()).first()
-            if row is None or row.account_id != expected_account_id:
+            # account_id in WHERE so cross-tenant probes don't take the lock.
+            row = session.scalars(
+                select(ProposalRow).filter_by(proposal_id=proposal_id, account_id=expected_account_id).with_for_update()
+            ).first()
+            if row is None:
                 raise AdcpError(
                     "INTERNAL_ERROR",
                     message=(f"finalize_consumption: proposal {proposal_id!r} not found for the expected tenant."),
@@ -375,12 +388,15 @@ class SalesAgentProposalStore:
         rollback path may have run); unknown ids are also a no-op so
         the adapter-failure rollback can be unconditional.
         """
-        from adcp.decisioning.proposal_store import ProposalState
-        from adcp.decisioning.types import AdcpError
 
         with get_db_session() as session:
-            row = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id).with_for_update()).first()
-            if row is None or row.account_id != expected_account_id:
+            # account_id in WHERE so cross-tenant probes don't take the lock.
+            # Unknown / cross-tenant ids fall through to a no-op
+            # (the rollback path fires unconditionally; idempotent on miss).
+            row = session.scalars(
+                select(ProposalRow).filter_by(proposal_id=proposal_id, account_id=expected_account_id).with_for_update()
+            ).first()
+            if row is None:
                 return
             if row.state == ProposalState.COMMITTED.value:
                 return
@@ -399,55 +415,58 @@ class SalesAgentProposalStore:
         *,
         media_buy_id: str,
     ) -> None:
-        """Legacy direct ``committed`` → ``consumed`` for v1.5 alpha
-        compatibility. Equivalent to ``try_reserve_consumption`` +
-        ``finalize_consumption`` against a single-threaded write; new
-        dispatch code uses the two-phase methods.
-        """
-        from adcp.decisioning.proposal_store import ProposalState
-        from adcp.decisioning.types import AdcpError
+        """Legacy v1.5-alpha ``committed`` → ``consumed`` transition —
+        intentionally **not implemented** in the salesagent store.
 
-        with get_db_session() as session:
-            row = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id).with_for_update()).first()
-            if row is None:
-                raise AdcpError(
-                    "INTERNAL_ERROR",
-                    message=f"Cannot mark_consumed proposal {proposal_id!r}: not in store.",
-                    recovery="terminal",
-                )
-            if row.state == ProposalState.CONSUMED.value:
-                if row.media_buy_id == media_buy_id:
-                    return
-                raise AdcpError(
-                    "INTERNAL_ERROR",
-                    message=(
-                        f"Proposal {proposal_id!r} already consumed by "
-                        f"media_buy_id={row.media_buy_id!r}; cannot "
-                        f"re-consume as {media_buy_id!r}."
-                    ),
-                    recovery="terminal",
-                )
-            if row.state != ProposalState.COMMITTED.value:
-                raise AdcpError(
-                    "INTERNAL_ERROR",
-                    message=(
-                        f"Cannot mark_consumed proposal {proposal_id!r} "
-                        f"from state {row.state!r}; mark_consumed "
-                        "requires COMMITTED."
-                    ),
-                    recovery="terminal",
-                )
-            row.state = ProposalState.CONSUMED.value
-            row.media_buy_id = media_buy_id
-            session.commit()
+        The Protocol signature doesn't accept ``expected_account_id``,
+        which means an internal caller (or a future framework version)
+        could mark *any* tenant's proposal as consumed and bind it to a
+        ``media_buy_id`` from another tenant — the partial unique index
+        on ``(account_id, media_buy_id)`` would still let the write
+        succeed because the tuple is per-account. New dispatch code
+        uses the two-phase :meth:`try_reserve_consumption` +
+        :meth:`finalize_consumption` (both account-scoped), so failing
+        this method closed has no functional cost today. Surfaces
+        loudly if a future framework version begins calling it.
+        """
+        logger.error(
+            "SalesAgentProposalStore.mark_consumed called for proposal_id=%r "
+            "media_buy_id=%r — this Protocol method has no tenant scoping "
+            "and is intentionally not implemented. New framework callers "
+            "should use try_reserve_consumption + finalize_consumption.",
+            proposal_id,
+            media_buy_id,
+        )
+        raise NotImplementedError(
+            "SalesAgentProposalStore intentionally does not implement "
+            "mark_consumed; the Protocol signature lacks tenant scoping. "
+            "Use try_reserve_consumption + finalize_consumption."
+        )
 
     async def discard(self, proposal_id: str) -> None:
-        """Idempotent delete — unknown ids no-op."""
-        with get_db_session() as session:
-            row = session.scalars(select(ProposalRow).filter_by(proposal_id=proposal_id)).first()
-            if row is not None:
-                session.delete(row)
-                session.commit()
+        """Idempotent delete — intentionally **not implemented**.
+
+        The Protocol signature doesn't accept ``expected_account_id``,
+        which means any caller that obtains a ``proposal_id`` (a
+        buyer-controllable value reachable via storyboard echoes /
+        log scrapes / brute force against the 48-bit id space) could
+        destroy another tenant's reservable proposal. The framework's
+        dispatch (``adcp.decisioning.proposal_dispatch``) doesn't call
+        this method today; surfacing loudly here ensures a future
+        framework version that begins calling it forces an upstream
+        Protocol fix before it can hit production.
+        """
+        logger.error(
+            "SalesAgentProposalStore.discard called for proposal_id=%r — "
+            "this Protocol method has no tenant scoping and is "
+            "intentionally not implemented. Filed upstream as a Protocol gap.",
+            proposal_id,
+        )
+        raise NotImplementedError(
+            "SalesAgentProposalStore intentionally does not implement "
+            "discard; the Protocol signature lacks tenant scoping. "
+            "File an upstream issue if the framework begins calling this."
+        )
 
     async def get_by_media_buy_id(
         self,
