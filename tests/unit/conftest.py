@@ -12,6 +12,21 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 
+@pytest.fixture
+def admin_app():
+    """Configured Flask admin app for unit tests that exercise public/auth routes."""
+    with patch.dict(
+        "os.environ",
+        {"GOOGLE_CLIENT_ID": "test-client-id", "GOOGLE_CLIENT_SECRET": "test-client-secret"},
+    ):
+        from src.admin.app import create_app
+
+        app = create_app()
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test-secret"
+        yield app
+
+
 def _build_scalars_dispatch(model_to_result: dict[type, Any]):
     """Build a callable side_effect for ``Session.scalars(stmt)`` that dispatches by target model.
 

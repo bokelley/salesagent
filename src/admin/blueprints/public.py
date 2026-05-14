@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import secrets
 import string
 from datetime import UTC, datetime
@@ -20,9 +21,20 @@ logger = logging.getLogger(__name__)
 public_bp = Blueprint("public", __name__)
 
 
+def signups_enabled() -> bool:
+    """Self-service signups are gated by the ALLOW_SIGNUPS env var.
+
+    Set ALLOW_SIGNUPS=false to close registration cluster-wide (e.g. during migration).
+    """
+    return os.getenv("ALLOW_SIGNUPS", "true").strip().lower() != "false"
+
+
 @public_bp.route("/signup")
 def landing():
     """Public landing page for self-service signup."""
+    if not signups_enabled():
+        return render_template("signups_closed.html"), 503
+
     # Only allow signup on main domain, not tenant subdomains
     host = request.headers.get("Host", "")
     approximated_host = request.headers.get("Apx-Incoming-Host")
@@ -63,6 +75,9 @@ def landing():
 @public_bp.route("/signup/start")
 def signup_start():
     """Initiate Google OAuth for signup flow."""
+    if not signups_enabled():
+        return redirect(url_for("public.landing"))
+
     # Set signup context in session
     session["signup_flow"] = True
     session["signup_step"] = "oauth"
@@ -74,6 +89,9 @@ def signup_start():
 @public_bp.route("/signup/onboarding")
 def signup_onboarding():
     """Onboarding wizard after Google OAuth (authenticated)."""
+    if not signups_enabled():
+        return redirect(url_for("public.landing"))
+
     # Verify signup flow is active
     if not session.get("signup_flow"):
         flash("Invalid signup session. Please start again.", "error")
@@ -99,6 +117,9 @@ def signup_onboarding():
 @public_bp.route("/signup/provision", methods=["POST"])
 def provision_tenant():
     """Provision new tenant from signup form."""
+    if not signups_enabled():
+        return redirect(url_for("public.landing"))
+
     # Verify signup flow is active
     if not session.get("signup_flow"):
         flash("Invalid signup session. Please start again.", "error")
