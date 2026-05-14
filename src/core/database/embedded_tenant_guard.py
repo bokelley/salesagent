@@ -190,10 +190,21 @@ def _enforce(mapper, connection, target, *, op: str) -> None:
         return
 
     detail = sorted(changed) if changed else "(insert)"
+
+    session = Session.object_session(target)
+    session_flags = (
+        {k: session.info.get(k) for k in _AUTH_FLAGS} if session is not None and session.info else None
+    )
+    connection_flags = (
+        {k: connection.info.get(k) for k in _AUTH_FLAGS} if getattr(connection, "info", None) else None
+    )
+
     raise EmbeddedTenantWriteError(
         f"{type(target).__name__} for tenant "
         f"{getattr(target, 'tenant_id', '?')!r} is platform-managed; "
-        f"changes to {detail} must go through the Tenant Management API."
+        f"changes to {detail} must go through the Tenant Management API. "
+        f"[diag: session_present={session is not None} "
+        f"session_flags={session_flags} connection_flags={connection_flags}]"
     )
 
 
