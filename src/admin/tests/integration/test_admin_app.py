@@ -223,3 +223,174 @@ class TestProductsBlueprintIntegration:
         assert any("/tenant/<tenant_id>/products" in rule for rule in rules)
         assert any("/tenant/<tenant_id>/products/add" in rule for rule in rules)
         assert any("/tenant/<tenant_id>/products/<product_id>/edit" in rule for rule in rules)
+
+
+class TestUncaughtExceptionHandler:
+    """The 500 handler must log the traceback + request context and return
+    a response with a stable error_id, so production crashes are diagnoseable
+    instead of bottoming out in the upstream proxy's generic error page.
+    """
+
+    @pytest.fixture
+    def app(self):
+        # PROPAGATE_EXCEPTIONS=False forces Flask to invoke registered error
+        # handlers for uncaught exceptions; TESTING=True would re-raise instead.
+        app = create_app({"TESTING": True, "PROPAGATE_EXCEPTIONS": False})
+
+        @app.route("/__boom_anonymous")
+        def boom_anonymous():
+            raise RuntimeError("synthetic crash for handler test")
+
+        @app.route("/tenant/<tenant_id>/__boom_scoped")
+        def boom_scoped(tenant_id):
+            raise ValueError(f"tenant-scoped crash for {tenant_id}")
+
+        return app
+
+    def test_uncaught_exception_returns_500_with_error_id(self, app, caplog):
+        client = app.test_client()
+        with caplog.at_level("ERROR", logger="src.admin.app"):
+            resp = client.get("/__boom_anonymous")
+
+        assert resp.status_code == 500
+        body = resp.get_data(as_text=True)
+        assert "Error ID:" in body
+        assert "Internal Server Error" in body
+
+        # The logged record must include the traceback + request context.
+        handler_records = [r for r in caplog.records if "Uncaught exception in GET" in r.getMessage()]
+        assert handler_records, f"expected handler log; got: {[r.getMessage() for r in caplog.records]}"
+        rec = handler_records[0]
+        msg = rec.getMessage()
+        assert "/__boom_anonymous" in msg
+        # Sanitizer always returns a string, so a Python ``None`` tenant_id
+        # is logged as the literal ``'None'`` (quoted via ``%r``). The
+        # ``=None`` substring would falsely also match ``='None'``; pin
+        # the exact post-sanitize shape.
+        assert "tenant_id='None'" in msg
+        assert rec.exc_info is not None, "exc_info must be attached so the traceback is logged"
+
+    def test_handler_captures_tenant_id_from_view_args(self, app, caplog):
+        client = app.test_client()
+        with caplog.at_level("ERROR", logger="src.admin.app"):
+            resp = client.get("/tenant/acme/__boom_scoped")
+        assert resp.status_code == 500
+        handler_records = [r for r in caplog.records if "Uncaught exception in GET" in r.getMessage()]
+        assert handler_records
+        msg = handler_records[0].getMessage()
+        assert "tenant_id='acme'" in msg, msg
+
+    def test_handler_returns_json_when_requested(self, app):
+        client = app.test_client()
+        resp = client.get("/__boom_anonymous", headers={"Accept": "application/json"})
+        assert resp.status_code == 500
+        assert resp.is_json
+        body = resp.get_json()
+        assert body["error"] == "internal_server_error"
+        assert "error_id" in body and len(body["error_id"]) >= 6
+
+    def test_http_exceptions_pass_through(self, app):
+        """Werkzeug HTTPExceptions (404, 403, etc.) must NOT be wrapped —
+        those are intentional responses, not internal errors."""
+        client = app.test_client()
+        resp = client.get("/this-route-does-not-exist")
+        assert resp.status_code == 404
+        # 404 page is Werkzeug's default, not our 500 handler's body.
+        assert "Error ID:" not in resp.get_data(as_text=True)
+
+    def test_handler_sanitizes_attacker_controlled_email(self, app, caplog):
+        """The session ``user`` lookup pulls from ``X-Identity-Email`` in
+        embedded mode — that header is attacker-controllable per the
+        contract (the upstream proxy IS expected to sanitize, but defense
+        in depth). A value with embedded CR/LF must NOT forge a second
+        log line in the access aggregator."""
+        client = app.test_client()
+
+        # Synthesize an embedded session by writing g/session ourselves
+        # via a custom view that crashes after the session is set.
+        @app.route("/__boom_injected_email")
+        def boom_injected_email():
+            from flask import session as flask_session
+
+            flask_session["user"] = {"email": "attacker@evil.com\n[CRIT] forged log line"}
+            raise RuntimeError("synthetic crash with attacker email in session")
+
+        with caplog.at_level("ERROR", logger="src.admin.app"):
+            resp = client.get("/__boom_injected_email")
+        assert resp.status_code == 500
+        handler_records = [r for r in caplog.records if "Uncaught exception in GET" in r.getMessage()]
+        assert handler_records
+        msg = handler_records[0].getMessage()
+        # The newline must be defanged before reaching the formatter.
+        # We assert on the LITERAL escape sequence and verify NO raw \n
+        # made it through. ``msg`` is the single formatted record body,
+        # so even one \n would split it across two log lines.
+        assert "\n" not in msg, f"raw newline leaked into log message: {msg!r}"
+        assert "\\n" in msg, f"sanitized escape not present: {msg!r}"
+        assert "forged log line" in msg  # the suffix survived, sanitized
+
+
+class TestEmbeddedMissingPrefixWarning:
+    """Embedded-auth requests without X-Forwarded-Prefix produce broken
+    redirects (they bypass the proxy mount). The warning surfaces this
+    misconfiguration in salesagent logs so the storefront integrator
+    sees it instead of guessing why redirects land outside their iframe.
+    """
+
+    @pytest.fixture
+    def app(self):
+        # TESTING=False so the before_request hook runs (it bypasses
+        # itself under TESTING to keep legacy unit tests quiet).
+        return create_app({"TESTING": False, "SECRET_KEY": "x"})
+
+    def test_warns_when_embedded_auth_present_without_prefix(self, app, caplog):
+        client = app.test_client()
+        with caplog.at_level("WARNING", logger="src.admin.app"):
+            # Hit /health (a real route) so we exercise the before_request
+            # hook without involving auth or DB.
+            client.get(
+                "/health",
+                headers={
+                    "X-Identity-Subject": "user@example.com",
+                    "X-Identity-Email": "user@example.com",
+                    "Origin": "https://interchange.io",
+                },
+            )
+        warnings = [r for r in caplog.records if "[EMBEDDED_PREFIX_MISSING]" in r.getMessage()]
+        assert warnings, f"expected EMBEDDED_PREFIX_MISSING warning; got: {[r.getMessage() for r in caplog.records]}"
+        assert "/health" in warnings[0].getMessage()
+
+    def test_no_warning_when_prefix_set(self, app, caplog):
+        client = app.test_client()
+        with caplog.at_level("WARNING", logger="src.admin.app"):
+            client.get(
+                "/health",
+                headers={
+                    "X-Identity-Subject": "user@example.com",
+                    "X-Forwarded-Prefix": "/storefront/psa",
+                },
+            )
+        warnings = [r for r in caplog.records if "[EMBEDDED_PREFIX_MISSING]" in r.getMessage()]
+        assert not warnings
+
+    def test_no_warning_for_non_embedded_request(self, app, caplog):
+        """Plain non-embedded request (no X-Identity-Subject) must not warn."""
+        client = app.test_client()
+        with caplog.at_level("WARNING", logger="src.admin.app"):
+            client.get("/health")
+        warnings = [r for r in caplog.records if "[EMBEDDED_PREFIX_MISSING]" in r.getMessage()]
+        assert not warnings
+
+    def test_no_warning_when_x_script_name_set(self, app, caplog):
+        """X-Script-Name is the alternate header the CustomProxyFix accepts."""
+        client = app.test_client()
+        with caplog.at_level("WARNING", logger="src.admin.app"):
+            client.get(
+                "/health",
+                headers={
+                    "X-Identity-Subject": "user@example.com",
+                    "X-Script-Name": "/storefront/psa",
+                },
+            )
+        warnings = [r for r in caplog.records if "[EMBEDDED_PREFIX_MISSING]" in r.getMessage()]
+        assert not warnings

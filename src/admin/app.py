@@ -6,8 +6,9 @@ import os
 import secrets
 
 import markdown
-from flask import Flask, request
+from flask import Flask, g, jsonify, request, session
 from markupsafe import Markup
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
 from src.admin.blueprints.accounts import accounts_bp
@@ -49,6 +50,26 @@ from src.core.domain_config import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_log(value, *, max_len: int = 200) -> str:
+    """Defang attacker-controllable values before they hit the log formatter.
+
+    The 500 handler interpolates fields that can carry attacker content —
+    ``X-Identity-Email`` (used as ``user_email``) and ``request.path`` are
+    the obvious ones. Python's stdlib ``logging`` does not strip control
+    bytes, so a header value with embedded ``\\n`` would forge a log line.
+
+    Truncates at ``max_len`` and replaces CR/LF/NUL with literal escape
+    sequences so a multi-line value can't span log records.
+    """
+    if value is None:
+        return "None"
+    if not isinstance(value, str):
+        value = str(value)
+    if len(value) > max_len:
+        value = value[:max_len] + "…"
+    return value.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
 
 
 # Custom ProxyFix for handling X-Script-Name and fixing redirect URLs
@@ -286,6 +307,38 @@ def create_app(config=None):
         )
         abort(403, description="Cross-origin admin request refused. See issue #32.")
 
+    # Diagnostic: embedded-mode requests must include X-Forwarded-Prefix
+    # (and/or X-Script-Name) so url_for() generates URLs the upstream
+    # proxy can route back to. Without it, redirects to ``/tenant/<id>/...``
+    # bypass the proxy mount (e.g. ``/storefront/psa/``) and land on a
+    # path the upstream's own router can't serve — producing an opaque
+    # "Cannot GET ..." or "Internal Server Error" page that's easy to
+    # mistake for a salesagent bug. Warn once per such request so the
+    # storefront operator sees the misconfiguration in salesagent logs.
+    # Per docs/integration/embedded-mode-identity-contract.md:124, the
+    # upstream is required to forward this header. The salesagent cannot
+    # safely infer the mount from request data alone, so we surface the
+    # gap loudly rather than guessing.
+    @app.before_request
+    def warn_embedded_missing_prefix():
+        from flask import request
+
+        if app.config.get("TESTING"):
+            return None
+        if not request.headers.get("X-Identity-Subject"):
+            return None
+        has_prefix = bool(request.headers.get("X-Forwarded-Prefix") or request.headers.get("X-Script-Name"))
+        if has_prefix:
+            return None
+        logger.warning(
+            "[EMBEDDED_PREFIX_MISSING] Embedded auth present (X-Identity-Subject set) "
+            "but no X-Forwarded-Prefix/X-Script-Name header on %s %s — generated "
+            "redirect URLs will NOT include the proxy mount and will land outside "
+            "it. See docs/integration/embedded-mode-identity-contract.md.",
+            request.method,
+            request.path,
+        )
+
     # Redirect external domain /admin requests to tenant subdomain
     @app.before_request
     def redirect_external_domain_admin():
@@ -372,6 +425,87 @@ def create_app(config=None):
                         f"(session.modified={session.modified}, keys={list(session.keys())})"
                     )
         return response
+
+    # 500 error handler: log the full traceback + request context so a
+    # production crash is diagnoseable without re-attaching a debugger.
+    # Without this handler, Flask hands the exception back to the upstream
+    # WSGI server (WSGIMiddleware → Starlette) which renders a generic
+    # "Internal Server Error" page with zero context — and the upstream
+    # proxy (e.g. storefront) often substitutes its OWN error page on top,
+    # making it look like a salesagent bug when the salesagent log is the
+    # only place the real traceback lives.
+    #
+    # Registered against ``Exception`` (not just 500) so application
+    # errors that Flask hasn't already mapped to an HTTPException are
+    # caught — Flask invokes 500 handlers AFTER converting un-mapped
+    # exceptions, but only if the handler is registered for the original
+    # exception class. ``Exception`` is the most permissive.
+    @app.errorhandler(Exception)
+    def handle_uncaught_exception(exc):
+        # Let HTTPExceptions (404/403/etc.) render their own pages —
+        # those are intentional, not internal errors.
+        if isinstance(exc, HTTPException):
+            return exc
+
+        # Stable short ID so a user can paste it into a support ticket
+        # and ops can grep the log.
+        error_id = secrets.token_hex(6)
+
+        # Resolve user email best-effort from g.user (embedded mode) or
+        # the OAuth session dict. Never fail the handler over this — the
+        # whole point of the handler is to surface the OUTER exception,
+        # so a session-shape oddity here would only mask the real signal.
+        user_email = "unknown"
+        try:
+            user = getattr(g, "user", None)
+            if isinstance(user, dict):
+                user_email = user.get("email", "unknown")
+            elif isinstance(user, str):
+                user_email = user
+            elif "user" in session:
+                sess_user = session["user"]
+                user_email = sess_user.get("email", "unknown") if isinstance(sess_user, dict) else str(sess_user)
+        except Exception:
+            logger.debug("user_email resolution failed in 500 handler", exc_info=True)
+
+        # tenant_id from view args is the most reliable source — the
+        # decorator chain stamps it into kwargs for every tenant route.
+        tenant_id = None
+        try:
+            view_args = request.view_args or {}
+            tenant_id = view_args.get("tenant_id")
+        except Exception:
+            logger.debug("tenant_id resolution failed in 500 handler", exc_info=True)
+
+        # ``user_email`` and ``request.path`` are attacker-controllable
+        # (X-Identity-Email header and the URL respectively). Sanitize
+        # before interpolating so a header with embedded ``\n`` can't
+        # forge a log line. ``request.endpoint`` / ``script_root`` /
+        # ``tenant_id`` are server-controlled but cheap to defang too.
+        logger.error(
+            "[ERROR_%s] Uncaught exception in %s %s — tenant_id=%r user=%r endpoint=%r script_root=%r",
+            error_id,
+            _sanitize_for_log(request.method, max_len=10),
+            _sanitize_for_log(request.path, max_len=500),
+            _sanitize_for_log(tenant_id, max_len=100),
+            _sanitize_for_log(user_email, max_len=200),
+            _sanitize_for_log(request.endpoint, max_len=100),
+            _sanitize_for_log(request.script_root, max_len=200),
+            exc_info=True,
+        )
+
+        # Return a JSON envelope if the client asked for it; otherwise
+        # plain text. Avoid rendering a template — template rendering
+        # can itself fail and we never want a 500 handler to throw.
+        accept = request.headers.get("Accept", "")
+        body = (
+            f"Internal Server Error\n\n"
+            f"Error ID: {error_id}\n"
+            f"This has been logged. Please include the Error ID when reporting.\n"
+        )
+        if "application/json" in accept:
+            return jsonify({"error": "internal_server_error", "error_id": error_id}), 500
+        return body, 500, {"Content-Type": "text/plain; charset=utf-8"}
 
     # Add context processor to make script_name and tenant available in templates
     @app.context_processor
