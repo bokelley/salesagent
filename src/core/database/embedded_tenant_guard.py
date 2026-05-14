@@ -192,12 +192,8 @@ def _enforce(mapper, connection, target, *, op: str) -> None:
     detail = sorted(changed) if changed else "(insert)"
 
     session = Session.object_session(target)
-    session_flags = (
-        {k: session.info.get(k) for k in _AUTH_FLAGS} if session is not None and session.info else None
-    )
-    connection_flags = (
-        {k: connection.info.get(k) for k in _AUTH_FLAGS} if getattr(connection, "info", None) else None
-    )
+    session_flags = {k: session.info.get(k) for k in _AUTH_FLAGS} if session is not None and session.info else None
+    connection_flags = {k: connection.info.get(k) for k in _AUTH_FLAGS} if getattr(connection, "info", None) else None
 
     raise EmbeddedTenantWriteError(
         f"{type(target).__name__} for tenant "
