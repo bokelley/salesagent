@@ -125,7 +125,6 @@ def execute_adapter_sync(
     from src.core.schemas import Principal
 
     stub_principal = Principal(
-        tenant_id=tenant_id,
         principal_id="__sync_orchestrator__",
         name="sync-orchestrator",
         platform_mappings={adapter_type: {"advertiser_id": "0"}},

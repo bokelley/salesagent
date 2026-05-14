@@ -358,18 +358,22 @@ def _resolve_public_url(request: Any) -> str:
 
 async def _start_schedulers() -> None:
     """Boot background schedulers when the ASGI server comes up."""
+    from src.services.adapter_reporting_sync_scheduler import start_adapter_reporting_sync_scheduler
     from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
     from src.services.media_buy_status_scheduler import start_media_buy_status_scheduler
 
     await start_delivery_webhook_scheduler()
     await start_media_buy_status_scheduler()
+    await start_adapter_reporting_sync_scheduler()
 
 
 async def _stop_schedulers() -> None:
     """Stop background schedulers on shutdown."""
+    from src.services.adapter_reporting_sync_scheduler import stop_adapter_reporting_sync_scheduler
     from src.services.delivery_webhook_scheduler import stop_delivery_webhook_scheduler
     from src.services.media_buy_status_scheduler import stop_media_buy_status_scheduler
 
+    await stop_adapter_reporting_sync_scheduler()
     await stop_media_buy_status_scheduler()
     await stop_delivery_webhook_scheduler()
 
