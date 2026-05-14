@@ -300,6 +300,157 @@ class TestTargetTenantId:
             assert dst_principal.access_token == seeded["access_token"]
 
 
+class TestCloneOnSameDeployment:
+    """Retargeting on the same DB: source stays in place, clone gets distinct surrogate PKs.
+
+    The original ``--target-tenant-id`` path collided on autoincrement int PKs
+    (gam_inventory.id, audit_logs.log_id, etc.) because the bundle preserved
+    those values and the source's rows still owned them. Fix: when retargeting,
+    strip autoincrement int PKs so Postgres re-allocates from the sequence,
+    then remap any FK references using the old→new ID map.
+    """
+
+    def test_clone_with_source_alive_succeeds(self, integration_db):
+        from src.core.database.models import AuditLog, InventoryProfile
+        from tests.factories import (
+            AuditLogFactory,
+            InventoryProfileFactory,
+            PrincipalFactory,
+            ProductFactory,
+            TenantFactory,
+        )
+
+        with _ExportEnv() as env:
+            session = env.get_session()
+            source = TenantFactory(tenant_id="rt_clone_src", name="Source")
+            principal = PrincipalFactory(
+                tenant=source,
+                principal_id="rt_clone_src_buyer",
+                access_token="rt_clone_src_token",
+            )
+            profile = InventoryProfileFactory(tenant=source, profile_id="rt_clone_src_profile")
+            ProductFactory(
+                tenant=source,
+                product_id="rt_clone_src_prod",
+                inventory_profile_id=profile.id,
+            )
+            AuditLogFactory(tenant=source, operation="clone_test_event")
+            session.commit()
+
+            source_profile_id = profile.id
+            source_audit_count = session.scalar(
+                select(func.count())
+                .select_from(AuditLog)
+                .where(AuditLog.tenant_id == "rt_clone_src", AuditLog.operation == "clone_test_event")
+            )
+            assert source_audit_count == 1
+
+            bundle = export_tenant(session.connection(), "rt_clone_src")
+            session.commit()
+
+            # Same-deployment clones must rewrite globally-unique columns the
+            # pre-flight check protects (subdomain, virtual_host, access_token).
+            # Mimicking what an operator does manually before importing a clone.
+            bundle["tenant"]["subdomain"] = "pub-rt-clone-dst"
+            for row in bundle["tables"].get("principals", []):
+                if row.get("access_token") == "rt_clone_src_token":
+                    row["access_token"] = "rt_clone_dst_token"
+
+            # Retarget while source is still alive — this is the clone scenario
+            # that originally collided on gam_inventory.id et al.
+            import_tenant(session.connection(), bundle, target_tenant_id="rt_clone_dst")
+            session.commit()
+
+            # Both tenants exist.
+            assert (
+                session.scalar(select(func.count()).select_from(Tenant).where(Tenant.tenant_id == "rt_clone_src")) == 1
+            )
+            assert (
+                session.scalar(select(func.count()).select_from(Tenant).where(Tenant.tenant_id == "rt_clone_dst")) == 1
+            )
+
+            # The clone's inventory_profile got a NEW autoincrement id.
+            dst_profile = session.scalars(
+                select(InventoryProfile).where(InventoryProfile.tenant_id == "rt_clone_dst")
+            ).first()
+            assert dst_profile is not None
+            assert dst_profile.id != source_profile_id, (
+                "clone must get a fresh autoincrement PK; sharing source's would collide"
+            )
+
+            # The clone's product FK must point at the CLONE's profile, not the source's.
+            dst_product = session.scalars(
+                select(Product).where(Product.tenant_id == "rt_clone_dst", Product.product_id == "rt_clone_src_prod")
+            ).first()
+            assert dst_product is not None
+            assert dst_product.inventory_profile_id == dst_profile.id, (
+                f"FK should be remapped: expected {dst_profile.id}, got {dst_product.inventory_profile_id}"
+            )
+
+            # Source data is untouched.
+            src_profile = session.scalars(
+                select(InventoryProfile).where(InventoryProfile.tenant_id == "rt_clone_src")
+            ).first()
+            assert src_profile is not None
+            assert src_profile.id == source_profile_id
+
+            # Access token preserved on the clone (buyers' integrations keep working).
+            # Token rewritten in the bundle pre-import; the buyer who got
+            # rt_clone_dst_token issued separately can now talk to the clone.
+            dst_principal = session.scalars(select(Principal).where(Principal.tenant_id == "rt_clone_dst")).first()
+            assert dst_principal is not None
+            assert dst_principal.access_token == "rt_clone_dst_token"
+
+    def test_retarget_without_source_still_works(self, integration_db):
+        """Regression: the original retarget test path (delete source, then retarget) still passes.
+
+        Strip-and-remap should be a superset of the original behavior — when the
+        source is gone, the new PKs Postgres allocates may or may not equal the
+        source's old PKs, but the data lands correctly either way.
+        """
+        from tests.factories import (
+            InventoryProfileFactory,
+            PrincipalFactory,
+            ProductFactory,
+            TenantFactory,
+        )
+
+        with _ExportEnv() as env:
+            session = env.get_session()
+            source = TenantFactory(tenant_id="rt_clone_solo_src", name="Solo Source")
+            principal = PrincipalFactory(
+                tenant=source,
+                principal_id="rt_clone_solo_buyer",
+                access_token="rt_clone_solo_token",
+            )
+            profile = InventoryProfileFactory(tenant=source, profile_id="rt_clone_solo_profile")
+            ProductFactory(
+                tenant=source,
+                product_id="rt_clone_solo_prod",
+                inventory_profile_id=profile.id,
+            )
+            session.commit()
+
+            bundle = export_tenant(session.connection(), "rt_clone_solo_src")
+            session.commit()
+            delete_tenant_data(session.connection(), "rt_clone_solo_src")
+            session.commit()
+
+            import_tenant(session.connection(), bundle, target_tenant_id="rt_clone_solo_dst")
+            session.commit()
+
+            dst_product = session.scalars(select(Product).where(Product.tenant_id == "rt_clone_solo_dst")).first()
+            assert dst_product is not None
+            # FK should still point to a real profile in the clone, not stale source ID.
+            from src.core.database.models import InventoryProfile
+
+            referenced_profile = session.scalars(
+                select(InventoryProfile).where(InventoryProfile.id == dst_product.inventory_profile_id)
+            ).first()
+            assert referenced_profile is not None
+            assert referenced_profile.tenant_id == "rt_clone_solo_dst"
+
+
 class TestStripSecrets:
     def test_strip_secrets_wipes_encrypted_columns(self, integration_db):
         from src.core.utils.encryption import encrypt_api_key

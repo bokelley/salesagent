@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pydantic_core
-from sqlalchemy import MetaData, Table, delete, insert, inspect, select
+from sqlalchemy import BigInteger, Column, Integer, MetaData, Table, delete, insert, inspect, select
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import ColumnElement
@@ -165,6 +165,37 @@ def discover_tenant_scoped_tables(metadata: MetaData | None = None) -> list[Tabl
 
 def _is_tenant_scoped(table: Table, scoped_set: set[Table]) -> bool:
     return table in scoped_set or "tenant_id" in table.columns
+
+
+def _is_autoincrement_int_pk(column: Column) -> bool:
+    """Return True for single-column integer autoincrement primary keys.
+
+    These get re-allocated by Postgres on insert when we strip the value;
+    preserving them across a same-deployment clone collides with the
+    source's existing rows. Detection is by column type + PK cardinality:
+
+    - Must be a primary key column.
+    - Must be Integer or BigInteger.
+    - Must be the only PK column on the table (composite PKs typically
+      carry tenant_id and aren't autoincrement-allocated).
+    - ``autoincrement`` is True or SQLAlchemy 2.0's "auto" default
+      (anything other than explicit False).
+    """
+    if not column.primary_key:
+        return False
+    if column.autoincrement is False:
+        return False
+    if len(column.table.primary_key.columns) != 1:
+        return False
+    return isinstance(column.type, (Integer, BigInteger))
+
+
+def _autoincrement_pk_column(table: Table) -> Column | None:
+    """Return the single autoincrement int PK column on ``table``, or None."""
+    for column in table.primary_key.columns:
+        if _is_autoincrement_int_pk(column):
+            return column
+    return None
 
 
 def build_tenant_filter(
@@ -522,15 +553,68 @@ def import_tenant(
     scoped_tables = discover_tenant_scoped_tables(md)
     summary_tables: dict[str, int] = {}
     total_rows = 0
+
+    # When retargeting to a new tenant_id on the same deployment, the
+    # bundle's surrogate integer PKs collide with rows still owned by the
+    # source tenant. Strip those PKs so Postgres re-allocates from the
+    # sequence, then rewrite any inbound FK references using the
+    # old→new ID map we build via INSERT ... RETURNING. Only one FK in
+    # the current schema points at an autoincrement int PK
+    # (products.inventory_profile_id → inventory_profiles.id) but the
+    # remap loop walks the FK graph generically so future references
+    # are handled automatically.
+    remap_pks = target_tenant_id is not None
+    pk_id_maps: dict[str, dict[int, int]] = {}
+
     for table in scoped_tables:
         rows = bundle["tables"].get(table.name)
         if not rows:
             continue
-        cleaned = [_filtered(table, r) for r in rows]
-        try:
-            connection.execute(insert(table), cleaned)
-        except IntegrityError as exc:
-            raise RuntimeError(f"Insert failed on table {table.name!r}: {exc.orig}") from exc
+
+        # Rewrite inbound FK columns whose targets we've already remapped.
+        for row in rows:
+            for fk in table.foreign_keys:
+                parent_map = pk_id_maps.get(fk.column.table.name)
+                if not parent_map:
+                    continue
+                col_name = fk.parent.name
+                old_value = row.get(col_name)
+                if old_value is None:
+                    continue
+                new_value = parent_map.get(old_value)
+                if new_value is not None:
+                    row[col_name] = new_value
+
+        auto_pk = _autoincrement_pk_column(table) if remap_pks else None
+
+        if auto_pk is not None:
+            # Strip the original PK values, capturing them for the post-insert
+            # remap. Postgres re-allocates from the sequence when the column
+            # is absent from the INSERT.
+            original_pks: list[int | None] = []
+            for row in rows:
+                original_pks.append(row.pop(auto_pk.name, None))
+            cleaned = [_filtered(table, r) for r in rows]
+            try:
+                result = connection.execute(
+                    insert(table).returning(table.c[auto_pk.name]),
+                    cleaned,
+                )
+                # SQLAlchemy 2.0 insertmanyvalues preserves parameter order on
+                # Postgres, so result rows align 1:1 with original_pks.
+                new_pks = [row[0] for row in result]
+            except IntegrityError as exc:
+                raise RuntimeError(f"Insert failed on table {table.name!r}: {exc.orig}") from exc
+
+            pk_id_maps[table.name] = {
+                old: new for old, new in zip(original_pks, new_pks, strict=True) if old is not None
+            }
+        else:
+            cleaned = [_filtered(table, r) for r in rows]
+            try:
+                connection.execute(insert(table), cleaned)
+            except IntegrityError as exc:
+                raise RuntimeError(f"Insert failed on table {table.name!r}: {exc.orig}") from exc
         summary_tables[table.name] = len(cleaned)
         total_rows += len(cleaned)
 
