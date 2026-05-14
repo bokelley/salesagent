@@ -85,6 +85,16 @@ class SalesAgentProposalManager:
         sales_specialism="sales-non-guaranteed",
         refine=True,
         auto_commit_on_put_draft=True,
+        # adcp 5.5.0 framework derivation (adcp-client-python#732). When
+        # the buyer calls ``create_media_buy(proposal_id=…)`` without
+        # inline packages, ``maybe_hydrate_recipes_for_create_media_buy``
+        # distributes ``total_budget.amount`` across the reserved
+        # proposal's ``allocations[]`` by percentage and injects the
+        # resulting ``packages[]`` before dispatch reaches the seller
+        # adapter. Closes the seller-side compliance gap on the
+        # ``proposal_finalize/create_media_buy`` storyboard without any
+        # local derivation code in this repo.
+        derive_packages_from_allocations=True,
     )
 
     @translate_adcp_errors
