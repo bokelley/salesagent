@@ -14,8 +14,11 @@ from unittest.mock import MagicMock
 from src.core.database.repositories.adapter_config import TenantAdapterRow
 from src.services.adapter_sync_orchestration import KIND_INVENTORY, KIND_REPORTING
 from src.services.sync_scheduling_view import (
-    INVENTORY_STALE_AFTER,
-    REPORTING_STALE_AFTER,
+    DEFAULT_INVENTORY_WARNING,
+    DEFAULT_REPORTING_WARNING,
+    FRESHNESS_CRITICAL,
+    FRESHNESS_OK,
+    FRESHNESS_WARNING,
     SchedulingRow,
     _build_row,
     _capability_flag,
@@ -48,9 +51,9 @@ class TestCapabilityFlag:
 
 class TestBuildRowNeverRun:
     """A supported triple with no SyncJob → ``never_run=True`` and
-    ``stale=True`` (action needed — admin should kick off a sync)."""
+    ``freshness='critical'`` (action needed — admin should kick off a sync)."""
 
-    def test_never_run_is_stale(self):
+    def test_never_run_is_critical(self):
         row = _build_row(
             tenant_id="t1",
             tenant_name="Tenant One",
@@ -60,14 +63,18 @@ class TestBuildRowNeverRun:
             now=datetime.now(UTC),
         )
         assert row.never_run is True
-        assert row.stale is True
+        assert row.freshness == FRESHNESS_CRITICAL
+        assert row.stale is True  # back-compat alias
         assert row.last_status is None
         assert row.last_sync_id is None
 
 
 class TestBuildRowFreshness:
-    """Stale verdict: only ``completed`` runs count, and only when newer
-    than the kind's threshold."""
+    """Three-state verdict: ``ok`` / ``warning`` / ``critical``.
+
+    Only ``completed`` runs can be ``ok``. Failures and queued/running
+    rows default to ``warning`` or ``critical`` depending on prior state.
+    """
 
     def _job(self, *, status, completed_at, started_at=None):
         job = MagicMock()
@@ -78,7 +85,7 @@ class TestBuildRowFreshness:
         job.error_message = None
         return job
 
-    def test_recent_completed_inventory_is_fresh(self):
+    def test_recent_completed_inventory_is_ok(self):
         now = datetime.now(UTC)
         row = _build_row(
             tenant_id="t1",
@@ -88,11 +95,12 @@ class TestBuildRowFreshness:
             job=self._job(status="completed", completed_at=now - timedelta(hours=1)),
             now=now,
         )
+        assert row.freshness == FRESHNESS_OK
         assert row.stale is False
         assert row.never_run is False
 
-    def test_old_completed_inventory_is_stale(self):
-        # Just past the 24h threshold.
+    def test_completed_past_warning_but_before_critical_is_warning(self):
+        # Just past the 24h warning, still inside 72h critical for FW inventory.
         now = datetime.now(UTC)
         row = _build_row(
             tenant_id="t1",
@@ -101,14 +109,28 @@ class TestBuildRowFreshness:
             sync_kind=KIND_INVENTORY,
             job=self._job(
                 status="completed",
-                completed_at=now - (INVENTORY_STALE_AFTER + timedelta(minutes=1)),
+                completed_at=now - (DEFAULT_INVENTORY_WARNING + timedelta(minutes=1)),
             ),
             now=now,
         )
-        assert row.stale is True
+        assert row.freshness == FRESHNESS_WARNING
 
-    def test_reporting_threshold_is_2h(self):
-        # 90min < 2h → fresh. 150min > 2h → stale.
+    def test_completed_past_critical_is_critical(self):
+        now = datetime.now(UTC)
+        row = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="freewheel",
+            sync_kind=KIND_INVENTORY,
+            job=self._job(
+                status="completed",
+                completed_at=now - timedelta(hours=96),  # past 72h critical
+            ),
+            now=now,
+        )
+        assert row.freshness == FRESHNESS_CRITICAL
+
+    def test_reporting_warning_at_2h_critical_at_6h(self):
         now = datetime.now(UTC)
         fresh = _build_row(
             tenant_id="t1",
@@ -118,23 +140,32 @@ class TestBuildRowFreshness:
             job=self._job(status="completed", completed_at=now - timedelta(minutes=90)),
             now=now,
         )
-        stale = _build_row(
+        warn = _build_row(
             tenant_id="t1",
             tenant_name="T",
             adapter_type="freewheel",
             sync_kind=KIND_REPORTING,
             job=self._job(
                 status="completed",
-                completed_at=now - (REPORTING_STALE_AFTER + timedelta(minutes=1)),
+                completed_at=now - (DEFAULT_REPORTING_WARNING + timedelta(minutes=1)),
             ),
             now=now,
         )
-        assert fresh.stale is False
-        assert stale.stale is True
+        critical = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="freewheel",
+            sync_kind=KIND_REPORTING,
+            job=self._job(status="completed", completed_at=now - timedelta(hours=8)),
+            now=now,
+        )
+        assert fresh.freshness == FRESHNESS_OK
+        assert warn.freshness == FRESHNESS_WARNING
+        assert critical.freshness == FRESHNESS_CRITICAL
 
-    def test_failed_run_is_always_stale(self):
+    def test_failed_run_is_critical(self):
         # Even a recently-failed run doesn't refresh the cache — the
-        # underlying data is whatever it was before. Stale.
+        # underlying data is whatever it was before. Critical.
         now = datetime.now(UTC)
         row = _build_row(
             tenant_id="t1",
@@ -144,9 +175,10 @@ class TestBuildRowFreshness:
             job=self._job(status="failed", completed_at=now - timedelta(minutes=5)),
             now=now,
         )
-        assert row.stale is True
+        assert row.freshness == FRESHNESS_CRITICAL
 
-    def test_running_run_is_stale_until_it_completes(self):
+    def test_running_is_warning_not_critical(self):
+        # In-flight is soft-stale, not red.
         now = datetime.now(UTC)
         job = MagicMock()
         job.status = "running"
@@ -162,7 +194,20 @@ class TestBuildRowFreshness:
             job=job,
             now=now,
         )
-        assert row.stale is True
+        assert row.freshness == FRESHNESS_WARNING
+
+    def test_gam_row_gets_bundled_notes(self):
+        now = datetime.now(UTC)
+        row = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="google_ad_manager",
+            sync_kind=KIND_INVENTORY,
+            job=None,
+            now=now,
+        )
+        assert row.notes is not None
+        assert "bundled" in row.notes.lower()
 
 
 class TestSchedulingRowToDict:
@@ -179,17 +224,19 @@ class TestSchedulingRowToDict:
             last_completed_at=now - timedelta(minutes=8),
             last_sync_id="sync_abc",
             last_error_message=None,
-            stale=False,
+            freshness=FRESHNESS_OK,
             never_run=False,
         )
         d = row.to_dict()
         assert d["tenant_id"] == "t1"
         assert d["sync_kind"] == "inventory"
-        assert d["stale"] is False
+        assert d["freshness"] == "ok"
+        assert d["stale"] is False  # back-compat alias
         assert d["never_run"] is False
         assert d["last_sync_id"] == "sync_abc"
         assert d["freshness_age_seconds"] is not None
         assert d["freshness_age_seconds"] >= 0
+        assert d["notes"] is None
 
 
 class TestBuildMatrixSkipsUnsupportedKinds:

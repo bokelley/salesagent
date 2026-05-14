@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.services.adapter_sync_orchestration import SyncExecutionResult
+from src.services.adapter_sync_orchestration import AdapterDoesNotSupportSyncKind
 from tests.factories import AdapterConfigFactory, TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -73,25 +73,19 @@ class TestRunNowValidatesBody:
         assert "sync_kind" in resp.get_json()["error"]
 
 
-class TestRunNowDispatchesToOrchestrator:
-    """The endpoint delegates to ``execute_adapter_sync``; we patch the
-    orchestrator to keep the test fast and focused on the HTTP layer
-    (the orchestrator itself has its own integration coverage)."""
+class TestRunNowEnqueuesAsync:
+    """The endpoint delegates to ``enqueue_adapter_sync`` which returns
+    immediately with a sync_id. The actual adapter work happens on a
+    daemon thread (covered by orchestrator tests, not these)."""
 
-    def test_successful_dispatch_returns_200(self, authenticated_admin_session, factory_session):
+    def test_successful_enqueue_returns_202_with_sync_id(self, authenticated_admin_session, factory_session):
         t = TenantFactory(tenant_id="t_run", name="Run Co")
         AdapterConfigFactory(tenant=t, adapter_type="freewheel")
 
-        fake_result = SyncExecutionResult(
-            sync_id="sync_test_ok",
-            sync_kind="inventory",
-            succeeded=True,
-            counts={"site": 5},
-        )
         with patch(
-            "src.admin.blueprints.scheduling.execute_adapter_sync",
-            return_value=fake_result,
-        ) as mock_exec:
+            "src.admin.blueprints.scheduling.enqueue_adapter_sync",
+            return_value="sync_test_ok",
+        ) as mock_enq:
             resp = authenticated_admin_session.post(
                 "/admin/api/scheduling/run",
                 json={
@@ -101,46 +95,43 @@ class TestRunNowDispatchesToOrchestrator:
                 },
             )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         body = resp.get_json()
         assert body["sync_id"] == "sync_test_ok"
-        assert body["succeeded"] is True
-        mock_exec.assert_called_once_with(
+        assert body["status"] == "queued"
+        # Admin identity flows from g.user (test fixture sets "test@example.com")
+        # through to ``triggered_by_id`` — proves the audit attribution path.
+        assert body["triggered_by_id"] == "test@example.com"
+        mock_enq.assert_called_once_with(
             tenant_id="t_run",
             adapter_type="freewheel",
             sync_kind="inventory",
             triggered_by="admin_scheduling_ui",
+            triggered_by_id="test@example.com",
         )
 
-    def test_scope_pending_returns_503(self, authenticated_admin_session, factory_session):
-        t = TenantFactory(tenant_id="t_scope", name="Scope Co")
+    def test_capability_off_returns_400(self, authenticated_admin_session, factory_session):
+        t = TenantFactory(tenant_id="t_cap", name="Cap Co")
         AdapterConfigFactory(tenant=t, adapter_type="freewheel")
 
-        fake_result = SyncExecutionResult(
-            sync_id="sync_scope",
-            sync_kind="reporting",
-            succeeded=False,
-            errors={"scope": "denied: /reports/queries"},
-            metadata={"scope_pending": True},
-        )
         with patch(
-            "src.admin.blueprints.scheduling.execute_adapter_sync",
-            return_value=fake_result,
+            "src.admin.blueprints.scheduling.enqueue_adapter_sync",
+            side_effect=AdapterDoesNotSupportSyncKind(adapter_type="freewheel", sync_kind="inventory"),
         ):
             resp = authenticated_admin_session.post(
                 "/admin/api/scheduling/run",
                 json={
-                    "tenant_id": "t_scope",
+                    "tenant_id": "t_cap",
                     "adapter_type": "freewheel",
-                    "sync_kind": "reporting",
+                    "sync_kind": "inventory",
                 },
             )
-        assert resp.status_code == 503
-        assert resp.get_json()["scope_pending"] is True
+        assert resp.status_code == 400
+        assert "supports_inventory_sync" in resp.get_json()["error"]
 
     def test_unconfigured_tenant_returns_400(self, authenticated_admin_session, factory_session):
         with patch(
-            "src.admin.blueprints.scheduling.execute_adapter_sync",
+            "src.admin.blueprints.scheduling.enqueue_adapter_sync",
             return_value=None,
         ):
             resp = authenticated_admin_session.post(

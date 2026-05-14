@@ -13,9 +13,12 @@
 
     <p class="sa-text-muted" style="margin-bottom: var(--sa-space-4);">
         Cross-tenant view of inventory + reporting sync freshness. Each row pairs a tenant's configured adapter
-        with the sync kinds the adapter declares it can run. <strong>Stale</strong> = the last completed run is
-        older than the threshold (24h inventory / 2h reporting), <strong>or</strong> the last run failed, <strong>or</strong>
-        the sync has never run.
+        with the sync kinds the adapter declares it can run. Freshness windows come from each adapter's
+        <code>AdapterCapabilities</code> declaration:
+        <span class="sa-text-success"><strong>OK</strong></span> = within the warning window;
+        <span class="sa-text-warning"><strong>Warning</strong></span> = past the warning window but not yet critical;
+        <span class="sa-text-danger"><strong>Critical</strong></span> = past the critical window, last run failed,
+        or the sync has never completed.
     </p>
 
     {% if rows %}
@@ -39,7 +42,12 @@
                     <br><small class="sa-text-muted"><code>{{ row.tenant_id }}</code></small>
                 </td>
                 <td><code>{{ row.adapter_type }}</code></td>
-                <td>{{ row.sync_kind }}</td>
+                <td>
+                    {{ row.sync_kind }}
+                    {% if row.notes %}
+                    <br><small class="sa-text-muted" title="{{ row.notes }}">ℹ {{ row.notes }}</small>
+                    {% endif %}
+                </td>
                 <td class="sa-cell-status">
                     {% if row.never_run %}
                     <span class="sa-text-faint">Never run</span>
@@ -52,6 +60,8 @@
                     {% endif %}
                     {% elif row.last_status == 'running' %}
                     <span class="status">⏳ running</span>
+                    {% elif row.last_status == 'queued' %}
+                    <span class="status">⏳ queued</span>
                     {% else %}
                     {{ row.last_status or '—' }}
                     {% endif %}
@@ -60,10 +70,12 @@
                     {% if row.last_completed_at %}{{ row.last_completed_at }}{% else %}—{% endif %}
                 </td>
                 <td class="sa-cell-freshness">
-                    {% if row.stale %}
-                    <span class="sa-text-danger">⚠ stale</span>
+                    {% if row.freshness == 'ok' %}
+                    <span class="sa-text-success">✓ ok</span>
+                    {% elif row.freshness == 'warning' %}
+                    <span class="sa-text-warning">⚠ warning</span>
                     {% else %}
-                    <span class="sa-text-success">✓ fresh</span>
+                    <span class="sa-text-danger">⚠ critical</span>
                     {% endif %}
                 </td>
                 <td>
@@ -138,7 +150,7 @@
     async function runNow(tenantId, adapterType, syncKind, btn) {
         const original = btn.textContent;
         btn.disabled = true;
-        btn.textContent = 'Running…';
+        btn.textContent = 'Enqueuing…';
         try {
             const resp = await fetch(apiBase + '/run', {
                 method: 'POST',
@@ -147,20 +159,50 @@
                 body: JSON.stringify({tenant_id: tenantId, adapter_type: adapterType, sync_kind: syncKind}),
             });
             const body = await resp.json();
-            if (resp.ok) {
-                flash('Sync completed: ' + (body.sync_id || ''), 'success');
-            } else if (resp.status === 503 && body.scope_pending) {
-                flash('Awaiting upstream scope grant: ' + (body.errors && body.errors.scope || ''), 'warning');
+            if (resp.status === 202) {
+                // Async dispatch — refresh the matrix to show ``queued``
+                // status, then keep polling until terminal state.
+                flash('Sync enqueued: ' + (body.sync_id || ''), 'info');
+                await pollUntilTerminal(body.sync_id);
             } else {
-                flash('Sync failed: ' + (body.error || (body.errors && Object.values(body.errors)[0]) || resp.status), 'error');
+                flash('Enqueue failed: ' + (body.error || resp.status), 'error');
             }
-            await refresh();
         } catch (err) {
             flash('Sync request failed: ' + err.message, 'error');
         } finally {
             btn.disabled = false;
             btn.textContent = original;
         }
+    }
+
+    async function pollUntilTerminal(syncId) {
+        // Poll /recent every 3s for up to ~5 minutes (100 iterations).
+        // The /jobs endpoint refreshes the matrix; /recent gives us the
+        // status of the specific row we just enqueued.
+        for (let i = 0; i < 100; i++) {
+            await refresh();
+            const resp = await fetch(apiBase + '/recent?limit=50', {credentials: 'same-origin'});
+            if (resp.ok) {
+                const data = await resp.json();
+                const match = (data.jobs || []).find(j => j.sync_id === syncId);
+                if (match && (match.status === 'completed' || match.status === 'failed')) {
+                    if (match.status === 'completed') {
+                        flash('Sync completed: ' + syncId, 'success');
+                    } else {
+                        flash('Sync failed: ' + (match.error_message || syncId), 'error');
+                    }
+                    return;
+                }
+            }
+            await new Promise(r => setTimeout(r, 3000));
+        }
+        flash('Sync still running — refresh manually for status', 'warning');
+    }
+
+    function freshnessBadge(freshness) {
+        if (freshness === 'ok') return '<span class="sa-text-success">✓ ok</span>';
+        if (freshness === 'warning') return '<span class="sa-text-warning">⚠ warning</span>';
+        return '<span class="sa-text-danger">⚠ critical</span>';
     }
 
     async function refresh() {
@@ -176,10 +218,7 @@
             const row = rowsById.get(key);
             if (!row) continue;
             tr.querySelector('.sa-cell-completed').textContent = row.last_completed_at || '—';
-            const fresh = tr.querySelector('.sa-cell-freshness');
-            fresh.innerHTML = row.stale
-                ? '<span class="sa-text-danger">⚠ stale</span>'
-                : '<span class="sa-text-success">✓ fresh</span>';
+            tr.querySelector('.sa-cell-freshness').innerHTML = freshnessBadge(row.freshness);
         }
     }
 

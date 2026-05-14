@@ -94,6 +94,7 @@ class GoogleAdManager(AdServerAdapter):
         # supports_reporting_sync stays False — GAM doesn't have a separate
         # reporting sync; line-item stats are written by gam_orders_service
         # as part of the inventory sync.
+        reporting_bundled_with_inventory=True,  # Surfaces label on /admin/scheduling
         supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
     )
 
@@ -351,19 +352,13 @@ class GoogleAdManager(AdServerAdapter):
         page. Reads from the existing ``sync_jobs`` table where the
         async ``background_sync_service`` persists run history.
         """
-        from sqlalchemy import select
-
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import SyncJob
+        from src.core.database.repositories.sync_job import SyncJobRepository
 
         with get_db_session() as session:
-            stmt = (
-                select(SyncJob.completed_at)
-                .filter_by(tenant_id=self.tenant_id, adapter_type="google_ad_manager", status="completed")
-                .order_by(SyncJob.completed_at.desc())
-                .limit(1)
+            return SyncJobRepository(session, self.tenant_id).latest_completed_at(
+                adapter_type="google_ad_manager", sync_type="inventory"
             )
-            return session.scalar(stmt)
 
     def get_supported_pricing_models(self) -> set[str]:
         """Return set of pricing models GAM adapter supports.

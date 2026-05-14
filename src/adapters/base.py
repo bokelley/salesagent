@@ -143,6 +143,26 @@ class AdapterCapabilities:
     # adapter.
     supports_reporting_sync: bool = False
 
+    # Freshness windows for the cross-tenant /admin/scheduling page
+    # (#382 Stage 4). ``warning`` = "should refresh soon", ``critical`` =
+    # "data is too old, alert operator". Defaults reflect the typical
+    # cadences across our adapters — overrides go on the per-adapter
+    # ``capabilities = AdapterCapabilities(...)`` block.
+    #
+    # Adapters with no inventory/reporting support leave these at the
+    # default; the scheduling view skips those rows entirely.
+    inventory_freshness_warning: timedelta = timedelta(hours=24)
+    inventory_freshness_critical: timedelta = timedelta(hours=72)
+    reporting_freshness_warning: timedelta = timedelta(hours=2)
+    reporting_freshness_critical: timedelta = timedelta(hours=6)
+
+    # Per-adapter "reporting bundled with inventory" hint. GAM doesn't
+    # have a separate reporting sync — line-item stats are written by
+    # gam_orders_service as part of the inventory sync. The scheduling
+    # page surfaces this label so admins don't see "no reporting" and
+    # worry that data is missing.
+    reporting_bundled_with_inventory: bool = False
+
     # Targeting
     supports_custom_targeting: bool = False  # Supports custom key-value targeting
     supports_geo_targeting: bool = True  # Supports geographic targeting

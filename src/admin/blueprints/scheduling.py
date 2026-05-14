@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, g, jsonify, render_template, request
 from pydantic import ValidationError
 
 from src.admin.utils import require_auth
@@ -27,7 +27,7 @@ from src.services.adapter_sync_orchestration import (
     KIND_INVENTORY,
     KIND_REPORTING,
     AdapterDoesNotSupportSyncKind,
-    execute_adapter_sync,
+    enqueue_adapter_sync,
 )
 from src.services.sync_scheduling_view import build_scheduling_matrix
 
@@ -120,15 +120,17 @@ def list_recent():
 @scheduling_bp.route("/admin/api/scheduling/run", methods=["POST"])
 @require_auth(admin_only=True)
 def run_now():
-    """Dispatch one sync via the shared orchestrator.
+    """Enqueue one sync via the shared orchestrator.
 
     Body: ``{"tenant_id": "...", "adapter_type": "...", "sync_kind": "inventory"|"reporting"}``
 
-    Returns the SyncExecutionResult shape with HTTP status reflecting outcome:
-      - 200: succeeded
-      - 400: bad request (unknown adapter / sync_kind, capability off)
-      - 503: ``scope_pending=True`` (FW reporting awaiting IAM grant)
-      - 500: succeeded=False but not scope-pending (generic adapter failure)
+    Returns 202 with the new ``sync_id`` so the UI can poll
+    ``/admin/api/scheduling/jobs``. The actual adapter work happens on a
+    daemon thread — important for GAM inventory sync which can run for
+    minutes (longer than nginx's request idle timeout).
+
+      - 202: enqueued — ``{"sync_id": "...", "status": "queued"}``
+      - 400: bad request (unknown adapter / sync_kind, capability off, tenant unconfigured)
     """
     body = request.get_json(silent=True) or {}
     tenant_id = body.get("tenant_id")
@@ -140,16 +142,14 @@ def run_now():
     if sync_kind not in _VALID_KINDS:
         return jsonify({"error": f"sync_kind must be one of {sorted(_VALID_KINDS)}"}), 400
 
+    triggered_by_id = _resolve_admin_identity()
     try:
-        # ``triggered_by_id`` could carry the admin email, but the SyncJob's
-        # ``triggered_by`` column is already provenance enough for this page —
-        # admins acting on this page are super-admins by gate, not impersonating
-        # a tenant principal.
-        result = execute_adapter_sync(
+        sync_id = enqueue_adapter_sync(
             tenant_id=tenant_id,
             adapter_type=adapter_type,
             sync_kind=sync_kind,
             triggered_by="admin_scheduling_ui",
+            triggered_by_id=triggered_by_id,
         )
     except AdapterDoesNotSupportSyncKind as exc:
         return jsonify({"error": str(exc)}), 400
@@ -157,29 +157,34 @@ def run_now():
         return jsonify({"error": f"Stored adapter config is invalid: {exc}"}), 400
     except Exception:
         logger.exception(
-            "Scheduling Run Now failed for tenant=%s adapter=%s kind=%s", tenant_id, adapter_type, sync_kind
+            "Scheduling Run Now enqueue failed for tenant=%s adapter=%s kind=%s",
+            tenant_id,
+            adapter_type,
+            sync_kind,
         )
-        return jsonify({"error": "Sync failed (see server logs)"}), 500
+        return jsonify({"error": "Enqueue failed (see server logs)"}), 500
 
-    if result is None:
+    if sync_id is None:
         return (
             jsonify({"error": f"Tenant {tenant_id!r} is not configured for adapter {adapter_type!r}"}),
             400,
         )
 
-    payload = {
-        "sync_id": result.sync_id,
-        "sync_kind": result.sync_kind,
-        "succeeded": result.succeeded,
-        "counts": result.counts,
-        "errors": result.errors,
-        "metadata": result.metadata,
-        "started_at": result.started_at.isoformat() if result.started_at else None,
-        "finished_at": result.finished_at.isoformat() if result.finished_at else None,
-    }
+    return jsonify({"sync_id": sync_id, "status": "queued", "triggered_by_id": triggered_by_id}), 202
 
-    if result.scope_pending:
-        return jsonify({**payload, "scope_pending": True}), 503
-    if not result.succeeded:
-        return jsonify(payload), 500
-    return jsonify(payload), 200
+
+def _resolve_admin_identity() -> str | None:
+    """Pull the super-admin's email off ``g.user`` for SyncJob attribution.
+
+    ``g.user`` is set by :func:`require_auth` and may be a plain email
+    string (legacy session shape) or a dict with ``email`` set (OAuth /
+    embedded-mode shape). Returns ``None`` if neither is present so the
+    SyncJob row simply lacks attribution rather than blowing up Run Now.
+    """
+    user = getattr(g, "user", None)
+    if isinstance(user, dict):
+        email = user.get("email")
+        return email if isinstance(email, str) else None
+    if isinstance(user, str):
+        return user
+    return None

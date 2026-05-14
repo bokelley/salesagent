@@ -29,25 +29,40 @@ def _pair(tenant_id, adapter_type):
     return p
 
 
+def _patch_eligibility_layer(monkeypatch, *, pairs, latest_map):
+    """Replace the three I/O seams used by ``_list_eligible_tenants``:
+    the cross-tenant AdapterConfig listing, the latest-SyncJob map, and
+    the DB-session context manager. Same three monkeypatches every test
+    needed — extracted so each test reads as "given inputs, assert output."
+    """
+    import contextlib
+
+    monkeypatch.setattr(
+        "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
+        lambda self: pairs,
+    )
+    monkeypatch.setattr(
+        "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
+        lambda self, triples: latest_map,
+    )
+    monkeypatch.setattr(
+        "src.services.adapter_reporting_sync_scheduler.get_db_session",
+        lambda: contextlib.nullcontext(MagicMock()),
+    )
+
+
 class TestListEligibleTenantsFiltering:
     """Capability gating: only adapters declaring reporting support are
     considered. Skip-when-fresh: if last completed run is newer than
     threshold, the pair is omitted."""
 
     def test_skips_adapters_without_reporting_capability(self, monkeypatch):
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
-            lambda self: [_pair("t_gam", "google_ad_manager"), _pair("t_fw", "freewheel")],
-        )
         # GAM declares reporting=False, FW declares reporting=True.
-        # Latest map empty → both eligible if supported.
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
-            lambda self, triples: {},
-        )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.get_db_session",
-            lambda: __import__("contextlib").nullcontext(MagicMock()),
+        # Latest map empty → only FW is eligible.
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_gam", "google_ad_manager"), _pair("t_fw", "freewheel")],
+            latest_map={},
         )
 
         eligible = _list_eligible_tenants(datetime.now(UTC))
@@ -61,19 +76,11 @@ class TestListEligibleTenantsFiltering:
         recent_job.completed_at = now - (REPORTING_STALE_AFTER - timedelta(minutes=10))
         recent_job.sync_id = "sync_recent"
 
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
-            lambda self: [_pair("t_fresh", "freewheel")],
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_fresh", "freewheel")],
+            latest_map={("t_fresh", "freewheel", KIND_REPORTING): recent_job},
         )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
-            lambda self, triples: {("t_fresh", "freewheel", KIND_REPORTING): recent_job},
-        )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.get_db_session",
-            lambda: __import__("contextlib").nullcontext(MagicMock()),
-        )
-
         assert _list_eligible_tenants(now) == []
 
     def test_eligible_when_last_run_older_than_threshold(self, monkeypatch):
@@ -82,19 +89,11 @@ class TestListEligibleTenantsFiltering:
         stale_job.status = "completed"
         stale_job.completed_at = now - (REPORTING_STALE_AFTER + timedelta(minutes=10))
 
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
-            lambda self: [_pair("t_stale", "freewheel")],
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_stale", "freewheel")],
+            latest_map={("t_stale", "freewheel", KIND_REPORTING): stale_job},
         )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
-            lambda self, triples: {("t_stale", "freewheel", KIND_REPORTING): stale_job},
-        )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.get_db_session",
-            lambda: __import__("contextlib").nullcontext(MagicMock()),
-        )
-
         assert _list_eligible_tenants(now) == [("t_stale", "freewheel")]
 
     def test_eligible_when_failed_last_run(self, monkeypatch):
@@ -104,19 +103,11 @@ class TestListEligibleTenantsFiltering:
         failed_job.status = "failed"
         failed_job.completed_at = now - timedelta(minutes=5)
 
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
-            lambda self: [_pair("t_failed", "freewheel")],
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_failed", "freewheel")],
+            latest_map={("t_failed", "freewheel", KIND_REPORTING): failed_job},
         )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
-            lambda self, triples: {("t_failed", "freewheel", KIND_REPORTING): failed_job},
-        )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.get_db_session",
-            lambda: __import__("contextlib").nullcontext(MagicMock()),
-        )
-
         assert _list_eligible_tenants(now) == [("t_failed", "freewheel")]
 
     def test_skips_when_currently_running(self, monkeypatch):
@@ -126,19 +117,28 @@ class TestListEligibleTenantsFiltering:
         running_job.status = "running"
         running_job.completed_at = None
 
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
-            lambda self: [_pair("t_running", "freewheel")],
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_running", "freewheel")],
+            latest_map={("t_running", "freewheel", KIND_REPORTING): running_job},
         )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
-            lambda self, triples: {("t_running", "freewheel", KIND_REPORTING): running_job},
-        )
-        monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.get_db_session",
-            lambda: __import__("contextlib").nullcontext(MagicMock()),
-        )
+        assert _list_eligible_tenants(now) == []
 
+    def test_skips_when_queued_or_running(self, monkeypatch):
+        # ``queued`` rows come from :func:`enqueue_adapter_sync` —
+        # transient, but the daemon thread will pick them up. The
+        # scheduler must NOT dispatch a parallel sync against the same
+        # triple while the queued row is still pending.
+        now = datetime.now(UTC)
+        queued_job = MagicMock()
+        queued_job.status = "queued"
+        queued_job.completed_at = None
+
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_queued", "freewheel")],
+            latest_map={("t_queued", "freewheel", KIND_REPORTING): queued_job},
+        )
         assert _list_eligible_tenants(now) == []
 
 

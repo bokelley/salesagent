@@ -3,10 +3,10 @@
 Assembles the data behind ``/admin/scheduling``: one row per
 ``(tenant_id, adapter_type, sync_kind)`` where the adapter declares
 support for that kind, paired with the most recent SyncJob row (if any)
-and a freshness verdict.
+and a three-state freshness verdict (``ok`` / ``warning`` / ``critical``).
 
 Reads only — the Run Now action goes through
-``src.services.adapter_sync_orchestration.execute_adapter_sync``.
+``src.services.adapter_sync_orchestration.enqueue_adapter_sync``.
 """
 
 from __future__ import annotations
@@ -18,19 +18,34 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.adapters import ADAPTER_REGISTRY
+from src.adapters.base import AdapterCapabilities
 from src.core.database.models import SyncJob
 from src.core.database.repositories.adapter_config import AdapterConfigAdminRepository
 from src.core.database.repositories.sync_job import SyncJobAdminRepository
 from src.services.adapter_sync_orchestration import KIND_INVENTORY, KIND_REPORTING
 
-# Freshness thresholds. Inventory taxonomies shift slowly (24h);
-# reporting feeds the delivery pipeline so 2h is one missed hourly cycle.
-# These match the per-adapter thresholds in adapters.py::freewheel_cache_freshness
-# so the cross-tenant view doesn't disagree with the per-tenant view.
-INVENTORY_STALE_AFTER = timedelta(hours=24)
-REPORTING_STALE_AFTER = timedelta(hours=2)
+# Fallback thresholds when an adapter doesn't override on its capabilities
+# block. Used for unknown adapter types and as backstops; production
+# adapters set their own values on :class:`AdapterCapabilities`.
+DEFAULT_INVENTORY_WARNING = timedelta(hours=24)
+DEFAULT_INVENTORY_CRITICAL = timedelta(hours=72)
+DEFAULT_REPORTING_WARNING = timedelta(hours=2)
+DEFAULT_REPORTING_CRITICAL = timedelta(hours=6)
+
+# Back-compat aliases — the Stage 5 reporting scheduler uses these to
+# decide "is this row fresh enough to skip?". Keeping them at the
+# Stage-4-default value is intentional: the scheduler doesn't care
+# which adapter is which, it just needs a single threshold.
+REPORTING_STALE_AFTER = DEFAULT_REPORTING_WARNING
+INVENTORY_STALE_AFTER = DEFAULT_INVENTORY_WARNING
 
 _SYNC_KINDS = (KIND_INVENTORY, KIND_REPORTING)
+
+# Freshness levels, in increasing severity. The HTML template renders
+# each as a distinct badge color (green / amber / red).
+FRESHNESS_OK = "ok"
+FRESHNESS_WARNING = "warning"
+FRESHNESS_CRITICAL = "critical"
 
 
 @dataclass
@@ -42,13 +57,23 @@ class SchedulingRow:
     adapter_type: str
     sync_kind: str
     supported: bool  # adapter.capabilities.supports_<kind>_sync
-    last_status: str | None  # "running" | "completed" | "failed" | None
+    last_status: str | None  # "queued" | "running" | "completed" | "failed" | None
     last_started_at: datetime | None
     last_completed_at: datetime | None
     last_sync_id: str | None
     last_error_message: str | None
-    stale: bool  # True when the freshest completed run is older than the kind's threshold
+    freshness: str  # FRESHNESS_OK / FRESHNESS_WARNING / FRESHNESS_CRITICAL
     never_run: bool  # True when no SyncJob row exists at all for this triple
+    notes: str | None = None  # Human-readable hint (e.g. "reporting bundled with inventory")
+
+    @property
+    def stale(self) -> bool:
+        """Back-compat: ``stale=True`` for anything not ``ok``.
+
+        Original Stage 4 surfaced a binary stale/fresh badge. Three-state
+        rendering replaces it, but JS / templates that look at ``stale``
+        still get a sensible value."""
+        return self.freshness != FRESHNESS_OK
 
     @property
     def freshness_age_seconds(self) -> int | None:
@@ -69,10 +94,19 @@ class SchedulingRow:
             "last_completed_at": self.last_completed_at.isoformat() if self.last_completed_at else None,
             "last_sync_id": self.last_sync_id,
             "last_error_message": self.last_error_message,
+            "freshness": self.freshness,
             "stale": self.stale,
             "never_run": self.never_run,
             "freshness_age_seconds": self.freshness_age_seconds,
+            "notes": self.notes,
         }
+
+
+def _capabilities_for(adapter_type: str) -> AdapterCapabilities | None:
+    adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
+    if adapter_class is None:
+        return None
+    return getattr(adapter_class, "capabilities", None)
 
 
 def _capability_flag(adapter_type: str, sync_kind: str) -> bool:
@@ -82,18 +116,80 @@ def _capability_flag(adapter_type: str, sync_kind: str) -> bool:
     the adapter — the scheduling page must render for tenants whose
     AdapterConfig is incomplete or whose credentials are missing.
     """
-    adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
-    if adapter_class is None:
-        return False
-    caps = getattr(adapter_class, "capabilities", None)
+    caps = _capabilities_for(adapter_type)
     if caps is None:
         return False
     attr = "supports_inventory_sync" if sync_kind == KIND_INVENTORY else "supports_reporting_sync"
     return bool(getattr(caps, attr, False))
 
 
-def _stale_threshold(sync_kind: str) -> timedelta:
-    return INVENTORY_STALE_AFTER if sync_kind == KIND_INVENTORY else REPORTING_STALE_AFTER
+def _freshness_thresholds(adapter_type: str, sync_kind: str) -> tuple[timedelta, timedelta]:
+    """Return ``(warning_after, critical_after)`` for this triple.
+
+    Reads from the adapter's :class:`AdapterCapabilities` so each adapter
+    can declare its own cadence (FW reporting flips warning at 2h; GAM
+    inventory at 24h). Falls back to module defaults for unknown adapters.
+    """
+    caps = _capabilities_for(adapter_type)
+    if caps is None:
+        if sync_kind == KIND_INVENTORY:
+            return DEFAULT_INVENTORY_WARNING, DEFAULT_INVENTORY_CRITICAL
+        return DEFAULT_REPORTING_WARNING, DEFAULT_REPORTING_CRITICAL
+
+    if sync_kind == KIND_INVENTORY:
+        return caps.inventory_freshness_warning, caps.inventory_freshness_critical
+    return caps.reporting_freshness_warning, caps.reporting_freshness_critical
+
+
+def _classify_freshness(
+    *,
+    job: SyncJob | None,
+    now: datetime,
+    warning_after: timedelta,
+    critical_after: timedelta,
+) -> str:
+    """Three-state classification.
+
+    Rules:
+      * No row, or no completed run → ``critical`` (action needed).
+      * Last completed run within ``warning_after`` → ``ok``.
+      * Last completed run within ``critical_after`` → ``warning``.
+      * Older than ``critical_after`` → ``critical``.
+      * In-flight (``running``/``queued``) → freshness based on the
+        previous completed_at, OR ``warning`` if we have no completed
+        run to compare against (still soft-stale, not red).
+    """
+    if job is None:
+        return FRESHNESS_CRITICAL
+    if job.status == "completed" and job.completed_at is not None:
+        age = now - job.completed_at
+        if age <= warning_after:
+            return FRESHNESS_OK
+        if age <= critical_after:
+            return FRESHNESS_WARNING
+        return FRESHNESS_CRITICAL
+    if job.status in ("queued", "running"):
+        # No prior completed run on this row — running is the best we
+        # can say. Soft-stale, not red.
+        return FRESHNESS_WARNING
+    # Failed (no completed_at on this row, but the prior completed run
+    # isn't joined here). Treat as critical — the failure means the
+    # cache wasn't refreshed.
+    return FRESHNESS_CRITICAL
+
+
+def _notes_for(adapter_type: str, sync_kind: str) -> str | None:
+    """Operator-facing hint shown beside the row.
+
+    Currently only used for GAM's bundled-reporting case so admins
+    don't see "no reporting row" and worry data is missing.
+    """
+    caps = _capabilities_for(adapter_type)
+    if caps is None:
+        return None
+    if sync_kind == KIND_INVENTORY and getattr(caps, "reporting_bundled_with_inventory", False):
+        return "reporting bundled with inventory sync"
+    return None
 
 
 def _build_row(
@@ -106,6 +202,10 @@ def _build_row(
     now: datetime,
 ) -> SchedulingRow:
     supported = _capability_flag(adapter_type, sync_kind)
+    warning_after, critical_after = _freshness_thresholds(adapter_type, sync_kind)
+    freshness = _classify_freshness(job=job, now=now, warning_after=warning_after, critical_after=critical_after)
+    notes = _notes_for(adapter_type, sync_kind)
+
     if job is None:
         return SchedulingRow(
             tenant_id=tenant_id,
@@ -118,18 +218,10 @@ def _build_row(
             last_completed_at=None,
             last_sync_id=None,
             last_error_message=None,
-            stale=supported,  # supported but never run → stale (action needed)
+            freshness=freshness,
             never_run=True,
+            notes=notes,
         )
-
-    threshold = _stale_threshold(sync_kind)
-    # Only "completed" runs count toward freshness; a failed run leaves the
-    # cache as-old-as-before. ``stale`` mirrors that: if there's no completed
-    # run yet, we're stale; otherwise compare to threshold.
-    if job.status == "completed" and job.completed_at is not None:
-        stale = (now - job.completed_at) > threshold
-    else:
-        stale = True
 
     return SchedulingRow(
         tenant_id=tenant_id,
@@ -142,8 +234,9 @@ def _build_row(
         last_completed_at=job.completed_at,
         last_sync_id=job.sync_id,
         last_error_message=job.error_message,
-        stale=stale,
+        freshness=freshness,
         never_run=False,
+        notes=notes,
     )
 
 

@@ -72,6 +72,37 @@ class SyncJobRepository:
         stmt = stmt.order_by(SyncJob.started_at.desc(), SyncJob.sync_id.desc()).limit(limit)
         return list(self._session.scalars(stmt).all())
 
+    def find_by_sync_id(self, sync_id: str) -> SyncJob | None:
+        """Lookup a single SyncJob row for this tenant by sync_id.
+
+        Returns ``None`` when the row doesn't exist OR belongs to another
+        tenant — the tenant_id filter is enforced so the
+        ``enqueue_adapter_sync`` async path can't accidentally transition
+        another tenant's queued row to ``running``.
+        """
+        stmt = select(SyncJob).filter_by(sync_id=sync_id, tenant_id=self._tenant_id)
+        return self._session.scalars(stmt).first()
+
+    def latest_completed_at(self, *, adapter_type: str, sync_type: str) -> datetime | None:
+        """Return ``completed_at`` of the most-recent ``status=completed``
+        sync row for this tenant + adapter + kind, or ``None``.
+
+        Powers the freshness accessors on :class:`AdServerAdapter` —
+        callers don't need full rows, just the timestamp.
+        """
+        stmt = (
+            select(SyncJob.completed_at)
+            .where(
+                SyncJob.tenant_id == self._tenant_id,
+                SyncJob.adapter_type == adapter_type,
+                SyncJob.sync_type == sync_type,
+                SyncJob.status == "completed",
+            )
+            .order_by(SyncJob.completed_at.desc())
+            .limit(1)
+        )
+        return self._session.scalar(stmt)
+
 
 class SyncJobAdminRepository:
     """Cross-tenant reads against ``sync_jobs`` for the super-admin

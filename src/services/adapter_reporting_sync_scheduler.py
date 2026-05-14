@@ -181,8 +181,11 @@ def _list_eligible_tenants(now: datetime) -> list[tuple[str, str]]:
         if last is None:
             eligible.append((tenant_id, adapter_type))
             continue
-        if last.status == "running":
-            # In-flight — skip.
+        if last.status in ("running", "queued"):
+            # In-flight — skip. ``queued`` rows come from the async
+            # /admin/scheduling Run Now dispatch; the daemon thread
+            # will transition them to running shortly, but until then
+            # we must not race another sync against the same triple.
             continue
         if last.status == "completed" and last.completed_at is not None:
             if (now - last.completed_at) <= REPORTING_STALE_AFTER:
