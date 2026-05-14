@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -135,6 +135,14 @@ class AdapterCapabilities:
     supports_inventory_profiles: bool = False  # Supports inventory profile configuration
     inventory_entity_label: str = "Items"  # UI label for inventory entities (e.g., "Zones", "Ad Units")
 
+    # Reporting sync — populates the per-adapter delivery cache that
+    # feeds get_packages_snapshot / get_media_buy_delivery. Different
+    # from supports_realtime_reporting (which is a buyer-facing
+    # capability flag); this controls whether the AdapterSyncScheduler
+    # should periodically run adapter.run_reporting_sync() for this
+    # adapter.
+    supports_reporting_sync: bool = False
+
     # Targeting
     supports_custom_targeting: bool = False  # Supports custom key-value targeting
     supports_geo_targeting: bool = True  # Supports geographic targeting
@@ -188,6 +196,37 @@ class DeliveryDataUnavailable(Exception):
         self.media_buy_id = media_buy_id
         self.reason = reason
         super().__init__(f"Delivery data not yet available for {media_buy_id}" + (f": {reason}" if reason else ""))
+
+
+@dataclass
+class AdapterSyncResult:
+    """Uniform outcome of one adapter sync run (inventory or reporting).
+
+    Returned by ``AdServerAdapter.run_inventory_sync()`` and
+    ``run_reporting_sync()``. The shared ``AdapterSyncScheduler``
+    persists these into the ``sync_jobs`` table for the
+    ``/admin/scheduling`` page to render.
+
+    ``counts`` is a free-form per-kind tally (entity_type for inventory,
+    placement-style breakdowns for reporting). ``errors`` captures
+    partial failures so a sync that succeeded for some entity types
+    but failed others isn't reported as a total wash.
+    """
+
+    sync_kind: str  # "inventory" | "reporting"
+    started_at: datetime
+    finished_at: datetime
+    succeeded: bool
+    counts: dict[str, int] = field(default_factory=dict)
+    errors: dict[str, str] = field(default_factory=dict)
+    # Free-form per-sync metadata: reporting carries job_id +
+    # placements_updated; inventory carries cache-refresh timestamps,
+    # etc. Surfaced by the admin UI; not used by the scheduler logic.
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def total_count(self) -> int:
+        return sum(self.counts.values())
 
 
 @dataclass
@@ -739,6 +778,55 @@ class AdServerAdapter(ABC):
         """
         # Default implementation returns empty inventory
         return {"placements": [], "ad_units": [], "targeting_options": {}, "creative_specs": [], "properties": {}}
+
+    def run_inventory_sync(self) -> AdapterSyncResult:
+        """Pull this adapter's inventory taxonomy into a local cache.
+
+        Adapters that declare ``capabilities.supports_inventory_sync=True``
+        MUST override this method. The shared ``AdapterSyncScheduler``
+        calls it on a configurable schedule (default daily); operators
+        can also trigger an immediate run via the ``/admin/scheduling``
+        page or the per-adapter "Sync Inventory Now" shortcut.
+
+        Implementations should return a non-raising :class:`AdapterSyncResult`
+        — partial failures captured in ``errors`` rather than thrown.
+        The shared scheduler persists the result to the ``sync_jobs``
+        table for the freshness UI to read.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} declared supports_inventory_sync but did not "
+            "implement run_inventory_sync(). Override it, or flip the capability flag off."
+        )
+
+    def run_reporting_sync(self) -> AdapterSyncResult:
+        """Pull delivery metrics into this adapter's stats cache.
+
+        Adapters that declare ``capabilities.supports_reporting_sync=True``
+        MUST override this method. Populates whatever cache backs
+        :meth:`get_packages_snapshot` and :meth:`get_media_buy_delivery`.
+
+        The shared scheduler runs this hourly (configurable). When the
+        upstream API isn't yet authorised (e.g. scope grant pending),
+        return a failed-but-non-raising :class:`AdapterSyncResult` so the
+        scheduler keeps trying tomorrow without flooding the logs with
+        stack traces.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} declared supports_reporting_sync but did not "
+            "implement run_reporting_sync(). Override it, or flip the capability flag off."
+        )
+
+    def latest_inventory_sync_at(self) -> datetime | None:
+        """When this adapter's inventory was last refreshed, or ``None`` if
+        never. Used by the ``/admin/scheduling`` freshness display and the
+        stale-cache banner. Adapters with inventory caches override this
+        to surface their own ``last_synced_at`` column."""
+        return None
+
+    def latest_reporting_sync_at(self) -> datetime | None:
+        """When this adapter's reporting cache was last refreshed.
+        Same shape + same role as :meth:`latest_inventory_sync_at`."""
+        return None
 
     def check_permissions(self) -> PermissionsReport:
         """Probe the upstream API for the scopes this adapter needs.
