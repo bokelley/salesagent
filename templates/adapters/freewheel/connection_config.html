@@ -14,6 +14,15 @@ Expected context:
 <div class="adapter-connection-config" data-adapter-type="freewheel">
     <div class="form-section">
         <h3>FreeWheel Publisher API Configuration</h3>
+
+        {# Proactive scope-state banner: populated on page load by
+           autoCheckFreeWheelPermissions(). Hidden by default; shown
+           only when the probe finishes and a required scope is missing
+           OR a nice-to-have like reporting is denied (since "no
+           delivery data ever" is a real operator-visible surprise we
+           shouldn't bury behind a button). #}
+        <div id="freewheel-scope-banner" style="display: none; margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid;"></div>
+
         <p class="text-muted" style="margin-bottom: 1.5rem;">
             Connect to FreeWheel's Publisher API. The recommended setup is to provide your
             FreeWheel User ID and password — the adapter mints and refreshes bearer tokens
@@ -402,5 +411,91 @@ function testFreeWheelConnection() {
     .catch(error => {
         statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>';
     });
+}
+
+// Auto-run permission check on page load. Renders a banner if a required
+// scope is missing OR if reporting is denied (delivery_reporting is
+// nice-to-have per the report shape, but its absence has real
+// operator-visible consequences — buyers see data_unavailable until
+// granted, so surface it). Quietly no-ops on auth failure / no creds
+// since the operator will see that via Test Connection.
+function autoCheckFreeWheelPermissions() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const bannerEl = document.getElementById('freewheel-scope-banner');
+    if (!bannerEl) return;
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/check-permissions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data.success || !data.report || data.report.error) {
+            // Don't show a banner when the probe itself can't run (no
+            // creds, auth failure). The credentials section already
+            // surfaces those states.
+            return;
+        }
+
+        const report = data.report;
+        const checks = report.checks || [];
+        const missingRequired = checks.filter(c => c.required && !c.granted);
+        const missingOptional = checks.filter(c => !c.required && !c.granted);
+
+        // Group features that are missing for the banner copy
+        const missingFeatures = new Set();
+        for (const c of [...missingRequired, ...missingOptional]) {
+            if (c.feature) missingFeatures.add(c.feature);
+        }
+
+        let severity, title, bodyText;
+        if (missingRequired.length > 0) {
+            severity = 'error';
+            title = '✗ Required FreeWheel API permissions are missing';
+            bodyText = missingRequired.map(c => c.description).join('; ');
+        } else if (missingFeatures.has('delivery_reporting')) {
+            severity = 'warn';
+            title = '⚠ Reporting API scope is pending';
+            bodyText = 'Delivery webhooks and buyer-facing pacing queries will surface ' +
+                       '\"data_unavailable\" until granted. Other features work normally. ' +
+                       'Other missing nice-to-haves: ' +
+                       (Array.from(missingFeatures).filter(f => f !== 'delivery_reporting').join(', ') || 'none') + '.';
+        } else if (missingOptional.length > 0) {
+            // Only nice-to-haves are missing and none of them is reporting —
+            // not worth a banner. Operator can still find it in Check API Permissions.
+            return;
+        } else {
+            // fully_operational, nothing to flag.
+            return;
+        }
+
+        const colors = severity === 'error'
+            ? {bg: '#fef2f2', border: '#fecaca', text: '#991b1b'}
+            : {bg: '#fffbeb', border: '#fed7aa', text: '#9a3412'};
+        bannerEl.style.backgroundColor = colors.bg;
+        bannerEl.style.borderColor = colors.border;
+        bannerEl.style.color = colors.text;
+        bannerEl.style.display = 'block';
+        bannerEl.innerHTML =
+            '<div style="font-weight: 600; margin-bottom: 0.25rem;">' + title + '</div>' +
+            '<div style="font-size: 0.9rem;">' + bodyText + '</div>' +
+            '<div style="font-size: 0.85rem; margin-top: 0.5rem;">' +
+            '<a href="#" onclick="document.getElementById(\'freewheel-permissions-detail\').scrollIntoView({behavior: \'smooth\'}); checkFreeWheelPermissions(); return false;">' +
+            'See full permissions checklist →</a>' +
+            '</div>';
+    })
+    .catch(() => {
+        // Best-effort — silent on transient failures so the page still loads.
+    });
+}
+
+// Kick off the auto-check after the page renders. Defer slightly so we
+// don't compete with other on-load work on slow links.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', autoCheckFreeWheelPermissions);
+} else {
+    setTimeout(autoCheckFreeWheelPermissions, 100);
 }
 </script>
