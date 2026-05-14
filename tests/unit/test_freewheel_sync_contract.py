@@ -77,7 +77,7 @@ class TestRunReportingSyncScopePending:
             def __init__(self, *_, **__):
                 pass
 
-            def run(self):
+            def run(self, **kwargs):
                 raise ReportingScopeNotGranted()
 
         monkeypatch.setattr("src.adapters.freewheel.reporting_sync.FreeWheelReportingSync", _DenySync)

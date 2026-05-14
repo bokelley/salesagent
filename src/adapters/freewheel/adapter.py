@@ -237,9 +237,20 @@ class FreeWheelAdapter(AdServerAdapter):
             errors=dict(inner.errors),
         )
 
-    def run_reporting_sync(self) -> AdapterSyncResult:
+    def run_reporting_sync(
+        self,
+        *,
+        placement_ids: list[str] | None = None,
+        start_date: Any = None,
+        end_date: Any = None,
+    ) -> AdapterSyncResult:
         """Refresh the local FreeWheel placement-stats cache via the
         Query Reporting API.
+
+        Optional kwargs let callers narrow the report window — the
+        scheduler uses defaults (today, all placements); the admin
+        "Sync Reporting Now" button can override for a specific date
+        range or placement set.
 
         Today this raises :class:`ReportingScopeNotGranted` on its first
         call against most accounts (Tier 1 scope grant is pending for
@@ -270,7 +281,7 @@ class FreeWheelAdapter(AdServerAdapter):
         with get_db_session() as session:
             syncer = FreeWheelReportingSync(client=self._client, tenant_id=self.tenant_id or "default", session=session)
             try:
-                inner = syncer.run()
+                inner = syncer.run(placement_ids=placement_ids, start_date=start_date, end_date=end_date)
             except ReportingScopeNotGranted as exc:
                 return AdapterSyncResult(
                     sync_kind="reporting",

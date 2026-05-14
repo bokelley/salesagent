@@ -344,6 +344,28 @@ def check_adapter_permissions(tenant_id, adapter_type, **kwargs):
 # FreeWheel-specific endpoints
 
 
+def _execute_freewheel_sync(
+    tenant_id: str,
+    *,
+    sync_kind: str,
+    triggered_by: str,
+    run_kwargs: dict | None = None,
+):
+    """Thin wrapper around the shared sync orchestration for the FW
+    per-adapter buttons. Returns ``None`` when FW isn't configured for
+    this tenant; otherwise returns the
+    :class:`SyncExecutionResult` from the orchestration."""
+    from src.services.adapter_sync_orchestration import execute_adapter_sync
+
+    return execute_adapter_sync(
+        tenant_id=tenant_id,
+        adapter_type="freewheel",
+        sync_kind=sync_kind,
+        triggered_by=triggered_by,
+        run_kwargs=run_kwargs,
+    )
+
+
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/test-connection", methods=["POST"])
 @require_tenant_access(role=("admin",), allow_embedded_writes=True)
 def test_freewheel_connection(tenant_id, **kwargs):
@@ -487,46 +509,22 @@ def sync_freewheel_inventory(tenant_id, **kwargs):
     exposed to AdCP buyers (property discovery goes through AAO lookup).
     """
     try:
-        from src.adapters.freewheel import FreeWheelClient, FreeWheelConnectionConfig
-        from src.adapters.freewheel.inventory_sync import FreeWheelInventorySync
-        from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
-        from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-        with get_db_session() as session:
-            existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
-            if not existing or existing.adapter_type != "freewheel" or not existing.config_json:
-                return (
-                    jsonify({"success": False, "error": "FreeWheel adapter is not configured for this tenant"}),
-                    400,
-                )
-
-            try:
-                cfg = FreeWheelConnectionConfig.model_validate(existing.config_json)
-            except ValidationError as exc:
-                return jsonify({"success": False, "error": f"Stored config is invalid: {exc}"}), 400
-
-            base_url = FREEWHEEL_HOSTS.get(cfg.environment, FREEWHEEL_HOSTS["production"])
-            client = FreeWheelClient(
-                username=cfg.username,
-                password=cfg.password,
-                api_token=cfg.api_token,
-                base_url=base_url,
-            )
-
-            syncer = FreeWheelInventorySync(client=client, session=session, tenant_id=tenant_id)
-            result = syncer.run()
-            session.commit()
-
+        result = _execute_freewheel_sync(tenant_id, sync_kind="inventory", triggered_by="admin_button")
+        if result is None:
+            return jsonify({"success": False, "error": "FreeWheel adapter is not configured for this tenant"}), 400
         return jsonify(
             {
                 "success": result.succeeded,
+                "sync_id": result.sync_id,
                 "counts": result.counts,
                 "errors": result.errors,
-                "total_synced": result.total_synced,
+                "total_synced": sum(result.counts.values()),
                 "started_at": result.started_at.isoformat() if result.started_at else None,
                 "finished_at": result.finished_at.isoformat() if result.finished_at else None,
             }
         )
+    except ValidationError as exc:
+        return jsonify({"success": False, "error": f"Stored config is invalid: {exc}"}), 400
     except Exception as e:
         logger.error(f"FreeWheel inventory sync failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": "Sync failed (see server logs)"}), 500
@@ -547,75 +545,47 @@ def sync_freewheel_reporting(tenant_id, **kwargs):
     Returns 503 when the upstream scope is still pending — the
     permission-check endpoint surfaces the exact denied paths.
     """
-    from src.adapters.freewheel import FreeWheelClient, FreeWheelConnectionConfig
-    from src.adapters.freewheel._reporting import ReportingError
-    from src.adapters.freewheel.reporting_sync import (
-        FreeWheelReportingSync,
-        ReportingScopeNotGranted,
-    )
-    from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
     try:
         body = request.get_json(silent=True) or {}
-        placement_ids = body.get("placement_ids")  # optional
-        start_date_str = body.get("start_date")
-        end_date_str = body.get("end_date")
-
         from datetime import date as _date
 
-        start_date = _date.fromisoformat(start_date_str) if start_date_str else None
-        end_date = _date.fromisoformat(end_date_str) if end_date_str else None
+        run_kwargs: dict = {}
+        if body.get("placement_ids"):
+            run_kwargs["placement_ids"] = body["placement_ids"]
+        if body.get("start_date"):
+            run_kwargs["start_date"] = _date.fromisoformat(body["start_date"])
+        if body.get("end_date"):
+            run_kwargs["end_date"] = _date.fromisoformat(body["end_date"])
 
-        with get_db_session() as session:
-            existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
-            if not existing or existing.adapter_type != "freewheel" or not existing.config_json:
-                return (
-                    jsonify({"success": False, "error": "FreeWheel adapter is not configured for this tenant"}),
-                    400,
-                )
-            try:
-                cfg = FreeWheelConnectionConfig.model_validate(existing.config_json)
-            except ValidationError as exc:
-                return jsonify({"success": False, "error": f"Stored config is invalid: {exc}"}), 400
+        result = _execute_freewheel_sync(
+            tenant_id, sync_kind="reporting", triggered_by="admin_button", run_kwargs=run_kwargs
+        )
+        if result is None:
+            return jsonify({"success": False, "error": "FreeWheel adapter is not configured for this tenant"}), 400
 
-            base_url = FREEWHEEL_HOSTS.get(cfg.environment, FREEWHEEL_HOSTS["production"])
-            client = FreeWheelClient(
-                username=cfg.username,
-                password=cfg.password,
-                api_token=cfg.api_token,
-                base_url=base_url,
+        if result.scope_pending:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "scope_pending": True,
+                        "sync_id": result.sync_id,
+                        "error": result.errors.get("scope", "Scope grant pending"),
+                    }
+                ),
+                503,
             )
-
-            syncer = FreeWheelReportingSync(client=client, tenant_id=tenant_id, session=session)
-            try:
-                result = syncer.run(
-                    placement_ids=placement_ids,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            except ReportingScopeNotGranted as exc:
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "scope_pending": True,
-                            "error": str(exc),
-                        }
-                    ),
-                    503,
-                )
-            except ReportingError as exc:
-                return jsonify({"success": False, "error": str(exc)}), 502
-
         return jsonify(
             {
-                "success": True,
-                "placements_updated": result.placements_updated,
-                "job_id": result.job_id,
-                "error": result.error,
+                "success": result.succeeded,
+                "sync_id": result.sync_id,
+                "placements_updated": result.counts.get("placements", 0),
+                "job_id": result.metadata.get("job_id"),
+                "error": next(iter(result.errors.values()), None) if result.errors else None,
             }
         )
+    except ValidationError as exc:
+        return jsonify({"success": False, "error": f"Stored config is invalid: {exc}"}), 400
     except Exception as e:
         logger.error(f"FreeWheel reporting sync failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": "Sync failed (see server logs)"}), 500
