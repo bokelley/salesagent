@@ -72,6 +72,7 @@ from typing import Any
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterSyncResult,
     AdServerAdapter,
     CreativeEngineAdapter,
     DeliveryDataUnavailable,
@@ -121,6 +122,7 @@ class FreeWheelAdapter(AdServerAdapter):
     product_config_class = FreeWheelProductConfig
     capabilities = AdapterCapabilities(
         supports_inventory_sync=True,
+        supports_reporting_sync=True,  # via FreeWheelReportingSync (scope-gated)
         supports_inventory_profiles=True,
         inventory_entity_label="Placements",
         supports_custom_targeting=True,
@@ -195,6 +197,121 @@ class FreeWheelAdapter(AdServerAdapter):
             geo_regions=True,
             nielsen_dma=True,
         )
+
+    def run_inventory_sync(self) -> AdapterSyncResult:
+        """Refresh the local FreeWheel inventory cache from the API.
+
+        Wraps :class:`FreeWheelInventorySync` and converts its internal
+        :class:`SyncResult` shape to the uniform :class:`AdapterSyncResult`
+        the shared scheduler expects. Partial failures are captured in
+        ``errors`` rather than raised — the scheduler logs the result
+        and tries again on the next tick.
+        """
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        from src.adapters.base import AdapterSyncResult
+        from src.adapters.freewheel.inventory_sync import FreeWheelInventorySync
+
+        start = _datetime.now(UTC)
+        if self.dry_run or self._client is None:
+            return AdapterSyncResult(
+                sync_kind="inventory",
+                started_at=start,
+                finished_at=_datetime.now(UTC),
+                succeeded=False,
+                errors={"adapter": "dry-run mode — no live client to sync with"},
+            )
+
+        with get_db_session() as session:
+            syncer = FreeWheelInventorySync(client=self._client, session=session, tenant_id=self.tenant_id or "default")
+            inner = syncer.run()
+            session.commit()
+
+        return AdapterSyncResult(
+            sync_kind="inventory",
+            started_at=inner.started_at or start,
+            finished_at=inner.finished_at or _datetime.now(UTC),
+            succeeded=inner.succeeded,
+            counts=dict(inner.counts),
+            errors=dict(inner.errors),
+        )
+
+    def run_reporting_sync(self) -> AdapterSyncResult:
+        """Refresh the local FreeWheel placement-stats cache via the
+        Query Reporting API.
+
+        Today this raises :class:`ReportingScopeNotGranted` on its first
+        call against most accounts (Tier 1 scope grant is pending for
+        ``/reporting/*``). We catch that and return a soft-failed
+        :class:`AdapterSyncResult` so the shared scheduler logs the state
+        without exception spam and keeps trying.
+        """
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        from src.adapters.base import AdapterSyncResult
+        from src.adapters.freewheel._reporting import ReportingError
+        from src.adapters.freewheel.reporting_sync import (
+            FreeWheelReportingSync,
+            ReportingScopeNotGranted,
+        )
+
+        start = _datetime.now(UTC)
+        if self.dry_run or self._client is None:
+            return AdapterSyncResult(
+                sync_kind="reporting",
+                started_at=start,
+                finished_at=_datetime.now(UTC),
+                succeeded=False,
+                errors={"adapter": "dry-run mode — no live client to sync with"},
+            )
+
+        with get_db_session() as session:
+            syncer = FreeWheelReportingSync(client=self._client, tenant_id=self.tenant_id or "default", session=session)
+            try:
+                inner = syncer.run()
+            except ReportingScopeNotGranted as exc:
+                return AdapterSyncResult(
+                    sync_kind="reporting",
+                    started_at=start,
+                    finished_at=_datetime.now(UTC),
+                    succeeded=False,
+                    errors={"scope": str(exc)},
+                    metadata={"scope_pending": True},
+                )
+            except ReportingError as exc:
+                return AdapterSyncResult(
+                    sync_kind="reporting",
+                    started_at=start,
+                    finished_at=_datetime.now(UTC),
+                    succeeded=False,
+                    errors={"reporting_client": str(exc)},
+                )
+
+        return AdapterSyncResult(
+            sync_kind="reporting",
+            started_at=start,
+            finished_at=_datetime.now(UTC),
+            succeeded=inner.error is None,
+            counts={"placements": inner.placements_updated},
+            errors={"job": inner.error} if inner.error else {},
+            metadata={"job_id": inner.job_id} if inner.job_id else {},
+        )
+
+    def latest_inventory_sync_at(self) -> datetime | None:
+        """Most-recent ``last_synced_at`` across cached inventory rows."""
+        with get_db_session() as session:
+            return FreeWheelInventoryRepository(session, self.tenant_id or "default").latest_sync_at()
+
+    def latest_reporting_sync_at(self) -> datetime | None:
+        """Most-recent ``last_synced_at`` across cached placement stats."""
+        from src.core.database.repositories.freewheel_placement_stats import (
+            FreeWheelPlacementStatsRepository,
+        )
+
+        with get_db_session() as session:
+            return FreeWheelPlacementStatsRepository(session, self.tenant_id or "default").latest_sync_at()
 
     async def get_available_inventory(self) -> dict[str, Any]:
         """Surface the locally-synced FW taxonomy for AI product configuration.
