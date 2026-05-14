@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from src.core.database.models import (
     AdapterConfig,
@@ -520,3 +520,110 @@ class TestExportMissingTenant:
             session = env.get_session()
             with pytest.raises(TenantNotFoundError):
                 export_tenant(session.connection(), "does_not_exist")
+
+
+class TestDeleteTenantDataSuspendsTriggers:
+    """Validation triggers like prevent_empty_pricing_options must not block bulk
+    tenant deletes — the parent product is going away in the same transaction.
+
+    Production has a ``prevent_empty_pricing_options`` BEFORE-DELETE trigger on
+    ``pricing_options``. During the first prod dry-run of import_tenant for
+    tenant_wonderstruck the delete path hit:
+        Cannot delete last pricing option for product prod_xyz
+        CONTEXT: PL/pgSQL function prevent_empty_pricing_options()
+
+    This test installs a similar trigger and verifies delete_tenant_data
+    suspends user triggers for the duration of the delete loop.
+    """
+
+    _TRIGGER_FN = "test_delete_block_pricing_options"
+    _TRIGGER_NAME = "test_delete_block_pricing_options_trg"
+
+    def _install_trigger(self, session) -> None:
+        session.execute(
+            text(f"""
+                CREATE OR REPLACE FUNCTION {self._TRIGGER_FN}()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    RAISE EXCEPTION
+                        'TEST: prevent_empty_pricing_options-like trigger on product %',
+                        OLD.product_id;
+                END;
+                $$ LANGUAGE plpgsql;
+            """)
+        )
+        session.execute(
+            text(f"""
+                CREATE TRIGGER {self._TRIGGER_NAME}
+                BEFORE DELETE ON pricing_options
+                FOR EACH ROW
+                EXECUTE FUNCTION {self._TRIGGER_FN}();
+            """)
+        )
+        session.commit()
+
+    def _drop_trigger(self, session) -> None:
+        session.execute(text(f"DROP TRIGGER IF EXISTS {self._TRIGGER_NAME} ON pricing_options"))
+        session.execute(text(f"DROP FUNCTION IF EXISTS {self._TRIGGER_FN}()"))
+        session.commit()
+
+    def test_delete_succeeds_through_blocking_trigger(self, integration_db):
+        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+
+        with _ExportEnv() as env:
+            session = env.get_session()
+            tenant = TenantFactory(tenant_id="rt_trigger", name="Trigger Test")
+            product = ProductFactory(tenant=tenant, product_id="rt_trigger_prod")
+            PricingOptionFactory(product=product, pricing_model="cpm")
+            session.commit()
+
+            self._install_trigger(session)
+            try:
+                # Sanity: trigger actually fires on a piecemeal delete.
+                with pytest.raises(Exception, match="prevent_empty_pricing_options-like"):
+                    session.execute(text("DELETE FROM pricing_options WHERE tenant_id = 'rt_trigger'"))
+                session.rollback()
+
+                # Real test: bulk delete via delete_tenant_data succeeds despite the trigger.
+                delete_tenant_data(session.connection(), "rt_trigger")
+                session.commit()
+
+                remaining = session.scalar(
+                    select(func.count()).select_from(Tenant).where(Tenant.tenant_id == "rt_trigger")
+                )
+                assert remaining == 0, "tenant row must be deleted"
+            finally:
+                # Re-bind a clean session to drop the trigger — the prior commit
+                # closed any aborted-tx state.
+                self._drop_trigger(session)
+
+    def test_triggers_reenabled_after_delete(self, integration_db):
+        """After delete_tenant_data returns, triggers fire normally on the affected tables."""
+        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+
+        with _ExportEnv() as env:
+            session = env.get_session()
+            tenant1 = TenantFactory(tenant_id="rt_reenable_a", name="Reenable A")
+            product1 = ProductFactory(tenant=tenant1, product_id="rt_reenable_a_prod")
+            PricingOptionFactory(product=product1, pricing_model="cpm")
+
+            # Separate tenant whose pricing_options must REMAIN protected.
+            tenant2 = TenantFactory(tenant_id="rt_reenable_b", name="Reenable B")
+            product2 = ProductFactory(tenant=tenant2, product_id="rt_reenable_b_prod")
+            PricingOptionFactory(product=product2, pricing_model="cpm")
+            session.commit()
+
+            self._install_trigger(session)
+            try:
+                delete_tenant_data(session.connection(), "rt_reenable_a")
+                session.commit()
+
+                # The trigger must fire again for tenant B's pricing_options.
+                with pytest.raises(Exception, match="prevent_empty_pricing_options-like"):
+                    session.execute(text("DELETE FROM pricing_options WHERE tenant_id = 'rt_reenable_b'"))
+                session.rollback()
+            finally:
+                self._drop_trigger(session)
+                # Clean up tenant B (using the now-fixed delete_tenant_data).
+                delete_tenant_data(session.connection(), "rt_reenable_b")
+                session.commit()

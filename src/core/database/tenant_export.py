@@ -34,10 +34,11 @@ on the tenant row.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -243,6 +244,41 @@ def _strip_secret_columns(table_name: str, rows: list[dict[str, Any]]) -> None:
                 cursor[parts[-1]] = None
 
 
+@contextlib.contextmanager
+def _suspend_user_triggers(connection: Connection, table_names: list[str]) -> Iterator[None]:
+    """Disable user-defined triggers on ``table_names`` for the duration.
+
+    Validation triggers (e.g. ``prevent_empty_pricing_options`` which fires
+    on every ``DELETE FROM pricing_options`` to enforce "every product
+    must have ≥1 pricing option") are designed for piecemeal user edits.
+    They fire incorrectly during bulk tenant deletion where the parent
+    rows are also being removed.
+
+    Uses ``ALTER TABLE ... DISABLE TRIGGER USER`` (per-table, owner-level
+    privilege) rather than ``SET session_replication_role = replica``
+    (session-wide, requires SUPERUSER). DDL is transactional in Postgres,
+    so a rollback restores triggers; the explicit re-enable in ``finally``
+    handles the commit case.
+
+    ``DISABLE TRIGGER USER`` skips FK and system triggers, so referential
+    integrity is still enforced during the delete.
+    """
+    enabled: list[str] = []
+    try:
+        for name in table_names:
+            connection.exec_driver_sql(f'ALTER TABLE "{name}" DISABLE TRIGGER USER')
+            enabled.append(name)
+        yield
+    finally:
+        for name in enabled:
+            try:
+                connection.exec_driver_sql(f'ALTER TABLE "{name}" ENABLE TRIGGER USER')
+            except Exception:
+                # Log and continue — masking the original error is worse than
+                # leaving triggers disabled briefly (txn rollback restores them).
+                logger.exception("failed to re-enable user triggers on %s", name)
+
+
 def delete_tenant_data(
     connection: Connection,
     tenant_id: str,
@@ -257,6 +293,9 @@ def delete_tenant_data(
     discovered tenant-scoped tables in reverse FK order so children go
     before their parents, then drop the tenants row last.
 
+    User-defined validation triggers are suspended for the duration of
+    the delete (see :func:`_suspend_user_triggers`).
+
     Caller controls the transaction.
     """
     md = metadata if metadata is not None else Base.metadata
@@ -264,11 +303,13 @@ def delete_tenant_data(
     scoped_set = set(scoped_tables)
     tenants_table = md.tables[TENANTS_TABLE]
 
-    for table in reversed(scoped_tables):
-        where_clause = build_tenant_filter(table, tenant_id, scoped_set)
-        connection.execute(delete(table).where(where_clause))
+    table_names = [t.name for t in scoped_tables] + [TENANTS_TABLE]
+    with _suspend_user_triggers(connection, table_names):
+        for table in reversed(scoped_tables):
+            where_clause = build_tenant_filter(table, tenant_id, scoped_set)
+            connection.execute(delete(table).where(where_clause))
 
-    connection.execute(delete(tenants_table).where(tenants_table.c.tenant_id == tenant_id))
+        connection.execute(delete(tenants_table).where(tenants_table.c.tenant_id == tenant_id))
 
 
 def _read_alembic_revision(connection: Connection) -> str | None:
