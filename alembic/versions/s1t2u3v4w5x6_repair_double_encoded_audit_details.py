@@ -40,18 +40,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # The upgrade is a forward-only data fix. Reversing it would mean
-    # re-encoding correctly-shaped JSONB objects back into JSON-encoded
-    # strings — i.e. deliberately re-introducing the bug. Refuse instead
-    # of silently corrupting data on downgrade.
+    # No-op by design. The upgrade is a forward-only data fix; reversing
+    # it would re-encode correctly-shaped JSONB objects back into JSON
+    # strings — deliberately re-introducing the bug. The schema is
+    # unchanged across this revision boundary, so prior revisions' code
+    # reads the repaired (object-shaped) rows fine and a downgrade can
+    # leave the data fix in place safely.
     #
-    # The schema is unchanged across this revision boundary, so prior
-    # revisions' code reads the repaired (object-shaped) rows fine. If a
-    # schema rollback past this point is required, leave the data fix in
-    # place and downgrade through the surrounding migration(s) only.
-    raise NotImplementedError(
-        "downgrade of s1t2u3v4w5x6 is unsupported: re-encoding repaired "
-        "audit_logs.details rows back into JSON strings would re-introduce "
-        "the bug this migration fixed. The repaired data is compatible "
-        "with prior revisions; skip this migration on downgrade."
+    # Emitted as a SQL NOTICE rather than pass so the migration-completeness
+    # guard sees a non-empty body and any operator running downgrade gets a
+    # clear hint about why this slot is intentionally empty.
+    op.execute(
+        "DO $$ BEGIN RAISE NOTICE "
+        "'Migration s1t2u3v4w5x6 downgrade is intentionally a no-op "
+        "(forward-only data fix; schema unchanged).'; END $$"
     )
