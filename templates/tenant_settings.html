@@ -402,10 +402,19 @@
 
         <div class="settings-nav-separator"></div>
 
+        {# Sprint 7 IA cleanup: Buyer Agents tab hidden on embedded tenants.
+           Buyer Routing (Configure → Buying → Buyer routing) is the single
+           canonical home for advertiser→buyer-agent mappings, and Principal
+           provisioning on embedded tenants is platform-managed via the
+           Tenant Management API (so there's nothing for the operator to do
+           here). Supersedes the Sprint 4 "read-only directory stays visible"
+           call documented in docs/design/embedded-mode-sprint-4-ui-hardening.md. #}
+        {% if not embedded_view %}
         <a class="settings-nav-item" data-section="advertisers">
             <span class="settings-nav-icon">👥</span>
             <span>Buyer Agents</span>
         </a>
+        {% endif %}
 
         <a class="settings-nav-item{% if default_section == 'signing-keys' %} active{% endif %}" data-section="signing-keys">
             <span class="settings-nav-icon">🔑</span>
@@ -2075,11 +2084,13 @@ Exclude any products that don't match the brand's tone.</pre>
            that mints GAM companies is ensure_sandbox_advertiser (sandbox-only)
            in src/services/buyer_advertiser_routing.py.
 
-           On embedded tenants the directory stays visible (publishers see who's
-           transacting + the resolved GAM advertiser) but write actions are hidden.
-           Principal provisioning on embedded tenants is platform-managed: the
-           upstream platform creates Principals via the Tenant Management API
-           (initial_principal on /provision, or POST /principals). #}
+           Sprint 7 IA cleanup: this whole section is hidden on embedded tenants
+           (both nav tab and content). Buyer Routing is the canonical home for
+           advertiser→buyer-agent mappings; Principal provisioning is platform-
+           managed via the Tenant Management API. Supersedes the Sprint 4
+           "read-only directory stays visible" decision documented in
+           docs/design/embedded-mode-sprint-4-ui-hardening.md. #}
+        {% if not embedded_view %}
         <div id="advertisers" class="settings-section">
             <div class="settings-header">
                 <h2>Buyer Agent Management</h2>
@@ -2240,6 +2251,7 @@ Exclude any products that don't match the brand's tone.</pre>
             </div>
             {% endif %}
         </div>
+        {% endif %}{# End: not embedded_view — advertisers section #}
 
         <!-- Integrations Settings -->
         <div id="integrations" class="settings-section">

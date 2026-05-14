@@ -389,39 +389,37 @@ class TestDangerZoneHiddenOnEmbedded:
 
 
 # ---------------------------------------------------------------------------
-# Settings → Advertisers (read-only directory on embedded)
+# Settings → Buyer Agents (Sprint 7: hidden entirely on embedded)
 # ---------------------------------------------------------------------------
 
 
-class TestAdvertisersDirectoryReadOnlyOnEmbedded:
-    """Advertisers directory stays visible on embedded tenants but write
-    actions (create / rename / delete) are hidden.
+class TestAdvertisersDirectoryHiddenOnEmbedded:
+    """Buyer Agents settings tab + section are hidden entirely on embedded tenants.
 
-    The "Advertiser" surface in PSA Settings = ``Principal`` (a
-    buyer-protocol identity bound to an existing GAM advertiser id).
-    Manual creation is hidden in embedded mode because Principal
-    provisioning is platform-managed: the upstream platform creates
-    Principals via the Tenant Management API (initial_principal on
-    /provision, or POST /principals). The directory is a read-only
-    view of who's transacting + the resolved GAM advertiser they map to.
+    Sprint 7 IA cleanup supersedes the Sprint 4 "read-only directory
+    stays visible" decision (docs/design/embedded-mode-sprint-4-ui-hardening.md
+    "Terminology pin", lines 156-212). Buyer Routing
+    (Configure → Buying → Buyer routing) is the single canonical home
+    for advertiser→buyer-agent mappings on embedded tenants, and
+    Principal provisioning is platform-managed via the Tenant
+    Management API — there's nothing operator-facing left to show
+    under Settings → Buyer Agents, so the whole tab is gated on
+    ``not embedded_view``.
 
-    Note: this is NOT about hiding GAM company creation. PSA never
-    mints GAM companies for commercial traffic — only for sandbox.
-    See docs/design/embedded-mode-sprint-4-ui-hardening.md "Terminology
-    pin" for the full distinction.
+    Standalone tenants still see the section with full write actions
+    (covered by ``test_open_tenant_shows_full_advertiser_write_ui``
+    below).
     """
 
-    def test_embedded_keeps_advertisers_section_and_nav_tab(self, client, embedded_tenant_id):
+    def test_embedded_hides_advertisers_section_and_nav_tab(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_data(as_text=True)
-        # The directory section heading and nav tab remain.
-        assert "<h2>Buyer Agent Management</h2>" in body
-        assert 'data-section="advertisers"' in body
-        # Read-only note is visible — surfaces the platform-API
-        # provisioning rationale so publishers know why there's no
-        # Create button.
-        assert "provisioned by your platform via the Tenant Management API" in body
+        # Both the directory section heading and the sidebar nav tab are gone.
+        assert "<h2>Buyer Agent Management</h2>" not in body
+        assert 'data-section="advertisers"' not in body
+        # And the read-only platform-API rationale copy goes with the section.
+        assert "provisioned by your platform via the Tenant Management API" not in body
 
     def test_embedded_hides_advertiser_create_button(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
@@ -434,7 +432,7 @@ class TestAdvertisersDirectoryReadOnlyOnEmbedded:
     def test_embedded_hides_per_row_edit_and_delete_controls(self, client, embedded_tenant_id):
         resp = client.get(f"/tenant/{embedded_tenant_id}/settings")
         body = resp.get_data(as_text=True)
-        # Per-row Edit link and Delete button are gone.
+        # Per-row Edit link and Delete button are gone with the section.
         assert "deletePrincipal(" not in body
         assert 'title="Edit Buyer Agent"' not in body
         assert 'title="Delete Buyer Agent"' not in body

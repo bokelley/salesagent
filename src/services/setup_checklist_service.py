@@ -676,21 +676,29 @@ class SetupChecklistService:
                 )
             )
 
-        # 6. Principals Created
-        stmt = select(func.count()).select_from(Principal).where(Principal.tenant_id == self.tenant_id)
-        principal_count = session.scalar(stmt) or 0
-        tasks.append(
-            SetupTask(
-                key="principals_created",
-                name="Advertisers (Principals)",
-                description="Create principals for advertisers who will buy inventory",
-                is_complete=principal_count > 0,
-                action_url=self._settings_url("advertisers"),
-                details=(
-                    f"{principal_count} advertisers configured" if principal_count > 0 else "No advertisers configured"
-                ),
+        # 6. Principals Created — Sprint 7 IA cleanup: skip on embedded.
+        # Principal provisioning on embedded tenants is platform-managed
+        # (Tenant Management API creates them on /provision and via the
+        # embedded auth header bypass), so there's nothing for the publisher
+        # operator to do here. The Buyer Agents settings tab is also hidden
+        # on embedded; surfacing this task would link to a missing section.
+        if not tenant.is_embedded:
+            stmt = select(func.count()).select_from(Principal).where(Principal.tenant_id == self.tenant_id)
+            principal_count = session.scalar(stmt) or 0
+            tasks.append(
+                SetupTask(
+                    key="principals_created",
+                    name="Advertisers (Principals)",
+                    description="Create principals for advertisers who will buy inventory",
+                    is_complete=principal_count > 0,
+                    action_url=self._settings_url("advertisers"),
+                    details=(
+                        f"{principal_count} advertisers configured"
+                        if principal_count > 0
+                        else "No advertisers configured"
+                    ),
+                )
             )
-        )
 
         return tasks
 
@@ -1083,19 +1091,25 @@ class SetupChecklistService:
                 )
             )
 
-        # 6. Principals Created
-        tasks.append(
-            SetupTask(
-                key="principals_created",
-                name="Advertisers (Principals)",
-                description="Create principals for advertisers who will buy inventory",
-                is_complete=principal_count > 0,
-                action_url=self._settings_url("advertisers"),
-                details=(
-                    f"{principal_count} advertisers configured" if principal_count > 0 else "No advertisers configured"
-                ),
+        # 6. Principals Created — Sprint 7 IA cleanup: skip on embedded.
+        # See :meth:`_check_critical_tasks` for the full rationale. Mirroring
+        # the per-tenant path so single-tenant and bulk callers agree on
+        # ``progress_percent`` and ``ready_for_orders``.
+        if not tenant.is_embedded:
+            tasks.append(
+                SetupTask(
+                    key="principals_created",
+                    name="Advertisers (Principals)",
+                    description="Create principals for advertisers who will buy inventory",
+                    is_complete=principal_count > 0,
+                    action_url=self._settings_url("advertisers"),
+                    details=(
+                        f"{principal_count} advertisers configured"
+                        if principal_count > 0
+                        else "No advertisers configured"
+                    ),
+                )
             )
-        )
 
         return tasks
 

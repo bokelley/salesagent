@@ -946,3 +946,77 @@ class TestSprint18AaoChecklistHide:
             assert "public_agent_url" in keys
         finally:
             self._cleanup(tid)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 7 IA cleanup — principals_created skip on embedded
+# ---------------------------------------------------------------------------
+
+
+class TestSprint7PrincipalsCreatedHideOnEmbedded:
+    """``principals_created`` task disappears from the critical-tasks list
+    on embedded tenants. Principal provisioning is platform-managed (Tenant
+    Management API + embedded-auth header bypass), so there is no operator
+    action available — and the Buyer Agents settings tab the task would link
+    to is hidden in embedded mode (Sprint 7 IA cleanup, supersedes the
+    Sprint 4 read-only-directory call in
+    ``docs/design/embedded-mode-sprint-4-ui-hardening.md``).
+
+    Open-instance tenants still see the task — that's where standalone
+    operators set up their Principals via Settings → Buyer Agents.
+    """
+
+    def _make_tenant(self, tenant_id: str, *, is_embedded: bool):
+        from datetime import UTC, datetime
+
+        from src.core.database.database_session import get_db_session
+
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            now = datetime.now(UTC)
+            tenant = Tenant(
+                tenant_id=tenant_id,
+                name=f"Test {tenant_id}",
+                subdomain=tenant_id.replace("_", "-"),
+                ad_server="mock",
+                created_at=now,
+                updated_at=now,
+                is_active=True,
+                is_embedded=is_embedded,
+                external_org_id=tenant_id if is_embedded else None,
+                external_source="scope3" if is_embedded else None,
+            )
+            session.add(tenant)
+            session.commit()
+
+    def _cleanup(self, tenant_id: str):
+        from src.core.database.database_session import get_db_session
+
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            existing = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if existing:
+                session.delete(existing)
+                session.commit()
+
+    def test_embedded_tenant_omits_principals_created_task(self, integration_db):
+        tid = "tid_principals_hide_embedded"
+        self._make_tenant(tid, is_embedded=True)
+        try:
+            service = SetupChecklistService(tid)
+            status = service.get_setup_status()
+            keys = {t["key"] for t in status["critical"]}
+            assert "principals_created" not in keys
+        finally:
+            self._cleanup(tid)
+
+    def test_open_instance_tenant_keeps_principals_created_task(self, integration_db):
+        tid = "tid_principals_show_open"
+        self._make_tenant(tid, is_embedded=False)
+        try:
+            service = SetupChecklistService(tid)
+            status = service.get_setup_status()
+            keys = {t["key"] for t in status["critical"]}
+            assert "principals_created" in keys
+        finally:
+            self._cleanup(tid)

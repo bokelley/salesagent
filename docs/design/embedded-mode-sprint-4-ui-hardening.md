@@ -2,8 +2,8 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md), [sprint 1.8](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md)
-**Status:** Captured (sprint-4 territory)
-**Last updated:** 2026-05-04
+**Status:** Captured (sprint-4 territory); Settings → Advertisers read-only-directory call partially superseded by Sprint 7 IA cleanup — see [Settings → Advertisers reversal](#settings--advertisers-reversal-sprint-7).
+**Last updated:** 2026-05-14
 
 ## Scope
 
@@ -213,6 +213,36 @@ existing GAM advertiser id to a new Principal row).
 
 Either way, no new GAM company-creation surface needs to land in
 PSA — that's never been a publisher-facing path here.
+
+## Settings → Advertisers reversal (Sprint 7)
+
+The "read-only directory stays visible" call above is **reversed in
+Sprint 7 IA cleanup**. The Sprint 4 reasoning assumed Settings →
+Advertisers was the only place publishers could see who's transacting
+and what GAM advertiser each buyer maps to. Sprint 5 invalidated that
+assumption by promoting advertiser↔buyer-agent mappings to the
+dedicated Buyer Routing page (`/tenant/<id>/buyer-routing`,
+Configure → Buying → Buyer routing), which is fully writeable on
+embedded (`allow_embedded_writes=True` on every mutating endpoint in
+`src/admin/blueprints/buyer_routing.py`) and ships the same
+"who's transacting + their GAM advertiser" view via the
+`advertiser_assignments` table and the recent-activity table.
+
+Once Buyer Routing became the canonical home for that information,
+the Settings → Buyer Agents tab on embedded tenants showed only
+duplicate read-only data plus a "managed by your platform via the
+Tenant Management API" rationale block — informational noise rather
+than a useful surface. Sprint 7 therefore gates the whole section
+on `not embedded_view`: both the sidebar nav tab and the `<div
+id="advertisers">` content. The Sprint 4 read-only-directory
+hardening (Create/Edit/Delete hides at the row + header level) stays
+in place behind the gate for standalone tenants and for the
+hypothetical "we need a manual create path" branch above.
+
+The "Open question for the host" itself is not yet resolved — if the
+answer turns out to be "we need a manual create path", the right
+surface for it is a new dedicated page under Configure → Workspace,
+not a re-instated Settings tab.
 
 ## Cross-references
 
