@@ -256,15 +256,9 @@ class TestGetAvailableInventory:
 
         mock_repo.list_by_type.side_effect = list_by_type
 
-        monkeypatch.setattr(
-            "src.adapters.freewheel.adapter.FreeWheelInventoryRepository",
-            lambda session, tenant_id: mock_repo,
-        )
-        # Avoid the real get_db_session — return a no-op context manager.
-        monkeypatch.setattr(
-            "src.adapters.freewheel.adapter.get_db_session",
-            lambda: __import__("contextlib").nullcontext(MagicMock()),
-        )
+        from tests.helpers.freewheel_adapter_patches import patch_freewheel_db
+
+        patch_freewheel_db(monkeypatch, mock_repo)
 
         adapter = FreeWheelAdapter(
             config={"api_token": "t"},

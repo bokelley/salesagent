@@ -15,13 +15,11 @@ Expected context:
     <div class="form-section">
         <h3>FreeWheel Publisher API Configuration</h3>
 
-        {# Proactive scope-state banner: populated on page load by
-           autoCheckFreeWheelPermissions(). Hidden by default; shown
-           only when the probe finishes and a required scope is missing
-           OR a nice-to-have like reporting is denied (since "no
-           delivery data ever" is a real operator-visible surprise we
-           shouldn't bury behind a button). #}
+        {# Proactive scope-state + freshness banners: populated on page
+           load. Each renders only when there's something to flag — no
+           noise when everything's healthy. #}
         <div id="freewheel-scope-banner" style="display: none; margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid;"></div>
+        <div id="freewheel-freshness-banner" style="display: none; margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid;"></div>
 
         <p class="text-muted" style="margin-bottom: 1.5rem;">
             Connect to FreeWheel's Publisher API. The recommended setup is to provide your
@@ -491,11 +489,81 @@ function autoCheckFreeWheelPermissions() {
     });
 }
 
-// Kick off the auto-check after the page renders. Defer slightly so we
+// Stale-cache freshness banner. Inventory + reporting caches both have
+// last_synced_at timestamps; render a banner if either is stale or
+// never-synced. Two distinct signals:
+//   never_synced → operator hasn't run the sync yet (onboarding gap)
+//   stale → sync ran but more than threshold ago (probably broken job)
+function _formatAge(seconds) {
+    if (seconds == null) return 'never';
+    if (seconds < 60) return seconds + 's ago';
+    if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
+    return Math.round(seconds / 86400) + 'd ago';
+}
+
+function checkFreeWheelFreshness() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const bannerEl = document.getElementById('freewheel-freshness-banner');
+    if (!bannerEl) return;
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/cache-freshness', {
+        method: 'GET',
+        credentials: 'same-origin',
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data.success) return;
+
+        const inv = data.inventory || {};
+        const rep = data.reporting || {};
+
+        const lines = [];
+        if (inv.never_synced) {
+            lines.push('<strong>Inventory cache is empty.</strong> Click \"Sync Inventory Now\" below to populate the product targeting pickers.');
+        } else if (inv.stale) {
+            lines.push('Inventory cache is <strong>' + _formatAge(inv.age_seconds) + '</strong> stale (threshold: ' + _formatAge(inv.threshold_seconds) + '). Consider re-syncing.');
+        }
+        if (rep.never_synced) {
+            // Don't double up if the scope banner is already shouting about reporting being denied
+            lines.push('Reporting cache is empty — buyers will see no delivery data until Sync Reporting runs (requires Tier 1 scope).');
+        } else if (rep.stale) {
+            lines.push('Reporting cache is <strong>' + _formatAge(rep.age_seconds) + '</strong> stale (threshold: ' + _formatAge(rep.threshold_seconds) + '). Buyer-facing delivery pacing may be out of date.');
+        }
+
+        if (lines.length === 0) {
+            return;  // Both caches are fresh — no banner.
+        }
+
+        // Pick severity by content: never_synced = info (onboarding), stale = warning
+        const anyNeverSynced = inv.never_synced || rep.never_synced;
+        const colors = anyNeverSynced
+            ? {bg: '#eff6ff', border: '#bfdbfe', text: '#1e40af'}   // blue (info)
+            : {bg: '#fffbeb', border: '#fed7aa', text: '#9a3412'};  // amber (warn)
+        bannerEl.style.backgroundColor = colors.bg;
+        bannerEl.style.borderColor = colors.border;
+        bannerEl.style.color = colors.text;
+        bannerEl.style.display = 'block';
+        const title = anyNeverSynced ? '⚙ Cache setup needed' : '⚠ Cache freshness';
+        bannerEl.innerHTML =
+            '<div style="font-weight: 600; margin-bottom: 0.25rem;">' + title + '</div>' +
+            '<ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem;">' +
+            lines.map(l => '<li>' + l + '</li>').join('') +
+            '</ul>';
+    })
+    .catch(() => {});  // Silent on transient failure.
+}
+
+// Kick off the auto-checks after the page renders. Defer slightly so we
 // don't compete with other on-load work on slow links.
+function _runFreeWheelAutoChecks() {
+    autoCheckFreeWheelPermissions();
+    checkFreeWheelFreshness();
+}
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', autoCheckFreeWheelPermissions);
+    document.addEventListener('DOMContentLoaded', _runFreeWheelAutoChecks);
 } else {
-    setTimeout(autoCheckFreeWheelPermissions, 100);
+    setTimeout(_runFreeWheelAutoChecks, 100);
 }
 </script>

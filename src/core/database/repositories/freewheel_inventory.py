@@ -9,7 +9,9 @@ Core invariant: every query filters by ``tenant_id``.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import datetime
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import FreeWheelInventory
@@ -41,3 +43,10 @@ class FreeWheelInventoryRepository:
         if parent_id is not None:
             stmt = stmt.filter_by(parent_id=parent_id)
         return list(self._session.scalars(stmt).all())
+
+    def latest_sync_at(self) -> datetime | None:
+        """Return the most recent ``last_synced_at`` across all cached entities
+        for this tenant, or ``None`` if the tenant has never synced. The
+        freshness banner uses this to flag a stale cache."""
+        stmt = select(func.max(FreeWheelInventory.last_synced_at)).filter_by(tenant_id=self._tenant_id)
+        return self._session.scalar(stmt)

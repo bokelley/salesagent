@@ -12,8 +12,9 @@ Core invariant: every query filters by ``tenant_id``.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -67,3 +68,11 @@ class FreeWheelPlacementStatsRepository:
         stmt = stmt.on_conflict_do_update(index_elements=["tenant_id", "placement_id"], set_=update_cols)
         result = self._session.execute(stmt)
         return getattr(result, "rowcount", 0) or 0
+
+    def latest_sync_at(self) -> datetime | None:
+        """Return the most recent ``last_synced_at`` across all cached placement
+        stats for this tenant, or ``None`` if the reporting sync has never run.
+        The freshness banner uses this to flag stale or never-run reporting
+        — buyer-facing pacing will be wrong if this drifts too far behind."""
+        stmt = select(func.max(FreeWheelPlacementStats.last_synced_at)).filter_by(tenant_id=self._tenant_id)
+        return self._session.scalar(stmt)

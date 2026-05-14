@@ -34,25 +34,27 @@ Live coverage:
      would either need a one-IO-per-package mapping (a different Mapping
      than A) or per-package budget tracking we don't have.
 
-- 🟡 add_creative_assets — partial unblock as of 2026-05-12. Creative
-  records themselves are reachable; the placement linkage is not:
+- ✅ add_creative_assets + associate_creatives — fully unblocked as of
+  2026-05-13. Live-verified create→bind→unbind→delete cycle against Talpa.
 
-    * ✅ ``/services/v4/creative_resources`` (CRUD verified) — manage
+    * ✅ ``/services/v4/creative_resources`` (POST/GET/DELETE) — manage
       creative records: name, base_ad_unit, renditions (VAST tag URIs or
-      hosted content), advertiser scoping. Exposed on the client at
+      hosted content), advertiser scoping. POST body wrapped under
+      ``{"creative": {...}}``; response wrapped under
+      ``{"data": {"creative": {...}}}``. Exposed on the client at
       ``client.creatives``.
-    * ❌ ``/services/v4/creative_instances`` (403 IAM-deny) — the
-      creative-to-placement association. Without scope here, creatives
-      we create are orphans (they exist but don't deliver against any
-      placement).
-    * Marketplace creative approval (``mkpl_creatives``, PUT for
-      Approved/Rejected/Pending) also 403 IAM-deny. That's a separate
-      moderation flow for buyer-uploaded creatives.
+    * ✅ ``/services/v4/creative_instances`` (POST/DELETE) — the
+      creative-to-ad_unit_node binding. FW's docs call the body param
+      ``ad_id`` but its description says "The Ad Unit Node ID to link
+      Creative" — there's no separate Ad object. POST returns 201 with
+      ``placement_id`` auto-populated. The adapter looks up
+      ad_unit_node_ids per placement from the inventory cache and
+      posts one creative_instance per (node, creative) pair.
 
   AdCP semantic note: ``sync_creatives`` (buyer registering creatives)
-  partially maps via ``creative_resources`` create. But without
-  ``creative_instances`` to attach them to a placement, the adapter
-  can't complete the round-trip.
+  maps cleanly: ``add_creative_assets`` POSTs creative_resources,
+  ``associate_creatives`` POSTs creative_instances binding each
+  resource to every ad_unit_node under the target placements.
 
   Demand-side path (out of scope for publisher integration): a buyer
   with their own DSP seat would POST to
@@ -596,36 +598,142 @@ class FreeWheelAdapter(AdServerAdapter):
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
+        """POST each asset to ``/services/v4/creative_resources`` and return
+        AssetStatus carrying the FW-assigned creative_id.
+
+        Each AdCP asset becomes one FW creative_resource. The returned
+        ``creative_id`` is the FW resource id — caller threads it into
+        :meth:`associate_creatives` so we can bind it to ad_unit_nodes.
+
+        Dry-run logs the planned POST and echoes the AdCP creative_id back
+        so callers downstream still get a stable id to plumb through.
+        """
         if self.dry_run:
             for asset in assets:
                 self.log(
-                    f"Would POST {self.base_url}/services/v3/creative "
-                    f"name={asset.get('name')} format={asset.get('format')}"
+                    f"Would POST {self.base_url}/services/v4/creative_resources "
+                    f"name={asset.get('name')} advertiser_id={self.advertiser_id}"
                 )
-                self.log(f"  Then POST creative-association for line items {asset.get('package_assignments', [])}")
+                self.log(
+                    f"  Then POST creative_instances for ad_unit_nodes under {asset.get('package_assignments', [])}"
+                )
             return [AssetStatus(creative_id=a["creative_id"], status="approved") for a in assets]
-        return [AssetStatus(creative_id=a["creative_id"], status="pending") for a in assets]
+
+        assert self._client is not None
+        statuses: list[AssetStatus] = []
+        for asset in assets:
+            try:
+                created = self._client.creatives.create_creative(
+                    name=asset.get("name") or f"adcp-{asset['creative_id']}",
+                    advertiser_ids=[int(self.advertiser_id)] if self.advertiser_id else None,
+                    base_ad_unit_id=asset.get("base_ad_unit_id"),
+                    external_id=asset["creative_id"],
+                )
+                # Echo the FW id back so associate_creatives can use it
+                # as platform_creative_ids[] input.
+                statuses.append(AssetStatus(creative_id=str(created.id), status="approved"))
+            except FreeWheelError as exc:
+                logger.warning(
+                    "FreeWheel creative_resource create failed for asset %s: %s",
+                    asset.get("creative_id"),
+                    exc,
+                )
+                statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+        return statuses
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
+        """Bind FW creatives to FW placements via creative_instances.
+
+        FW's data model: creative_instance binds a creative to an
+        ad_unit_node (the placement→inventory binding row). One placement
+        has N ad_unit_nodes (pre-roll, mid-roll, post-roll, etc.) — to
+        traffic a creative against a placement we POST one creative_instance
+        per ad_unit_node under it.
+
+        ``line_item_ids`` here are FW placement IDs. We look up the
+        ad_unit_nodes for each placement from the synced inventory cache
+        (``freewheel_inventory`` parent_id=placement_id, entity_type=
+        ad_unit_node) and POST creative_instances for each (node, creative)
+        pair.
+
+        Returns one row per attempted binding with status="success" /
+        "failed" / "skipped" + a message explaining the failure or skip.
+        """
         if self.dry_run:
             for li in line_item_ids:
                 for ci in platform_creative_ids:
-                    self.log(f"Would POST .../line-items/{li}/creative-associations with creativeId={ci}")
+                    self.log(
+                        f"Would look up ad_unit_nodes for placement={li}, "
+                        f"then POST .../creative_instances ad_id=<each node> creative_id={ci}"
+                    )
             return [
                 {"line_item_id": li, "creative_id": ci, "status": "success"}
                 for li in line_item_ids
                 for ci in platform_creative_ids
             ]
-        return [
-            {
-                "line_item_id": li,
-                "creative_id": ci,
-                "status": "skipped",
-                "message": "FreeWheel creative association pending live-mode implementation",
-            }
-            for li in line_item_ids
-            for ci in platform_creative_ids
-        ]
+
+        assert self._client is not None
+        results: list[dict[str, Any]] = []
+
+        # Build placement_id → [ad_unit_node_ids] lookup from the cache.
+        # One query per unique placement (small set in practice).
+        node_ids_by_placement: dict[str, list[str]] = {}
+        with get_db_session() as session:
+            repo = FreeWheelInventoryRepository(session, self.tenant_id or "default")
+            for placement_id in set(line_item_ids):
+                rows = repo.list_by_type("ad_unit_node", parent_id=placement_id)
+                node_ids_by_placement[placement_id] = [row.entity_id for row in rows]
+
+        for placement_id in line_item_ids:
+            ad_unit_nodes = node_ids_by_placement.get(placement_id, [])
+            if not ad_unit_nodes:
+                for ci in platform_creative_ids:
+                    results.append(
+                        {
+                            "line_item_id": placement_id,
+                            "creative_id": ci,
+                            "status": "skipped",
+                            "message": (
+                                f"No ad_unit_nodes cached for placement {placement_id} — run inventory sync first."
+                            ),
+                        }
+                    )
+                continue
+
+            for ci in platform_creative_ids:
+                for node_id in ad_unit_nodes:
+                    try:
+                        binding = self._client.creatives.create_creative_instance(
+                            ad_unit_node_id=int(node_id),
+                            creative_id=int(ci),
+                        )
+                        results.append(
+                            {
+                                "line_item_id": placement_id,
+                                "creative_id": ci,
+                                "ad_unit_node_id": node_id,
+                                "creative_instance_id": binding.get("id"),
+                                "status": "success",
+                            }
+                        )
+                    except FreeWheelError as exc:
+                        logger.warning(
+                            "FreeWheel creative_instance bind failed for placement=%s node=%s creative=%s: %s",
+                            placement_id,
+                            node_id,
+                            ci,
+                            exc,
+                        )
+                        results.append(
+                            {
+                                "line_item_id": placement_id,
+                                "creative_id": ci,
+                                "ad_unit_node_id": node_id,
+                                "status": "failed",
+                                "message": str(exc),
+                            }
+                        )
+        return results
 
     # ----- status / delivery -----
 

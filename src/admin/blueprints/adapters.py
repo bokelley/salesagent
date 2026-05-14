@@ -621,6 +621,66 @@ def sync_freewheel_reporting(tenant_id, **kwargs):
         return jsonify({"success": False, "error": "Sync failed (see server logs)"}), 500
 
 
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/freewheel/cache-freshness", methods=["GET"])
+@require_tenant_access()
+def freewheel_cache_freshness(tenant_id, **kwargs):
+    """Return ``last_synced_at`` for both FW caches so the settings page
+    can surface a "data is stale" banner.
+
+    Stale thresholds are policy choices, returned alongside the timestamps
+    so the UI doesn't have to embed them:
+
+      - inventory: stale after 24h (taxonomy changes are infrequent;
+        publishers re-sync on a daily-ish cadence).
+      - reporting: stale after 2h (delivery pacing matters in near-
+        real-time; webhook scheduler runs hourly so 2h is one missed
+        cycle).
+
+    ``never_synced=true`` is a distinct signal from "stale by N hours" —
+    a never-run cache is an onboarding gap, not a freshness issue.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
+    from src.core.database.repositories.freewheel_placement_stats import FreeWheelPlacementStatsRepository
+
+    INVENTORY_STALE_THRESHOLD = timedelta(hours=24)
+    REPORTING_STALE_THRESHOLD = timedelta(hours=2)
+
+    with get_db_session() as session:
+        inventory_at = FreeWheelInventoryRepository(session, tenant_id).latest_sync_at()
+        reporting_at = FreeWheelPlacementStatsRepository(session, tenant_id).latest_sync_at()
+
+    now = datetime.now(UTC)
+
+    def _stale_info(last_at, threshold):
+        if last_at is None:
+            return {"last_synced_at": None, "age_seconds": None, "stale": True, "never_synced": True}
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=UTC)
+        age = (now - last_at).total_seconds()
+        return {
+            "last_synced_at": last_at.isoformat(),
+            "age_seconds": int(age),
+            "stale": age > threshold.total_seconds(),
+            "never_synced": False,
+        }
+
+    return jsonify(
+        {
+            "success": True,
+            "inventory": {
+                **_stale_info(inventory_at, INVENTORY_STALE_THRESHOLD),
+                "threshold_seconds": int(INVENTORY_STALE_THRESHOLD.total_seconds()),
+            },
+            "reporting": {
+                **_stale_info(reporting_at, REPORTING_STALE_THRESHOLD),
+                "threshold_seconds": int(REPORTING_STALE_THRESHOLD.total_seconds()),
+            },
+        }
+    )
+
+
 # Triton test-connection endpoint removed — adapter parked while their APIs
 # aren't production-ready. Source remains under src/adapters/triton/ so
 # restoring the endpoint is a single revert; templates/adapters/triton/ also
