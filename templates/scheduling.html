@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}Scheduling - Sales Agent Admin{% endblock %}
+
+{% block content %}
+<div class="sa-card">
+    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
+        <h2 class="sa-page-header__title">Adapter Sync Scheduling</h2>
+        <div class="sa-page-header__actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="sa-refresh-btn">Refresh</button>
+        </div>
+    </header>
+
+    <p class="sa-text-muted" style="margin-bottom: var(--sa-space-4);">
+        Cross-tenant view of inventory + reporting sync freshness. Each row pairs a tenant's configured adapter
+        with the sync kinds the adapter declares it can run. <strong>Stale</strong> = the last completed run is
+        older than the threshold (24h inventory / 2h reporting), <strong>or</strong> the last run failed, <strong>or</strong>
+        the sync has never run.
+    </p>
+
+    {% if rows %}
+    <table id="sa-scheduling-table">
+        <thead>
+            <tr>
+                <th>Tenant</th>
+                <th>Adapter</th>
+                <th>Sync</th>
+                <th>Last Status</th>
+                <th>Last Completed</th>
+                <th>Freshness</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr data-tenant="{{ row.tenant_id }}" data-adapter="{{ row.adapter_type }}" data-kind="{{ row.sync_kind }}">
+                <td>
+                    <strong>{{ row.tenant_name }}</strong>
+                    <br><small class="sa-text-muted"><code>{{ row.tenant_id }}</code></small>
+                </td>
+                <td><code>{{ row.adapter_type }}</code></td>
+                <td>{{ row.sync_kind }}</td>
+                <td class="sa-cell-status">
+                    {% if row.never_run %}
+                    <span class="sa-text-faint">Never run</span>
+                    {% elif row.last_status == 'completed' %}
+                    <span class="status status-active">✓ completed</span>
+                    {% elif row.last_status == 'failed' %}
+                    <span class="status status-inactive">✗ failed</span>
+                    {% if row.last_error_message %}
+                    <br><small class="sa-text-danger" title="{{ row.last_error_message }}">{{ row.last_error_message[:80] }}{% if row.last_error_message|length > 80 %}…{% endif %}</small>
+                    {% endif %}
+                    {% elif row.last_status == 'running' %}
+                    <span class="status">⏳ running</span>
+                    {% else %}
+                    {{ row.last_status or '—' }}
+                    {% endif %}
+                </td>
+                <td class="sa-cell-completed sa-text-muted">
+                    {% if row.last_completed_at %}{{ row.last_completed_at }}{% else %}—{% endif %}
+                </td>
+                <td class="sa-cell-freshness">
+                    {% if row.stale %}
+                    <span class="sa-text-danger">⚠ stale</span>
+                    {% else %}
+                    <span class="sa-text-success">✓ fresh</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <button type="button" class="btn btn-primary btn-sm sa-run-now" data-tenant="{{ row.tenant_id }}" data-adapter="{{ row.adapter_type }}" data-kind="{{ row.sync_kind }}">
+                        Run Now
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="sa-empty">
+        <div class="sa-empty__title">No adapters configured</div>
+        <p class="sa-empty__hint">No tenant has an adapter configured that declares sync support.</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="sa-card" style="margin-top: var(--sa-space-5);">
+    <h3>Recent runs</h3>
+    {% if recent %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Tenant</th>
+                <th>Adapter</th>
+                <th>Kind</th>
+                <th>Status</th>
+                <th>Triggered by</th>
+                <th>Sync ID</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for j in recent %}
+            <tr>
+                <td class="sa-text-muted">{{ j.started_at }}</td>
+                <td><code>{{ j.tenant_id }}</code></td>
+                <td><code>{{ j.adapter_type }}</code></td>
+                <td>{{ j.sync_type }}</td>
+                <td>
+                    {% if j.status == 'completed' %}<span class="status status-active">✓ completed</span>
+                    {% elif j.status == 'failed' %}<span class="status status-inactive">✗ failed</span>
+                    {% else %}{{ j.status }}{% endif %}
+                </td>
+                <td>{{ j.triggered_by }}</td>
+                <td><code>{{ j.sync_id }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="sa-text-muted">No sync runs recorded yet.</p>
+    {% endif %}
+</div>
+
+<script>
+(function () {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const apiBase = scriptRoot + '/admin/api/scheduling';
+
+    function flash(msg, kind) {
+        // sa-toast is registered globally via base.html.
+        if (window.saToast) {
+            window.saToast(msg, kind || 'info');
+        } else {
+            alert(msg);
+        }
+    }
+
+    async function runNow(tenantId, adapterType, syncKind, btn) {
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Running…';
+        try {
+            const resp = await fetch(apiBase + '/run', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({tenant_id: tenantId, adapter_type: adapterType, sync_kind: syncKind}),
+            });
+            const body = await resp.json();
+            if (resp.ok) {
+                flash('Sync completed: ' + (body.sync_id || ''), 'success');
+            } else if (resp.status === 503 && body.scope_pending) {
+                flash('Awaiting upstream scope grant: ' + (body.errors && body.errors.scope || ''), 'warning');
+            } else {
+                flash('Sync failed: ' + (body.error || (body.errors && Object.values(body.errors)[0]) || resp.status), 'error');
+            }
+            await refresh();
+        } catch (err) {
+            flash('Sync request failed: ' + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    async function refresh() {
+        const resp = await fetch(apiBase + '/jobs', {credentials: 'same-origin'});
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const rowsById = new Map();
+        for (const r of data.rows) {
+            rowsById.set(r.tenant_id + '|' + r.adapter_type + '|' + r.sync_kind, r);
+        }
+        for (const tr of document.querySelectorAll('#sa-scheduling-table tbody tr')) {
+            const key = tr.dataset.tenant + '|' + tr.dataset.adapter + '|' + tr.dataset.kind;
+            const row = rowsById.get(key);
+            if (!row) continue;
+            tr.querySelector('.sa-cell-completed').textContent = row.last_completed_at || '—';
+            const fresh = tr.querySelector('.sa-cell-freshness');
+            fresh.innerHTML = row.stale
+                ? '<span class="sa-text-danger">⚠ stale</span>'
+                : '<span class="sa-text-success">✓ fresh</span>';
+        }
+    }
+
+    document.addEventListener('click', function (ev) {
+        const btn = ev.target.closest('.sa-run-now');
+        if (btn) {
+            runNow(btn.dataset.tenant, btn.dataset.adapter, btn.dataset.kind, btn);
+        }
+    });
+    const refreshBtn = document.getElementById('sa-refresh-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', refresh);
+})();
+</script>
+{% endblock %}

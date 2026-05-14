@@ -20,12 +20,24 @@ Introduced in PR #1163, redesigned in PR #1171.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import AdapterConfig
+from src.core.database.models import AdapterConfig, Tenant
+
+
+@dataclass(frozen=True)
+class TenantAdapterRow:
+    """Result row for :meth:`AdapterConfigAdminRepository.list_all` — pairs
+    each AdapterConfig with the tenant's display name so the
+    ``/admin/scheduling`` view doesn't need a separate Tenant repo."""
+
+    tenant_id: str
+    tenant_name: str
+    adapter_type: str
 
 
 class TenantNotConfiguredError(Exception):
@@ -38,6 +50,39 @@ class TenantNotConfiguredError(Exception):
     def __init__(self, tenant_id: str) -> None:
         self.tenant_id = tenant_id
         super().__init__(f"No adapter configuration found for tenant {tenant_id!r}")
+
+
+class AdapterConfigAdminRepository:
+    """Cross-tenant access for super-admin views (Stage 4 of #382).
+
+    Deliberately separate from :class:`AdapterConfigRepository` so the
+    tenant isolation invariant on the tenant-scoped repo stays intact —
+    this one skips that filter on purpose, and callers are super-admin
+    endpoints gated by ``@require_auth(admin_only=True)``.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_all(self) -> list[TenantAdapterRow]:
+        """Return every configured ``(tenant, adapter_type)`` pair joined
+        with the tenant's display name, ordered by tenant name for
+        deterministic UI rendering.
+
+        The join lives here so the cross-tenant ``/admin/scheduling`` view
+        doesn't need a separate Tenant repository — there's no general
+        ``TenantRepository`` in the codebase yet (only specialized ones
+        for config / signing).
+        """
+        stmt = (
+            select(Tenant.tenant_id, Tenant.name, AdapterConfig.adapter_type)
+            .join(AdapterConfig, AdapterConfig.tenant_id == Tenant.tenant_id)
+            .order_by(Tenant.name)
+        )
+        return [
+            TenantAdapterRow(tenant_id=tid, tenant_name=name, adapter_type=adapter_type)
+            for tid, name, adapter_type in self._session.execute(stmt).all()
+        ]
 
 
 class AdapterConfigRepository:

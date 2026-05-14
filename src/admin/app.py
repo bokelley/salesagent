@@ -33,6 +33,7 @@ from src.admin.blueprints.principals import principals_bp
 from src.admin.blueprints.products import products_bp
 from src.admin.blueprints.public import public_bp
 from src.admin.blueprints.publisher_partners import publisher_partners_bp
+from src.admin.blueprints.scheduling import scheduling_bp
 from src.admin.blueprints.schemas import schemas_bp
 from src.admin.blueprints.settings import settings_bp, tenant_management_settings_bp
 from src.admin.blueprints.signals_agents import signals_agents_bp
@@ -501,6 +502,7 @@ def create_app(config=None):
     app.register_blueprint(format_search_bp)  # Format search API (/api/formats)
     app.register_blueprint(activity_stream_bp)  # SSE endpoints - Flask handles /admin via script_name from nginx proxy
     app.register_blueprint(schemas_bp)  # JSON Schema validation service
+    app.register_blueprint(scheduling_bp)  # /admin/scheduling cross-adapter view (#382 Stage 4)
     app.register_blueprint(workflows_bp, url_prefix="/tenant")  # Workflow approval and review
     # app.register_blueprint(tasks_bp)  # Tasks management - Disabled, tasks eliminated in favor of workflow system
 

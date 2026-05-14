@@ -60,6 +60,7 @@
                     </span>
                     {% if session.role == 'super_admin' %}
                         <a href="{{ script_name }}/">Accounts</a>
+                        <a href="{{ script_name }}/admin/scheduling">Scheduling</a>
                         <a href="{{ script_name }}/create_tenant">New tenant</a>
                     {% endif %}
                     <a href="{{ script_name }}/logout">Logout</a>

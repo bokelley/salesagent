@@ -18,15 +18,20 @@ def make_mock_adapter(
     supports_reporting: bool = False,
     inventory_result=None,
     reporting_result=None,
+    adapter_name: str = "_mock_test",
 ):
     """Stripped-down ``AdServerAdapter`` exposing only what
     :func:`execute_sync` needs: ``capabilities`` + ``run_*_sync``
-    methods. Caller can pre-program return values for both methods."""
+    methods. Caller can pre-program return values for both methods.
+
+    ``adapter_name`` flows through to ``SyncJob.adapter_type`` so tests
+    asserting against the scheduling matrix (#382 Stage 4) can seed rows
+    with the real adapter_type keys (``freewheel`` / ``google_ad_manager``)."""
     adapter = MagicMock(spec=AdServerAdapter)
     adapter.__class__ = type(
         "_MockAdapter",
         (AdServerAdapter,),
-        {"adapter_name": "_mock_test"},
+        {"adapter_name": adapter_name},
     )
     adapter.capabilities = AdapterCapabilities(
         supports_inventory_sync=supports_inventory,
