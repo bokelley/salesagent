@@ -205,6 +205,15 @@ class Tenant(Base, JSONValidatorMixin):
     # default 6h. sync_all_tenants.py branches on this when picking
     # tenants per run.
     sync_cadence_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Upper bound on dynamic product validity for storefront-composed
+    # products. Default 7d (604800s) — storefronts may request shorter
+    # via the compose endpoint, but never longer. See the embedded
+    # composition design.
+    max_composition_ttl_seconds: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("604800"),
+    )
     # Embed-mode breadcrumb root override. Shape: ``{"label": str, "url": str}``.
     # Only meaningful when ``is_embedded`` is True — open-instance tenants ignore
     # the value. Replaces the default first crumb ("Dashboard") with the
@@ -441,6 +450,27 @@ class Product(Base, JSONValidatorMixin):
     # NULL or empty means visible to all principals (default)
     allowed_principal_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
 
+    # Composition discriminator. ``static`` is the catalog default. ``signal_variant``
+    # is set by the dynamic-products signals pipeline (today's is_dynamic_variant=True).
+    # ``storefront_composed`` is set by POST /api/v1/products in embedded mode.
+    # Used by get_products to filter the catalog to static-only.
+    composition_source: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text("'static'"),
+    )
+    # Principal whose storefront composed this row (for storefront_composed rows).
+    # Scopes visibility — composed products are visible only to their composer's principal.
+    composed_by_principal_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Storefront-supplied key for replay-safe composition. Unique per
+    # (tenant, composed_by_principal_id) when non-null.
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Custom targeting profile ids referenced at composition time. Resolution
+    # into implementation_config happens at write time; this is the trail.
+    custom_targeting_profile_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Storefront-set price recorded for audit. Not enforced by the sales agent.
+    agreed_cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 4), nullable=True)
+
     # Relationships
     tenant = relationship("Tenant", back_populates="products")
     inventory_profile = relationship("InventoryProfile", back_populates="products")
@@ -556,6 +586,21 @@ class Product(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_products_tenant", "tenant_id"),
+        Index("idx_products_composition_source", "tenant_id", "composition_source"),
+        Index(
+            "idx_products_idempotency_key",
+            "tenant_id",
+            "composed_by_principal_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "composed_by_principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            name="fk_products_composed_by_principal",
+            ondelete="SET NULL",
+        ),
         # Enforce AdCP spec: products must have EITHER properties OR property_tags (not both, not neither)
         CheckConstraint(
             "(properties IS NOT NULL AND property_tags IS NULL) OR (properties IS NULL AND property_tags IS NOT NULL)",
@@ -678,6 +723,10 @@ class Principal(Base, JSONValidatorMixin):
     # that try to set billing="agent" for any account owned by this principal.
     # billing="operator" / NULL is always allowed regardless. See BR-RULE-061.
     billing_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Storefront-supplied stable identifier for idempotent principal
+    # creation via /api/v1/principals. Unique per (tenant, external_id)
+    # when non-null; NULL for principals created through legacy paths.
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -701,6 +750,13 @@ class Principal(Base, JSONValidatorMixin):
             "tenant_id",
             "agent_url",
             postgresql_where=text("agent_url IS NOT NULL"),
+        ),
+        Index(
+            "idx_principals_external_id",
+            "tenant_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
         ),
     )
 
@@ -1609,6 +1665,16 @@ class InventoryProfile(Base, JSONValidatorMixin):
     gam_preset_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     gam_preset_sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
+    # Typed AdCP capability narrowings (formats, channels, targeting_dimensions)
+    # so storefronts can pre-validate compositions client-side without
+    # round-tripping to the agent. Vocabulary references AdCP DecisioningCapabilities;
+    # bundles express narrowings, never redeclarations. Optional in v1.
+    # Shape: {"formats": [format_id, ...], "channels": [channel, ...],
+    #         "targeting_dimensions": [dim_name, ...]}
+    constraints: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Content hash for cache invalidation via If-None-Match on the REST API.
+    etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -1622,6 +1688,68 @@ class InventoryProfile(Base, JSONValidatorMixin):
     __table_args__ = (
         UniqueConstraint("tenant_id", "profile_id", name="uq_inventory_profile"),
         Index("idx_inventory_profiles_tenant", "tenant_id"),
+    )
+
+
+class CustomTargetingProfile(Base, JSONValidatorMixin):
+    """Composable overlay for adapter-specific targeting.
+
+    Scope is targeting that AdCP cannot express natively: operator-specific
+    custom key-values, adapter-opaque audience segment ids. AdCP-native
+    targeting (geo, daypart, device, contextual, standard demos) flows
+    through the create_media_buy request per spec — not here.
+
+    Storefronts compose products by referencing a stable profile id;
+    adapter-specific ids stay hidden behind the profile.
+    """
+
+    __tablename__ = "custom_targeting_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    custom_targeting_profile_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Adapter-specific overlays only. Shape:
+    # {
+    #   "key_values": [{"key": str, "values": [str], "mode": "include"|"exclude"}],
+    #   "audience_segments": [{"segment_id": str, "mode": "include"|"exclude"}],
+    #   ...
+    # }
+    components: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+
+    # Resolved adapter ids + metadata cached at write time so the composition
+    # endpoint can validate without re-resolving from the adapter on every
+    # call. Source of truth remains the adapter; this is a cache.
+    adapter_config: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+
+    # AdCP-standard targeting-dimension names this profile narrows. Lets the
+    # storefront pre-validate (bundle ∩ profile ∩ buyer_targeting) client-side.
+    touches_dimensions: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+
+    # Content hash for cache invalidation via If-None-Match on the REST API.
+    etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "custom_targeting_profile_id",
+            name="uq_custom_targeting_profile",
+        ),
+        Index("idx_custom_targeting_profiles_tenant", "tenant_id"),
     )
 
 
