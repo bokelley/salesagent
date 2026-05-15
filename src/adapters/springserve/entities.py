@@ -96,6 +96,36 @@ class DemandTag(_SpringServeEntity):
     updated_at: datetime | None = None
 
 
+class VideoCreative(_SpringServeEntity):
+    """SpringServe creative -- video OR audio.
+
+    The ``/videos`` endpoint hosts both media types, discriminated by
+    ``creative_format`` ("video" | "audio") and ``creative_content_type``.
+    The ``type`` field returned by SpringServe is the entity class
+    ("VideoCreative") regardless of media type.
+    """
+
+    id: int
+    name: str
+    account_id: int | None = None
+    demand_partner_id: int
+    creative_format: Literal["video", "audio"] = "video"
+    creative_content_type: str | None = None
+    creative_remote_url: str | None = None
+    creative_file_name: str | None = None
+    creative_file_size: int | None = None
+    creative_landing_page_url: str | None = None
+    type: str | None = None  # SS-internal entity class, e.g. "VideoCreative"
+    active: bool = True
+    duration_seconds: int | None = None
+    height: int | None = None
+    width: int | None = None
+    line_item_demand_tag_ids: list[int] = Field(default_factory=list)
+    secondary_code: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class DemandTagPriority(BaseModel):
     """One ``demand_tag_priorities`` entry binding a Demand Tag to a Supply Tag.
 

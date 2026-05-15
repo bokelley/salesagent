@@ -14,6 +14,7 @@ from __future__ import annotations
 import requests
 
 from src.adapters.springserve._campaigns import SpringServeCampaignsClient
+from src.adapters.springserve._creatives import SpringServeCreativesClient
 from src.adapters.springserve._demand_tags import SpringServeDemandTagsClient
 from src.adapters.springserve._transport import (
     DEFAULT_BASE_URL,
@@ -75,6 +76,7 @@ class SpringServeClient:
         )
         self.campaigns = SpringServeCampaignsClient(self._transport)
         self.demand_tags = SpringServeDemandTagsClient(self._transport)
+        self.creatives = SpringServeCreativesClient(self._transport)
 
     # ----- connectivity -----
 

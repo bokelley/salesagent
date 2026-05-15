@@ -361,35 +361,125 @@ class SpringServeAdapter(AdServerAdapter):
 
     # ----- creatives -----
 
+    @staticmethod
+    def _asset_media_type(asset: dict[str, Any]) -> tuple[str, str]:
+        """Return ``(creative_format, creative_content_type)`` for an asset.
+
+        Routing is driven by the AdCP Format id prefix (``springserve_audio_*``
+        vs ``springserve_video_*``) when present, falling back to the asset's
+        own ``content_type`` hint, then to video/mp4 as a safe default.
+        """
+        fid = (asset.get("format_id") or {}).get("id") if isinstance(asset.get("format_id"), dict) else None
+        is_audio = (isinstance(fid, str) and "audio" in fid.lower()) or str(
+            asset.get("content_type", "")
+        ).lower().startswith("audio/")
+        if is_audio:
+            return "audio", str(asset.get("content_type") or "audio/mpeg")
+        return "video", str(asset.get("content_type") or "video/mp4")
+
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
+        """POST each asset to /videos and return AssetStatus with the SS id.
+
+        Audio routing is driven by ``format_id`` -- ``springserve_audio_*``
+        format ids produce audio creatives with the matching MIME type.
+        AdCP buyers provide a ``url`` or ``media_url`` pointing at the
+        hosted asset; SpringServe pulls it during ingest.
+        """
         if self.dry_run:
             for asset in assets:
+                media_format, content_type = self._asset_media_type(asset)
                 self.log(
-                    f"Would POST {self.base_url}/videos "
-                    f"name={asset.get('name')} demand_partner_id={self.demand_partner_id}"
+                    f"Would POST {self.base_url}/videos name={asset.get('name')} "
+                    f"format={media_format} content_type={content_type} "
+                    f"remote_url={asset.get('url') or asset.get('media_url')}"
                 )
             return [AssetStatus(creative_id=a["creative_id"], status="approved") for a in assets]
-        return [AssetStatus(creative_id=a["creative_id"], status="pending") for a in assets]
+
+        assert self._client is not None
+        assert self.demand_partner_id is not None
+        statuses: list[AssetStatus] = []
+        for asset in assets:
+            remote_url = asset.get("url") or asset.get("media_url") or asset.get("creative_remote_url")
+            if not remote_url:
+                logger.warning(
+                    "SpringServe asset %s missing remote URL (need 'url' or 'media_url')",
+                    asset.get("creative_id"),
+                )
+                statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                continue
+            media_format, content_type = self._asset_media_type(asset)
+            try:
+                created = self._client.creatives.create(
+                    name=asset.get("name") or f"adcp-{asset['creative_id']}",
+                    demand_partner_id=int(self.demand_partner_id),
+                    creative_remote_url=remote_url,
+                    creative_format=media_format,
+                    creative_content_type=content_type,
+                    duration_seconds=asset.get("duration_seconds"),
+                    width=asset.get("width"),
+                    height=asset.get("height"),
+                    creative_landing_page_url=asset.get("landing_page_url"),
+                    secondary_code=asset["creative_id"],
+                )
+                statuses.append(AssetStatus(creative_id=str(created.id), status="approved"))
+            except SpringServeError as exc:
+                logger.warning(
+                    "SpringServe creative create failed for asset %s: %s",
+                    asset.get("creative_id"),
+                    exc,
+                )
+                statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+        return statuses
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
+        """Bind SpringServe creatives to demand tags.
+
+        Demand tags carry a single ``creative_id`` (1:1) or a
+        ``line_item_ratios`` rotation list. Stage 3 writes only the
+        single-creative path; if multiple creative_ids are supplied for
+        the same demand tag, the LAST one wins and earlier ones are
+        recorded as ``skipped``. The tag is flipped active on a
+        successful bind so it can deliver. Rotation via
+        ``line_item_ratios`` lands in a later stage.
+        """
+        if not platform_creative_ids:
+            return []
+        winner = platform_creative_ids[-1]
+        losers = platform_creative_ids[:-1]
+        results: list[dict[str, Any]] = []
+        for li in line_item_ids:
+            results.extend(self._skip_extra_creative_result(li, ci) for ci in losers)
+            results.append(self._bind_creative_to_demand_tag(li, winner))
+        return results
+
+    def _skip_extra_creative_result(self, line_item_id: str, creative_id: str) -> dict[str, Any]:
         if self.dry_run:
-            for li in line_item_ids:
-                for ci in platform_creative_ids:
-                    self.log(
-                        f"Would PATCH .../demand_tags/{li} creative_id={ci} (or vast_url=<asset-url>) and active=true"
-                    )
-            return [
-                {"line_item_id": li, "creative_id": ci, "status": "success"}
-                for li in line_item_ids
-                for ci in platform_creative_ids
-            ]
-        return [
-            {"line_item_id": li, "creative_id": ci, "status": "pending"}
-            for li in line_item_ids
-            for ci in platform_creative_ids
-        ]
+            self.log(f"Would skip extra creative={creative_id} on demand_tag={line_item_id} (only last wins)")
+        return {
+            "line_item_id": line_item_id,
+            "creative_id": creative_id,
+            "status": "skipped",
+            "message": "Multiple creatives per demand tag -- only the last is wired in Stage 3.",
+        }
+
+    def _bind_creative_to_demand_tag(self, line_item_id: str, creative_id: str) -> dict[str, Any]:
+        if self.dry_run:
+            self.log(f"Would PUT .../demand_tags/{line_item_id} creative_id={creative_id} is_active=true")
+            return {"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"}
+        assert self._client is not None
+        try:
+            self._client.demand_tags.update(int(line_item_id), creative_id=int(creative_id), is_active=True)
+        except SpringServeError as exc:
+            logger.warning("SpringServe bind creative=%s -> demand_tag=%s failed: %s", creative_id, line_item_id, exc)
+            return {
+                "line_item_id": line_item_id,
+                "creative_id": creative_id,
+                "status": "failed",
+                "message": str(exc),
+            }
+        return {"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"}
 
     # ----- status / delivery -----
 

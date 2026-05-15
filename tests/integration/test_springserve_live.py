@@ -1,10 +1,11 @@
-"""Live SpringServe API smoke test (Stages 1 + 2).
+"""Live SpringServe API smoke test (Stages 1 + 2 + 3).
 
 Exercises the SpringServe client against the real API:
 
 * Stage 1 — token minting and per-endpoint scope probes.
 * Stage 2 — full Campaign + Demand Tag create-then-cleanup cycle, plus
   pause/resume at both levels.
+* Stage 3 — Video creative upload, binding to a demand tag, then cleanup.
 
 Skipped by default; runs only when credentials are provisioned via env
 vars. Provide ONE of:
@@ -216,6 +217,95 @@ class TestWriteRoundTrip:
         finally:
             # Best-effort cleanup; log but don't re-raise so the actual
             # assertion failure (if any) propagates.
+            if demand_tag is not None:
+                try:
+                    client.demand_tags.delete(demand_tag.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete demand_tag %s: %s", demand_tag.id, exc)
+            if campaign is not None:
+                try:
+                    client.campaigns.delete(campaign.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete campaign %s: %s", campaign.id, exc)
+
+
+class TestCreativeRoundTrip:
+    """Stage 3 live cycle -- POST /videos, bind to a demand tag, cleanup.
+
+    Uses a tiny remote URL (Google's sample MP4 if reachable from
+    SpringServe's network; otherwise the test passes the URL through and
+    SpringServe may reject the ingest -- that's fine, we still verify
+    the POST path returns a typed VideoCreative).
+    """
+
+    SAMPLE_VIDEO_URL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+
+    def test_create_video_and_bind_to_demand_tag(
+        self, client: SpringServeClient, demand_partner_id: int, smoke_label: str
+    ):
+        from src.adapters.springserve import SpringServeForbiddenError
+
+        start = datetime.now(UTC) + timedelta(days=7)
+        end = start + timedelta(days=14)
+        campaign = None
+        demand_tag = None
+        creative = None
+        try:
+            try:
+                campaign = client.campaigns.create(
+                    name=f"{smoke_label}_creative",
+                    demand_partner_id=demand_partner_id,
+                    is_active=False,
+                    secondary_code=smoke_label,
+                    rate_currency="EUR",
+                )
+            except SpringServeForbiddenError as exc:
+                pytest.skip(
+                    f"SpringServe POST /campaigns scope not granted ({exc.status_code}); "
+                    "see TestWriteRoundTrip for the scope-grant ask."
+                )
+
+            demand_tag = client.demand_tags.create(
+                name=f"{smoke_label}_creative_dt",
+                campaign_id=campaign.id,
+                demand_partner_id=demand_partner_id,
+                start_date=start,
+                end_date=end,
+                format="video",
+                rate=0.01,
+                rate_currency="EUR",
+                is_active=False,
+                secondary_code="pkg_creative_smoke",
+            )
+
+            try:
+                creative = client.creatives.create(
+                    name=f"{smoke_label}_creative_asset",
+                    demand_partner_id=demand_partner_id,
+                    creative_remote_url=self.SAMPLE_VIDEO_URL,
+                    creative_format="video",
+                    creative_content_type="video/mp4",
+                    secondary_code=smoke_label,
+                )
+            except SpringServeForbiddenError as exc:
+                pytest.skip(
+                    f"SpringServe POST /videos scope not granted ({exc.status_code}); "
+                    "ask for write scope on Videos alongside Campaigns + Demand Tags."
+                )
+            assert creative.id > 0
+            assert creative.creative_format == "video"
+
+            # Bind creative -> demand_tag and verify.
+            client.demand_tags.update(demand_tag.id, creative_id=creative.id, is_active=True)
+            refetched = client.demand_tags.get(demand_tag.id)
+            assert refetched.creative_id == creative.id
+            assert refetched.is_active is True
+        finally:
+            if creative is not None:
+                try:
+                    client.creatives.delete(creative.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete creative %s: %s", creative.id, exc)
             if demand_tag is not None:
                 try:
                     client.demand_tags.delete(demand_tag.id)

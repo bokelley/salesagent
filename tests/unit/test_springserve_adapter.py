@@ -247,6 +247,142 @@ class TestLiveCreateMediaBuy:
         adapter._client.demand_tags.create.assert_not_called()
 
 
+class TestLiveCreatives:
+    """Stage 3 creative upload + binding."""
+
+    def _adapter(self, mock_principal):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        adapter._client = MagicMock()
+        return adapter
+
+    def test_add_creative_assets_posts_video(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create.return_value = MagicMock(id=1182735)
+
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [
+                {
+                    "creative_id": "adcp_creative_1",
+                    "name": "Spot 15s",
+                    "url": "https://cdn.example.com/spot.mp4",
+                    "duration_seconds": 15,
+                    "width": 1920,
+                    "height": 1080,
+                }
+            ],
+            today=datetime.now(UTC),
+        )
+
+        adapter._client.creatives.create.assert_called_once_with(
+            name="Spot 15s",
+            demand_partner_id=42,
+            creative_remote_url="https://cdn.example.com/spot.mp4",
+            creative_format="video",
+            creative_content_type="video/mp4",
+            duration_seconds=15,
+            width=1920,
+            height=1080,
+            creative_landing_page_url=None,
+            secondary_code="adcp_creative_1",
+        )
+        # Returned creative_id is the SS id (so associate_creatives can use it).
+        assert statuses[0].creative_id == "1182735"
+        assert statuses[0].status == "approved"
+
+    def test_add_creative_assets_audio_format_id_routes_audio(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create.return_value = MagicMock(id=1182999)
+
+        adapter.add_creative_assets(
+            "springserve_900001",
+            [
+                {
+                    "creative_id": "adcp_audio_1",
+                    "name": "Audio Spot",
+                    "url": "https://cdn.example.com/spot.mp3",
+                    "format_id": {"id": "springserve_audio_30s_pre_roll", "agent_url": "springserve://t"},
+                }
+            ],
+            today=datetime.now(UTC),
+        )
+
+        kw = adapter._client.creatives.create.call_args.kwargs
+        assert kw["creative_format"] == "audio"
+        assert kw["creative_content_type"] == "audio/mpeg"
+
+    def test_add_creative_assets_audio_mime_hint_routes_audio(self, mock_principal):
+        """If the asset itself carries an audio/* content_type, route to audio
+        even without a format_id hint."""
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create.return_value = MagicMock(id=1)
+
+        adapter.add_creative_assets(
+            "springserve_900001",
+            [{"creative_id": "c1", "url": "https://x", "content_type": "audio/mp4"}],
+            today=datetime.now(UTC),
+        )
+
+        kw = adapter._client.creatives.create.call_args.kwargs
+        assert kw["creative_format"] == "audio"
+        assert kw["creative_content_type"] == "audio/mp4"
+
+    def test_add_creative_assets_missing_url_marks_failed(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [{"creative_id": "no_url"}],
+            today=datetime.now(UTC),
+        )
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+        assert statuses[0].creative_id == "no_url"
+
+    def test_add_creative_assets_upstream_failure_marks_failed(self, mock_principal):
+        from src.adapters.springserve import SpringServeError
+
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create.side_effect = SpringServeError("rejected", status_code=400, body="bad")
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [{"creative_id": "c1", "url": "https://x"}],
+            today=datetime.now(UTC),
+        )
+        assert statuses[0].status == "failed"
+
+    def test_associate_creatives_binds_and_activates_demand_tag(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        results = adapter.associate_creatives(line_item_ids=["800001"], platform_creative_ids=["1182735"])
+
+        adapter._client.demand_tags.update.assert_called_once_with(800001, creative_id=1182735, is_active=True)
+        assert results == [{"line_item_id": "800001", "creative_id": "1182735", "status": "success"}]
+
+    def test_associate_creatives_multiple_per_tag_keeps_last_marks_others_skipped(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        results = adapter.associate_creatives(
+            line_item_ids=["800001"],
+            platform_creative_ids=["1", "2", "3"],
+        )
+
+        # Only the last creative is bound; earlier ones recorded as skipped.
+        adapter._client.demand_tags.update.assert_called_once_with(800001, creative_id=3, is_active=True)
+        statuses = [r["status"] for r in results]
+        assert statuses == ["skipped", "skipped", "success"]
+
+    def test_associate_creatives_upstream_error_marks_failed(self, mock_principal):
+        from src.adapters.springserve import SpringServeError
+
+        adapter = self._adapter(mock_principal)
+        adapter._client.demand_tags.update.side_effect = SpringServeError("rejected", status_code=400, body="bad")
+        results = adapter.associate_creatives(line_item_ids=["800001"], platform_creative_ids=["1"])
+        assert results[0]["status"] == "failed"
+
+
 class TestLiveCheckStatus:
     def test_active_campaign_reports_active(self, mock_principal):
         adapter = SpringServeAdapter(
