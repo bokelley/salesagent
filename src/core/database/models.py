@@ -21,6 +21,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     Date,
     DateTime,
     Float,
@@ -2766,7 +2767,74 @@ class TenantSigningCredential(Base):
     )
 
 
-# The ``proposals`` table is managed by :class:`adcp.decisioning.pg.proposal_store.PgProposalStore`
-# (adcp 5.5.0). Schema lives in alembic migration t2u3v4w5x6y7; no ORM
-# model is exposed here because every read/write goes through the
-# upstream store's psycopg3 path. See :mod:`core.decisioning.proposal_store`.
+class Proposal(Base):
+    """``proposals`` table schema mirror — table-creation-only declaration.
+
+    The runtime owner of this table is
+    :class:`adcp.decisioning.pg.proposal_store.PgProposalStore` (adcp
+    5.5.0), which speaks raw psycopg3 with explicit-column INSERTs.
+    salesagent code MUST NOT query through this ORM model — every read
+    and write goes through :func:`core.decisioning.proposal_store.get_proposal_store`.
+
+    This class exists so :data:`Base.metadata` knows the table when
+    :func:`sqlalchemy.MetaData.create_all` runs (every integration test
+    fixture rebuilds per-test DBs via ``Base.metadata.create_all``,
+    bypassing Alembic). Without it, the table is missing from the test
+    DB and ``PgProposalStore`` raises ``UndefinedTable`` on every
+    proposal-path dispatch.
+
+    Production runs Alembic (migration ``t2u3v4w5x6y7``), which is the
+    source of truth for the schema. The column types here are chosen
+    to produce the same DDL ``create_all`` would emit — namely they
+    omit ``COLLATE "C"`` (test-only perf optimization) but otherwise
+    match. The ``CheckConstraint`` on ``state`` and the partial unique
+    + partial expires_at indexes are replicated so test DBs match
+    production behavior for any SQL we ever might add against this
+    table (we don't today, but the principle stands).
+
+    The generated ``tenant_id`` column is declared via
+    :class:`sqlalchemy.Computed` so SQLAlchemy emits the matching
+    ``GENERATED ALWAYS AS ... STORED`` clause. The FK + cascade to
+    ``tenants`` is preserved.
+    """
+
+    __tablename__ = "proposals"
+
+    account_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    proposal_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    recipes: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    proposal_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    media_buy_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recipe_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        Computed("split_part(account_id, ':', 1)", persisted=True),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('draft', 'committed', 'consuming', 'consumed')",
+            name="ck_proposals_state",
+        ),
+        Index(
+            "ux_proposals_account_media_buy",
+            "account_id",
+            "media_buy_id",
+            unique=True,
+            postgresql_where=text("media_buy_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_proposals_expires_at",
+            "expires_at",
+            postgresql_where=text("expires_at IS NOT NULL"),
+        ),
+        Index("ix_proposals_tenant_id", "tenant_id"),
+    )
