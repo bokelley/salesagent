@@ -104,6 +104,29 @@ def get_proposal_store() -> PgProposalStore:
         return _STORE
 
 
+async def open_proposal_store() -> None:
+    """Construct the store (if not already) and open its pool on the
+    current event loop. Wired into ``serve(on_startup=...)``.
+
+    Must run on the same loop that later dispatches store method calls
+    — psycopg3's :class:`AsyncConnectionPool` binds its worker tasks to
+    whichever loop ran ``open()``. Calling ``open()`` from a transient
+    bootstrap loop (e.g. ``asyncio.run`` inside a sync factory) would
+    leave the workers tied to a closed loop once ``serve()`` takes
+    over and the first acquire would hang forever.
+
+    Idempotent — :meth:`AsyncConnectionPool.open` is a no-op if the
+    pool is already open.
+    """
+    store = get_proposal_store()  # ensures _POOL singleton exists
+    assert _POOL is not None
+    await _POOL.open()
+    # Touch ``store`` so the construction visibly succeeds in
+    # startup logs (and so static analysis doesn't flag the var as
+    # unused).
+    logger.info("PgProposalStore pool opened (store=%r)", type(store).__name__)
+
+
 async def close_proposal_store() -> None:
     """Close the pool at shutdown. Wired into ``serve(on_shutdown=...)``.
 

@@ -65,7 +65,7 @@ from sqlalchemy import select
 # evicts the webhook-signing credential cache on commit. Must run before
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
-from core.decisioning.proposal_store import close_proposal_store, get_proposal_store
+from core.decisioning.proposal_store import close_proposal_store, get_proposal_store, open_proposal_store
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.platforms.gam import GamPlatform
@@ -528,11 +528,13 @@ def _serve_kwargs(
     # (adcp 5.4.0 #713). transport="both" is required for these to fire,
     # which we already pass below.
     #
-    # ``close_proposal_store`` shuts the PgProposalStore pool down
-    # cleanly so in-flight connections drain before serve() exits.
-    # Always runs regardless of ``include_scheduler`` — the pool is
-    # tied to serve()'s loop, not to background-job lifecycle.
-    on_startup = [_start_schedulers] if include_scheduler else None
+    # ``open_proposal_store`` opens the async psycopg3 pool on
+    # serve()'s loop so worker tasks bind to the right loop;
+    # ``close_proposal_store`` shuts it down cleanly so in-flight
+    # connections drain before serve() exits. Both always run
+    # regardless of ``include_scheduler`` — the pool is tied to
+    # serve()'s loop, not to background-job lifecycle.
+    on_startup = [open_proposal_store, _start_schedulers] if include_scheduler else [open_proposal_store]
     on_shutdown = [_stop_schedulers, close_proposal_store] if include_scheduler else [close_proposal_store]
 
     return {
