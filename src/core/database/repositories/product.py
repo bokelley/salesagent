@@ -90,10 +90,16 @@ class ProductRepository:
     # List queries
     # ------------------------------------------------------------------
 
-    def list_all(self) -> list[Product]:
+    def list_all(self, include_non_catalog: bool = False) -> list[Product]:
         """Get all products for the tenant, ordered by product_id.
 
         Eagerly loads pricing_options and tenant to avoid N+1 queries.
+
+        By default the result is filtered to catalog products
+        (``composition_source = 'static'``): signal-driven variants and
+        storefront-composed dynamic products are not catalog items and
+        are excluded from ``get_products``. Admin/reporting callers that
+        need the full set can opt in with ``include_non_catalog=True``.
         """
         stmt = (
             select(Product)
@@ -101,12 +107,15 @@ class ProductRepository:
             .where(Product.tenant_id == self._tenant_id)
             .order_by(Product.product_id)
         )
+        if not include_non_catalog:
+            stmt = stmt.where(Product.composition_source == "static")
         return list(self._session.execute(stmt).unique().scalars().all())
 
-    def list_all_with_inventory(self) -> list[Product]:
+    def list_all_with_inventory(self, include_non_catalog: bool = False) -> list[Product]:
         """Get all products with pricing, inventory profile, and tenant loaded.
 
-        Used by get_product_catalog which needs full product data for conversion.
+        Used by ``get_product_catalog`` which needs full product data for conversion.
+        Same ``composition_source = 'static'`` default as :meth:`list_all`.
         """
         stmt = (
             select(Product)
@@ -117,6 +126,8 @@ class ProductRepository:
             )
             .where(Product.tenant_id == self._tenant_id)
         )
+        if not include_non_catalog:
+            stmt = stmt.where(Product.composition_source == "static")
         return list(self._session.scalars(stmt).all())
 
     def list_by_ids(self, product_ids: list[str]) -> list[Product]:
