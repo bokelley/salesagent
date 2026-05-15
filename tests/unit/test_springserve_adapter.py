@@ -343,6 +343,57 @@ class TestLiveCreatives:
         assert statuses[0].status == "failed"
         assert statuses[0].creative_id == "no_url"
 
+    def test_add_creative_assets_missing_creative_id_marks_failed(self, mock_principal):
+        """A bad asset reports failed for its own slot; later assets keep going."""
+        adapter = self._adapter(mock_principal)
+        adapter._client.creatives.create.return_value = MagicMock(id=1)
+
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [
+                {"url": "https://x/spot.mp4"},  # missing creative_id
+                {"creative_id": "good", "url": "https://cdn.example.com/spot.mp4"},
+            ],
+            today=datetime.now(UTC),
+        )
+
+        # Bad asset fails fast with empty id; good asset is uploaded normally.
+        assert statuses[0].status == "failed"
+        assert statuses[0].creative_id == ""
+        assert statuses[1].status == "approved"
+        # Good asset triggered exactly one creates call (the bad asset short-circuited).
+        assert adapter._client.creatives.create.call_count == 1
+
+    def test_add_creative_assets_rejects_non_https_url(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [{"creative_id": "c_http", "url": "http://cdn.example.com/spot.mp4"}],
+            today=datetime.now(UTC),
+        )
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+
+    def test_add_creative_assets_rejects_loopback_url(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [{"creative_id": "c_local", "url": "https://localhost:8080/spot.mp4"}],
+            today=datetime.now(UTC),
+        )
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+
+    def test_add_creative_assets_rejects_rfc1918_url(self, mock_principal):
+        adapter = self._adapter(mock_principal)
+        statuses = adapter.add_creative_assets(
+            "springserve_900001",
+            [{"creative_id": "c_priv", "url": "https://10.0.0.5/spot.mp4"}],
+            today=datetime.now(UTC),
+        )
+        adapter._client.creatives.create.assert_not_called()
+        assert statuses[0].status == "failed"
+
     def test_add_creative_assets_upstream_failure_marks_failed(self, mock_principal):
         from src.adapters.springserve import SpringServeError
 

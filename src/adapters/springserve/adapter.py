@@ -387,6 +387,32 @@ class SpringServeAdapter(AdServerAdapter):
             return "audio", str(asset.get("content_type") or "audio/mpeg")
         return "video", str(asset.get("content_type") or "video/mp4")
 
+    @staticmethod
+    def _validate_creative_remote_url(url: str) -> str | None:
+        """Return an error message if ``url`` isn't safe to forward to SpringServe,
+        otherwise None.
+
+        Defence-in-depth: SpringServe pulls the asset server-side, so an
+        unconstrained URL is server-side request forgery on their network.
+        We reject non-https schemes (``file://``, ``http://``, ``ftp://``,
+        etc) and any URL whose hostname resolves to loopback or RFC1918
+        private space before the POST.
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme.lower() != "https":
+            return f"Asset URL must use https:// (got {parsed.scheme!r})"
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return "Asset URL is missing a hostname"
+        # Cheap private-host check -- avoids a DNS round-trip for the common cases.
+        if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+            return f"Asset URL host {host!r} is not routable from SpringServe"
+        if host.startswith(("10.", "192.168.", "169.254.", "172.16.", "172.17.", "172.18.", "172.19.")):
+            return f"Asset URL host {host!r} is in RFC1918 private space"
+        return None
+
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
@@ -396,6 +422,11 @@ class SpringServeAdapter(AdServerAdapter):
         format ids produce audio creatives with the matching MIME type.
         AdCP buyers provide a ``url`` or ``media_url`` pointing at the
         hosted asset; SpringServe pulls it during ingest.
+
+        Each asset is reported individually. A bad asset (missing
+        ``creative_id``, missing URL, non-https URL, SpringServe rejection)
+        produces a ``failed`` AssetStatus for that asset only -- the loop
+        continues with the remaining assets.
         """
         if self.dry_run:
             for asset in assets:
@@ -405,42 +436,45 @@ class SpringServeAdapter(AdServerAdapter):
                     f"format={media_format} content_type={content_type} "
                     f"remote_url={asset.get('url') or asset.get('media_url')}"
                 )
-            return [AssetStatus(creative_id=a["creative_id"], status="approved") for a in assets]
+            return [AssetStatus(creative_id=str(a.get("creative_id") or ""), status="approved") for a in assets]
 
         assert self._client is not None
         assert self.demand_partner_id is not None
         statuses: list[AssetStatus] = []
         for asset in assets:
+            creative_id = str(asset.get("creative_id") or "")
+            if not creative_id:
+                logger.warning("SpringServe asset missing 'creative_id'; skipping")
+                statuses.append(AssetStatus(creative_id="", status="failed"))
+                continue
             remote_url = asset.get("url") or asset.get("media_url") or asset.get("creative_remote_url")
             if not remote_url:
-                logger.warning(
-                    "SpringServe asset %s missing remote URL (need 'url' or 'media_url')",
-                    asset.get("creative_id"),
-                )
-                statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                logger.warning("SpringServe asset %s missing remote URL (need 'url' or 'media_url')", creative_id)
+                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
+                continue
+            url_error = self._validate_creative_remote_url(str(remote_url))
+            if url_error:
+                logger.warning("SpringServe asset %s rejected: %s", creative_id, url_error)
+                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
                 continue
             media_format, content_type = self._asset_media_type(asset)
             try:
                 created = self._client.creatives.create(
-                    name=asset.get("name") or f"adcp-{asset['creative_id']}",
+                    name=asset.get("name") or f"adcp-{creative_id}",
                     demand_partner_id=int(self.demand_partner_id),
-                    creative_remote_url=remote_url,
+                    creative_remote_url=str(remote_url),
                     creative_format=media_format,
                     creative_content_type=content_type,
                     duration_seconds=asset.get("duration_seconds"),
                     width=asset.get("width"),
                     height=asset.get("height"),
                     creative_landing_page_url=asset.get("landing_page_url"),
-                    secondary_code=asset["creative_id"],
+                    secondary_code=creative_id,
                 )
                 statuses.append(AssetStatus(creative_id=str(created.id), status="approved"))
             except SpringServeError as exc:
-                logger.warning(
-                    "SpringServe creative create failed for asset %s: %s",
-                    asset.get("creative_id"),
-                    exc,
-                )
-                statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                logger.warning("SpringServe creative create failed for asset %s: %s", creative_id, exc)
+                statuses.append(AssetStatus(creative_id=creative_id, status="failed"))
         return statuses
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:
@@ -534,7 +568,7 @@ class SpringServeAdapter(AdServerAdapter):
             )
         campaign_id = media_buy_id.removeprefix("springserve_")
         with get_db_session() as session:
-            repo = SpringServeDemandTagStatsRepository(session, self.tenant_id or "default")
+            repo = SpringServeDemandTagStatsRepository(session, self.tenant_id)
             stats_rows = repo.list_by_campaign(campaign_id)
         if not stats_rows:
             raise DeliveryDataUnavailable(media_buy_id)
@@ -562,7 +596,7 @@ class SpringServeAdapter(AdServerAdapter):
                 result.setdefault(media_buy_id, {})[package_id] = None
             return result
         with get_db_session() as session:
-            repo = SpringServeDemandTagStatsRepository(session, self.tenant_id or "default")
+            repo = SpringServeDemandTagStatsRepository(session, self.tenant_id)
             stats = repo.get_by_demand_tag_ids(demand_tag_ids)
         for media_buy_id, package_id, demand_tag_id in package_refs:
             row = stats.get(demand_tag_id) if demand_tag_id else None
@@ -620,7 +654,7 @@ class SpringServeAdapter(AdServerAdapter):
             with get_db_session() as session:
                 syncer = SpringServeReportingSync(
                     client=client,
-                    tenant_id=self.tenant_id or "default",
+                    tenant_id=self.tenant_id,
                     session=session,
                 )
                 return syncer.run(
@@ -640,7 +674,7 @@ class SpringServeAdapter(AdServerAdapter):
     def latest_reporting_sync_at(self) -> datetime | None:
         """Most-recent ``last_synced_at`` across cached demand-tag stats."""
         with get_db_session() as session:
-            return SpringServeDemandTagStatsRepository(session, self.tenant_id or "default").latest_sync_at()
+            return SpringServeDemandTagStatsRepository(session, self.tenant_id).latest_sync_at()
 
     def run_inventory_sync(self) -> AdapterSyncResult:
         """Refresh the SpringServe inventory cache from the API.
@@ -671,7 +705,7 @@ class SpringServeAdapter(AdServerAdapter):
             with get_db_session() as session:
                 syncer = SpringServeInventorySync(
                     client=client,
-                    tenant_id=self.tenant_id or "default",
+                    tenant_id=self.tenant_id,
                     session=session,
                 )
                 return syncer.run()
@@ -686,7 +720,7 @@ class SpringServeAdapter(AdServerAdapter):
     def latest_inventory_sync_at(self) -> datetime | None:
         """Most-recent ``last_synced_at`` across cached inventory rows."""
         with get_db_session() as session:
-            return SpringServeInventoryRepository(session, self.tenant_id or "default").latest_sync_at()
+            return SpringServeInventoryRepository(session, self.tenant_id).latest_sync_at()
 
     async def get_available_inventory(self) -> dict[str, Any]:
         """Surface the locally-synced SpringServe taxonomy for product config.
@@ -705,7 +739,7 @@ class SpringServeAdapter(AdServerAdapter):
         * ``properties`` -- cache counts and metadata
         """
         with get_db_session() as session:
-            repo = SpringServeInventoryRepository(session, self.tenant_id or "default")
+            repo = SpringServeInventoryRepository(session, self.tenant_id)
             supply_partners = repo.list_by_type("supply_partner")
             supply_tags = repo.list_by_type("supply_tag")
 

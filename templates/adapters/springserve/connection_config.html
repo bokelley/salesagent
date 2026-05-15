@@ -221,7 +221,7 @@ function checkSpringServePermissions() {
     summaryEl.innerHTML = '<span style="color: #6b7280;">Probing...</span>';
     detailEl.style.display = 'none';
 
-    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/springserve/check-permissions', {
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/springserve/check-permissions', {  // generic /<type>/check-permissions handler
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         credentials: 'same-origin',

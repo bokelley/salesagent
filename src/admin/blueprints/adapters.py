@@ -908,60 +908,8 @@ def sync_springserve_inventory(tenant_id, **kwargs):
     )
 
 
-@adapters_bp.route("/api/tenant/<tenant_id>/adapters/springserve/check-permissions", methods=["POST"])
-@require_tenant_access(role=("admin",), allow_embedded_writes=True)
-def check_springserve_permissions(tenant_id, **kwargs):
-    """Run the SpringServe adapter's permission-probe matrix and return a report.
-
-    Cheap reads only; nothing is mutated upstream.
-    """
-    try:
-        from src.adapters.springserve import SpringServeAdapter
-        from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-        with get_db_session() as session:
-            existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
-            if not existing or existing.adapter_type != "springserve" or not existing.config_json:
-                return (
-                    jsonify({"success": False, "error": "SpringServe adapter is not configured for this tenant"}),
-                    400,
-                )
-            config = dict(existing.config_json)
-
-        # Build a stub principal so the adapter __init__ passes; the probe
-        # doesn't depend on the principal's actual demand-partner mapping
-        # because it only reads endpoints.
-        from unittest.mock import MagicMock
-
-        principal = MagicMock()
-        principal.principal_id = f"probe-{tenant_id}"
-        principal.get_adapter_id.return_value = str(config.get("default_demand_partner_id") or 0)
-        adapter = SpringServeAdapter(config=config, principal=principal, dry_run=False, tenant_id=tenant_id)
-        report = adapter.check_permissions()
-        return jsonify(
-            {
-                "success": True,
-                "report": {
-                    "adapter": report.adapter,
-                    "tenant_id": report.tenant_id,
-                    "checked_at": report.checked_at.isoformat(),
-                    "fully_operational": report.fully_operational,
-                    "error": report.error,
-                    "checks": [
-                        {
-                            "name": c.name,
-                            "description": c.description,
-                            "granted": c.granted,
-                            "required": c.required,
-                            "feature": c.feature,
-                            "probe_target": c.probe_target,
-                            "detail": c.detail,
-                        }
-                        for c in report.checks
-                    ],
-                },
-            }
-        )
-    except Exception as e:
-        logger.error(f"SpringServe permissions check failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": "Permissions check failed (see server logs)"}), 500
+# SpringServe permission probes use the generic
+# ``/api/tenant/<tenant_id>/adapters/<adapter_type>/check-permissions``
+# endpoint above. The generic path constructs a real typed ``Principal``
+# stub (instead of a MagicMock) so the adapter's tenant-isolation invariants
+# are honoured during the probe.
