@@ -31,14 +31,14 @@ from src.adapters.base import (
     TargetingCapabilities,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.adapters.springserve.client import SpringServeAuthError, SpringServeClient
+from src.adapters.springserve.client import SpringServeAuthError, SpringServeClient, SpringServeError
 from src.adapters.springserve.formats import springserve_creative_formats
 from src.adapters.springserve.schemas import (
     SPRINGSERVE_HOSTS,
     SpringServeConnectionConfig,
     SpringServeProductConfig,
 )
-from src.adapters.springserve.targeting import build_targeting, validate_targeting
+from src.adapters.springserve.targeting import build_demand_tag_targeting, validate_targeting
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -223,45 +223,56 @@ class SpringServeAdapter(AdServerAdapter):
         impl = getattr(package, "implementation_config", None) or {}
         return impl.get("springserve", impl) if isinstance(impl, dict) else {}
 
-    def _campaign_payload(
-        self,
-        buy_name: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> dict[str, Any]:
-        return {
-            "name": buy_name,
-            "demand_partner_id": self.demand_partner_id,
-            "start_date": start_time.date().isoformat(),
-            "end_date": end_time.date().isoformat(),
-        }
+    def _demand_tag_format(self, package: MediaPackage) -> str:
+        """Pick the SpringServe ``format`` field (``video`` / ``audio`` /
+        ``display``) from the AdCP Package's ``format_ids``.
 
-    def _demand_tag_payload(
+        SpringServe encodes media type as a string on the demand tag, not
+        as a separate field. We discriminate by the ``springserve_audio_*``
+        vs ``springserve_video_*`` format id prefixes from our static
+        format declarations.
+        """
+        for fid in package.format_ids or []:
+            fmt_id = fid.id if hasattr(fid, "id") else str(fid)
+            if fmt_id.startswith("springserve_audio") or "audio" in fmt_id.lower():
+                return "audio"
+        return "video"
+
+    def _demand_tag_kwargs(
         self,
         package: MediaPackage,
-        campaign_id: str | int,
+        campaign_id: int,
         rate: float,
-        rate_type: str,
         start_time: datetime,
         end_time: datetime,
+        po_number: str | None,
     ) -> dict[str, Any]:
+        """Build the kwargs for ``client.demand_tags.create()`` from a package.
+
+        Includes targeting via ``build_demand_tag_targeting`` and the
+        per-package demand_code so SpringServe stores the AdCP package_id
+        as a searchable code on the tag.
+        """
         product_config = self._product_config_from_package(package)
-        payload: dict[str, Any] = {
+        assert self.demand_partner_id is not None  # enforced in __init__ for live mode
+        kwargs: dict[str, Any] = {
             "name": package.name or package.package_id,
             "campaign_id": campaign_id,
-            "demand_partner_id": self.demand_partner_id,
-            "start_date": start_time.date().isoformat(),
-            "end_date": end_time.date().isoformat(),
+            "demand_partner_id": int(self.demand_partner_id),
+            "start_date": start_time,
+            "end_date": end_time,
+            "format": self._demand_tag_format(package),
             "rate": rate,
-            "rate_type": rate_type,
-            "impression_goal": package.impressions,
-            "targeting": build_targeting(package.targeting_overlay, product_config),
-            "external_id": package.package_id,
-            "active": False,  # Inactive until a creative is bound.
+            "rate_currency": self.config.get("rate_currency", "USD"),
+            "demand_code": f"{po_number}_{package.package_id}" if po_number else package.package_id,
+            "secondary_code": package.package_id,
+            "note": (
+                f"Package: {package.name or package.package_id}, Impressions: {package.impressions or 0:,}, CPM: {rate}"
+            ),
+            "is_active": False,  # Inactive until a creative is bound.
         }
-        if product_config.get("priority") is not None:
-            payload["priority"] = product_config["priority"]
-        return payload
+        kwargs.update(build_demand_tag_targeting(package.targeting_overlay, product_config))
+        return kwargs
 
     # ----- create_media_buy -----
 
@@ -280,39 +291,68 @@ class SpringServeAdapter(AdServerAdapter):
             return targeting_error
 
         buy_name = self._buy_name(request)
+        rate_currency = self.config.get("rate_currency", "USD")
 
         if self.dry_run:
-            campaign_payload = self._campaign_payload(buy_name, start_time, end_time)
             self.log(f"Would call: POST {self.base_url}/campaigns")
-            self.log(f"  Campaign: {campaign_payload}")
+            self.log(f"  Campaign: name={buy_name} demand_partner_id={self.demand_partner_id}")
             for package in packages:
-                rate, rate_type = self._resolve_pricing_rate(package, package_pricing_info)
-                payload = self._demand_tag_payload(
+                rate, _ = self._resolve_pricing_rate(package, package_pricing_info)
+                kwargs = self._demand_tag_kwargs(
                     package,
-                    campaign_id="<new>",
+                    campaign_id=0,  # placeholder for dry-run
                     rate=rate,
-                    rate_type=rate_type,
                     start_time=start_time,
                     end_time=end_time,
+                    po_number=request.po_number,
                 )
                 self.log(f"Would call: POST {self.base_url}/demand_tags")
-                self.log(f"  DemandTag: {payload}")
+                self.log(f"  DemandTag: {kwargs}")
             return self._build_create_success(request, f"springserve_{buy_name}", packages)
 
-        # Live mode lands in Stage 2 -- explicit pending error for now so
-        # callers don't get a misleading success on an unwired path.
-        return CreateMediaBuyError(
-            errors=[
-                Error(
-                    code="pending_credentials",
-                    message=(
-                        "SpringServe live-mode create_media_buy lands in Stage 2. "
-                        "Run in dry-run mode until Campaign + Demand Tag write paths are wired."
-                    ),
-                    details=None,
+        # Live mode -- Mapping A: AdCP MediaBuy -> SS Campaign, AdCP Package
+        # -> SS Demand Tag. Both created paused; the operator (or a later
+        # Stage 3 creative-bind call) flips them active.
+        assert self._client is not None
+        assert self.demand_partner_id is not None
+        try:
+            campaign = self._client.campaigns.create(
+                name=buy_name,
+                demand_partner_id=int(self.demand_partner_id),
+                is_active=False,
+                code=request.po_number,
+                secondary_code=f"adcp_{request.po_number}" if request.po_number else None,
+                note=(
+                    f"AdCP MediaBuy: po_number={request.po_number}, "
+                    f"packages={len(packages)}, "
+                    f"flight={start_time.date()}..{end_time.date()}"
+                ),
+                rate_currency=rate_currency,
+            )
+            for package in packages:
+                rate, _ = self._resolve_pricing_rate(package, package_pricing_info)
+                kwargs = self._demand_tag_kwargs(
+                    package,
+                    campaign_id=campaign.id,
+                    rate=rate,
+                    start_time=start_time,
+                    end_time=end_time,
+                    po_number=request.po_number,
                 )
-            ]
-        )
+                self._client.demand_tags.create(**kwargs)
+        except SpringServeError as exc:
+            logger.warning("SpringServe create_media_buy failed: %s body=%s", exc, exc.body)
+            return CreateMediaBuyError(
+                errors=[
+                    Error(
+                        code="upstream_error",
+                        message=f"SpringServe rejected the request: {exc}",
+                        details=None,
+                    )
+                ]
+            )
+
+        return self._build_create_success(request, f"springserve_{campaign.id}", packages)
 
     def _buy_name(self, request: CreateMediaBuyRequest) -> str:
         if request.po_number:
@@ -358,7 +398,16 @@ class SpringServeAdapter(AdServerAdapter):
         if self.dry_run:
             self.log(f"Would call: GET {self.base_url}/campaigns/{campaign_id}")
             return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
-        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
+        assert self._client is not None
+        try:
+            campaign = self._client.campaigns.get(int(campaign_id))
+        except SpringServeError as exc:
+            logger.warning("SpringServe get_campaign(%s) failed: %s", campaign_id, exc)
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="unknown")
+        # SpringServe carries the on/off state on ``is_active``; map to the
+        # AdCP buyer-facing status enum.
+        status = "active" if campaign.is_active else "paused"
+        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
 
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
@@ -407,11 +456,77 @@ class SpringServeAdapter(AdServerAdapter):
                 self.log(f"Would PUT demand_tag external_id={package_id} goal={budget}")
             return UpdateMediaBuySuccess(media_buy_id=media_buy_id, affected_packages=[], implementation_date=today)
 
+        # Live mode -- map AdCP actions to Campaign / Demand Tag PUTs.
+        assert self._client is not None
+        campaign_id = media_buy_id.removeprefix("springserve_")
+        try:
+            if action == "pause_media_buy":
+                self._client.campaigns.update(int(campaign_id), is_active=False)
+            elif action == "resume_media_buy":
+                self._client.campaigns.update(int(campaign_id), is_active=True)
+            elif action in {"pause_package", "resume_package"} and package_id:
+                dt_id = self._find_demand_tag_id(int(campaign_id), package_id)
+                if dt_id is None:
+                    return self._package_not_found_error(package_id)
+                self._client.demand_tags.update(dt_id, is_active=(action == "resume_package"))
+            elif action in {"update_package_budget", "update_package_impressions"} and package_id and budget:
+                # Budget on the demand tag is encoded via the ``budgets`` list
+                # of nested objects. Surfaced in Stage 4 alongside reporting;
+                # rejected here so callers see an honest error instead of a
+                # silent no-op.
+                return self._unsupported_action_error(f"{action} (pending Stage 4)")
+            else:
+                return self._unsupported_action_error(action)
+        except SpringServeError as exc:
+            logger.warning("SpringServe update_media_buy failed: %s body=%s", exc, exc.body)
+            return UpdateMediaBuyError(
+                errors=[
+                    Error(
+                        code="upstream_error",
+                        message=f"SpringServe rejected the update: {exc}",
+                        details=None,
+                    )
+                ]
+            )
+        from src.core.schemas import AffectedPackage
+
+        affected = [AffectedPackage(package_id=package_id)] if package_id else []
+        return UpdateMediaBuySuccess(
+            media_buy_id=media_buy_id,
+            affected_packages=affected,
+            implementation_date=today,
+        )
+
+    def _find_demand_tag_id(self, campaign_id: int, package_id: str) -> int | None:
+        """Look up the SpringServe demand_tag.id for an AdCP package_id.
+
+        The demand_tag's ``secondary_code`` is set to the AdCP package_id
+        at creation time, so we can find it by scanning the campaign's
+        demand_tag_ids. SpringServe's per-campaign demand-tag list isn't a
+        free filter on the docs, so we fetch each by id; in practice
+        campaigns have at most a handful of demand tags so the round-trip
+        cost is low.
+        """
+        assert self._client is not None
+        try:
+            campaign = self._client.campaigns.get(campaign_id)
+        except SpringServeError:
+            return None
+        for dt_id in campaign.demand_tag_ids:
+            try:
+                tag = self._client.demand_tags.get(dt_id)
+            except SpringServeError:
+                continue
+            if tag.secondary_code == package_id:
+                return tag.id
+        return None
+
+    def _package_not_found_error(self, package_id: str) -> UpdateMediaBuyError:
         return UpdateMediaBuyError(
             errors=[
                 Error(
-                    code="pending_credentials",
-                    message="SpringServe live-mode update_media_buy lands in Stage 2",
+                    code="package_not_found",
+                    message=f"No SpringServe demand tag found for package_id={package_id!r}",
                     details=None,
                 )
             ]

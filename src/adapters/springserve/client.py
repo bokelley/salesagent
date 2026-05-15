@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import requests
 
+from src.adapters.springserve._campaigns import SpringServeCampaignsClient
+from src.adapters.springserve._demand_tags import SpringServeDemandTagsClient
 from src.adapters.springserve._transport import (
     DEFAULT_BASE_URL,
     DEFAULT_TIMEOUT,
@@ -47,11 +49,10 @@ __all__ = [
 class SpringServeClient:
     """Composed SpringServe API client.
 
-    Stage 1 exposes the raw transport for connectivity probing and
-    auth verification. Stage 2 will add namespaced clients
-    (``client.campaigns``, ``client.demand_tags``, ``client.creatives``,
-    ``client.supply``, ``client.reporting``) that compose typed entity
-    CRUD methods on top of the transport.
+    ``client.campaigns`` and ``client.demand_tags`` expose typed CRUD over
+    the two write surfaces the adapter cares about today. Future stages
+    add ``client.creatives``, ``client.supply``, and ``client.reporting``
+    against the same transport.
     """
 
     def __init__(
@@ -72,6 +73,8 @@ class SpringServeClient:
             timeout=timeout,
             session=session,
         )
+        self.campaigns = SpringServeCampaignsClient(self._transport)
+        self.demand_tags = SpringServeDemandTagsClient(self._transport)
 
     # ----- connectivity -----
 

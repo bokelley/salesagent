@@ -1,11 +1,13 @@
-"""Live SpringServe API smoke test (Stage 1).
+"""Live SpringServe API smoke test (Stages 1 + 2).
 
-Exercises the SpringServe transport against the real API: token minting
-(or static-token use), basic read probes against the endpoints the
-adapter depends on. Skipped by default; runs only when credentials are
-provisioned via env vars.
+Exercises the SpringServe client against the real API:
 
-Provide ONE of:
+* Stage 1 — token minting and per-endpoint scope probes.
+* Stage 2 — full Campaign + Demand Tag create-then-cleanup cycle, plus
+  pause/resume at both levels.
+
+Skipped by default; runs only when credentials are provisioned via env
+vars. Provide ONE of:
 
     SPRINGSERVE_TEST_API_TOKEN          (pre-minted, 2hr TTL)
 
@@ -14,6 +16,10 @@ or both of:
     SPRINGSERVE_USERNAME (or SPRINGSERVE_TEST_EMAIL)
     SPRINGSERVE_PASSWORD (or SPRINGSERVE_TEST_PASSWORD)
 
+The write cycle additionally needs::
+
+    SPRINGSERVE_TEST_DEMAND_PARTNER_ID  (int; defaults to 88061 for Talpa)
+
 (SpringServe's auth field is named ``email`` in their API but takes the
 account login -- the username and email names are accepted interchangeably.)
 
@@ -21,18 +27,21 @@ Run with::
 
     uv run pytest tests/integration/test_springserve_live.py -m live -v
 
-Stage 1 does NOT write anything. Stage 2 adds the live create+delete
-round-trip for Campaigns + Demand Tags.
+Created entities are tagged with ``adcp-stage2-smoke-<uuid>`` in their
+``secondary_code`` so any orphans from a failed cleanup are easy to
+identify and reap by hand.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.adapters.springserve import SpringServeClient
+from src.adapters.springserve import SpringServeClient, SpringServeError
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +72,7 @@ def _build_client() -> SpringServeClient:
     if email and password:
         return SpringServeClient(email=email, password=password)
     pytest.skip(
-        f"Live SpringServe test requires {API_TOKEN_ENV} or "
-        f"({'/'.join(EMAIL_ENVS)} + {'/'.join(PASSWORD_ENVS)})"
+        f"Live SpringServe test requires {API_TOKEN_ENV} or ({'/'.join(EMAIL_ENVS)} + {'/'.join(PASSWORD_ENVS)})"
     )
 
 
@@ -112,3 +120,109 @@ class TestPermissionsProbe:
             logger.info("SpringServe %s OK (HTTP %s) feature=%s", path, status, feature)
         # The probe itself must complete; auth failures fail loudly.
         assert status != 0, f"probe to {path} produced no status"
+
+
+# ----- Stage 2 -----
+
+DEMAND_PARTNER_ID_ENV = "SPRINGSERVE_TEST_DEMAND_PARTNER_ID"
+DEFAULT_TALPA_DEMAND_PARTNER_ID = 88061
+
+
+@pytest.fixture
+def demand_partner_id() -> int:
+    return int(os.environ.get(DEMAND_PARTNER_ID_ENV, str(DEFAULT_TALPA_DEMAND_PARTNER_ID)))
+
+
+@pytest.fixture
+def smoke_label() -> str:
+    """Short unique label so concurrent runs and orphan reaping stay sane."""
+    return f"adcp-stage2-smoke-{uuid.uuid4().hex[:8]}"
+
+
+class TestWriteRoundTrip:
+    """Live create→check→pause→resume→delete cycle for Campaign + Demand Tag.
+
+    All created entities are deleted in a finally-cleanup so a failed test
+    doesn't leave orphans on the account. Look for ``adcp-stage2-smoke-*``
+    in ``secondary_code`` if cleanup ever misses one.
+    """
+
+    def test_full_cycle(self, client: SpringServeClient, demand_partner_id: int, smoke_label: str):
+        from src.adapters.springserve import SpringServeForbiddenError
+
+        start = datetime.now(UTC) + timedelta(days=7)
+        end = start + timedelta(days=14)
+        campaign = None
+        demand_tag = None
+        try:
+            # Create campaign (paused).
+            try:
+                campaign = client.campaigns.create(
+                    name=smoke_label,
+                    demand_partner_id=demand_partner_id,
+                    is_active=False,
+                    secondary_code=smoke_label,
+                    note="AdCP Stage 2 live smoke test -- safe to delete",
+                    rate_currency="EUR",
+                )
+            except SpringServeForbiddenError as exc:
+                pytest.skip(
+                    "SpringServe POST /campaigns scope not granted on this account "
+                    f"({exc.status_code}: {exc.body}). Ask SpringServe support to enable "
+                    "write scope on Campaigns + Demand Tags for the API user."
+                )
+            assert campaign.id > 0
+            assert campaign.demand_partner_id == demand_partner_id
+            assert campaign.is_active is False
+            logger.info("created campaign id=%s name=%s", campaign.id, campaign.name)
+
+            # Create one demand tag (also paused) under the campaign.
+            demand_tag = client.demand_tags.create(
+                name=f"{smoke_label}_dt_1",
+                campaign_id=campaign.id,
+                demand_partner_id=demand_partner_id,
+                start_date=start,
+                end_date=end,
+                format="video",
+                rate=0.01,  # nominal CPM; tag is inactive anyway
+                rate_currency="EUR",
+                is_active=False,
+                secondary_code="pkg_smoke",
+                note="Stage 2 demand tag -- safe to delete",
+                country_codes=["NL"],
+            )
+            assert demand_tag.id > 0
+            assert demand_tag.campaign_id == campaign.id
+            assert demand_tag.is_active is False
+            logger.info("created demand_tag id=%s", demand_tag.id)
+
+            # Re-fetch the campaign; demand_tag_ids should include the new tag.
+            campaign_refetched = client.campaigns.get(campaign.id)
+            assert demand_tag.id in campaign_refetched.demand_tag_ids
+
+            # Resume + re-pause cycle at the demand-tag level.
+            client.demand_tags.update(demand_tag.id, is_active=True)
+            refetched_dt = client.demand_tags.get(demand_tag.id)
+            assert refetched_dt.is_active is True
+
+            client.demand_tags.update(demand_tag.id, is_active=False)
+            assert client.demand_tags.get(demand_tag.id).is_active is False
+
+            # Resume + re-pause cycle at the campaign level.
+            client.campaigns.update(campaign.id, is_active=True)
+            assert client.campaigns.get(campaign.id).is_active is True
+            client.campaigns.update(campaign.id, is_active=False)
+            assert client.campaigns.get(campaign.id).is_active is False
+        finally:
+            # Best-effort cleanup; log but don't re-raise so the actual
+            # assertion failure (if any) propagates.
+            if demand_tag is not None:
+                try:
+                    client.demand_tags.delete(demand_tag.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete demand_tag %s: %s", demand_tag.id, exc)
+            if campaign is not None:
+                try:
+                    client.campaigns.delete(campaign.id)
+                except SpringServeError as exc:
+                    logger.warning("cleanup: failed to delete campaign %s: %s", campaign.id, exc)

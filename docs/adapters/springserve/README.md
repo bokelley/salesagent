@@ -13,12 +13,10 @@ direct-sold CTV, online video, and audio inventory.
 
 ## Status
 
-Stage 1 (skeleton + auth + dry-run) ships in this commit. Subsequent stages:
-
 | Stage | Goal | Status |
 |---|---|---|
-| 1 | Skeleton + auth + dry-run | ✅ this commit |
-| 2 | Live Campaign + Demand Tag create | ⏳ next |
+| 1 | Skeleton + auth + dry-run | ✅ shipped |
+| 2 | Live Campaign + Demand Tag create | 🟡 code complete, **blocked on write scope grant** |
 | 3 | Creatives (incl. audio MIME negotiation) | ⏳ |
 | 4 | Reporting cache + sync | ⏳ |
 | 5 | Inventory cache + admin UI + typed embedder config | ⏳ |
@@ -74,24 +72,37 @@ API surface as video, with audio MIME types (`audio/mp4`, `audio/mpeg`,
 SpringServe connection handles both, with the AdCP `Format.type`
 discrimination (`video` vs `audio`) driving creative MIME negotiation.
 
-## Scope coverage (Stage 1 live probe, 2026-05-14)
+## Scope coverage (live probe, 2026-05-14)
 
 Token mint succeeds; per-endpoint scope on the operator's test account:
 
-| Endpoint | Status | Verdict |
-|---|---|---|
-| `POST /auth` | ✅ 200 | Token mint works (2-hour TTL) |
-| `GET /campaigns` | ✅ 200 | Stage 2 unblocked |
-| `GET /demand_tags` | ✅ 200 | Stage 2 unblocked |
-| `GET /videos` | ✅ 200 | Stage 3 unblocked |
-| `GET /supply_tags` | ❌ 403 | **Stage 5 blocked — request supply-side read scope from SpringServe support** |
-| `GET /supply_partners` | ❌ 403 | **Stage 5 blocked — same scope grant unblocks both** |
-| `GET /report` | ⏳ 404 | POST-only endpoint; probe shape replaced with a real POST in Stage 4 |
+| Endpoint | Method | Status | Verdict |
+|---|---|---|---|
+| `/auth` | POST | ✅ 200 | Token mint works (2-hour TTL) |
+| `/campaigns` | GET | ✅ 200 | Stage 1 reads unblocked |
+| `/campaigns` | POST | ❌ 403 | **Stage 2 write scope needed — `"You are not authorized to access this page."`** |
+| `/demand_tags` | GET | ✅ 200 | Stage 1 reads unblocked |
+| `/demand_tags` | POST | ❌ 403 | **Stage 2 write scope needed (same grant covers both)** |
+| `/videos` | GET | ✅ 200 | Stage 3 reads unblocked; POST scope TBD |
+| `/supply_tags` | GET | ❌ 403 | **Stage 5 blocked — request supply-side read scope** |
+| `/supply_partners` | GET | ❌ 403 | **Stage 5 blocked — same grant unblocks both** |
+| `/report` | GET | ⏳ 404 | POST-only endpoint; probe shape replaced with real POST in Stage 4 |
 
-The demand-side write paths (Campaigns, Demand Tags, Videos) are all
-unblocked, so Stage 2 (live create_media_buy against a Talpa test account)
-can proceed without any further scope asks. Stage 5 (inventory cache) is
-gated on a single scope-grant ticket with SpringServe.
+### Scope grants to request from SpringServe support
+
+The Talpa API user has read scope on Campaigns / Demand Tags / Videos but
+no write scope and no supply-side read scope. Open a SpringServe support
+ticket asking for the following on the API user attached to the Talpa
+demand partner (88061):
+
+1. **WRITE scope on Campaigns + Demand Tags + Videos** — unblocks Stage 2
+   live `create_media_buy` end-to-end (Stage 2 code is complete and
+   verified by mocked unit tests; the live cycle test skips with a clear
+   message until this grant lands).
+2. **READ scope on Supply Tags + Supply Partners** — unblocks Stage 5
+   (inventory cache + admin product config UI).
+3. **Reporting API access** — covered in Stage 4; ask for it at the same
+   time to avoid a second round-trip.
 
 ## Rate limits
 
