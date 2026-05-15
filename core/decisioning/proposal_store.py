@@ -166,12 +166,21 @@ def get_proposal_store() -> _LazyOpenPgProposalStore:
             return _STORE
 
         _POOL = _build_pool()
+        # ``table_name="proposals"`` matches the salesagent migration
+        # ``t2u3v4w5x6y7_swap_to_pg_proposal_store_schema``. The upstream
+        # default is ``adcp_proposal_drafts``, which we deliberately
+        # don't use — our table predates the upstream wireup (PR #390
+        # created it as ``proposals``) and renaming would force every
+        # existing tenant through a no-op rename migration with zero
+        # functional gain. Schema columns + indexes match upstream's
+        # expected shape; only the table identifier differs.
+        #
         # Default ``recipe_decoder`` (``Recipe.model_validate``) is
         # correct — ``SalesAgentProposalManager`` only stores the base
         # ``Recipe`` shape today. If a typed subclass (GAMRecipe, etc.)
         # lands later, supply a ``recipe_decoder=`` here that branches
         # on ``payload.get("recipe_kind")``.
-        _STORE = _LazyOpenPgProposalStore(pool=_POOL)
+        _STORE = _LazyOpenPgProposalStore(pool=_POOL, table_name="proposals")
         logger.info("PgProposalStore constructed (pool will open on first async use)")
         return _STORE
 
