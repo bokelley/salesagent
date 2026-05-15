@@ -78,6 +78,28 @@ def _reset_replay_store() -> None:
     mod.reset_for_tests()
 
 
+def _reset_proposal_store() -> None:
+    """Reset the process-wide PgProposalStore singleton + async pool.
+
+    Same shape as ``_reset_idempotency_store`` / ``_reset_replay_store``.
+    ``core.decisioning.proposal_store`` caches an :class:`AsyncConnectionPool`
+    bound to the first-call ``DATABASE_URL``; without reset between tests,
+    a later test that triggers ``proposal_store_factory`` would acquire a
+    connection to a dropped per-test DB and ``PoolTimeout`` after 30s.
+
+    Preventive — no current integration test exercises the proposal path
+    (the dedicated suite was removed when ``SalesAgentProposalStore`` was
+    replaced by upstream ``PgProposalStore``), but the bug is identical
+    to the one fixed in PR #134 and the helper already exists.
+    """
+    import sys
+
+    mod = sys.modules.get("core.decisioning.proposal_store")
+    if mod is None:
+        return
+    mod.reset_for_tests()
+
+
 def _import_all_models() -> None:
     """Import all ORM models so Base.metadata knows about every table.
 
@@ -171,12 +193,14 @@ def make_integration_db(
     src.core.context_manager._context_manager_instance = None
 
     # Reset every process-wide cache that holds a psycopg pool — idempotency
-    # store and replay store both bind their pool to whatever DATABASE_URL was
-    # live on first use. Without a reset between tests, the pool keeps trying
-    # to connect to a previous test's database (now dropped) and every later
-    # request that needs the cache hits psycopg's 30s PoolTimeout.
+    # store, replay store, and proposal store all bind their pool to whatever
+    # DATABASE_URL was live on first use. Without a reset between tests, the
+    # pool keeps trying to connect to a previous test's database (now dropped)
+    # and every later request that needs the cache hits psycopg's 30s
+    # PoolTimeout.
     _reset_idempotency_store()
     _reset_replay_store()
+    _reset_proposal_store()
 
     # ── Yield ───────────────────────────────────────────────────────────
     try:
@@ -187,6 +211,7 @@ def make_integration_db(
         src.core.context_manager._context_manager_instance = None
         _reset_idempotency_store()
         _reset_replay_store()
+        _reset_proposal_store()
         engine.dispose()
 
         # Restore environment

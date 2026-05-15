@@ -123,6 +123,16 @@ def reset_for_tests() -> None:
     Per-test databases (see ``tests/fixtures/integration_db.py``) need
     to rebuild the pool against a fresh ``DATABASE_URL``. The lock is
     re-entered to guarantee no other caller is mid-construction.
+
+    Does NOT await pool close — by design. Per-test teardown runs in
+    sync test scope, and the pool's worker tasks are bound to a foreign
+    event loop (the production ``serve()`` loop, or the pytest-asyncio
+    loop from the prior test). Awaiting close would either deadlock
+    (running loop) or orphan the cleanup (closed loop). Process exit
+    at end of the pytest run reclaims the underlying sockets. Tests
+    that re-use the same process between integration runs and care
+    about clean pool shutdown must ``await close_proposal_store()``
+    before calling this helper.
     """
     global _STORE, _POOL
     with _LOCK:
