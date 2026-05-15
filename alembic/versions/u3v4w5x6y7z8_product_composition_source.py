@@ -71,14 +71,10 @@ def upgrade() -> None:
         "products",
         sa.Column("composed_by_principal_id", sa.String(50), nullable=True),
     )
-    op.create_foreign_key(
-        "fk_products_composed_by_principal",
-        "products",
-        "principals",
-        ["tenant_id", "composed_by_principal_id"],
-        ["tenant_id", "principal_id"],
-        ondelete="SET NULL",
-    )
+    # No FK to principals: a composite FK with ondelete=SET NULL would try
+    # to null both columns of the composite (including tenant_id, which is
+    # NOT NULL on products). Principal existence is validated at the API
+    # boundary; tenant scoping is enforced via the existing tenant_id PK.
 
     op.add_column(
         "products",
@@ -119,11 +115,6 @@ def downgrade() -> None:
     op.drop_column("products", "custom_targeting_profile_ids")
     op.drop_index("idx_products_idempotency_key", table_name="products")
     op.drop_column("products", "idempotency_key")
-    op.drop_constraint(
-        "fk_products_composed_by_principal",
-        "products",
-        type_="foreignkey",
-    )
     op.drop_column("products", "composed_by_principal_id")
     op.drop_column("products", "composition_source")
 

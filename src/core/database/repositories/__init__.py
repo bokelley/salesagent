@@ -19,7 +19,10 @@ from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
 from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.custom_targeting_profile import CustomTargetingProfileRepository
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -36,8 +39,11 @@ __all__ = [
     "AuditLogRepository",
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
+    "CustomTargetingProfileRepository",
+    "InventoryProfileRepository",
     "MediaBuyRepository",
     "MediaBuyUoW",
+    "PrincipalRepository",
     "ProductRepository",
     "ProductUoW",
     "SyncJobRepository",

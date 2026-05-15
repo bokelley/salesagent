@@ -687,6 +687,13 @@ def create_app(config=None):
         logger.warning("tenant_management_api blueprint not found")
 
     try:
+        from src.admin.composition_api import composition_api
+
+        app.register_blueprint(composition_api)
+    except ImportError:
+        logger.warning("composition_api blueprint not found")
+
+    try:
         from src.admin.sync_api import sync_api
 
         app.register_blueprint(sync_api, url_prefix="/api/sync")

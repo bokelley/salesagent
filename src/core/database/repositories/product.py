@@ -67,6 +67,25 @@ class ProductRepository:
             )
         ).first()
 
+    def find_composed_by_idempotency_key(
+        self,
+        principal_id: str,
+        idempotency_key: str,
+    ) -> Product | None:
+        """Replay lookup for POST /api/v1/products.
+
+        Unique on (tenant_id, composed_by_principal_id, idempotency_key) when
+        non-null — see migration ``u3v4w5x6y7z8``. Returns the previously
+        composed Product so the storefront sees the same product_id on retry.
+        """
+        return self._session.scalars(
+            select(Product).where(
+                Product.tenant_id == self._tenant_id,
+                Product.composed_by_principal_id == principal_id,
+                Product.idempotency_key == idempotency_key,
+            )
+        ).first()
+
     # ------------------------------------------------------------------
     # List queries
     # ------------------------------------------------------------------

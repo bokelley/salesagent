@@ -595,12 +595,9 @@ class Product(Base, JSONValidatorMixin):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
-        ForeignKeyConstraint(
-            ["tenant_id", "composed_by_principal_id"],
-            ["principals.tenant_id", "principals.principal_id"],
-            name="fk_products_composed_by_principal",
-            ondelete="SET NULL",
-        ),
+        # composed_by_principal_id has no FK constraint — see migration
+        # u3v4w5x6y7z8 for the rationale. Principal existence is validated
+        # at the API boundary.
         # Enforce AdCP spec: products must have EITHER properties OR property_tags (not both, not neither)
         CheckConstraint(
             "(properties IS NOT NULL AND property_tags IS NULL) OR (properties IS NULL AND property_tags IS NOT NULL)",
