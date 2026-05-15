@@ -65,7 +65,7 @@ from sqlalchemy import select
 # evicts the webhook-signing credential cache on commit. Must run before
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
-from core.decisioning.proposal_store import close_proposal_store, get_proposal_store, open_proposal_store
+from core.decisioning.proposal_store import close_proposal_store, get_proposal_store
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.platforms.gam import GamPlatform
@@ -528,13 +528,12 @@ def _serve_kwargs(
     # (adcp 5.4.0 #713). transport="both" is required for these to fire,
     # which we already pass below.
     #
-    # ``open_proposal_store`` opens the async psycopg3 pool on
-    # serve()'s loop so worker tasks bind to the right loop;
-    # ``close_proposal_store`` shuts it down cleanly so in-flight
-    # connections drain before serve() exits. Both always run
-    # regardless of ``include_scheduler`` — the pool is tied to
-    # serve()'s loop, not to background-job lifecycle.
-    on_startup = [open_proposal_store, _start_schedulers] if include_scheduler else [open_proposal_store]
+    # PgProposalStore's pool opens lazily on first method call via
+    # ``_LazyOpenPgProposalStore`` — no ``on_startup`` entry needed,
+    # which is the right behavior for integration tests that rebuild
+    # the store against per-test databases. ``close_proposal_store``
+    # on shutdown drains in-flight connections before serve() exits.
+    on_startup = [_start_schedulers] if include_scheduler else None
     on_shutdown = [_stop_schedulers, close_proposal_store] if include_scheduler else [close_proposal_store]
 
     return {
@@ -676,11 +675,11 @@ def build_app():
         enable_dns_rebinding_protection=False,
         auth=kwargs["auth"],
         pre_validation_hooks=pre_validation_hooks,
-        # Lifespan hooks must propagate to the in-process app so
-        # ``open_proposal_store`` runs and binds the psycopg3 async
-        # pool to the test harness's loop. ``main()``'s ``serve()``
-        # call wires these natively; ``build_app`` has to forward
-        # them explicitly because it bypasses ``serve``.
+        # Forward lifespan hooks so the proposal-store close hook
+        # fires on shutdown (``open_proposal_store`` is gone — pool
+        # opens lazily on first async call now). ``main()``'s
+        # ``serve()`` call wires these natively; ``build_app`` has
+        # to forward them explicitly because it bypasses ``serve``.
         on_startup=kwargs["on_startup"],
         on_shutdown=kwargs["on_shutdown"],
     )

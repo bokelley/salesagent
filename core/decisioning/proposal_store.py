@@ -28,19 +28,91 @@ shape (no typed subclasses like GAMRecipe), so the default works.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from adcp.decisioning.pg.proposal_store import PgProposalStore as _UpstreamPgProposalStore
 
 if TYPE_CHECKING:
-    from adcp.decisioning.pg.proposal_store import PgProposalStore
     from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
 
+
+class _LazyOpenPgProposalStore(_UpstreamPgProposalStore):
+    """Subclass that opens its pool on the first async method call.
+
+    Why: ``serve()``'s ``on_startup`` lifespan hook fires once at app
+    startup, binding the pool to whichever ``DATABASE_URL`` was live at
+    that moment. Integration tests rebuild the proposal-store singleton
+    against per-test databases (``_reset_proposal_store()`` between
+    cases) — each rebuild produces a new ``AsyncConnectionPool`` that
+    needs to be opened against its current DSN. Relying on lifespan
+    would leave subsequent test pools closed against fresh DSNs.
+
+    Same shape as :class:`core.idempotency._LazyBootstrapPgBackend`.
+    The pool open is on the live event loop, runs once per pool, and
+    is mutex-guarded so concurrent first-callers don't race the open
+    side-effect.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # ``asyncio.Lock`` binds to a loop at construction; defer
+        # creation until first use so we attach to the live loop.
+        self._open_lock: asyncio.Lock | None = None
+        self._opened = False
+
+    async def _ensure_open(self) -> None:
+        if self._opened:
+            return
+        if self._open_lock is None:
+            self._open_lock = asyncio.Lock()
+        async with self._open_lock:
+            if self._opened:
+                return
+            await self._pool.open()
+            self._opened = True
+            logger.info("PgProposalStore pool opened on first async use")
+
+    async def put_draft(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().put_draft(*args, **kwargs)
+
+    async def get(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().get(*args, **kwargs)
+
+    async def try_reserve_consumption(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().try_reserve_consumption(*args, **kwargs)
+
+    async def commit(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().commit(*args, **kwargs)
+
+    async def mark_consumed(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().mark_consumed(*args, **kwargs)
+
+    async def discard(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().discard(*args, **kwargs)
+
+    async def release_consumption(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().release_consumption(*args, **kwargs)
+
+    async def get_by_media_buy_id(self, *args: Any, **kwargs: Any) -> Any:
+        await self._ensure_open()
+        return await super().get_by_media_buy_id(*args, **kwargs)
+
+
 _LOCK = threading.Lock()
-_STORE: PgProposalStore | None = None
+_STORE: _LazyOpenPgProposalStore | None = None
 _POOL: AsyncConnectionPool | None = None
 
 
@@ -74,14 +146,16 @@ def _build_pool() -> AsyncConnectionPool:
     )
 
 
-def get_proposal_store() -> PgProposalStore:
-    """Return the process-wide :class:`PgProposalStore` singleton.
+def get_proposal_store() -> _LazyOpenPgProposalStore:
+    """Return the process-wide proposal store singleton.
 
-    Lazy + thread-safe. The pool opens on the first async store method
-    call, on whatever event loop is running at that point — which means
-    it binds to ``serve()``'s loop, not whatever transient loop
-    constructed the store. Same rationale as
-    :class:`core.idempotency._LazyBootstrapPgBackend`.
+    Lazy + thread-safe. The pool is constructed here (sync, doesn't
+    talk to the DB) and opened on the first async method call via
+    :class:`_LazyOpenPgProposalStore._ensure_open` — which runs on
+    whatever event loop dispatches it. This pattern survives test
+    re-instantiation (``_reset_proposal_store`` between per-test DBs)
+    because every rebuilt singleton opens its own pool against its
+    current ``DATABASE_URL`` on first call.
     """
     global _STORE, _POOL
     if _STORE is not None:
@@ -91,40 +165,15 @@ def get_proposal_store() -> PgProposalStore:
         if _STORE is not None:
             return _STORE
 
-        from adcp.decisioning.pg.proposal_store import PgProposalStore
-
         _POOL = _build_pool()
         # Default ``recipe_decoder`` (``Recipe.model_validate``) is
         # correct — ``SalesAgentProposalManager`` only stores the base
         # ``Recipe`` shape today. If a typed subclass (GAMRecipe, etc.)
         # lands later, supply a ``recipe_decoder=`` here that branches
         # on ``payload.get("recipe_kind")``.
-        _STORE = PgProposalStore(pool=_POOL)
+        _STORE = _LazyOpenPgProposalStore(pool=_POOL)
         logger.info("PgProposalStore constructed (pool will open on first async use)")
         return _STORE
-
-
-async def open_proposal_store() -> None:
-    """Construct the store (if not already) and open its pool on the
-    current event loop. Wired into ``serve(on_startup=...)``.
-
-    Must run on the same loop that later dispatches store method calls
-    — psycopg3's :class:`AsyncConnectionPool` binds its worker tasks to
-    whichever loop ran ``open()``. Calling ``open()`` from a transient
-    bootstrap loop (e.g. ``asyncio.run`` inside a sync factory) would
-    leave the workers tied to a closed loop once ``serve()`` takes
-    over and the first acquire would hang forever.
-
-    Idempotent — :meth:`AsyncConnectionPool.open` is a no-op if the
-    pool is already open.
-    """
-    store = get_proposal_store()  # ensures _POOL singleton exists
-    assert _POOL is not None
-    await _POOL.open()
-    # Touch ``store`` so the construction visibly succeeds in
-    # startup logs (and so static analysis doesn't flag the var as
-    # unused).
-    logger.info("PgProposalStore pool opened (store=%r)", type(store).__name__)
 
 
 async def close_proposal_store() -> None:
