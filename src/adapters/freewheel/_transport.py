@@ -22,12 +22,13 @@ Exactly one of the two paths must be provided.
 from __future__ import annotations
 
 import logging
-import time
 import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import urlencode
 
 import requests
+
+from src.adapters._token_cache import BearerTokenCache
 
 logger = logging.getLogger(__name__)
 
@@ -97,16 +98,16 @@ class FreeWheelTransport:
         if not has_password_grant and not has_token:
             raise ValueError("FreeWheelTransport requires either api_token or (username + password)")
 
-        self._static_token = api_token if has_token else None
         self._username = username
         self._password = password
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._session = session or requests.Session()
-
-        # Cache for tokens minted from username + password.
-        self._cached_token: str | None = None
-        self._cached_token_expires_at: float = 0.0
+        self._token_cache = BearerTokenCache(
+            static_token=api_token if has_token else None,
+            mint_fn=self._mint_token if has_password_grant else None,
+            refresh_leeway_seconds=_REFRESH_LEEWAY_SECONDS,
+        )
 
     # ----- public methods -----
 
@@ -191,14 +192,15 @@ class FreeWheelTransport:
 
     def _current_token(self) -> str:
         """Return a valid bearer, minting/refreshing if needed."""
-        if self._static_token is not None:
-            return self._static_token
-        if self._cached_token and time.time() < self._cached_token_expires_at:
-            return self._cached_token
-        return self._mint_token()
+        return self._token_cache.current()
 
-    def _mint_token(self) -> str:
-        """OAuth2 password grant: POST /auth/token to mint a fresh bearer."""
+    def _mint_token(self) -> tuple[str, float]:
+        """OAuth2 password grant: POST /auth/token to mint a fresh bearer.
+
+        Returns ``(token, ttl_seconds)`` for :class:`BearerTokenCache` to
+        cache with. FreeWheel issues 7-day tokens by default; the actual
+        TTL is read from the ``expires_in`` field of the response.
+        """
         assert self._username and self._password  # enforced in __init__
         url = f"{self.base_url}/auth/token"
         response = self._session.post(
@@ -224,15 +226,9 @@ class FreeWheelTransport:
                 status_code=response.status_code,
                 body=response.text,
             )
-        # Default to 7-day TTL if expires_in isn't returned. Clamp the leeway
-        # to half the TTL so shorter-lived tokens don't trigger refresh on
-        # every call.
         expires_in = float(body.get("expires_in", 7 * 24 * 60 * 60))
-        leeway = min(_REFRESH_LEEWAY_SECONDS, expires_in / 2)
-        self._cached_token = token
-        self._cached_token_expires_at = time.time() + expires_in - leeway
         logger.info("FreeWheel: minted bearer token (expires_in=%s)", int(expires_in))
-        return token
+        return token, expires_in
 
     def _request(
         self,
@@ -247,10 +243,9 @@ class FreeWheelTransport:
         response = self._do_request(method, path, accept, params, body, content_type)
         # If we're using a minted token and got a 401, the token might have
         # rolled prematurely. Try one refresh + retry before propagating.
-        if response.status_code == 401 and self._static_token is None and self._username:
+        if response.status_code == 401 and self._token_cache.has_mint:
             logger.info("FreeWheel: 401 with cached token; minting fresh and retrying")
-            self._cached_token = None
-            self._cached_token_expires_at = 0.0
+            self._token_cache.invalidate()
             response = self._do_request(method, path, accept, params, body, content_type)
         self._raise_for_status(response, method, path)
         return response

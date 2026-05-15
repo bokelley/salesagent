@@ -1,0 +1,259 @@
+"""Tests for the SpringServe adapter -- registry wiring, dry-run, init."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+
+import pytest
+
+from src.adapters import get_adapter_default_channels, get_adapter_schemas
+from src.adapters.springserve import SpringServeAdapter
+from src.adapters.springserve.schemas import SpringServeConnectionConfig, SpringServeProductConfig
+from tests.helpers.adapter_test_helpers import (
+    invoke_create_media_buy,
+    make_sample_create_request,
+    make_sample_video_package,
+)
+
+
+@pytest.fixture
+def mock_principal():
+    principal = MagicMock()
+    principal.name = "video_advertiser"
+    principal.principal_id = "principal_ss_1"
+    # SpringServe Demand Partner IDs are integers; the adapter casts the
+    # returned value to int.
+    principal.get_adapter_id.return_value = "42"
+    principal.platform_mappings = {"springserve": {"demand_partner_id": "42"}}
+    return principal
+
+
+@pytest.fixture
+def sample_request():
+    return make_sample_create_request()
+
+
+@pytest.fixture
+def sample_packages():
+    return [make_sample_video_package()]
+
+
+class TestRegistry:
+    def test_get_adapter_schemas_returns_springserve_classes(self):
+        schemas = get_adapter_schemas("springserve")
+        assert schemas is not None
+        assert schemas.connection_config is SpringServeConnectionConfig
+        assert schemas.product_config is SpringServeProductConfig
+        assert schemas.capabilities.inventory_entity_label == "Supply Tags"
+
+    def test_default_channels_cover_video_and_audio(self):
+        channels = get_adapter_default_channels("springserve")
+        assert "olv" in channels
+        assert "ctv" in channels
+        assert "streaming_audio" in channels
+        assert "podcast" in channels
+
+    def test_default_delivery_measurement_is_springserve(self):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=MagicMock(get_adapter_id=MagicMock(return_value="42")),
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        assert adapter.default_delivery_measurement == {"provider": "springserve"}
+
+
+class TestCapabilities:
+    def _dry_run_adapter(self, mock_principal):
+        return SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+
+    def test_supported_pricing_models(self, mock_principal):
+        adapter = self._dry_run_adapter(mock_principal)
+        assert adapter.get_supported_pricing_models() == {"cpm", "flat_rate"}
+
+    def test_targeting_capabilities(self, mock_principal):
+        adapter = self._dry_run_adapter(mock_principal)
+        caps = adapter.get_targeting_capabilities()
+        assert caps.geo_countries is True
+        assert caps.geo_regions is True
+        assert caps.nielsen_dma is True
+        assert caps.us_zip is False  # postal targeting unsupported
+
+    def test_creative_formats_include_video_and_audio(self, mock_principal):
+        adapter = self._dry_run_adapter(mock_principal)
+        formats = adapter.get_creative_formats()
+        # Six video + four audio
+        format_ids = [f["format_id"]["id"] for f in formats]
+        assert "springserve_video_15s_pre_roll" in format_ids
+        assert "springserve_video_30s_post_roll" in format_ids
+        assert "springserve_audio_15s_pre_roll" in format_ids
+        assert "springserve_audio_30s_mid_roll" in format_ids
+
+        video_types = {f["type"] for f in formats}
+        assert video_types == {"video", "audio"}
+
+
+class TestAdapterDryRun:
+    def test_dry_run_creates_buy_without_calling_client(self, mock_principal, sample_request, sample_packages):
+        adapter = SpringServeAdapter(
+            config={"api_token": "test-token"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+        assert response.packages is not None
+        assert len(response.packages) == 1
+        assert response.media_buy_id.startswith("springserve_")
+        assert adapter._client is None
+
+    def test_dry_run_rejects_postal_targeting(self, mock_principal, sample_request, sample_packages):
+        from src.core.schemas import Targeting
+
+        sample_packages[0] = sample_packages[0].model_copy(
+            update={
+                "targeting_overlay": Targeting(
+                    geo_countries=["US"],
+                    geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
+                )
+            }
+        )
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+        assert hasattr(response, "errors")
+        assert response.errors[0].code == "unsupported_targeting"
+
+    def test_live_mode_requires_credentials(self, mock_principal):
+        with pytest.raises(ValueError, match="email \\+ password.*or api_token"):
+            SpringServeAdapter(
+                config={},
+                principal=mock_principal,
+                dry_run=False,
+                tenant_id="tenant_ss_1",
+            )
+
+    def test_live_mode_requires_demand_partner_id(self):
+        principal = MagicMock()
+        principal.principal_id = "principal_no_dp"
+        principal.get_adapter_id.return_value = None  # no mapping
+
+        with pytest.raises(ValueError, match="demand_partner_id"):
+            SpringServeAdapter(
+                config={"api_token": "tok"},
+                principal=principal,
+                dry_run=False,
+                tenant_id="tenant_ss_1",
+            )
+
+    def test_default_demand_partner_id_fallback(self):
+        principal = MagicMock()
+        principal.principal_id = "principal_no_mapping"
+        principal.get_adapter_id.return_value = None  # no per-principal mapping
+
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok", "default_demand_partner_id": 99},
+            principal=principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        assert adapter.demand_partner_id == 99
+
+
+class TestStage1LiveStubs:
+    """Stage 1 live paths return clean pending_credentials errors so callers
+    don't get a misleading success on an unwired path."""
+
+    def _live_adapter(self, mock_principal):
+        return SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+
+    def test_live_create_media_buy_returns_pending_error(self, mock_principal, sample_request, sample_packages):
+        adapter = self._live_adapter(mock_principal)
+        response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+        assert hasattr(response, "errors")
+        assert response.errors[0].code == "pending_credentials"
+
+    def test_live_update_media_buy_returns_pending_error(self, mock_principal):
+        adapter = self._live_adapter(mock_principal)
+        response = adapter.update_media_buy(
+            media_buy_id="springserve_abc",
+            action="pause_media_buy",
+            package_id=None,
+            budget=None,
+            today=datetime.now(UTC),
+        )
+        assert hasattr(response, "errors")
+        assert response.errors[0].code == "pending_credentials"
+
+    def test_update_media_buy_rejects_unknown_action(self, mock_principal):
+        adapter = self._live_adapter(mock_principal)
+        response = adapter.update_media_buy(
+            media_buy_id="springserve_abc",
+            action="banana",
+            package_id=None,
+            budget=None,
+            today=datetime.now(UTC),
+        )
+        assert response.errors[0].code == "unsupported_action"
+
+
+class TestPermissionsProbe:
+    def test_dry_run_reports_no_live_client(self, mock_principal):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        report = adapter.check_permissions()
+        assert report.error is not None
+        assert "Dry-run" in report.error
+        assert report.fully_operational is False
+        assert report.checks == []
+
+    def test_probe_walks_every_endpoint(self, mock_principal):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        # Every probe returns 200 -> all granted, fully_operational.
+        adapter._client = MagicMock()
+        adapter._client.probe.return_value = (200, "")
+
+        report = adapter.check_permissions()
+        # 6 probes: campaigns, demand_tags, videos, supply_tags, supply_partners, report
+        assert len(report.checks) == 6
+        assert all(c.granted for c in report.checks)
+        assert report.fully_operational is True
+
+    def test_probe_marks_403_as_denied(self, mock_principal):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=mock_principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        adapter._client = MagicMock()
+        # All endpoints 403 -- token valid but lacks scope on every surface
+        adapter._client.probe.return_value = (403, "forbidden")
+
+        report = adapter.check_permissions()
+        assert all(not c.granted for c in report.checks)
+        assert report.fully_operational is False

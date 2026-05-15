@@ -21,8 +21,8 @@ from typing import Literal
 
 from pydantic import Field, field_serializer, field_validator, model_validator
 
+from src.adapters._secret_fields import decrypt_secret_value, encrypt_secret_value
 from src.adapters.base import BaseConnectionConfig, BaseProductConfig
-from src.core.utils.encryption import decrypt_api_key, encrypt_api_key, is_encrypted
 
 # Environment -> API host mapping. Tokens are environment-scoped — staging
 # tokens won't work in prod and vice versa.
@@ -73,29 +73,21 @@ class FreeWheelConnectionConfig(BaseConnectionConfig):
 
     @field_serializer("password")
     def _encrypt_password(self, value: str | None) -> str | None:
-        if value is None or value == "":
-            return value
-        return value if is_encrypted(value) else encrypt_api_key(value)
+        return encrypt_secret_value(value)
 
     @field_validator("password", mode="after")
     @classmethod
     def _decrypt_password(cls, value: str | None) -> str | None:
-        if value is None or value == "":
-            return value
-        return decrypt_api_key(value) if is_encrypted(value) else value
+        return decrypt_secret_value(value)
 
     @field_serializer("api_token")
     def _encrypt_token(self, value: str | None) -> str | None:
-        if value is None or value == "":
-            return value
-        return value if is_encrypted(value) else encrypt_api_key(value)
+        return encrypt_secret_value(value)
 
     @field_validator("api_token", mode="after")
     @classmethod
     def _decrypt_token(cls, value: str | None) -> str | None:
-        if value is None or value == "":
-            return value
-        return decrypt_api_key(value) if is_encrypted(value) else value
+        return decrypt_secret_value(value)
 
     @model_validator(mode="after")
     def _require_credentials(self) -> "FreeWheelConnectionConfig":

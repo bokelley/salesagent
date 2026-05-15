@@ -19,16 +19,7 @@ from src.adapters.freewheel._transport import (
     FreeWheelTransport,
     FreeWheelValidationError,
 )
-
-
-def _stub_response(status_code: int, *, content: bytes = b"", text: str = "") -> MagicMock:
-    mock = MagicMock()
-    mock.status_code = status_code
-    mock.ok = 200 <= status_code < 400
-    mock.content = content
-    mock.text = text
-    mock.json.return_value = {} if not content else None
-    return mock
+from tests.helpers.adapter_test_helpers import stub_http_response as _stub_response
 
 
 class TestBearerAuth:

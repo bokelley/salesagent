@@ -869,6 +869,74 @@ class AdServerAdapter(ABC):
             checks=[],
         )
 
+    def _new_permissions_report(self, *, dry_run_message: str | None = None) -> PermissionsReport:
+        """Build an empty :class:`PermissionsReport` scaffold for this adapter.
+
+        ``check_permissions`` subclass implementations call this to get a
+        consistently-populated report shell; when ``dry_run_message`` is
+        supplied and dry-run is active, the report is returned pre-set with
+        ``error`` and ``fully_operational=False`` so the caller can return
+        it immediately without further setup.
+        """
+        report = PermissionsReport(
+            adapter=getattr(self.__class__, "adapter_name", self.__class__.__name__),
+            tenant_id=self.tenant_id,
+            checked_at=datetime.now(UTC),
+            fully_operational=False,
+            checks=[],
+        )
+        if dry_run_message is not None and self.dry_run:
+            report.error = dry_run_message
+        return report
+
+    def _walk_permission_probes(
+        self,
+        report: PermissionsReport,
+        probes: list[tuple[str, str, str, str, bool, str]],
+        probe_fn: Callable[[str, str], tuple[int, str]],
+        *,
+        auth_error_types: tuple[type[Exception], ...] = (),
+    ) -> None:
+        """Run a permission probe matrix into ``report.checks``.
+
+        Each entry in ``probes`` is ``(name, description, method, path,
+        required, feature)``. ``probe_fn(method, path)`` must return
+        ``(status_code, body_snippet)`` without raising on non-2xx; if it
+        does raise an instance of ``auth_error_types`` (e.g. the adapter's
+        auth-error class) the walk stops early and ``report.error`` is
+        populated. The final ``fully_operational`` rollup is set on the
+        report after all probes complete.
+
+        4xx validation errors (400/404/422) count as granted because they
+        prove the endpoint accepts the call -- granted is determined by
+        status NOT in (401, 403).
+        """
+        for name, description, method, path, required, feature in probes:
+            try:
+                status, body = probe_fn(method, path)
+            except auth_error_types as exc:
+                report.error = f"Authentication failed: {exc}"
+                return
+
+            granted = status not in (401, 403)
+            detail: str | None = None
+            if not granted:
+                snippet = body.strip().replace("\n", " ")[:120]
+                detail = f"{status}: {snippet}" if snippet else f"HTTP {status}"
+
+            report.checks.append(
+                PermissionCheck(
+                    name=name,
+                    description=description,
+                    granted=granted,
+                    required=required,
+                    feature=feature,
+                    probe_target=f"{method} {path.split('?', 1)[0]}",
+                    detail=detail,
+                )
+            )
+        report.fully_operational = all(c.granted for c in report.checks if c.required)
+
     def get_creative_formats(self) -> list[dict[str, Any]]:
         """Return creative formats provided by this adapter.
 

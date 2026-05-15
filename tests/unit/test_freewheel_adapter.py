@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import ANY, MagicMock
 
 import pytest
@@ -10,9 +10,11 @@ import pytest
 from src.adapters import get_adapter_default_channels, get_adapter_schemas
 from src.adapters.freewheel import FreeWheelAdapter, FreeWheelClient
 from src.adapters.freewheel.schemas import FreeWheelConnectionConfig, FreeWheelProductConfig
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
-from tests.factories.spec_required_kwargs import required_request_kwargs
-from tests.helpers.adapter_test_helpers import invoke_create_media_buy
+from tests.helpers.adapter_test_helpers import (
+    invoke_create_media_buy,
+    make_sample_create_request,
+    make_sample_video_package,
+)
 
 
 @pytest.fixture
@@ -29,29 +31,12 @@ def mock_principal():
 
 @pytest.fixture
 def sample_request():
-    from tests.helpers.adcp_factories import create_test_package_request
-
-    start = datetime.now(UTC)
-    return CreateMediaBuyRequest(
-        **required_request_kwargs(),
-        brand={"domain": "brand.example.com"},
-        packages=[create_test_package_request(product_id="prod_video_1")],
-        start_time=start,
-        end_time=start + timedelta(days=14),
-    )
+    return make_sample_create_request()
 
 
 @pytest.fixture
 def sample_packages():
-    return [
-        MediaPackage(
-            package_id="pkg_video_1",
-            name="Pre-roll Bundle",
-            delivery_type="guaranteed",
-            impressions=500_000,
-            format_ids=[FormatId(agent_url="https://test.com", id="video_15s")],
-        )
-    ]
+    return [make_sample_video_package()]
 
 
 class TestRegistry:
@@ -166,8 +151,6 @@ class TestLiveCreateMediaBuy:
 
 class TestCheckMediaBuyStatus:
     def test_live_mode_reads_insertion_order_stage(self, mock_principal):
-        from datetime import UTC, datetime
-
         adapter = FreeWheelAdapter(
             config={"api_token": "t"},
             principal=mock_principal,

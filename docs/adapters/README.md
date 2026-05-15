@@ -38,6 +38,18 @@ Connect to Comcast/FreeWheel's Publisher API for video and CTV advertising.
 
 [Get started with FreeWheel](freewheel/)
 
+### [SpringServe (Magnite)](springserve/)
+
+Connect to Magnite's SpringServe ad server for direct-sold CTV, online video, and audio inventory.
+
+- Email + password authentication (with pre-minted token escape hatch)
+- Campaign + Demand Tag creation against `console.springserve.com`
+- Audio + video on the same demand-tag API surface (streaming audio + podcast supported)
+- CPM and FLAT_RATE pricing
+- Stage 1 ships skeleton + auth + dry-run; live writes land in subsequent stages
+
+[Get started with SpringServe](springserve/)
+
 ## Adding a New Adapter
 
 Building support for a new ad server? See the [adapter playbook](adding-a-new-adapter.md) —
@@ -51,6 +63,7 @@ gotchas. FreeWheel is the reference implementation.
 |---------|----------|
 | **GAM** | Production deployments with Google Ad Manager |
 | **FreeWheel** | Video + CTV inventory via Comcast/FreeWheel Publisher API |
+| **SpringServe** | Direct-sold CTV / OLV / audio inventory via Magnite SpringServe |
 | **Mock** | Testing, demos, development |
 
 > Triton Digital is currently parked while their APIs aren't production-ready.

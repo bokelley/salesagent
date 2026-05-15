@@ -76,7 +76,6 @@ from src.adapters.base import (
     AdServerAdapter,
     CreativeEngineAdapter,
     DeliveryDataUnavailable,
-    PermissionCheck,
     PermissionsReport,
     TargetingCapabilities,
 )
@@ -396,32 +395,13 @@ class FreeWheelAdapter(AdServerAdapter):
         }
 
     def check_permissions(self) -> PermissionsReport:
-        """Probe every FW endpoint the adapter depends on, return a report.
-
-        Probes are cheap GETs with one-row pagination where supported. The
-        permission is considered granted unless the upstream returns a hard
-        deny (401/403). 4xx validation errors (400/404/422) prove the
-        endpoint accepts the call — just with a missing query param or
-        body — so they count as granted.
-
-        Auth-level failures (no token, expired refresh, bad credentials)
-        surface on the report as ``error=...`` with all checks granted=False
-        — separating a credentials problem from a per-endpoint scope gap.
-        """
-        report = PermissionsReport(
-            adapter=self.adapter_name,
-            tenant_id=self.tenant_id,
-            checked_at=datetime.now(UTC),
-            fully_operational=False,
-            checks=[],
-        )
-
+        """Probe every FW endpoint the adapter depends on, return a report."""
+        report = self._new_permissions_report(dry_run_message="Dry-run mode — no live FreeWheel client to probe with.")
         if self.dry_run or self._client is None:
-            report.error = "Dry-run mode — no live FreeWheel client to probe with."
             return report
 
         # Each tuple: (name, description, method, path, required, feature)
-        probes = [
+        probes: list[tuple[str, str, str, str, bool, str]] = [
             ("auth_token_info", "Validate bearer token", "GET", "/auth/token/info", True, "auth"),
             (
                 "v4_inventory_sites",
@@ -541,39 +521,22 @@ class FreeWheelAdapter(AdServerAdapter):
 
         from src.adapters.freewheel.client import FreeWheelAuthError
 
+        # FW's transport probe is content-type-aware (v3 paths return XML,
+        # v4 paths return JSON). The base ``_walk_permission_probes`` helper
+        # takes a ``probe_fn(method, path) -> (status, body)`` so we bind
+        # the accept-header selection here.
+        assert self._client is not None  # early-returned above when None
+        client = self._client
+
+        def _probe(method: str, path: str) -> tuple[int, str]:
+            accept = "application/xml" if "/services/v3/" in path else "application/json"
+            return client._transport.probe(method, path, accept=accept)
+
         try:
-            for name, description, method, path, required, feature in probes:
-                try:
-                    accept = "application/xml" if "/services/v3/" in path else "application/json"
-                    status, body = self._client._transport.probe(method, path, accept=accept)
-                except FreeWheelAuthError as exc:
-                    # Auth failure invalidates the whole pass — bail
-                    report.error = f"Authentication failed: {exc}"
-                    return report
-
-                granted = status not in (401, 403)
-                detail: str | None = None
-                if not granted:
-                    snippet = body.strip().replace("\n", " ")[:120]
-                    detail = f"{status}: {snippet}" if snippet else f"HTTP {status}"
-
-                report.checks.append(
-                    PermissionCheck(
-                        name=name,
-                        description=description,
-                        granted=granted,
-                        required=required,
-                        feature=feature,
-                        probe_target=f"{method} {path.split('?', 1)[0]}",
-                        detail=detail,
-                    )
-                )
+            self._walk_permission_probes(report, probes, _probe, auth_error_types=(FreeWheelAuthError,))
         except Exception as exc:
             logger.warning("FreeWheel permissions probe failed unexpectedly: %s", exc)
             report.error = f"Permissions probe failed: {type(exc).__name__}: {exc}"
-            return report
-
-        report.fully_operational = all(c.granted for c in report.checks if c.required)
         return report
 
     # ----- helpers -----
