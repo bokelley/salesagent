@@ -16,7 +16,7 @@ from src.admin.services.business_activity_service import get_business_activities
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, AuthorizedProperty, Creative, MediaBuy, Principal, Product, Tenant
-from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories import AuditLogRepository, MediaBuyRepository
 from src.core.schemas import CreativeStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -693,22 +693,25 @@ class DashboardService:
         """Recent audit-log activity rendered for the ledger table.
 
         Distinct from `recent_activity` (business-summary view); this is the
-        raw audit feed shown editorial-style with HH:mm time, actor, event,
-        object, status.
+        raw audit feed shown editorial-style with date+time, actor, event,
+        object, status. Bounded to the last 7 days to match the UI label.
         """
-        from sqlalchemy import select
-
-        stmt = (
-            select(AuditLog)
-            .where(AuditLog.tenant_id == self.tenant_id)
-            .order_by(AuditLog.timestamp.desc())
-            .limit(limit)
-        )
+        now = datetime.now(UTC)
+        window_start = now - timedelta(days=7)
+        repo = AuditLogRepository(session, self.tenant_id)
+        today = now.date()
         rows = []
-        for log in session.scalars(stmt):
+        for log in repo.list_filtered(from_date=window_start, limit=limit):
+            ts = log.timestamp
+            if ts is None:
+                time_label = ""
+            elif ts.date() == today:
+                time_label = ts.strftime("%H:%M")
+            else:
+                time_label = ts.strftime("%b %d %H:%M")
             rows.append(
                 {
-                    "time": log.timestamp.strftime("%H:%M") if log.timestamp else "",
+                    "time": time_label,
                     "actor": log.principal_name or "System",
                     "operation": log.operation,
                     "object": (log.details or {}).get("media_buy_id") or (log.details or {}).get("brand_domain") or "",

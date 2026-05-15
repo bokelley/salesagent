@@ -268,7 +268,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/services/business_activity_service.py", "get_business_activities"),
     ("src/admin/services/dashboard_service.py", "get_tenant"),
     ("src/admin/services/dashboard_service.py", "_load_tenant"),
-    ("src/admin/services/dashboard_service.py", "_activity_ledger"),
     ("src/admin/services/media_buy_readiness_service.py", "get_readiness_state"),
     ("src/admin/sync_api.py", "get_sync_history"),
     ("src/admin/sync_api.py", "get_sync_stats"),
