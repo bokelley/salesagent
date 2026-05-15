@@ -65,6 +65,7 @@ from sqlalchemy import select
 # evicts the webhook-signing credential cache on commit. Must run before
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401
+from core.decisioning.proposal_store import close_proposal_store, get_proposal_store
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
 from core.platforms.gam import GamPlatform
@@ -74,7 +75,6 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
-from src.core.database.repositories import SalesAgentProposalStore
 from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
@@ -291,13 +291,24 @@ def build_router() -> LazyPlatformRouter:
     # miss tenants registered after boot, but the factory has no such
     # coupling. The framework calls this on every dispatch; the
     # closure return is O(1).
-    proposal_store = SalesAgentProposalStore()
+    #
+    # The store itself is the upstream :class:`PgProposalStore`
+    # (adcp 5.5.0, adcontextprotocol/adcp-client-python#732). Cross-tenant
+    # rejection, CAS for state transitions, TTL bookkeeping, and the
+    # ``ON CONFLICT`` upsert all live in the library — our pool wiring
+    # in :mod:`core.decisioning.proposal_store` is the only local glue.
+    #
+    # ``get_proposal_store`` is called *inside* the factory closure
+    # rather than eagerly here so unit tests can ``build_router()``
+    # without setting ``DATABASE_URL``. The factory only fires when the
+    # framework dispatches a proposal-aware tool, by which point the
+    # production server has a live DSN.
     router = LazyPlatformRouter(
         accounts=SalesagentAccountStore(),
         factory=build_platform_for_tenant,
         capabilities=capabilities,
         proposal_managers=proposal_managers,
-        proposal_store_factory=lambda _tenant_id: proposal_store,
+        proposal_store_factory=lambda _tenant_id: get_proposal_store(),
     )
     # validate_idempotency_wiring inspects the platform handed to serve()
     # for @IdempotencyStore.wrap decorators. The router shell has none —
@@ -516,8 +527,13 @@ def _serve_kwargs(
     # Background schedulers wire as serve()'s native lifespan hooks
     # (adcp 5.4.0 #713). transport="both" is required for these to fire,
     # which we already pass below.
+    #
+    # ``close_proposal_store`` shuts the PgProposalStore pool down
+    # cleanly so in-flight connections drain before serve() exits.
+    # Always runs regardless of ``include_scheduler`` — the pool is
+    # tied to serve()'s loop, not to background-job lifecycle.
     on_startup = [_start_schedulers] if include_scheduler else None
-    on_shutdown = [_stop_schedulers] if include_scheduler else None
+    on_shutdown = [_stop_schedulers, close_proposal_store] if include_scheduler else [close_proposal_store]
 
     return {
         "router": router,

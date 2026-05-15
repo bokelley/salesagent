@@ -69,10 +69,21 @@ SCHEMA_VERSION = 1
 TENANTS_TABLE = "tenants"
 
 # Tables that are global, not tenant-owned, and must never appear in a bundle.
+#
+# ``proposals`` is excluded because the row schema includes a
+# ``tenant_id GENERATED ALWAYS AS (split_part(account_id, ':', 1)) STORED``
+# column that Postgres rejects on direct INSERT. Tenant export's bulk-insert
+# path can't write a value for it; the alternative (strip the column on
+# import + let it auto-derive) is real but proposals are ephemeral state
+# (drafts expire fast, committed proposals get consumed) — exporting them
+# during a tenant move would carry stale in-flight state that the target's
+# ``PgProposalStore`` should re-mint via fresh ``get_products`` calls.
+# Revisit if proposal data turns out to need cross-deployment portability.
 EXCLUDED_TABLES: frozenset[str] = frozenset(
     {
         "superadmin_config",
         "alembic_version",
+        "proposals",
     }
 )
 
