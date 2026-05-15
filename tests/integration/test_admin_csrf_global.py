@@ -117,15 +117,16 @@ class TestAdminCsrfGlobal:
     def test_cookieless_post_bypasses_csrf(self, production_admin_client):
         """The structural rule: no session cookie → no CSRF possible.
         A POST with no cookies at all must not be 403'd by the CSRF
-        guard regardless of path — per-route auth still applies."""
+        guard regardless of path — per-route auth still applies.
+
+        Note: ``FlaskClient`` persists cookies across requests in its
+        own cookie jar; this test relies on the per-test fixture
+        yielding a fresh client (so no prior session cookie carries
+        over), not on the client being stateless."""
         resp = production_admin_client.post(
             "/tenant/anything/deactivate",
             follow_redirects=False,
         )
-        # Caller sent no cookies; nothing for an attacker to ride.
-        # (Note: still ensure no Set-Cookie session was implicitly
-        # created — test_client doesn't persist between requests, so
-        # this request really has no session cookie.)
         assert resp.status_code != 403, f"cookieless POST should not be CSRF-rejected; got 403: {resp.data!r}"
 
     def test_tenant_management_api_s2s_post_bypasses_csrf(self, production_admin_client):

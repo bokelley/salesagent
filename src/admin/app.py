@@ -290,9 +290,11 @@ def create_app(config=None):
         from flask import abort, request
 
         if app.config.get("TESTING"):
-            # Tests opt in per-route via _SAME_ORIGIN_HEADERS. The
-            # blanket bypass here keeps thousands of legacy tests
-            # green without forcing every test client to set Origin.
+            # Blanket bypass under TESTING=True so the thousands of
+            # legacy admin tests that POST without an Origin header
+            # stay green. Tests that need to exercise the production
+            # CSRF path (see test_admin_csrf_global.py) flip TESTING
+            # off explicitly via a per-test fixture.
             return None
 
         if request.method in _CSRF_SAFE_METHODS:
