@@ -50,7 +50,7 @@ no longer needs (the proposals they reference were already consumed or
 expired). Acceptable loss; the schema correctness win outweighs.
 
 Revision ID: t2u3v4w5x6y7
-Revises: d0c3c40fdd41
+Revises: ss02e5f6a7b8
 Create Date: 2026-05-14
 """
 
@@ -62,7 +62,12 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "t2u3v4w5x6y7"
-down_revision: str | Sequence[str] | None = "d0c3c40fdd41"
+# Rebased onto ss02e5f6a7b8 (SpringServe inventory migration that landed
+# on main during this PR's review cycle). Original parent was d0c3c40fdd41;
+# the springserve chain (ss01a1b2c3d4 → ss02e5f6a7b8) doesn't touch
+# proposals, so linearizing instead of using ``alembic merge`` keeps
+# the history cleaner.
+down_revision: str | Sequence[str] | None = "ss02e5f6a7b8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
