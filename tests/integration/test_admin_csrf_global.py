@@ -101,17 +101,18 @@ class TestAdminCsrfGlobal:
         assert resp.status_code != 403
 
     def test_embedded_mode_post_bypasses_csrf(self, production_admin_client):
-        """Embedded-mode requests authenticate via X-Identity-* (set by
-        the upstream proxy, not the browser). Even if the proxy forwards
-        a session cookie, the explicit identity header signals the guard
-        to yield — the request is not cookie-authed against this app."""
+        """Embedded mode authenticates via X-Identity-* set by the
+        upstream proxy and does not set a session cookie on this app
+        (docs/integration/embedded-mode-operational.md §4). The
+        cookieless structural bypass therefore covers it — the guard
+        no longer needs an explicit X-Identity-Subject branch."""
         resp = production_admin_client.post(
             "/tenant/anything/deactivate",
             headers={"X-Identity-Subject": "user@upstream.example.com"},
             follow_redirects=False,
         )
         assert resp.status_code != 403, (
-            f"embedded-mode POST (X-Identity-Subject set) should not be CSRF-rejected; got 403: {resp.data!r}"
+            f"embedded-mode POST (X-Identity-Subject set, no cookie) should not be CSRF-rejected; got 403: {resp.data!r}"
         )
 
     def test_cookieless_post_bypasses_csrf(self, production_admin_client):

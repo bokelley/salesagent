@@ -271,18 +271,15 @@ def create_app(config=None):
     # ``evil.example.com``.
     #
     # The guard runs as ``before_request`` on the whole app, but only
-    # cookie-authed routes are vulnerable. Two structural bypasses
-    # keep header/token-authed callers out of scope:
-    #   1. No session cookie on the request — there is nothing for an
-    #      attacker's POST to ride. Covers S2S API-key callers
-    #      (tenant_management_api, sync_api) and any other request
-    #      that doesn't establish a browser session.
-    #   2. ``X-Identity-Subject`` header present — embedded mode,
-    #      where the upstream proxy authenticates the user out of
-    #      band. Belt-and-suspenders in case the proxy forwards the
-    #      session cookie alongside its identity headers.
-    # Per-route auth decorators still enforce their own credentials.
-    # Closes #32.
+    # cookie-authed routes are vulnerable. The structural bypass — no
+    # session cookie on the request — keeps every header/token-authed
+    # caller out of scope: S2S API-key clients (tenant_management_api,
+    # sync_api), embedded mode (upstream proxy auths via X-Identity-*
+    # without setting a session cookie, per
+    # docs/integration/embedded-mode-operational.md), and any other
+    # request that doesn't establish a browser session. Per-route auth
+    # decorators (@require_api_key_auth, @require_auth) still enforce
+    # their own credentials. Closes #32.
     _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
     @app.before_request
@@ -317,14 +314,6 @@ def create_app(config=None):
         # be forged by an attacker on a cookie-authed admin route.
         session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
         if not request.cookies.get(session_cookie_name):
-            return None
-
-        # Embedded mode authenticates via X-Identity-* (set by the
-        # upstream proxy, not the browser). If the proxy forwards
-        # the user's session cookie alongside its identity headers,
-        # the check above won't fire — fall through to this explicit
-        # signal so the legitimate embedded admin POST isn't 403'd.
-        if request.headers.get("X-Identity-Subject"):
             return None
 
         candidate = request.headers.get("Origin") or request.headers.get("Referer") or ""
