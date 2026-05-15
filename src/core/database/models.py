@@ -2361,6 +2361,45 @@ class FreeWheelPlacementStats(Base):
     )
 
 
+class SpringServeDemandTagStats(Base):
+    """Per-demand-tag delivery stats cache for the SpringServe adapter.
+
+    Populated by a periodic Reporting API sync (Stage 4 -- the sync
+    writer is wired but the SpringServe Reporting scope grant lands
+    separately). Read by ``SpringServeAdapter.get_packages_snapshot``
+    and ``get_media_buy_delivery`` so AdCP delivery surfaces serve
+    results without round-tripping to SpringServe on every request.
+
+    Stays empty until the reporting sync is wired and scope is granted.
+    Adapter reads raise ``DeliveryDataUnavailable`` on empty cache --
+    we don't fabricate zeros for missing data.
+
+    Spend is stored as currency-minor-unit micros (1 EUR = 1_000_000
+    micros) to avoid floating-point precision loss when aggregating.
+    """
+
+    __tablename__ = "springserve_demand_tag_stats"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False, primary_key=True)
+    demand_tag_id: Mapped[str] = mapped_column(String(64), nullable=False, primary_key=True)
+    campaign_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    impressions: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    completed_views: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    clicks: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    spend_micros: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    delivery_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    tenant = relationship("Tenant", backref="springserve_demand_tag_stats")
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        Index("idx_ss_demand_tag_stats_tenant_campaign", "tenant_id", "campaign_id"),
+    )
+
+
 class PublisherPartner(Base, JSONValidatorMixin):
     """Publisher domains that this tenant has partnerships with.
 

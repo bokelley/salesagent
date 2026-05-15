@@ -89,13 +89,11 @@ from src.core.database.repositories.freewheel_inventory import FreeWheelInventor
 from src.core.database.repositories.freewheel_placement_stats import FreeWheelPlacementStatsRepository
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
-    AdapterPackageDelivery,
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
-    DeliveryTotals,
     Error,
     MediaPackage,
     Principal,
@@ -874,35 +872,11 @@ class FreeWheelAdapter(AdServerAdapter):
 
         if not stats_rows:
             raise DeliveryDataUnavailable(media_buy_id)
-
-        total_impressions = sum(row.impressions or 0 for row in stats_rows)
-        total_spend = sum((row.spend_micros or 0) for row in stats_rows) / 1_000_000.0
-        total_completed = sum((row.completed_views or 0) for row in stats_rows)
-        # Pick a currency: every row should agree, but fall back to the
-        # first non-null if they don't.
-        currency = next((row.currency for row in stats_rows if row.currency), "USD")
-
-        totals = DeliveryTotals(
-            impressions=float(total_impressions),
-            spend=total_spend,
-            completed_views=float(total_completed) if total_completed else None,
-            completion_rate=(total_completed / total_impressions) if total_impressions else None,
-        )
-        by_package = [
-            AdapterPackageDelivery(
-                package_id=row.placement_id,
-                impressions=int(row.impressions or 0),
-                spend=(row.spend_micros or 0) / 1_000_000.0,
-                completed_views=int(row.completed_views) if row.completed_views is not None else None,
-            )
-            for row in stats_rows
-        ]
-        return AdapterGetMediaBuyDeliveryResponse(
-            media_buy_id=media_buy_id,
-            reporting_period=date_range,
-            totals=totals,
-            by_package=by_package,
-            currency=currency,
+        return self._aggregate_stat_rows_to_delivery_response(
+            media_buy_id,
+            date_range,
+            stats_rows,
+            package_id_attr="placement_id",
         )
 
     def get_packages_snapshot(

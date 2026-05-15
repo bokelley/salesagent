@@ -25,8 +25,10 @@ from typing import Any
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterSyncResult,
     AdServerAdapter,
     CreativeEngineAdapter,
+    DeliveryDataUnavailable,
     PermissionsReport,
     TargetingCapabilities,
 )
@@ -39,6 +41,10 @@ from src.adapters.springserve.schemas import (
     SpringServeProductConfig,
 )
 from src.adapters.springserve.targeting import build_demand_tag_targeting, validate_targeting
+from src.core.database.database_session import get_db_session
+from src.core.database.repositories.springserve_demand_tag_stats import (
+    SpringServeDemandTagStatsRepository,
+)
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -50,6 +56,7 @@ from src.core.schemas import (
     MediaPackage,
     Principal,
     ReportingPeriod,
+    Snapshot,
     UpdateMediaBuyError,
     UpdateMediaBuyResponse,
     UpdateMediaBuySuccess,
@@ -502,13 +509,16 @@ class SpringServeAdapter(AdServerAdapter):
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
     ) -> AdapterGetMediaBuyDeliveryResponse:
-        """Stage-1: dry-run returns simulated numbers; live mode raises until
-        the Stage-4 reporting cache lands.
+        """Aggregate delivery totals from the demand-tag-stats cache.
 
-        Stage 4 replaces this with a reader over a local placement_stats
-        cache populated by the Reporting API sync job. Until then live mode
-        falls through to an empty delivery response (the SpringServe Reporting
-        scope may not be granted yet, and we don't want to fabricate zeros).
+        Live mode reads ``springserve_demand_tag_stats`` (populated by the
+        reporting sync). When the cache is empty (sync not running yet, or
+        scope still pending) raises :class:`DeliveryDataUnavailable` so
+        the impl layer surfaces a ``data_unavailable`` error rather than
+        a fabricated zero-delivery response. Matches the FreeWheel adapter
+        contract.
+
+        Dry-run returns simulated numbers for demo/testing.
         """
         if self.dry_run:
             return self._simulated_delivery_response(
@@ -519,7 +529,115 @@ class SpringServeAdapter(AdServerAdapter):
                 cpm=15.0,
                 completion_rate=0.85,
             )
-        return self._empty_delivery_response(media_buy_id, date_range, currency="USD")
+        campaign_id = media_buy_id.removeprefix("springserve_")
+        with get_db_session() as session:
+            repo = SpringServeDemandTagStatsRepository(session, self.tenant_id or "default")
+            stats_rows = repo.list_by_campaign(campaign_id)
+        if not stats_rows:
+            raise DeliveryDataUnavailable(media_buy_id)
+        return self._aggregate_stat_rows_to_delivery_response(
+            media_buy_id,
+            date_range,
+            stats_rows,
+            package_id_attr="demand_tag_id",
+        )
+
+    def get_packages_snapshot(
+        self, package_refs: list[tuple[str, str, str | None]]
+    ) -> dict[str, dict[str, Snapshot | None]]:
+        """Near-real-time package snapshots from the demand-tag-stats cache.
+
+        Returns one ``Snapshot`` per package. Missing rows (no reporting
+        sync data yet, or no scope granted) surface as ``None`` so the
+        caller can render a 'no data' state rather than failing.
+        """
+        now = datetime.now(UTC)
+        result: dict[str, dict[str, Snapshot | None]] = {}
+        demand_tag_ids = [ref[2] for ref in package_refs if ref[2] is not None]
+        if not demand_tag_ids:
+            for media_buy_id, package_id, _ in package_refs:
+                result.setdefault(media_buy_id, {})[package_id] = None
+            return result
+        with get_db_session() as session:
+            repo = SpringServeDemandTagStatsRepository(session, self.tenant_id or "default")
+            stats = repo.get_by_demand_tag_ids(demand_tag_ids)
+        for media_buy_id, package_id, demand_tag_id in package_refs:
+            row = stats.get(demand_tag_id) if demand_tag_id else None
+            result.setdefault(media_buy_id, {})[package_id] = self._snapshot_from_stat_row(row, now)
+        return result
+
+    def _snapshot_from_stat_row(self, row: Any, now: datetime) -> Snapshot | None:
+        """Convert a SpringServeDemandTagStats row into an AdCP Snapshot."""
+        if row is None:
+            return None
+        as_of = row.as_of if row.as_of.tzinfo else row.as_of.replace(tzinfo=UTC)
+        return Snapshot(
+            as_of=as_of,
+            impressions=float(row.impressions or 0),
+            spend=(row.spend_micros or 0) / 1_000_000.0,
+            clicks=float(row.clicks) if row.clicks is not None else None,
+            staleness_seconds=max(0, int((now - as_of).total_seconds())),
+            delivery_status=self._platform_status_to_delivery_status(row.delivery_status),
+            currency=row.currency,
+        )
+
+    def run_reporting_sync(
+        self,
+        *,
+        demand_tag_ids: list[str] | None = None,
+        start_date: Any = None,
+        end_date: Any = None,
+    ) -> AdapterSyncResult:
+        """Refresh the SpringServe demand-tag-stats cache via the Reporting API.
+
+        Today this raises :class:`ReportingScopeNotGranted` on its first
+        call against most accounts. The shared ``_wrap_sync_run`` helper
+        translates that into a soft-failed :class:`AdapterSyncResult` so
+        the scheduler keeps retrying without log spam.
+        """
+        from src.adapters.springserve._reporting import ReportingError
+        from src.adapters.springserve.reporting_sync import (
+            ReportingScopeNotGranted,
+            SpringServeReportingSync,
+        )
+
+        if self.dry_run or self._client is None:
+            return AdapterSyncResult(
+                sync_kind="reporting",
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                succeeded=False,
+                errors={"adapter": "dry-run mode -- no live client to sync with"},
+            )
+
+        assert self._client is not None  # narrowed by the early-return above
+        client = self._client
+
+        def _do_sync() -> Any:
+            with get_db_session() as session:
+                syncer = SpringServeReportingSync(
+                    client=client,
+                    tenant_id=self.tenant_id or "default",
+                    session=session,
+                )
+                return syncer.run(
+                    start_date=start_date,
+                    end_date=end_date,
+                    demand_tag_ids=demand_tag_ids,
+                )
+
+        return self._wrap_sync_run(
+            "reporting",
+            _do_sync,
+            scope_error_types=(ReportingScopeNotGranted,),
+            retryable_error_types=(ReportingError,),
+            rows_count_key="demand_tags",
+        )
+
+    def latest_reporting_sync_at(self) -> datetime | None:
+        """Most-recent ``last_synced_at`` across cached demand-tag stats."""
+        with get_db_session() as session:
+            return SpringServeDemandTagStatsRepository(session, self.tenant_id or "default").latest_sync_at()
 
     # ----- update_media_buy -----
 
