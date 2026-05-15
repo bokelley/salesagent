@@ -2361,6 +2361,47 @@ class FreeWheelPlacementStats(Base):
     )
 
 
+class SpringServeInventory(Base, JSONValidatorMixin):
+    """Local cache of SpringServe inventory taxonomy.
+
+    Stores SpringServe Supply Partners, Supply Tags, Supply Groups, and
+    Accounts as JSON-blob rows keyed by ``(tenant_id, entity_type,
+    entity_id)``. The cache is used by the SpringServe adapter's product
+    configuration UI so publishers can pick targeting from their
+    SpringServe inventory without round-tripping to the SpringServe API
+    on every page render.
+
+    NOT exposed to AdCP buyers -- buyer-facing property discovery goes
+    through the AAO lookup path (adagents.json + brand.json). This is
+    a private adapter-side cache.
+
+    Refreshed on demand via the adapter settings "Sync Inventory" button
+    or the periodic AdapterSyncScheduler.
+    """
+
+    __tablename__ = "springserve_inventory"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        primary_key=True,
+        comment=("SpringServe entity kind: supply_partner, supply_tag, supply_group, account"),
+    )
+    entity_id: Mapped[str] = mapped_column(String(64), nullable=False, primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    parent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    raw_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    tenant = relationship("Tenant", backref="springserve_inventory")
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        Index("idx_springserve_inventory_tenant_type", "tenant_id", "entity_type"),
+    )
+
+
 class SpringServeDemandTagStats(Base):
     """Per-demand-tag delivery stats cache for the SpringServe adapter.
 

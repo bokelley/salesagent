@@ -45,6 +45,9 @@ from src.core.database.database_session import get_db_session
 from src.core.database.repositories.springserve_demand_tag_stats import (
     SpringServeDemandTagStatsRepository,
 )
+from src.core.database.repositories.springserve_inventory import (
+    SpringServeInventoryRepository,
+)
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -638,6 +641,103 @@ class SpringServeAdapter(AdServerAdapter):
         """Most-recent ``last_synced_at`` across cached demand-tag stats."""
         with get_db_session() as session:
             return SpringServeDemandTagStatsRepository(session, self.tenant_id or "default").latest_sync_at()
+
+    def run_inventory_sync(self) -> AdapterSyncResult:
+        """Refresh the SpringServe inventory cache from the API.
+
+        Wraps :class:`SpringServeInventorySync`. Today the supply-side
+        reads return 403; the shared ``_wrap_sync_run`` helper translates
+        ``SupplyScopeNotGranted`` into a soft-failed result with
+        ``scope_pending`` metadata so the scheduler keeps trying.
+        """
+        from src.adapters.springserve.inventory_sync import (
+            SpringServeInventorySync,
+            SupplyScopeNotGranted,
+        )
+
+        if self.dry_run or self._client is None:
+            return AdapterSyncResult(
+                sync_kind="inventory",
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                succeeded=False,
+                errors={"adapter": "dry-run mode -- no live client to sync with"},
+            )
+
+        assert self._client is not None
+        client = self._client
+
+        def _do_sync() -> Any:
+            with get_db_session() as session:
+                syncer = SpringServeInventorySync(
+                    client=client,
+                    tenant_id=self.tenant_id or "default",
+                    session=session,
+                )
+                return syncer.run()
+
+        return self._wrap_sync_run(
+            "inventory",
+            _do_sync,
+            scope_error_types=(SupplyScopeNotGranted,),
+            rows_count_key="entities",
+        )
+
+    def latest_inventory_sync_at(self) -> datetime | None:
+        """Most-recent ``last_synced_at`` across cached inventory rows."""
+        with get_db_session() as session:
+            return SpringServeInventoryRepository(session, self.tenant_id or "default").latest_sync_at()
+
+    async def get_available_inventory(self) -> dict[str, Any]:
+        """Surface the locally-synced SpringServe taxonomy for product config.
+
+        Reads from the ``springserve_inventory`` cache. No SpringServe API
+        calls happen here -- everything is served from local cache so the
+        AI product configurator runs offline.
+
+        Shape follows the base ``get_available_inventory`` contract:
+
+        * ``placements`` -- SpringServe supply tags (the per-property inventory units)
+        * ``ad_units`` -- supply partners (the business-unit grouping)
+        * ``targeting_options`` -- empty for Stage 5 (refined when the schema
+          is observed against a live account with scope granted)
+        * ``creative_specs`` -- the static VAST format declarations
+        * ``properties`` -- cache counts and metadata
+        """
+        with get_db_session() as session:
+            repo = SpringServeInventoryRepository(session, self.tenant_id or "default")
+            supply_partners = repo.list_by_type("supply_partner")
+            supply_tags = repo.list_by_type("supply_tag")
+
+            placements = [
+                {
+                    "id": f"supply_tag:{row.entity_id}",
+                    "name": row.name or row.entity_id,
+                    "type": "supply_tag",
+                    "parent": row.parent_id,
+                }
+                for row in supply_tags
+            ]
+            ad_units = [
+                {
+                    "path": f"supply_partner:{row.entity_id}",
+                    "name": row.name or row.entity_id,
+                    "type": "supply_partner",
+                }
+                for row in supply_partners
+            ]
+            properties = {
+                "supply_partners_count": len(supply_partners),
+                "supply_tags_count": len(supply_tags),
+            }
+
+        return {
+            "placements": placements,
+            "ad_units": ad_units,
+            "targeting_options": {},
+            "creative_specs": springserve_creative_formats(self.tenant_id),
+            "properties": properties,
+        }
 
     # ----- update_media_buy -----
 

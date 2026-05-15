@@ -740,3 +740,228 @@ def list_broadstreet_zones(tenant_id, **kwargs):
     except Exception as e:
         logger.error(f"Error fetching Broadstreet zones: {e}", exc_info=True)
         return jsonify({"zones": [], "error": str(e)}), 500
+
+
+# SpringServe-specific endpoints
+
+
+def _execute_springserve_sync(
+    tenant_id: str,
+    *,
+    sync_kind: str,
+    triggered_by: str,
+    run_kwargs: dict | None = None,
+):
+    """Thin wrapper around the shared sync orchestration for the SpringServe
+    per-adapter buttons. Returns ``None`` when SpringServe isn't configured
+    for this tenant; otherwise returns the
+    :class:`SyncExecutionResult` from the orchestration."""
+    from src.services.adapter_sync_orchestration import execute_adapter_sync
+
+    return execute_adapter_sync(
+        tenant_id=tenant_id,
+        adapter_type="springserve",
+        sync_kind=sync_kind,
+        triggered_by=triggered_by,
+        run_kwargs=run_kwargs,
+    )
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/springserve/test-connection", methods=["POST"])
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
+def test_springserve_connection(tenant_id, **kwargs):
+    """Verify SpringServe credentials by minting a token (email+password) or
+    probing /campaigns with a pre-minted token.
+
+    Submitted ciphertext on secret fields is rejected to prevent
+    cross-tenant replay; missing fields fall back to the encrypted values
+    already on AdapterConfig.config_json.
+    """
+    from src.core.utils.encryption import is_encrypted
+
+    try:
+        data = request.get_json() or {}
+        email = data.get("email")
+        password = data.get("password")
+        api_token = data.get("api_token")
+
+        for field_name, field_value in [("password", password), ("api_token", api_token)]:
+            if field_value and is_encrypted(field_value):
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": f"{field_name} must be plaintext (encrypted-token replay rejected)",
+                        }
+                    ),
+                    400,
+                )
+
+        if not (email and password) and not api_token:
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            with get_db_session() as session:
+                existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if existing and existing.config_json:
+                    from src.adapters.springserve import SpringServeConnectionConfig
+
+                    try:
+                        rehydrated = SpringServeConnectionConfig.model_validate(existing.config_json)
+                        email = email or rehydrated.email
+                        password = password or rehydrated.password
+                        api_token = api_token or rehydrated.api_token
+                    except ValidationError:
+                        pass
+
+        if not (email and password) and not api_token:
+            return (
+                jsonify({"success": False, "error": "Connection test requires either (email + password) or api_token"}),
+                400,
+            )
+
+        from src.adapters.springserve import SpringServeClient, SpringServeError
+
+        client = SpringServeClient(email=email, password=password, api_token=api_token)
+        try:
+            status, _body = client.probe("GET", "/campaigns?per_page=1")
+        except SpringServeError as exc:
+            logger.warning("SpringServe credential probe failed: %s body=%s", exc, exc.body)
+            return jsonify({"success": False, "error": "SpringServe rejected the credentials"}), 200
+
+        if status >= 400:
+            return jsonify({"success": False, "error": f"SpringServe responded HTTP {status}"}), 200
+
+        return jsonify(
+            {
+                "success": True,
+                "auth_mode": "password_grant" if (email and password) else "pre_minted_token",
+            }
+        )
+    except Exception as e:
+        logger.error(f"SpringServe connection test failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/springserve/inventory", methods=["GET"])
+@require_tenant_access()
+def list_springserve_inventory(tenant_id, **kwargs):
+    """Return locally-cached SpringServe inventory entries for the product setup UI.
+
+    Filterable by ``entity_type`` (supply_partner, supply_tag). Optional
+    ``parent_id`` narrows supply_tags to one supply_partner.
+    """
+    from src.core.database.repositories.springserve_inventory import (
+        SpringServeInventoryRepository,
+    )
+
+    entity_type = request.args.get("entity_type")
+    parent_id = request.args.get("parent_id")
+    q = request.args.get("q")
+
+    if not entity_type:
+        return jsonify({"success": False, "error": "entity_type query param is required"}), 400
+
+    with get_db_session() as session:
+        repo = SpringServeInventoryRepository(session, tenant_id)
+        rows = repo.list_by_type(entity_type, parent_id=parent_id)
+
+    items = [
+        {"id": row.entity_id, "name": row.name, "parent_id": row.parent_id}
+        for row in rows
+        if not q or (row.name and q.lower() in row.name.lower())
+    ]
+    return jsonify({"success": True, "entity_type": entity_type, "count": len(items), "items": items})
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/springserve/sync-inventory", methods=["POST"])
+@require_tenant_access(role=("admin",))
+def sync_springserve_inventory(tenant_id, **kwargs):
+    """Walk SpringServe supply_partners + supply_tags and refresh the cache.
+
+    Returns scope_pending=True when SpringServe denies supply-side reads
+    so the UI can surface a clear scope-grant message.
+    """
+    result = _execute_springserve_sync(tenant_id, sync_kind="inventory", triggered_by="admin_button")
+    if result is None:
+        return jsonify({"success": False, "error": "SpringServe adapter is not configured for this tenant"}), 400
+    metadata = getattr(result, "metadata", {}) or {}
+    if not result.succeeded and metadata.get("scope_pending"):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "scope_pending": True,
+                    "error": "Supply-side read scope not granted by SpringServe",
+                    "errors": result.errors,
+                }
+            ),
+            503,
+        )
+    return jsonify(
+        {
+            "success": result.succeeded,
+            "sync_id": result.sync_id,
+            "counts": result.counts,
+            "errors": result.errors,
+            "total_synced": sum(result.counts.values()),
+        }
+    )
+
+
+@adapters_bp.route("/api/tenant/<tenant_id>/adapters/springserve/check-permissions", methods=["POST"])
+@require_tenant_access(role=("admin",), allow_embedded_writes=True)
+def check_springserve_permissions(tenant_id, **kwargs):
+    """Run the SpringServe adapter's permission-probe matrix and return a report.
+
+    Cheap reads only; nothing is mutated upstream.
+    """
+    try:
+        from src.adapters.springserve import SpringServeAdapter
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+        with get_db_session() as session:
+            existing = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+            if not existing or existing.adapter_type != "springserve" or not existing.config_json:
+                return (
+                    jsonify({"success": False, "error": "SpringServe adapter is not configured for this tenant"}),
+                    400,
+                )
+            config = dict(existing.config_json)
+
+        # Build a stub principal so the adapter __init__ passes; the probe
+        # doesn't depend on the principal's actual demand-partner mapping
+        # because it only reads endpoints.
+        from unittest.mock import MagicMock
+
+        principal = MagicMock()
+        principal.principal_id = f"probe-{tenant_id}"
+        principal.get_adapter_id.return_value = str(config.get("default_demand_partner_id") or 0)
+        adapter = SpringServeAdapter(config=config, principal=principal, dry_run=False, tenant_id=tenant_id)
+        report = adapter.check_permissions()
+        return jsonify(
+            {
+                "success": True,
+                "report": {
+                    "adapter": report.adapter,
+                    "tenant_id": report.tenant_id,
+                    "checked_at": report.checked_at.isoformat(),
+                    "fully_operational": report.fully_operational,
+                    "error": report.error,
+                    "checks": [
+                        {
+                            "name": c.name,
+                            "description": c.description,
+                            "granted": c.granted,
+                            "required": c.required,
+                            "feature": c.feature,
+                            "probe_target": c.probe_target,
+                            "detail": c.detail,
+                        }
+                        for c in report.checks
+                    ],
+                },
+            }
+        )
+    except Exception as e:
+        logger.error(f"SpringServe permissions check failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Permissions check failed (see server logs)"}), 500

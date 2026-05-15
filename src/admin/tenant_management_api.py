@@ -59,6 +59,7 @@ from src.admin.api_schemas.tenant_management import (
     RecentBuyer,
     RefreshResponse,
     RejectWorkflowRequest,
+    SpringServeAdapterConfig,
     TenantDetail,
     TenantStatusResponse,
     TenantSummary,
@@ -214,6 +215,15 @@ def _adapter_config_to_dict(adapter: AdapterConfigSchema) -> dict:
             "api_key": adapter.api_key.get_secret_value(),
             "default_advertiser_id": adapter.default_advertiser_id,
         }
+    if isinstance(adapter, SpringServeAdapterConfig):
+        return {
+            "type": "springserve",
+            "email": adapter.email,
+            "password": adapter.password.get_secret_value() if adapter.password else None,
+            "api_token": adapter.api_token.get_secret_value() if adapter.api_token else None,
+            "environment": adapter.environment,
+            "default_demand_partner_id": adapter.default_demand_partner_id,
+        }
     raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
 
 
@@ -280,6 +290,23 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             tenant_id=tenant_id,
             adapter_type="broadstreet",
             config_json=bs_validated.model_dump(),
+        )
+    elif isinstance(adapter, SpringServeAdapterConfig):
+        # Same Fernet-encryption round-trip as FreeWheel so secrets land
+        # consistently in config_json.
+        from src.adapters.springserve import SpringServeConnectionConfig
+
+        ss_validated = SpringServeConnectionConfig(
+            email=adapter.email,
+            password=adapter.password.get_secret_value() if adapter.password else None,
+            api_token=adapter.api_token.get_secret_value() if adapter.api_token else None,
+            environment=adapter.environment,
+            default_demand_partner_id=adapter.default_demand_partner_id,
+        )
+        ac = AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="springserve",
+            config_json=ss_validated.model_dump(),
         )
     else:
         raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
@@ -351,6 +378,11 @@ _ADAPTER_CATALOG_METADATA: dict[str, dict[str, str]] = {
         "description": "Direct sold display and email-newsletter inventory via the Broadstreet Ads API.",
         "tier": "live",
     },
+    "springserve": {
+        "name": "SpringServe (Magnite)",
+        "description": "Direct-sold CTV, online video, and audio inventory via Magnite's SpringServe ad server.",
+        "tier": "live",
+    },
 }
 
 # Map from ADAPTER_REGISTRY key → the typed AdapterConfig member whose
@@ -360,6 +392,7 @@ _ADAPTER_CONFIG_TYPED = {
     "mock": MockAdapterConfig,
     "freewheel": FreeWheelAdapterConfig,
     "broadstreet": BroadstreetAdapterConfig,
+    "springserve": SpringServeAdapterConfig,
 }
 
 

@@ -1,0 +1,275 @@
+{#
+SpringServe Adapter Connection Configuration Template
+
+Included in the settings page when the SpringServe adapter is selected.
+Supports two auth flows: email+password (canonical, auto-refreshing
+2hr token) and pre-minted api_token (escape hatch). Exactly one of
+(email+password) or api_token must be provided.
+
+Expected context:
+- adapter_config: dict with current adapter configuration
+- tenant_id: current tenant ID
+#}
+
+<div class="adapter-connection-config" data-adapter-type="springserve">
+    <div class="form-section">
+        <h3>SpringServe (Magnite) Configuration</h3>
+
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            Direct connection to the SpringServe ad server -- the path that
+            avoids Magnite's SSP-level AdCP agent and the fees that come with
+            it. Provide the API user's email + password (recommended -- the
+            adapter mints + refreshes the 2-hour token automatically), or
+            paste a pre-minted token under Advanced.
+        </p>
+
+        <h4 style="margin-top: 1rem; margin-bottom: 0.75rem;">Sign-in Credentials</h4>
+
+        <div class="form-group">
+            <label for="springserve_email">Email</label>
+            <input type="text" id="springserve_email" name="springserve_email"
+                   value="{{ adapter_config.get('email', '') if adapter_config else '' }}"
+                   placeholder="API user email (e.g. publisher+api@example.com)">
+            <small class="form-text text-muted">
+                SpringServe API user email. Used with the password below to mint a 2-hour token via POST /api/v0/auth.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="springserve_password">Password</label>
+            <input type="password" id="springserve_password" name="springserve_password"
+                   value=""
+                   placeholder="{% if adapter_config and adapter_config.get('email') %}(leave blank to keep existing){% else %}Enter password{% endif %}">
+            <small class="form-text text-muted">
+                Stored encrypted at rest. Leave blank to keep the previously saved password.
+            </small>
+        </div>
+
+        <details style="margin-top: 1rem; margin-bottom: 1rem;">
+            <summary style="cursor: pointer; font-weight: 500;">Advanced: pre-minted API token</summary>
+            <p class="text-muted" style="margin-top: 0.5rem;">
+                Use this when a partner has minted a token for you, or for testing without
+                real credentials. No auto-refresh -- rotate manually when the 2-hour TTL expires.
+            </p>
+            <div class="form-group">
+                <label for="springserve_api_token">API Token</label>
+                <input type="password" id="springserve_api_token" name="springserve_api_token"
+                       value=""
+                       placeholder="{% if adapter_config and adapter_config.get('api_token') %}(leave blank to keep existing){% else %}Paste token{% endif %}">
+                <small class="form-text text-muted">
+                    Stored encrypted at rest. When set, takes precedence over email/password.
+                </small>
+            </div>
+        </details>
+
+        <div class="form-group">
+            <label for="springserve_default_demand_partner_id">Default Demand Partner ID</label>
+            <input type="number" id="springserve_default_demand_partner_id" name="springserve_default_demand_partner_id"
+                   value="{{ adapter_config.get('default_demand_partner_id', '') if adapter_config else '' }}"
+                   placeholder="Integer ID, e.g. 88061">
+            <small class="form-text text-muted">
+                Fallback SpringServe Demand Partner ID for principals without an explicit springserve mapping.
+                The Demand Partner is the parent of every Campaign + Demand Tag this adapter creates.
+            </small>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="springserve_manual_approval_required">
+                <input type="checkbox" id="springserve_manual_approval_required" name="springserve_manual_approval_required"
+                       {% if adapter_config and adapter_config.get('manual_approval_required') %}checked{% endif %}>
+                Require Manual Approval
+            </label>
+            <small class="form-text text-muted">
+                When enabled, media buy operations require human approval before execution.
+            </small>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="saveSpringServeConfig()" class="btn btn-primary">Save Configuration</button>
+            <button type="button" onclick="testSpringServeConnection()" class="btn btn-secondary">Test Connection</button>
+            <span id="springserve-connection-status"></span>
+        </div>
+
+        <hr style="margin: 2rem 0 1rem 0;">
+
+        <h4>Inventory Sync</h4>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Pull SpringServe supply partners + supply tags into the local cache. The product
+            setup UI uses this so you can pick targeting from synced inventory instead of
+            typing IDs. Today supply-side reads return 403 on most accounts -- ask SpringServe
+            support to enable supply read scope.
+        </p>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="syncSpringServeInventory()" class="btn btn-secondary">Sync Inventory Now</button>
+            <span id="springserve-inventory-sync-status"></span>
+        </div>
+
+        <hr style="margin: 2rem 0 1rem 0;">
+
+        <h4>API Permissions</h4>
+        <p class="text-muted" style="margin-bottom: 1rem;">
+            Probe each SpringServe endpoint the adapter depends on to verify the configured
+            credentials have the required scopes. Each check is a cheap read; nothing is
+            mutated upstream.
+        </p>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button type="button" onclick="checkSpringServePermissions()" class="btn btn-secondary">Check API Permissions</button>
+            <span id="springserve-permissions-summary"></span>
+        </div>
+        <div id="springserve-permissions-detail" style="margin-top: 1rem; display: none;"></div>
+    </div>
+</div>
+
+<script>
+function _springservePayload() {
+    const config = {
+        email: document.getElementById('springserve_email').value || null,
+        environment: 'production',
+        default_demand_partner_id: parseInt(document.getElementById('springserve_default_demand_partner_id').value, 10) || null,
+        manual_approval_required: document.getElementById('springserve_manual_approval_required').checked
+    };
+    const pw = document.getElementById('springserve_password').value;
+    const tok = document.getElementById('springserve_api_token').value;
+    if (pw) config.password = pw;
+    if (tok) config.api_token = tok;
+    return config;
+}
+
+function saveSpringServeConfig() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapter-config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({adapter_type: 'springserve', config: _springservePayload()})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Configuration saved', 'success');
+            document.getElementById('springserve_password').value = '';
+            document.getElementById('springserve_api_token').value = '';
+        } else {
+            showNotification('Failed to save: ' + (data.error || 'Unknown'), 'error');
+        }
+    })
+    .catch(error => showNotification('Error: ' + error.message, 'error'));
+}
+
+function testSpringServeConnection() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('springserve-connection-status');
+    statusEl.innerHTML = '<span style="color: #6b7280;">Testing...</span>';
+
+    const payload = {};
+    const email = document.getElementById('springserve_email').value;
+    const pw = document.getElementById('springserve_password').value;
+    const tok = document.getElementById('springserve_api_token').value;
+    if (email) payload.email = email;
+    if (pw) payload.password = pw;
+    if (tok) payload.api_token = tok;
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/springserve/test-connection', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Authenticated (' + (data.auth_mode || 'token') + ')</span>';
+        } else {
+            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
+        }
+    })
+    .catch(error => statusEl.innerHTML = '<span style="color: #ef4444;">✗ Error: ' + error.message + '</span>');
+}
+
+function syncSpringServeInventory() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const statusEl = document.getElementById('springserve-inventory-sync-status');
+    statusEl.innerHTML = '<span style="color: #6b7280;">Syncing...</span>';
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/springserve/sync-inventory', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+    })
+    .then(r => r.json().then(data => ({status: r.status, data: data})))
+    .then(({status, data}) => {
+        if (data.success) {
+            const counts = Object.entries(data.counts || {}).map(([k, v]) => k + '=' + v).join(', ');
+            statusEl.innerHTML = '<span style="color: #10b981;">✓ Synced ' + (counts || 'entities') + '</span>';
+        } else if (data.scope_pending) {
+            statusEl.innerHTML = '<span style="color: #f59e0b;">⚠ Supply read scope pending</span>';
+        } else {
+            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Sync failed') + '</span>';
+        }
+    })
+    .catch(error => statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + error.message + '</span>');
+}
+
+function checkSpringServePermissions() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const summaryEl = document.getElementById('springserve-permissions-summary');
+    const detailEl = document.getElementById('springserve-permissions-detail');
+    summaryEl.innerHTML = '<span style="color: #6b7280;">Probing...</span>';
+    detailEl.style.display = 'none';
+
+    fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/springserve/check-permissions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success || !data.report) {
+            summaryEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Probe failed') + '</span>';
+            return;
+        }
+        const report = data.report;
+        if (report.error) {
+            summaryEl.innerHTML = '<span style="color: #ef4444;">✗ ' + report.error + '</span>';
+            return;
+        }
+        const checks = report.checks || [];
+        const required = checks.filter(c => c.required);
+        const optional = checks.filter(c => !c.required);
+        const grantedReq = required.filter(c => c.granted).length;
+        const grantedOpt = optional.filter(c => c.granted).length;
+
+        if (report.fully_operational) {
+            summaryEl.innerHTML = '<span style="color: #10b981;">✓ Fully operational (' +
+                grantedReq + '/' + required.length + ' required, ' + grantedOpt + '/' + optional.length + ' optional)</span>';
+        } else {
+            const missing = required.filter(c => !c.granted).map(c => c.description).join(', ');
+            summaryEl.innerHTML = '<span style="color: #f59e0b;">⚠ Missing required: ' + missing + '</span>';
+        }
+
+        const rows = ['<table style="width:100%;border-collapse:collapse;margin-top:.5rem;font-size:.9rem;">'];
+        rows.push('<thead><tr style="text-align:left;border-bottom:1px solid #e5e7eb;">' +
+                  '<th style="padding:.5rem;">Check</th><th style="padding:.5rem;">Endpoint</th>' +
+                  '<th style="padding:.5rem;">Required</th><th style="padding:.5rem;text-align:center;">Status</th>' +
+                  '<th style="padding:.5rem;">Detail</th></tr></thead><tbody>');
+        for (const c of checks) {
+            const icon = c.granted ? '✓' : '✗';
+            const color = c.granted ? '#10b981' : (c.required ? '#ef4444' : '#9ca3af');
+            rows.push('<tr style="border-bottom:1px solid #f3f4f6;">' +
+                '<td style="padding:.5rem;">' + c.description + '</td>' +
+                '<td style="padding:.5rem;font-family:monospace;color:#6b7280;">' + (c.probe_target || '') + '</td>' +
+                '<td style="padding:.5rem;color:' + (c.required ? '#374151' : '#9ca3af') + ';">' + (c.required ? 'yes' : 'no') + '</td>' +
+                '<td style="padding:.5rem;text-align:center;font-size:1.1rem;color:' + color + ';">' + icon + '</td>' +
+                '<td style="padding:.5rem;color:#6b7280;font-size:.85rem;">' + (c.detail || '') + '</td></tr>');
+        }
+        rows.push('</tbody></table>');
+        detailEl.innerHTML = rows.join('');
+        detailEl.style.display = 'block';
+    })
+    .catch(error => summaryEl.innerHTML = '<span style="color: #ef4444;">✗ ' + error.message + '</span>');
+}
+</script>

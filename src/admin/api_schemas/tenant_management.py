@@ -159,13 +159,41 @@ class BroadstreetAdapterConfig(BaseModel):
     default_advertiser_id: str | None = Field(default=None, max_length=64)
 
 
+class SpringServeAdapterConfig(BaseModel):
+    """SpringServe (Magnite) ad-server adapter configuration.
+
+    Exactly one auth path is required: ``email`` + ``password`` (the
+    canonical path -- the SpringServe API mints a 2-hour token from
+    these credentials and the adapter caches + refreshes) or
+    ``api_token`` (a pre-minted token, escape hatch for partner-
+    provisioned tokens; no auto-refresh).
+    """
+
+    model_config = _config()
+
+    type: Literal["springserve"] = "springserve"
+    email: str | None = Field(default=None, max_length=255)
+    password: SecretStr | None = None
+    api_token: SecretStr | None = None
+    environment: Literal["production"] = "production"
+    default_demand_partner_id: int | None = None
+
+    @model_validator(mode="after")
+    def _require_credentials(self) -> SpringServeAdapterConfig:
+        has_password_grant = bool(self.email) and bool(self.password)
+        has_token = bool(self.api_token)
+        if not has_password_grant and not has_token:
+            raise ValueError("SpringServe config requires either (email + password) or api_token")
+        return self
+
+
 # Public discriminated alias used in request/response schemas.
 # Triton (``type="triton"``) is intentionally absent — the adapter is parked
 # while Triton's APIs aren't production-ready. Restoring is a one-line union
 # addition + registry re-add when their APIs come back; the source module
 # under src/adapters/triton/ is preserved.
 AdapterConfig = Annotated[
-    GAMAdapterConfig | MockAdapterConfig | FreeWheelAdapterConfig | BroadstreetAdapterConfig,
+    GAMAdapterConfig | MockAdapterConfig | FreeWheelAdapterConfig | BroadstreetAdapterConfig | SpringServeAdapterConfig,
     Field(discriminator="type"),
 ]
 

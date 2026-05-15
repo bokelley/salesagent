@@ -1,0 +1,115 @@
+{#
+SpringServe Product Configuration Template
+
+Per-product targeting picker. Populates supply_tag + supply_partner
+pickers from the synced inventory cache (springserve_inventory).
+
+Expected context:
+- product_config: dict with current product configuration (may be None for new products)
+- tenant_id: current tenant ID
+#}
+
+<div class="adapter-product-config" data-adapter-type="springserve">
+    <div class="form-section">
+        <h3>SpringServe Targeting</h3>
+        <p class="text-muted">
+            Pick supply tags + supply partners from your synced SpringServe inventory.
+            If the picker shows empty lists, run "Sync Inventory Now" in the adapter
+            connection settings.
+        </p>
+
+        <div class="form-group">
+            <label for="ss_supply_tag_ids">Supply Tags (per-property inventory units)</label>
+            <select id="ss_supply_tag_ids" name="ss_supply_tag_ids" multiple data-entity-type="supply_tag"
+                    style="min-height: 6rem;">
+                <option value="" disabled>Loading from inventory cache...</option>
+            </select>
+            <small class="form-text text-muted">
+                One per app/player/stream/podcast. Becomes the
+                ``demand_tag_priorities`` list on each created demand tag.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="ss_supply_partner_ids">Supply Partners (business-unit grouping)</label>
+            <select id="ss_supply_partner_ids" name="ss_supply_partner_ids" multiple data-entity-type="supply_partner"
+                    style="min-height: 4rem;">
+                <option value="" disabled>Loading from inventory cache...</option>
+            </select>
+            <small class="form-text text-muted">
+                Coarser than supply tags. Use to scope a product to "all of Talpa Radio"
+                vs picking individual stations.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="ss_player_sizes">Player Sizes</label>
+            <input type="text" id="ss_player_sizes" name="ss_player_sizes"
+                   value="{{ (product_config.get('player_sizes', []) | join(',')) if product_config else '' }}"
+                   placeholder="Comma-separated: xs,s,m,l,xl,u">
+            <small class="form-text text-muted">
+                Allowed player sizes for video supply. Audio products typically leave this blank.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="ss_environments">Environments</label>
+            <input type="text" id="ss_environments" name="ss_environments"
+                   value="{{ (product_config.get('environments', []) | join(',')) if product_config else '' }}"
+                   placeholder="Comma-separated: ctv,app,web,streaming_audio">
+        </div>
+
+        <div class="form-group">
+            <label for="ss_device_types">Device Types</label>
+            <input type="text" id="ss_device_types" name="ss_device_types"
+                   value="{{ (product_config.get('device_types', []) | join(',')) if product_config else '' }}"
+                   placeholder="Comma-separated: ctv,mobile,desktop,tablet">
+        </div>
+
+        <div class="form-group">
+            <label for="ss_priority">Priority (higher wins first)</label>
+            <input type="number" id="ss_priority" name="ss_priority"
+                   value="{{ product_config.get('priority', '') if product_config else '' }}">
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = '{{ tenant_id }}';
+    const currentTagIds = {{ (product_config.get('supply_tag_ids', []) if product_config else []) | tojson }};
+    const currentPartnerIds = {{ (product_config.get('supply_partner_ids', []) if product_config else []) | tojson }};
+
+    function loadInventory(entityType, selectorId, currentIds) {
+        const url = scriptRoot + '/api/tenant/' + tenantId + '/adapters/springserve/inventory?entity_type=' + entityType;
+        fetch(url, {credentials: 'same-origin'})
+            .then(r => r.json())
+            .then(data => {
+                const sel = document.getElementById(selectorId);
+                sel.innerHTML = '';
+                const items = data.items || [];
+                if (items.length === 0) {
+                    sel.innerHTML = '<option value="" disabled>No items synced -- run Sync Inventory in connection settings</option>';
+                    return;
+                }
+                for (const item of items) {
+                    const opt = document.createElement('option');
+                    opt.value = item.id;
+                    opt.textContent = item.name + ' (id=' + item.id + ')';
+                    if (currentIds.includes(parseInt(item.id, 10)) || currentIds.includes(item.id)) {
+                        opt.selected = true;
+                    }
+                    sel.appendChild(opt);
+                }
+            })
+            .catch(() => {
+                document.getElementById(selectorId).innerHTML =
+                    '<option value="" disabled>Failed to load inventory</option>';
+            });
+    }
+
+    loadInventory('supply_tag', 'ss_supply_tag_ids', currentTagIds);
+    loadInventory('supply_partner', 'ss_supply_partner_ids', currentPartnerIds);
+})();
+</script>

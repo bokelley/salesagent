@@ -18,8 +18,8 @@ direct-sold CTV, online video, and audio inventory.
 | 1 | Skeleton + auth + dry-run | ✅ shipped |
 | 2 | Live Campaign + Demand Tag create | 🟡 code complete, **blocked on write scope grant** |
 | 3 | Creatives (incl. audio MIME negotiation) | 🟡 code complete, **blocked on write scope grant** |
-| 4 | Reporting cache + sync | ⏳ |
-| 5 | Inventory cache + admin UI + typed embedder config | ⏳ |
+| 4 | Reporting cache + sync | 🟡 code complete, **blocked on reporting scope grant** |
+| 5 | Inventory cache + admin UI + typed embedder config | 🟡 code complete, **blocked on supply-side read scope grant** |
 
 See `.context/springserve-adapter-plan.md` for the full plan, risks, and
 open questions.

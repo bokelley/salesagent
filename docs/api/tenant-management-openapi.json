@@ -158,7 +158,8 @@
             "broadstreet": "#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig",
             "freewheel": "#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig",
             "google_ad_manager": "#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig",
-            "mock": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig"
+            "mock": "#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig",
+            "springserve": "#/components/schemas/AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig"
           },
           "propertyName": "type"
         },
@@ -174,6 +175,9 @@
           },
           {
             "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig"
+          },
+          {
+            "$ref": "#/components/schemas/AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig"
           }
         ],
         "title": "AdapterConfigEnvelope"
@@ -366,6 +370,79 @@
           }
         },
         "title": "MockAdapterConfig",
+        "type": "object"
+      },
+      "AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig": {
+        "additionalProperties": false,
+        "description": "SpringServe (Magnite) ad-server adapter configuration.\n\nExactly one auth path is required: ``email`` + ``password`` (the\ncanonical path -- the SpringServe API mints a 2-hour token from\nthese credentials and the adapter caches + refreshes) or\n``api_token`` (a pre-minted token, escape hatch for partner-\nprovisioned tokens; no auto-refresh).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_demand_partner_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Demand Partner Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email"
+          },
+          "environment": {
+            "const": "production",
+            "default": "production",
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "springserve",
+            "default": "springserve",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "SpringServeAdapterConfig",
         "type": "object"
       },
       "AdapterConfigResponse.f44f287": {
@@ -2351,7 +2428,8 @@
                 "broadstreet": "#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig",
                 "freewheel": "#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig",
                 "google_ad_manager": "#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig",
-                "mock": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig"
+                "mock": "#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig",
+                "springserve": "#/components/schemas/PreviewAdapterRequest.f44f287.SpringServeAdapterConfig"
               },
               "propertyName": "type"
             },
@@ -2367,6 +2445,9 @@
               },
               {
                 "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/PreviewAdapterRequest.f44f287.SpringServeAdapterConfig"
               }
             ],
             "title": "Adapter"
@@ -2568,6 +2649,79 @@
         "title": "MockAdapterConfig",
         "type": "object"
       },
+      "PreviewAdapterRequest.f44f287.SpringServeAdapterConfig": {
+        "additionalProperties": false,
+        "description": "SpringServe (Magnite) ad-server adapter configuration.\n\nExactly one auth path is required: ``email`` + ``password`` (the\ncanonical path -- the SpringServe API mints a 2-hour token from\nthese credentials and the adapter caches + refreshes) or\n``api_token`` (a pre-minted token, escape hatch for partner-\nprovisioned tokens; no auto-refresh).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_demand_partner_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Demand Partner Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email"
+          },
+          "environment": {
+            "const": "production",
+            "default": "production",
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "springserve",
+            "default": "springserve",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "SpringServeAdapterConfig",
+        "type": "object"
+      },
       "PreviewAdapterResponse.f44f287": {
         "additionalProperties": false,
         "description": "Adapter preview with network metadata for the Storefront UX.\n\n``ok=False`` (bad creds) is returned with HTTP 200 \u2014 Storefront renders\nthis inline. Hard errors (malformed body, missing API key) still surface\nvia the normal 4xx path.",
@@ -2658,7 +2812,8 @@
                 "broadstreet": "#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig",
                 "freewheel": "#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig",
                 "google_ad_manager": "#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig",
-                "mock": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig"
+                "mock": "#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig",
+                "springserve": "#/components/schemas/ProvisionTenantRequest.f44f287.SpringServeAdapterConfig"
               },
               "propertyName": "type"
             },
@@ -2674,6 +2829,9 @@
               },
               {
                 "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionTenantRequest.f44f287.SpringServeAdapterConfig"
               }
             ],
             "title": "Adapter"
@@ -3009,6 +3167,79 @@
           }
         },
         "title": "MockAdapterConfig",
+        "type": "object"
+      },
+      "ProvisionTenantRequest.f44f287.SpringServeAdapterConfig": {
+        "additionalProperties": false,
+        "description": "SpringServe (Magnite) ad-server adapter configuration.\n\nExactly one auth path is required: ``email`` + ``password`` (the\ncanonical path -- the SpringServe API mints a 2-hour token from\nthese credentials and the adapter caches + refreshes) or\n``api_token`` (a pre-minted token, escape hatch for partner-\nprovisioned tokens; no auto-refresh).",
+        "properties": {
+          "api_token": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Token"
+          },
+          "default_demand_partner_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default Demand Partner Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Email"
+          },
+          "environment": {
+            "const": "production",
+            "default": "production",
+            "title": "Environment",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Password"
+          },
+          "type": {
+            "const": "springserve",
+            "default": "springserve",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "SpringServeAdapterConfig",
         "type": "object"
       },
       "ProvisionTenantResponse.f44f287": {

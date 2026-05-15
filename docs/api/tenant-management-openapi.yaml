@@ -95,12 +95,14 @@ components:
           freewheel: '#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig'
           google_ad_manager: '#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig'
           mock: '#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig'
+          springserve: '#/components/schemas/AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig'
         propertyName: type
       oneOf:
       - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig'
       - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig'
       - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig'
       - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig'
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig'
       title: AdapterConfigEnvelope
     AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig:
       additionalProperties: false
@@ -236,6 +238,62 @@ components:
           title: Type
           type: string
       title: MockAdapterConfig
+      type: object
+    AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig:
+      additionalProperties: false
+      description: 'SpringServe (Magnite) ad-server adapter configuration.
+
+
+        Exactly one auth path is required: ``email`` + ``password`` (the
+
+        canonical path -- the SpringServe API mints a 2-hour token from
+
+        these credentials and the adapter caches + refreshes) or
+
+        ``api_token`` (a pre-minted token, escape hatch for partner-
+
+        provisioned tokens; no auto-refresh).'
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_demand_partner_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Default Demand Partner Id
+        email:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Email
+        environment:
+          const: production
+          default: production
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: springserve
+          default: springserve
+          title: Type
+          type: string
+      title: SpringServeAdapterConfig
       type: object
     AdapterConfigResponse.f44f287:
       additionalProperties: false
@@ -1606,12 +1664,14 @@ components:
               freewheel: '#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig'
               google_ad_manager: '#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig'
               mock: '#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig'
+              springserve: '#/components/schemas/PreviewAdapterRequest.f44f287.SpringServeAdapterConfig'
             propertyName: type
           oneOf:
           - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig'
           - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig'
           - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig'
           - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig'
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.SpringServeAdapterConfig'
           title: Adapter
       required:
       - adapter
@@ -1752,6 +1812,62 @@ components:
           type: string
       title: MockAdapterConfig
       type: object
+    PreviewAdapterRequest.f44f287.SpringServeAdapterConfig:
+      additionalProperties: false
+      description: 'SpringServe (Magnite) ad-server adapter configuration.
+
+
+        Exactly one auth path is required: ``email`` + ``password`` (the
+
+        canonical path -- the SpringServe API mints a 2-hour token from
+
+        these credentials and the adapter caches + refreshes) or
+
+        ``api_token`` (a pre-minted token, escape hatch for partner-
+
+        provisioned tokens; no auto-refresh).'
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_demand_partner_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Default Demand Partner Id
+        email:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Email
+        environment:
+          const: production
+          default: production
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: springserve
+          default: springserve
+          title: Type
+          type: string
+      title: SpringServeAdapterConfig
+      type: object
     PreviewAdapterResponse.f44f287:
       additionalProperties: false
       description: "Adapter preview with network metadata for the Storefront UX.\n\
@@ -1811,12 +1927,14 @@ components:
               freewheel: '#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig'
               google_ad_manager: '#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig'
               mock: '#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig'
+              springserve: '#/components/schemas/ProvisionTenantRequest.f44f287.SpringServeAdapterConfig'
             propertyName: type
           oneOf:
           - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig'
           - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig'
           - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig'
           - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig'
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.SpringServeAdapterConfig'
           title: Adapter
         billing_plan:
           default: standard
@@ -2072,6 +2190,62 @@ components:
           title: Type
           type: string
       title: MockAdapterConfig
+      type: object
+    ProvisionTenantRequest.f44f287.SpringServeAdapterConfig:
+      additionalProperties: false
+      description: 'SpringServe (Magnite) ad-server adapter configuration.
+
+
+        Exactly one auth path is required: ``email`` + ``password`` (the
+
+        canonical path -- the SpringServe API mints a 2-hour token from
+
+        these credentials and the adapter caches + refreshes) or
+
+        ``api_token`` (a pre-minted token, escape hatch for partner-
+
+        provisioned tokens; no auto-refresh).'
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_demand_partner_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Default Demand Partner Id
+        email:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Email
+        environment:
+          const: production
+          default: production
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: springserve
+          default: springserve
+          title: Type
+          type: string
+      title: SpringServeAdapterConfig
       type: object
     ProvisionTenantResponse.f44f287:
       additionalProperties: false
