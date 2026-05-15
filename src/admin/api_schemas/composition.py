@@ -11,12 +11,12 @@ forbid unknown fields in dev/CI, ignore them in production.
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.schemas._base import AdCPPricingOption
 
 _EXTRA_MODE = get_pydantic_extra_mode()
 
@@ -224,68 +224,91 @@ class AudienceSegmentsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Principals
+# Advertiser mappings (operator + brand → adapter advertiser routing)
 # ---------------------------------------------------------------------------
 
 
-class PrincipalCreate(BaseModel):
-    """Idempotent on (tenant, external_id). Repeat POST returns the existing row.
+class AccountBrandPattern(BaseModel):
+    """Brand component of an :class:`AccountPattern`. Same field names as AdCP
+    ``BrandReference`` (``domain``, ``brand_id``) but both are optional so a
+    routing rule can wildcard the brand house, the brand id, or both."""
 
-    ``platform_mappings`` must declare at least one adapter mapping (e.g.
-    ``{"google_ad_manager": {"advertiser_id": "12345"}}``). The model-layer
-    validator enforces non-empty; the storefront knows the tenant's ad
-    server context and supplies the right mapping.
+    model_config = _config()
+
+    domain: str | None = Field(default=None, max_length=255)
+    brand_id: str | None = Field(default=None, max_length=255)
+
+
+class AccountPattern(BaseModel):
+    """Routing-rule pattern over an AdCP account.
+
+    Structurally mirrors ``AccountReference`` (operator + brand + sandbox)
+    so the storefront can paste the same shape it uses on
+    ``create_media_buy`` — but ``brand`` is optional here, and components
+    inside ``brand`` are individually optional, because routing rules
+    treat NULL columns as wildcards per the existing resolution chain
+    (exact → house wildcard → operator wildcard → tenant default).
+
+    Strict AccountReference targeting one account uses every field; routing
+    patterns may leave some absent.
     """
 
     model_config = _config()
 
-    external_id: str = Field(..., min_length=1, max_length=255)
-    name: str = Field(..., min_length=1, max_length=200)
-    platform_mappings: dict = Field(..., min_length=1)
-    agent_url: str | None = None
-    brand_domain: str | None = None
+    operator: str = Field(..., min_length=1, max_length=255)
+    brand: AccountBrandPattern | None = None
+    sandbox: bool = False
 
 
-class PrincipalUpdate(BaseModel):
+class AdvertiserMappingCreate(BaseModel):
+    """Route buys carrying ``account: AccountReference`` to a specific adapter
+    advertiser. The natural key is ``account`` (operator + brand + sandbox);
+    NULL components on ``brand`` act as wildcards.
+    """
+
     model_config = _config()
 
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    platform_mappings: dict | None = None
-    agent_url: str | None = None
-    brand_domain: str | None = None
-    billing_enabled: bool | None = None
+    account: AccountPattern
+    adapter_advertiser_id: str = Field(..., min_length=1, max_length=64)
 
 
-class PrincipalRead(BaseModel):
+class AdvertiserMappingUpdate(BaseModel):
     model_config = _config()
 
-    principal_id: str
-    external_id: str | None
-    name: str
-    platform_mappings: dict
-    agent_url: str | None
-    brand_domain: str | None
-    billing_enabled: bool
+    adapter_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class AdvertiserMappingRead(BaseModel):
+    model_config = _config()
+
+    mapping_id: str
+    account: AccountPattern
+    adapter_advertiser_id: str
     created_at: datetime
     updated_at: datetime
 
 
-class PrincipalCreated(PrincipalRead):
-    """Returned on principal creation. Includes the access token; only emitted
-    once — token is never returned again from list/get endpoints."""
-
-    access_token: str
-
-
-class PrincipalListResponse(BaseModel):
+class AdvertiserMappingListResponse(BaseModel):
     model_config = _config()
-    principals: list[PrincipalRead]
+    advertiser_mappings: list[AdvertiserMappingRead]
 
 
-class TokenRotatedResponse(BaseModel):
+class AdvertiserSummary(BaseModel):
+    """Entry in the synced adapter-advertiser cache. Read-only mirror of the
+    operator's GAM (or other adapter) advertiser list."""
+
     model_config = _config()
-    principal_id: str
-    access_token: str
+
+    adapter_advertiser_id: str
+    name: str
+    status: str
+    currency_code: str | None = None
+    synced_at: datetime
+
+
+class AdvertiserListResponse(BaseModel):
+    model_config = _config()
+    advertisers: list[AdvertiserSummary]
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +317,13 @@ class TokenRotatedResponse(BaseModel):
 
 
 class DynamicProductCreate(BaseModel):
-    """Body for ``POST /api/v1/products``. Idempotency-Key header is required."""
+    """Body for ``POST /api/v1/products``. Idempotency-Key header is required.
+
+    Pricing flows through AdCP's typed ``PricingOption`` — same wire shape
+    ``create_media_buy`` and ``get_products`` use. No translation, no
+    impedance mismatch. The storefront sets the price; the sales agent
+    records it (no floor enforcement).
+    """
 
     model_config = _config()
 
@@ -304,10 +333,12 @@ class DynamicProductCreate(BaseModel):
         default=None,
         description="Optional AdCP-native targeting baked into the product at compose time",
     )
-    agreed_cpm: Decimal = Field(..., gt=Decimal("0"))
+    pricing_option: AdCPPricingOption = Field(
+        ...,
+        description="AdCP PricingOption — drives both wire shape and the persisted PricingOption row",
+    )
     flight_start: date
     flight_end: date
-    principal_id: str = Field(..., min_length=1)
     ttl_seconds: int | None = Field(
         default=None,
         gt=0,
@@ -322,10 +353,9 @@ class DynamicProductRead(BaseModel):
     composition_source: Literal["storefront_composed"]
     inventory_profile_id: str
     custom_targeting_profile_ids: list[str]
-    agreed_cpm: Decimal
+    pricing_option: AdCPPricingOption
     flight_start: date
     flight_end: date
-    principal_id: str
     expires_at: datetime
     implementation_config_summary: dict
     created_at: datetime
@@ -343,10 +373,10 @@ _COMPOSITION_ERROR_CODES = Literal[
     "unknown_inventory_profile",
     "unknown_custom_targeting_profile",
     "unknown_segment",
-    "missing_principal",
     "expired_inventory_profile",
     "expired_custom_targeting_profile",
     "invalid_flight_dates",
+    "unsupported_pricing_model",
 ]
 
 
@@ -362,7 +392,7 @@ class CompositionErrorDetail(BaseModel):
     dimension: str | None = None
     format_id: str | None = None
     channel: str | None = None
-    principal_id: str | None = None
+    pricing_model: str | None = None
     expected: str | None = None
     got: str | None = None
     message: str | None = None

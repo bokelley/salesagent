@@ -2,13 +2,20 @@
 
 Server-to-server surface for an embedding storefront (e.g. Scope3) to manage
 the primitives it composes products from: inventory profiles, custom targeting
-profiles, principals, and (in a follow-up phase) dynamic product creation.
+profiles, advertiser mappings, and dynamic product creation.
 
 Auth: same operator/wrapper API key as the Tenant Management API
 (``X-Tenant-Management-API-Key``). No new MCP tools — this is REST only.
 
-Pricing: storefront sets ``agreed_cpm`` end-to-end. The sales agent records
-it for audit; no floor enforcement.
+Vocabulary mirrors the AdCP spec (``PricingOption``, ``AccountReference``) so
+storefronts can paste the same shapes they already construct for the buyer
+protocol. Pricing flows through ``PricingOption`` — the storefront sets the
+price end-to-end; the sales agent records it (no floor enforcement).
+
+In embedded mode the host (storefront) is the only agent. The sales agent
+never receives requests directly from a buyer, so there is no per-buyer
+principal API on this surface — the tenant's embedded principal is
+auto-resolved (lazy-created on first compose).
 
 See ``.context/embedded-composition-design.md``.
 """
@@ -27,6 +34,12 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import IntegrityError
 
 from src.admin.api_schemas.composition import (
+    AdvertiserListResponse,
+    AdvertiserMappingCreate,
+    AdvertiserMappingListResponse,
+    AdvertiserMappingRead,
+    AdvertiserMappingUpdate,
+    AdvertiserSummary,
     ApiError,
     AudienceSegmentsResponse,
     CompositionError,
@@ -43,24 +56,24 @@ from src.admin.api_schemas.composition import (
     InventoryProfileListResponse,
     InventoryProfileRead,
     InventoryProfileUpdate,
-    PrincipalCreate,
-    PrincipalCreated,
-    PrincipalListResponse,
-    PrincipalRead,
-    PrincipalUpdate,
     TargetingComponents,
-    TokenRotatedResponse,
 )
 from src.admin.auth_helpers import require_api_key_auth
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
+    AdvertiserRoutingRule,
     CustomTargetingProfile,
     InventoryProfile,
+    PricingOption,
     Principal,
     Product,
     Tenant,
+)
+from src.core.database.repositories.advertiser_mapping import (
+    AdvertiserMappingRepository,
+    GamAdvertiserRepository,
 )
 from src.core.database.repositories.custom_targeting_profile import CustomTargetingProfileRepository
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
@@ -446,179 +459,55 @@ def delete_custom_targeting_profile(tenant_id: str, profile_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Principals
+# Embedded principal — lazy auto-resolution
 # ---------------------------------------------------------------------------
 
 
-def _principal_to_read(principal: Principal) -> dict:
-    return PrincipalRead(
-        principal_id=principal.principal_id,
-        external_id=principal.external_id,
-        name=principal.name,
-        platform_mappings=principal.platform_mappings or {},
-        agent_url=principal.agent_url,
-        brand_domain=principal.brand_domain,
-        billing_enabled=bool(principal.billing_enabled),
-        created_at=principal.created_at,
-        updated_at=principal.updated_at,
-    ).model_dump(mode="json")
+# Reserved external_id marker for the per-tenant embedded principal. The
+# host (storefront) is the only agent in embedded mode; this principal
+# exists so composed Products can be scoped to a principal_id for
+# get_products filtering and AuditLog consistency.
+_EMBEDDED_PRINCIPAL_EXTERNAL_ID = "__embedded_host__"
 
 
-@composition_api.route("/tenants/<tenant_id>/principals", methods=["GET"])
-@require_composition_api_key
-def list_principals(tenant_id: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = PrincipalRepository(session, tenant_id)
-        principals = repo.list_all()
-        items = [_principal_to_read(p) for p in principals]
-        body = PrincipalListResponse(principals=items).model_dump(mode="json")
-        return jsonify(body), 200
+def _resolve_or_create_embedded_principal(session, tenant: Tenant) -> Principal:
+    """Return the tenant's embedded principal, creating it on first call.
 
+    The embedded principal has NULL ``access_token`` (no direct-to-/mcp
+    auth path in embedded mode). The ``platform_mappings`` entry is a
+    sentinel under the tenant's ad-server key — actual GAM (or other
+    adapter) advertiser resolution flows through advertiser routing rules,
+    not through this row. The key just satisfies the
+    ``PlatformMappingModel`` validator which requires at least one known
+    adapter key.
+    """
+    repo = PrincipalRepository(session, tenant.tenant_id)
+    existing = repo.get_by_external_id(_EMBEDDED_PRINCIPAL_EXTERNAL_ID)
+    if existing is not None:
+        return existing
 
-@composition_api.route("/tenants/<tenant_id>/principals/<principal_id>", methods=["GET"])
-@require_composition_api_key
-def get_principal(tenant_id: str, principal_id: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = PrincipalRepository(session, tenant_id)
-        principal = repo.get_by_id(principal_id)
-        if principal is None:
-            return _api_error(
-                "principal_not_found",
-                f"Principal {principal_id!r} not found.",
-                404,
-            )
-        return jsonify(_principal_to_read(principal)), 200
+    adapter_key = tenant.ad_server if tenant.ad_server in {"google_ad_manager", "mock"} else "mock"
+    sentinel_mapping = {adapter_key: {"resolved_via": "advertiser_routing_rules"}}
 
-
-@composition_api.route("/tenants/<tenant_id>/principals", methods=["POST"])
-@require_composition_api_key
-def create_principal(tenant_id: str):
-    """Idempotent on (tenant, external_id). Repeat POST returns the existing row
-    without rotating the token."""
+    principal = Principal(
+        tenant_id=tenant.tenant_id,
+        principal_id=f"embedded_{secrets.token_hex(6)}",
+        external_id=_EMBEDDED_PRINCIPAL_EXTERNAL_ID,
+        name=f"{tenant.name} embedded host",
+        platform_mappings=sentinel_mapping,
+        access_token=None,
+    )
+    repo.add(principal)
     try:
-        payload = PrincipalCreate.model_validate(request.get_json() or {})
-    except Exception as exc:
-        return _api_error("invalid_request", str(exc), 400)
-
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = PrincipalRepository(session, tenant_id)
-        existing = repo.get_by_external_id(payload.external_id)
-        if existing is not None:
-            # Idempotent replay — token is NOT re-emitted (security: only on create).
-            body = _principal_to_read(existing)
-            return jsonify(body), 200
-
-        principal_id = f"principal_{secrets.token_hex(8)}"
-        access_token = secrets.token_urlsafe(32)
-        principal = Principal(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            external_id=payload.external_id,
-            name=payload.name,
-            platform_mappings=payload.platform_mappings,
-            access_token=access_token,
-            agent_url=payload.agent_url,
-            brand_domain=payload.brand_domain,
-        )
-        repo.add(principal)
-        try:
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
-            # Race: another writer claimed this external_id between our
-            # idempotency probe and commit. Re-read and treat as replay.
-            replay = repo.get_by_external_id(payload.external_id)
-            if replay is not None:
-                return jsonify(_principal_to_read(replay)), 200
-            return _api_error("conflict", str(exc), 409)
-
-        body = PrincipalCreated(
-            **_principal_to_read(principal),
-            access_token=access_token,
-        ).model_dump(mode="json")
-        return jsonify(body), 201
-
-
-@composition_api.route("/tenants/<tenant_id>/principals/<principal_id>", methods=["PUT"])
-@require_composition_api_key
-def update_principal(tenant_id: str, principal_id: str):
-    try:
-        payload = PrincipalUpdate.model_validate(request.get_json() or {})
-    except Exception as exc:
-        return _api_error("invalid_request", str(exc), 400)
-
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = PrincipalRepository(session, tenant_id)
-        principal = repo.get_by_id(principal_id)
-        if principal is None:
-            return _api_error(
-                "principal_not_found",
-                f"Principal {principal_id!r} not found.",
-                404,
-            )
-        if payload.name is not None:
-            principal.name = payload.name
-        if payload.platform_mappings is not None:
-            principal.platform_mappings = payload.platform_mappings
-        if payload.agent_url is not None:
-            principal.agent_url = payload.agent_url
-        if payload.brand_domain is not None:
-            principal.brand_domain = payload.brand_domain
-        if payload.billing_enabled is not None:
-            principal.billing_enabled = payload.billing_enabled
-        session.commit()
-        return jsonify(_principal_to_read(principal)), 200
-
-
-@composition_api.route("/tenants/<tenant_id>/principals/<principal_id>", methods=["DELETE"])
-@require_composition_api_key
-def delete_principal(tenant_id: str, principal_id: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = PrincipalRepository(session, tenant_id)
-        principal = repo.get_by_id(principal_id)
-        if principal is None:
-            return _api_error(
-                "principal_not_found",
-                f"Principal {principal_id!r} not found.",
-                404,
-            )
-        repo.delete(principal)
-        session.commit()
-        return "", 204
-
-
-@composition_api.route(
-    "/tenants/<tenant_id>/principals/<principal_id>/rotate-token",
-    methods=["POST"],
-)
-@require_composition_api_key
-def rotate_principal_token(tenant_id: str, principal_id: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = PrincipalRepository(session, tenant_id)
-        principal = repo.get_by_id(principal_id)
-        if principal is None:
-            return _api_error(
-                "principal_not_found",
-                f"Principal {principal_id!r} not found.",
-                404,
-            )
-        new_token = secrets.token_urlsafe(32)
-        principal.access_token = new_token
-        session.commit()
-        body = TokenRotatedResponse(principal_id=principal_id, access_token=new_token).model_dump(mode="json")
-        return jsonify(body), 200
+        session.flush()
+    except IntegrityError:
+        # Race: a concurrent compose claimed the slot. Re-read.
+        session.rollback()
+        replay = repo.get_by_external_id(_EMBEDDED_PRINCIPAL_EXTERNAL_ID)
+        if replay is None:
+            raise
+        return replay
+    return principal
 
 
 # ---------------------------------------------------------------------------
@@ -812,19 +701,85 @@ def _validate_capability_narrowing(
     return errors
 
 
-def _dynamic_product_to_read(product: Product) -> dict:
-    flight_start = (product.expires_at and product.expires_at.date()) or None
-    # Fall back to today if we can't infer (shouldn't happen for valid
-    # dynamic products, but keep the typed response shape stable).
+# Supported pricing models — mirrors core/main.py build_router declaration.
+# Storefront-composed products may only use a pricing_model the agent's
+# DecisioningCapabilities declared support for. Per-tenant override could
+# come later when adapters declare distinct capability sets.
+SUPPORTED_PRICING_MODELS: frozenset[str] = frozenset({"cpm"})
+
+
+def _persist_pricing_option(
+    *,
+    session,
+    tenant_id: str,
+    product_id: str,
+    pricing_option,
+) -> PricingOption:
+    """Translate an AdCP PricingOption into the ORM row that ``Product.pricing_options``
+    expects. The full AdCP shape is also cached on ``parameters`` so the read
+    path is lossless even though the ORM column model is flatter than the
+    spec.
+    """
+    po_dict = pricing_option.model_dump(mode="json")
+    rate: Decimal | None
+    if pricing_option.fixed_price is not None:
+        rate = Decimal(str(pricing_option.fixed_price))
+        is_fixed = True
+    elif pricing_option.floor_price is not None:
+        rate = Decimal(str(pricing_option.floor_price))
+        is_fixed = False
+    else:
+        rate = None
+        is_fixed = False
+
+    parameters: dict[str, Any] = {"_pricing_option": po_dict}
+
+    min_spend = (
+        Decimal(str(pricing_option.min_spend_per_package)) if pricing_option.min_spend_per_package is not None else None
+    )
+    price_guidance = pricing_option.price_guidance.model_dump() if pricing_option.price_guidance else None
+
+    po_row = PricingOption(
+        tenant_id=tenant_id,
+        product_id=product_id,
+        pricing_model=pricing_option.pricing_model,
+        rate=rate,
+        currency=pricing_option.currency,
+        is_fixed=is_fixed,
+        price_guidance=price_guidance,
+        parameters=parameters,
+        min_spend_per_package=min_spend,
+    )
+    session.add(po_row)
+    return po_row
+
+
+def _read_pricing_option(po_row: PricingOption) -> dict:
+    """Return the AdCP PricingOption dict cached on the row. Falls back to a
+    minimal reconstruction for rows that didn't come through this API path."""
+    params = po_row.parameters or {}
+    cached = params.get("_pricing_option")
+    if cached:
+        return cached
+    return {
+        "pricing_option_id": f"po_{po_row.id}",
+        "pricing_model": po_row.pricing_model,
+        "currency": po_row.currency,
+        "fixed_price": float(po_row.rate) if po_row.is_fixed and po_row.rate else None,
+        "floor_price": float(po_row.rate) if not po_row.is_fixed and po_row.rate else None,
+    }
+
+
+def _dynamic_product_to_read(product: Product, pricing_option_dict: dict) -> dict:
+    flight_start = (product.expires_at and product.expires_at.date()) or date.today()
     return DynamicProductRead(
         product_id=product.product_id,
         composition_source="storefront_composed",
         inventory_profile_id=(product.inventory_profile.profile_id if product.inventory_profile else ""),
         custom_targeting_profile_ids=list(product.custom_targeting_profile_ids or []),
-        agreed_cpm=product.agreed_cpm or Decimal("0"),
-        flight_start=flight_start or date.today(),
-        flight_end=flight_start or date.today(),
-        principal_id=product.composed_by_principal_id or "",
+        pricing_option=pricing_option_dict,
+        flight_start=flight_start,
+        flight_end=flight_start,
         expires_at=product.expires_at or datetime.now(UTC),
         implementation_config_summary=product.implementation_config or {},
         created_at=getattr(product, "created_at", datetime.now(UTC)),
@@ -834,7 +789,13 @@ def _dynamic_product_to_read(product: Product) -> dict:
 @composition_api.route("/tenants/<tenant_id>/products", methods=["POST"])
 @require_composition_api_key
 def compose_product(tenant_id: str):
-    """Materialize a dynamic product from primitives. Idempotency-Key header required."""
+    """Materialize a dynamic product from primitives. Idempotency-Key header required.
+
+    The storefront supplies a full ``PricingOption`` (AdCP's typed wire shape);
+    the sales agent records it as a ``Product.pricing_options`` row and returns
+    it lossless on read. No agent identification needed — in embedded mode the
+    host is the only agent, auto-resolved on first compose.
+    """
     idempotency_key = request.headers.get("Idempotency-Key")
     if not idempotency_key:
         return _api_error(
@@ -863,38 +824,45 @@ def compose_product(tenant_id: str):
             422,
         )
 
+    if payload.pricing_option.pricing_model not in SUPPORTED_PRICING_MODELS:
+        return (
+            jsonify(
+                CompositionError(
+                    details=[
+                        CompositionErrorDetail(
+                            code="unsupported_pricing_model",
+                            pricing_model=payload.pricing_option.pricing_model,
+                            expected=",".join(sorted(SUPPORTED_PRICING_MODELS)),
+                            got=payload.pricing_option.pricing_model,
+                            message=(
+                                f"pricing_model={payload.pricing_option.pricing_model!r} is not in the "
+                                f"agent's declared supported_pricing_models."
+                            ),
+                        )
+                    ]
+                ).model_dump(mode="json")
+            ),
+            422,
+        )
+
     with get_db_session() as session:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
 
-        principals = PrincipalRepository(session, tenant_id)
-        principal = principals.get_by_id(payload.principal_id)
-        if principal is None:
-            return (
-                jsonify(
-                    CompositionError(
-                        details=[
-                            CompositionErrorDetail(
-                                code="missing_principal",
-                                principal_id=payload.principal_id,
-                                message=f"Principal {payload.principal_id!r} not found.",
-                            )
-                        ]
-                    ).model_dump(mode="json")
-                ),
-                422,
-            )
+        # Auto-resolve the embedded principal — no buyer-side principal API.
+        embedded_principal = _resolve_or_create_embedded_principal(session, tenant)
 
         products = ProductRepository(session, tenant_id)
 
         # Idempotency replay — return the previously composed product unchanged.
         existing = products.find_composed_by_idempotency_key(
-            principal_id=payload.principal_id,
+            principal_id=embedded_principal.principal_id,
             idempotency_key=idempotency_key,
         )
         if existing is not None:
-            return jsonify(_dynamic_product_to_read(existing)), 200
+            existing_pricing = _read_pricing_option(existing.pricing_options[0]) if existing.pricing_options else {}
+            return jsonify(_dynamic_product_to_read(existing, existing_pricing)), 200
 
         inv_repo = InventoryProfileRepository(session, tenant_id)
         inventory_profile = inv_repo.get_by_id(payload.inventory_profile_id)
@@ -962,7 +930,7 @@ def compose_product(tenant_id: str):
         product = Product(
             tenant_id=tenant_id,
             product_id=product_id,
-            name=f"Composed for {principal.name}",
+            name=f"Composed {product_id}",
             description=None,
             format_ids=inventory_profile.format_ids or [],
             targeting_template=payload.adcp_targeting or inventory_profile.targeting_template or {},
@@ -975,13 +943,19 @@ def compose_product(tenant_id: str):
             property_tags=["all_inventory"],
             expires_at=expires_at,
             composition_source="storefront_composed",
-            composed_by_principal_id=principal.principal_id,
+            composed_by_principal_id=embedded_principal.principal_id,
             idempotency_key=idempotency_key,
             custom_targeting_profile_ids=list(payload.custom_targeting_profile_ids),
-            agreed_cpm=payload.agreed_cpm,
-            allowed_principal_ids=[principal.principal_id],
+            allowed_principal_ids=[embedded_principal.principal_id],
         )
         products.create(product)
+        _persist_pricing_option(
+            session=session,
+            tenant_id=tenant_id,
+            product_id=product_id,
+            pricing_option=payload.pricing_option,
+        )
+
         try:
             session.commit()
         except IntegrityError as exc:
@@ -990,30 +964,28 @@ def compose_product(tenant_id: str):
             # winning row so the storefront still gets a consistent result.
             session.rollback()
             replay = products.find_composed_by_idempotency_key(
-                principal_id=payload.principal_id,
+                principal_id=embedded_principal.principal_id,
                 idempotency_key=idempotency_key,
             )
             if replay is not None:
-                return jsonify(_dynamic_product_to_read(replay)), 200
+                replay_pricing = _read_pricing_option(replay.pricing_options[0]) if replay.pricing_options else {}
+                return jsonify(_dynamic_product_to_read(replay, replay_pricing)), 200
             return _api_error("conflict", str(exc), 409)
 
-        # Materialize the response body BEFORE the audit-log call. The audit
-        # logger opens its own get_db_session() context; depending on the
-        # session-scope strategy that can detach this session's instances
-        # from their bindings, which then breaks lazy-load on attribute
-        # access. Snapshotting the response payload first avoids that hazard
-        # entirely and lets us treat audit emission as best-effort.
-        response_body = _dynamic_product_to_read(product)
+        # Snapshot before exiting the session (audit-logger opens its own
+        # session; lazy-loads after that can detach).
+        pricing_option_dict = payload.pricing_option.model_dump(mode="json")
+        response_body = _dynamic_product_to_read(product, pricing_option_dict)
         audit_details = {
             "product_id": product.product_id,
             "inventory_profile_id": inventory_profile.profile_id,
             "custom_targeting_profile_ids": list(payload.custom_targeting_profile_ids),
-            "agreed_cpm": str(payload.agreed_cpm),
+            "pricing_option": pricing_option_dict,
             "idempotency_key": idempotency_key,
             "expires_at": expires_at.isoformat(),
         }
-        principal_name = principal.name
-        principal_id_value = principal.principal_id
+        principal_name = embedded_principal.name
+        principal_id_value = embedded_principal.principal_id
 
     try:
         get_audit_logger("composition_api", tenant_id=tenant_id).log_operation(
@@ -1039,11 +1011,217 @@ def get_composed_product(tenant_id: str, product_id: str):
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
         products = ProductRepository(session, tenant_id)
-        product = products.get_by_id(product_id)
+        product = products.get_by_id_with_pricing(product_id)
         if product is None or product.composition_source != "storefront_composed":
             return _api_error(
                 "product_not_found",
                 f"Composed product {product_id!r} not found.",
                 404,
             )
-        return jsonify(_dynamic_product_to_read(product)), 200
+        pricing_option_dict = _read_pricing_option(product.pricing_options[0]) if product.pricing_options else {}
+        return jsonify(_dynamic_product_to_read(product, pricing_option_dict)), 200
+
+
+# ---------------------------------------------------------------------------
+# Advertiser mappings (AccountReference → adapter advertiser)
+# ---------------------------------------------------------------------------
+
+
+def _account_from_rule(rule: AdvertiserRoutingRule) -> dict:
+    """Translate an ``AdvertiserRoutingRule``'s internal columns into the
+    :class:`AccountPattern` wire shape. NULL ``brand_house``/``brand_id``
+    surface as omitted fields so the wildcard semantics survive the round trip."""
+    account: dict[str, Any] = {"operator": rule.operator_domain, "sandbox": False}
+    if rule.brand_house is not None or rule.brand_id is not None:
+        brand: dict[str, Any] = {}
+        if rule.brand_house is not None:
+            brand["domain"] = rule.brand_house
+        if rule.brand_id is not None:
+            brand["brand_id"] = rule.brand_id
+        account["brand"] = brand
+    return account
+
+
+def _advertiser_mapping_to_read(rule: AdvertiserRoutingRule) -> dict:
+    return AdvertiserMappingRead(
+        mapping_id=rule.id,
+        account=_account_from_rule(rule),
+        adapter_advertiser_id=rule.gam_advertiser_id,
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    ).model_dump(mode="json")
+
+
+def _account_to_columns(account) -> tuple[str, str | None, str | None]:
+    """Pull (operator_domain, brand_house, brand_id) from an AccountPattern.
+
+    The strict AdCP ``AccountReference`` is a discriminated union (variant 1:
+    account_id, variant 2: operator + brand + sandbox). Routing rules use a
+    looser :class:`AccountPattern` where ``brand`` and its components may be
+    omitted to express wildcards — same vocabulary, additional flexibility.
+    """
+    operator_domain = account.operator
+    brand = account.brand
+    brand_house = brand.domain if brand else None
+    brand_id = brand.brand_id if brand else None
+    return operator_domain, brand_house, brand_id
+
+
+@composition_api.route("/tenants/<tenant_id>/advertiser-mappings", methods=["GET"])
+@require_composition_api_key
+def list_advertiser_mappings(tenant_id: str):
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = AdvertiserMappingRepository(session, tenant_id)
+        items = [_advertiser_mapping_to_read(rule) for rule in repo.list_all()]
+        body = AdvertiserMappingListResponse(advertiser_mappings=items).model_dump(mode="json")
+        return jsonify(body), 200
+
+
+@composition_api.route(
+    "/tenants/<tenant_id>/advertiser-mappings/<mapping_id>",
+    methods=["GET"],
+)
+@require_composition_api_key
+def get_advertiser_mapping(tenant_id: str, mapping_id: str):
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        rule = AdvertiserMappingRepository(session, tenant_id).get_by_id(mapping_id)
+        if rule is None:
+            return _api_error(
+                "advertiser_mapping_not_found",
+                f"Advertiser mapping {mapping_id!r} not found.",
+                404,
+            )
+        return jsonify(_advertiser_mapping_to_read(rule)), 200
+
+
+@composition_api.route("/tenants/<tenant_id>/advertiser-mappings", methods=["POST"])
+@require_composition_api_key
+def create_advertiser_mapping(tenant_id: str):
+    try:
+        payload = AdvertiserMappingCreate.model_validate(request.get_json() or {})
+    except Exception as exc:
+        return _api_error("invalid_request", str(exc), 400)
+    operator_domain, brand_house, brand_id = _account_to_columns(payload.account)
+
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = AdvertiserMappingRepository(session, tenant_id)
+        # The natural key uniqueness check is enforced at DB level via the
+        # uq_routing_rule_natural_key index; this lookup short-circuits the
+        # happy path so callers see a clean 409 instead of an IntegrityError.
+        existing = repo.find_by_natural_key(
+            principal_id=None,
+            operator_domain=operator_domain,
+            brand_house=brand_house,
+            brand_id=brand_id,
+        )
+        if existing is not None:
+            return _api_error(
+                "conflict",
+                "An advertiser mapping already exists for this account natural key.",
+                409,
+                details={"mapping_id": existing.id},
+            )
+
+        rule = AdvertiserRoutingRule(
+            id=f"rule_{secrets.token_hex(10)}",
+            tenant_id=tenant_id,
+            principal_id=None,  # embedded mode: no per-agent narrowing
+            operator_domain=operator_domain,
+            brand_house=brand_house,
+            brand_id=brand_id,
+            gam_advertiser_id=payload.adapter_advertiser_id,
+        )
+        repo.add(rule)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            return _api_error("conflict", str(exc), 409)
+        return jsonify(_advertiser_mapping_to_read(rule)), 201
+
+
+@composition_api.route(
+    "/tenants/<tenant_id>/advertiser-mappings/<mapping_id>",
+    methods=["PUT"],
+)
+@require_composition_api_key
+def update_advertiser_mapping(tenant_id: str, mapping_id: str):
+    """Only ``adapter_advertiser_id`` is mutable. Changing the natural key
+    requires DELETE + POST so the uniqueness index can't be silently violated."""
+    try:
+        payload = AdvertiserMappingUpdate.model_validate(request.get_json() or {})
+    except Exception as exc:
+        return _api_error("invalid_request", str(exc), 400)
+
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        rule = AdvertiserMappingRepository(session, tenant_id).get_by_id(mapping_id)
+        if rule is None:
+            return _api_error(
+                "advertiser_mapping_not_found",
+                f"Advertiser mapping {mapping_id!r} not found.",
+                404,
+            )
+        if payload.adapter_advertiser_id is not None:
+            rule.gam_advertiser_id = payload.adapter_advertiser_id
+        session.commit()
+        return jsonify(_advertiser_mapping_to_read(rule)), 200
+
+
+@composition_api.route(
+    "/tenants/<tenant_id>/advertiser-mappings/<mapping_id>",
+    methods=["DELETE"],
+)
+@require_composition_api_key
+def delete_advertiser_mapping(tenant_id: str, mapping_id: str):
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = AdvertiserMappingRepository(session, tenant_id)
+        rule = repo.get_by_id(mapping_id)
+        if rule is None:
+            return _api_error(
+                "advertiser_mapping_not_found",
+                f"Advertiser mapping {mapping_id!r} not found.",
+                404,
+            )
+        repo.delete(rule)
+        session.commit()
+        return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Advertisers (synced cache, read-only)
+# ---------------------------------------------------------------------------
+
+
+@composition_api.route("/tenants/<tenant_id>/advertisers", methods=["GET"])
+@require_composition_api_key
+def list_advertisers(tenant_id: str):
+    """Synced cache of adapter advertisers for the picker. Read-only — the
+    sync job hydrates this from the adapter (GAM ``CompanyService``)."""
+    include_inactive = request.args.get("include_inactive", "").lower() in ("true", "1", "yes")
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = GamAdvertiserRepository(session, tenant_id)
+        rows = repo.list_all(include_inactive=include_inactive)
+        items = [
+            AdvertiserSummary(
+                adapter_advertiser_id=row.advertiser_id,
+                name=row.name,
+                status=row.status,
+                currency_code=row.currency_code,
+                synced_at=row.synced_at,
+            ).model_dump(mode="json")
+            for row in rows
+        ]
+        body = AdvertiserListResponse(advertisers=items).model_dump(mode="json")
+        return jsonify(body), 200

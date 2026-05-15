@@ -468,9 +468,6 @@ class Product(Base, JSONValidatorMixin):
     # Custom targeting profile ids referenced at composition time. Resolution
     # into implementation_config happens at write time; this is the trail.
     custom_targeting_profile_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Storefront-set price recorded for audit. Not enforced by the sales agent.
-    agreed_cpm: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 4), nullable=True)
-
     # Relationships
     tenant = relationship("Tenant", back_populates="products")
     inventory_profile = relationship("InventoryProfile", back_populates="products")
@@ -690,7 +687,12 @@ class Principal(Base, JSONValidatorMixin):
     principal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
-    access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # Bearer token for direct-to-/mcp authentication. Required for
+    # open-instance principals (buyer agents that hit the sales agent's
+    # AdCP surface directly). Nullable so embedded-mode principals — where
+    # the host (storefront) is the only agent and the sales agent never
+    # receives requests directly from a buyer — can be created without one.
+    access_token: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     # Buyer-agent URL — informational; populated from brand.json at admit
     # time so it shows up in audit logs and the admin UI. NOT used by the
     # verifier hot path; rotation of agent_url in brand.json doesn't need

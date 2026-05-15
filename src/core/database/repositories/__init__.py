@@ -17,6 +17,10 @@ Usage:
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
+from src.core.database.repositories.advertiser_mapping import (
+    AdvertiserMappingRepository,
+    GamAdvertiserRepository,
+)
 from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.custom_targeting_profile import CustomTargetingProfileRepository
@@ -36,7 +40,9 @@ __all__ = [
     "AccountRepository",
     "AccountUoW",
     "AdapterConfigRepository",
+    "AdvertiserMappingRepository",
     "AuditLogRepository",
+    "GamAdvertiserRepository",
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
     "CustomTargetingProfileRepository",
