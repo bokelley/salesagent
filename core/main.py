@@ -676,6 +676,13 @@ def build_app():
         enable_dns_rebinding_protection=False,
         auth=kwargs["auth"],
         pre_validation_hooks=pre_validation_hooks,
+        # Lifespan hooks must propagate to the in-process app so
+        # ``open_proposal_store`` runs and binds the psycopg3 async
+        # pool to the test harness's loop. ``main()``'s ``serve()``
+        # call wires these natively; ``build_app`` has to forward
+        # them explicitly because it bypasses ``serve``.
+        on_startup=kwargs["on_startup"],
+        on_shutdown=kwargs["on_shutdown"],
     )
     return _apply_asgi_middleware(app, asgi_middleware)
 
