@@ -485,6 +485,22 @@ def integration_db():
 
     src.core.context_manager._context_manager_instance = None
 
+    # Reset every process-wide cache that holds a psycopg pool — idempotency
+    # store, replay store, and proposal store all bind their pool to whatever
+    # DATABASE_URL was live on first use. Without a reset between tests, the
+    # pool keeps trying to connect to a previous test's database (now dropped)
+    # and every later request that needs the cache hits psycopg's 30s PoolTimeout.
+    import sys
+
+    for mod_name in (
+        "core.idempotency",
+        "src.core.signing.replay_store",
+        "core.decisioning.proposal_store",
+    ):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and hasattr(mod, "reset_for_tests"):
+            mod.reset_for_tests()
+
     yield db_path
 
     # Reset engine to clean up test database connections
@@ -492,6 +508,18 @@ def integration_db():
 
     # Reset context manager singleton again to avoid stale references
     src.core.context_manager._context_manager_instance = None
+
+    # Same reason as above — clear pool-holding singletons so the next test's
+    # fixture rebuilds against its fresh DATABASE_URL instead of inheriting the
+    # dropped-DB pool.
+    for mod_name in (
+        "core.idempotency",
+        "src.core.signing.replay_store",
+        "core.decisioning.proposal_store",
+    ):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and hasattr(mod, "reset_for_tests"):
+            mod.reset_for_tests()
 
     # Cleanup
     engine.dispose()
