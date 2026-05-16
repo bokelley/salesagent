@@ -367,6 +367,86 @@ class TestGamComposedSignals:
                 )
 
 
+class TestActivateSignalForTenantSignals:
+    """``activate_signal`` returns a stable decisioning_platform_segment_id
+    (== signal_id) for operator-declared TenantSignal rows. No synthetic
+    UUID drift across calls — repeat activations are idempotent.
+    """
+
+    def test_activate_known_tenant_signal_returns_stable_handle(self, integration_db):
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.tools.signals import _activate_signal_impl
+        from tests.factories import PrincipalFactory, TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="act_t1", ad_server="google_ad_manager")
+            principal = PrincipalFactory(tenant=tenant)
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="audience_sports_fans",
+                adapter_config={"kind": "audience_segment", "segment_id": "98765"},
+            )
+            env.get_session()
+
+            identity = ResolvedIdentity(
+                tenant_id="act_t1",
+                principal_id=principal.principal_id,
+                tenant={"ad_server": "google_ad_manager"},
+                principal=None,
+                testing_context=None,
+                auth_method="api_key",
+                raw_credential=None,
+            )
+            response = asyncio.run(
+                _activate_signal_impl(
+                    signal_agent_segment_id="audience_sports_fans",
+                    identity=identity,
+                )
+            )
+
+        assert response.errors is None
+        assert response.activation_details is not None
+        # Stable handle: decisioning_platform_segment_id IS the signal_id.
+        assert response.activation_details["decisioning_platform_segment_id"] == "audience_sports_fans"
+        assert response.activation_details["status"] == "deployed"
+        # Publisher first-party signal = zero activation latency.
+        assert response.activation_details["estimated_activation_duration_minutes"] == 0.0
+
+    def test_activate_unknown_signal_falls_through_to_mock(self, integration_db):
+        """Sample signals from the hardcoded demo set still get the
+        mock-activation flow — backward compat with existing buyer demos."""
+        from src.core.resolved_identity import ResolvedIdentity
+        from src.core.tools.signals import _activate_signal_impl
+        from tests.factories import PrincipalFactory, TenantFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="act_t2", ad_server="google_ad_manager")
+            principal = PrincipalFactory(tenant=tenant)
+            env.get_session()
+
+            identity = ResolvedIdentity(
+                tenant_id="act_t2",
+                principal_id=principal.principal_id,
+                tenant={"ad_server": "google_ad_manager"},
+                principal=None,
+                testing_context=None,
+                auth_method="api_key",
+                raw_credential=None,
+            )
+            response = asyncio.run(
+                _activate_signal_impl(
+                    signal_agent_segment_id="auto_intenders_q1_2025",
+                    identity=identity,
+                )
+            )
+
+        # Mock path: synthetic decisioning_platform_segment_id, processing status.
+        assert response.errors is None
+        assert response.activation_details is not None
+        assert response.activation_details["status"] == "processing"
+        assert response.activation_details["decisioning_platform_segment_id"].startswith("seg_auto_intenders_q1_2025_")
+
+
 class TestGamSignalErrors:
     """Failure modes — fail loud, never silently drop targeting."""
 

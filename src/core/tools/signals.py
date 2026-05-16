@@ -352,54 +352,66 @@ async def _activate_signal_impl(
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet
 
     try:
-        # In a real implementation, this would:
-        # 1. Validate the signal exists and is available
-        # 2. Check if the principal has permission to activate the signal
-        # 3. Communicate with the signal provider's API to activate the signal
-        # 4. Update the campaign or media buy configuration to include the signal
-
-        # Mock implementation for demonstration
-        activation_success = True
-        requires_approval = signal_agent_segment_id.startswith("premium_")
-
+        from src.core.database.repositories.uow import TenantSignalUoW
         from src.core.schemas import Error
 
-        if requires_approval:
-            # Create a human task for approval - return error response
-            errors = [
-                Error(
-                    code="APPROVAL_REQUIRED",
-                    message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
-                )
-            ]
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details=None,
-                errors=errors,
-                context=context,
-            )
-        elif activation_success:
-            # Success - return activation details
-            decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
+        # Operator-declared signals (the publisher's first-party adapter
+        # capability map) are immediately usable on the publisher's own
+        # inventory — no external provisioning. ``activate_signal`` validates
+        # the signal exists and returns a stable handle the buyer can pass
+        # in ``audience_include`` / ``audience_exclude`` on
+        # ``create_media_buy``. For these signals, the
+        # decisioning_platform_segment_id is the signal_id itself: stable
+        # across calls, no synthetic UUID drift.
+        with TenantSignalUoW(identity.tenant_id) as uow:
+            assert uow.tenant_signals is not None
+            tenant_signal = uow.tenant_signals.get_by_id(signal_agent_segment_id)
+            # Snapshot the stable signal_id while the row is still
+            # session-bound — accessing it after the UoW exits would trip
+            # DetachedInstanceError on attribute refresh.
+            resolved_signal_id = tenant_signal.signal_id if tenant_signal is not None else None
+
+        if resolved_signal_id is not None:
             return ActivateSignalResponse(
                 signal_id=signal_agent_segment_id,
                 activation_details={
-                    "decisioning_platform_segment_id": decisioning_platform_segment_id,
-                    "estimated_activation_duration_minutes": 15.0,
-                    "status": "processing",
+                    "decisioning_platform_segment_id": resolved_signal_id,
+                    "estimated_activation_duration_minutes": 0.0,
+                    "status": "deployed",
                 },
                 errors=None,
                 context=context,
             )
-        else:
-            # Failure
-            errors = [Error(code="ACTIVATION_FAILED", message="Signal provider unavailable")]
+
+        # Fall-through: signal not declared on tenant_signals. Today this
+        # covers the hardcoded sample signals in get_signals (legacy demo
+        # data) — they get the mock activation flow. A future signals-agent
+        # path would call out to an external agent here; for now we preserve
+        # the demo behavior so existing buyers don't break.
+        if signal_agent_segment_id.startswith("premium_"):
             return ActivateSignalResponse(
                 signal_id=signal_agent_segment_id,
                 activation_details=None,
-                errors=errors,
+                errors=[
+                    Error(
+                        code="APPROVAL_REQUIRED",
+                        message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
+                    )
+                ],
                 context=context,
             )
+
+        decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
+        return ActivateSignalResponse(
+            signal_id=signal_agent_segment_id,
+            activation_details={
+                "decisioning_platform_segment_id": decisioning_platform_segment_id,
+                "estimated_activation_duration_minutes": 15.0,
+                "status": "processing",
+            },
+            errors=None,
+            context=context,
+        )
 
     except Exception as e:
         logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
