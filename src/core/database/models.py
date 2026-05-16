@@ -560,20 +560,32 @@ class Product(Base, JSONValidatorMixin):
 
     @property
     def effective_implementation_config(self) -> dict:
-        """Get GAM implementation config from inventory profile (if set) or product itself.
+        """Get implementation config for adapter consumption.
 
-        Returns implementation_config dict with GAM-specific settings.
-        When inventory_profile_id is set, builds config from profile's inventory (auto-updates).
-        When inventory_profile_id is null, returns product's own config (legacy).
+        Composed and signal-variant rows store a frozen ``implementation_config``
+        materialized at compose time — the storefront agreed to a specific
+        bundle + targeting combination at a specific price, and adapter-side
+        execution must reflect that exact composition. Late-binding through
+        ``inventory_profile`` would let an operator silently change the deal
+        after the fact, which is wrong.
 
-        Key fields for GAM adapter:
-        - targeted_ad_unit_ids: List of GAM ad unit IDs
-        - targeted_placement_ids: List of GAM placement IDs
-        - include_descendants: Whether to include child ad units
+        Static rows continue to auto-resolve from ``inventory_profile`` when
+        the link is set (so editing the profile flows to every product using
+        it), falling back to the row's own ``implementation_config`` otherwise.
+        Adapter-shaped fields the GAM adapter consumes:
+
+        - targeted_ad_unit_ids
+        - targeted_placement_ids
+        - include_descendants
+        - custom_targeting_keys (composed-only)
+        - audience_segment_ids / excluded_audience_segment_ids (composed-only)
         """
+        if self.composition_source != "static":
+            # Frozen at compose time. Use the materialized dict verbatim.
+            return self.implementation_config or {}
+
         if self.inventory_profile_id and self.inventory_profile:
             profile = self.inventory_profile
-            # Build config from profile's inventory configuration
             return {
                 "targeted_ad_unit_ids": profile.inventory_config.get("ad_units", []),
                 "targeted_placement_ids": profile.inventory_config.get("placements", []),

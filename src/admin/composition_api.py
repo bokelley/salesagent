@@ -618,21 +618,29 @@ def _materialize_implementation_config(
     inventory_profile: InventoryProfile,
     custom_targeting_profiles: list[CustomTargetingProfile],
 ) -> dict:
-    """Merge inventory profile inventory_config + each profile's adapter_config
-    into a single implementation_config the adapter layer can consume directly.
+    """Merge inventory profile inventory_config + each profile's components
+    into a single ``implementation_config`` the adapter layer consumes directly.
 
-    Schema (additive over the GAM-shaped baseline used by
-    ``Product.effective_implementation_config``):
+    Field names match what the GAM adapter (``src/adapters/gam/managers/orders.py``)
+    and the GAM implementation config schema expect, so adapters need no changes:
 
       {
         "targeted_ad_unit_ids": [...],
         "targeted_placement_ids": [...],
         "include_descendants": bool,
-        "custom_targeting": {key: [values]},      # merged from profiles
-        "excluded_custom_targeting": {key: [...]},
+        "custom_targeting_keys": {
+            key: {"values": [...], "operator": "IS"|"IS_NOT"}
+        },
         "audience_segment_ids": [...],
         "excluded_audience_segment_ids": [...],
       }
+
+    NB on custom-targeting key/value identifiers: GAM's ``CustomCriteriaSet``
+    uses numeric ``keyId`` and ``valueIds``. The storefront supplies whatever
+    string is the right identifier for the operator's adapter — the operator's
+    admin UI / discovery endpoints translate human-readable names to ids.
+    Storefront ↔ adapter id translation is a known follow-up; the wire shape
+    here is stable.
     """
     inv = inventory_profile.inventory_config or {}
     config: dict[str, Any] = {
@@ -641,24 +649,35 @@ def _materialize_implementation_config(
         "include_descendants": bool(inv.get("include_descendants", True)),
     }
 
-    custom_include: dict[str, list[str]] = {}
-    custom_exclude: dict[str, list[str]] = {}
+    custom_targeting_keys: dict[str, dict[str, Any]] = {}
     aud_include: list[str] = []
     aud_exclude: list[str] = []
 
     for profile in custom_targeting_profiles:
         components = profile.components or {}
         for kv in components.get("key_values", []) or []:
-            target = custom_include if kv.get("mode", "include") == "include" else custom_exclude
-            target.setdefault(kv["key"], []).extend(kv.get("values", []))
+            key = kv["key"]
+            mode = kv.get("mode", "include")
+            gam_operator = "IS" if mode == "include" else "IS_NOT"
+            existing = custom_targeting_keys.get(key)
+            if existing is not None and existing.get("operator") != gam_operator:
+                # Mixed include/exclude on the same key from different profiles
+                # is contradictory; the second wins but emit a structured field
+                # so downstream debug is possible. Composition validation
+                # could later reject this at compose time.
+                logger.warning(
+                    "custom targeting key %r has conflicting include/exclude across profiles; later one wins",
+                    key,
+                )
+            slot = custom_targeting_keys.setdefault(key, {"values": [], "operator": gam_operator})
+            slot["operator"] = gam_operator
+            slot["values"].extend(kv.get("values", []))
         for seg in components.get("audience_segments", []) or []:
             target = aud_include if seg.get("mode", "include") == "include" else aud_exclude
             target.append(seg["segment_id"])
 
-    if custom_include:
-        config["custom_targeting"] = custom_include
-    if custom_exclude:
-        config["excluded_custom_targeting"] = custom_exclude
+    if custom_targeting_keys:
+        config["custom_targeting_keys"] = custom_targeting_keys
     if aud_include:
         config["audience_segment_ids"] = aud_include
     if aud_exclude:
