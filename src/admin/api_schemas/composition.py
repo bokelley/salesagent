@@ -1,21 +1,27 @@
 """Pydantic schemas for the Embedded Composition API (``/api/v1/...``).
 
-Server-to-server REST surface that lets an embedding storefront compose
-products from primitives — inventory profile + signal selections + price.
-See ``.context/embedded-composition-design.md``.
+Server-to-server REST surface for operator-side authoring of:
+- Inventory profiles (operator declares the inventory that backs wholesale
+  Products in their catalog).
+- Tenant signals (operator declares adapter targeting capabilities; surface
+  through the AdCP ``get_signals`` tool).
+- Advertiser mappings (``AccountReference`` → adapter advertiser routing).
 
-Adapter-agnostic at the storefront boundary:
-- ``InventoryProfileRead`` (what storefront sees) carries only AdCP-vocab
-  metadata. Adapter-specific config is operator-authored on Create/Update
-  and never echoed in storefront-facing reads.
+Storefront discovery + composition itself runs through standard AdCP tools
+(``get_products``, ``get_signals``, ``create_media_buy``) — there is no
+separate "compose product" write on this surface. See
+``.context/embedded-composition-design.md``.
+
+Adapter-agnostic at the boundary:
+- ``InventoryProfileRead`` exposes only AdCP-vocab metadata to the
+  storefront. Adapter-specific ``inventory_config`` is operator-authored
+  on Create/Update.
 - ``TenantSignalRead`` mirrors AdCP's existing ``Signal`` shape
-  (``value_type``, ``categories``, ``range``). Adapter-specific resolution
-  lives in ``adapter_config`` on Create/Update only.
-
-Composition body uses ``signal_selections`` (a buyer-style selection over
-operator-declared signals), not opaque profile references — so the
-storefront can compose with the same vocabulary it uses for AdCP signals
-elsewhere.
+  (``value_type``, ``categories``, ``range``). The opaque
+  ``adapter_config`` resolution map is operator-authored on Create/Update
+  only.
+- Advertiser-mapping bodies use ``AccountPattern`` — same field names as
+  AdCP ``AccountReference``, with ``brand`` optional for wildcards.
 
 All schemas follow the project ``get_pydantic_extra_mode()`` convention:
 forbid unknown fields in dev/CI, ignore them in production.
@@ -23,14 +29,13 @@ forbid unknown fields in dev/CI, ignore them in production.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import AdCPPricingOption
 
 _EXTRA_MODE = get_pydantic_extra_mode()
 
@@ -211,33 +216,6 @@ class TenantSignalListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Signal selections (storefront → sales agent on compose)
-# ---------------------------------------------------------------------------
-
-
-class SignalSelection(BaseModel):
-    """One storefront-issued selection over an operator-declared signal.
-
-    Shape echoes how AdCP buyers narrow on signals on ``create_media_buy``:
-    a ``signal_id`` plus value(s) appropriate to the signal's ``value_type``.
-    Include vs exclude is expressed via ``mode``; the per-adapter materializer
-    translates to the adapter's native operator (GAM ``IS``/``IS_NOT``,
-    Freewheel inclusion lists vs exclusion lists, …).
-    """
-
-    model_config = _config()
-
-    signal_id: str = Field(..., min_length=1, max_length=200)
-    mode: Literal["include", "exclude"] = "include"
-    # For value_type='categorical': pick from signal.categories.
-    values: list[str] = Field(default_factory=list)
-    # For value_type='numeric': bounded range (any field optional → unbounded that side).
-    range: SignalRange | None = None
-    # For value_type='binary': True = signal applies, False = signal explicitly off.
-    enabled: bool | None = None
-
-
-# ---------------------------------------------------------------------------
 # Advertiser mappings (operator + brand → adapter advertiser routing)
 # ---------------------------------------------------------------------------
 
@@ -326,100 +304,8 @@ class AdvertiserListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Dynamic product composition
+# Generic error envelope
 # ---------------------------------------------------------------------------
-
-
-class DynamicProductCreate(BaseModel):
-    """Body for ``POST /api/v1/products``. Idempotency-Key header is required.
-
-    Pricing flows through AdCP's typed ``PricingOption`` — same wire shape
-    ``create_media_buy`` and ``get_products`` use. Targeting flows through
-    ``signal_selections`` over the operator's declared signals. No
-    adapter-specific fields on this surface.
-    """
-
-    model_config = _config()
-
-    inventory_profile_id: str = Field(..., min_length=1)
-    signal_selections: list[SignalSelection] = Field(default_factory=list)
-    adcp_targeting: dict | None = Field(
-        default=None,
-        description="Optional AdCP-native targeting baked into the product at compose time",
-    )
-    pricing_option: AdCPPricingOption = Field(
-        ...,
-        description="AdCP PricingOption — drives both wire shape and the persisted PricingOption row",
-    )
-    flight_start: date
-    flight_end: date
-    ttl_seconds: int | None = Field(
-        default=None,
-        gt=0,
-        description="Storefront-requested validity; clamped by tenant.max_composition_ttl_seconds and flight_start",
-    )
-
-
-class DynamicProductRead(BaseModel):
-    model_config = _config()
-
-    product_id: str
-    composition_source: Literal["storefront_composed"]
-    inventory_profile_id: str
-    signal_selections: list[SignalSelection]
-    pricing_option: AdCPPricingOption
-    flight_start: date
-    flight_end: date
-    expires_at: datetime
-    implementation_config_summary: dict
-    created_at: datetime
-
-
-# ---------------------------------------------------------------------------
-# Structured errors
-# ---------------------------------------------------------------------------
-
-
-_COMPOSITION_ERROR_CODES = Literal[
-    "format_mismatch",
-    "channel_mismatch",
-    "dimension_unsupported",
-    "unknown_inventory_profile",
-    "unknown_signal",
-    "expired_inventory_profile",
-    "invalid_flight_dates",
-    "unsupported_pricing_model",
-    "unsupported_adapter",
-    "invalid_signal_selection",
-]
-
-
-class CompositionErrorDetail(BaseModel):
-    """Single typed entry in a composition_invalid error response."""
-
-    model_config = _config()
-
-    code: _COMPOSITION_ERROR_CODES
-    inventory_profile_id: str | None = None
-    signal_id: str | None = None
-    dimension: str | None = None
-    format_id: str | None = None
-    channel: str | None = None
-    pricing_model: str | None = None
-    adapter: str | None = None
-    expected: str | None = None
-    got: str | None = None
-    message: str | None = None
-
-
-class CompositionError(BaseModel):
-    """422 response shape for ``POST /api/v1/products``."""
-
-    model_config = _config()
-
-    error: Literal["composition_invalid"] = "composition_invalid"
-    message: str = "Composition could not be materialized."
-    details: list[CompositionErrorDetail]
 
 
 class ApiError(BaseModel):

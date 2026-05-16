@@ -2934,20 +2934,11 @@ async def _create_media_buy_impl(
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy import to avoid circular dependency with main.py
-        from src.core.tools.products import get_product_catalog, resolve_composed_products
+        from src.core.tools.products import get_product_catalog
 
         catalog = get_product_catalog(tenant_id=identity.tenant_id)
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
-
-        # Catalog excludes storefront-composed and signal-variant rows so they
-        # don't surface in get_products. They are still valid buy targets when
-        # the buyer (or storefront) hands us a materialized product_id, so
-        # resolve any non-catalog ids here and reject expired composed rows
-        # with a structured PRODUCT_NOT_FOUND.
-        missing_from_catalog = [pid for pid in product_ids if pid not in {p.product_id for p in products_in_buy}]
-        if missing_from_catalog:
-            products_in_buy.extend(resolve_composed_products(identity.tenant_id, missing_from_catalog))
 
         # Validate and auto-generate GAM implementation_config for each product if needed.
         # ``effective_configs`` lets us thread the auto-generated value through the

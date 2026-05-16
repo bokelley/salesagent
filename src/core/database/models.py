@@ -205,15 +205,6 @@ class Tenant(Base, JSONValidatorMixin):
     # default 6h. sync_all_tenants.py branches on this when picking
     # tenants per run.
     sync_cadence_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Upper bound on dynamic product validity for storefront-composed
-    # products. Default 7d (604800s) — storefronts may request shorter
-    # via the compose endpoint, but never longer. See the embedded
-    # composition design.
-    max_composition_ttl_seconds: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        server_default=text("604800"),
-    )
     # Embed-mode breadcrumb root override. Shape: ``{"label": str, "url": str}``.
     # Only meaningful when ``is_embedded`` is True — open-instance tenants ignore
     # the value. Replaces the default first crumb ("Dashboard") with the
@@ -450,21 +441,6 @@ class Product(Base, JSONValidatorMixin):
     # NULL or empty means visible to all principals (default)
     allowed_principal_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
 
-    # Composition discriminator. ``static`` is the catalog default. ``signal_variant``
-    # is set by the dynamic-products signals pipeline (today's is_dynamic_variant=True).
-    # ``storefront_composed`` is set by POST /api/v1/products in embedded mode.
-    # Used by get_products to filter the catalog to static-only.
-    composition_source: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        server_default=text("'static'"),
-    )
-    # Principal whose storefront composed this row (for storefront_composed rows).
-    # Scopes visibility — composed products are visible only to their composer's principal.
-    composed_by_principal_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    # Storefront-supplied key for replay-safe composition. Unique per
-    # (tenant, composed_by_principal_id) when non-null.
-    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Relationships
     tenant = relationship("Tenant", back_populates="products")
     inventory_profile = relationship("InventoryProfile", back_populates="products")
@@ -557,32 +533,20 @@ class Product(Base, JSONValidatorMixin):
 
     @property
     def effective_implementation_config(self) -> dict:
-        """Get implementation config for adapter consumption.
+        """Get GAM implementation config from inventory profile (if set) or product itself.
 
-        Composed and signal-variant rows store a frozen ``implementation_config``
-        materialized at compose time — the storefront agreed to a specific
-        bundle + targeting combination at a specific price, and adapter-side
-        execution must reflect that exact composition. Late-binding through
-        ``inventory_profile`` would let an operator silently change the deal
-        after the fact, which is wrong.
+        Returns implementation_config dict with GAM-specific settings.
+        When inventory_profile_id is set, builds config from profile's inventory (auto-updates).
+        When inventory_profile_id is null, returns product's own config (legacy).
 
-        Static rows continue to auto-resolve from ``inventory_profile`` when
-        the link is set (so editing the profile flows to every product using
-        it), falling back to the row's own ``implementation_config`` otherwise.
-        Adapter-shaped fields the GAM adapter consumes:
-
-        - targeted_ad_unit_ids
-        - targeted_placement_ids
-        - include_descendants
-        - custom_targeting_keys (composed-only)
-        - audience_segment_ids / excluded_audience_segment_ids (composed-only)
+        Key fields for GAM adapter:
+        - targeted_ad_unit_ids: List of GAM ad unit IDs
+        - targeted_placement_ids: List of GAM placement IDs
+        - include_descendants: Whether to include child ad units
         """
-        if self.composition_source != "static":
-            # Frozen at compose time. Use the materialized dict verbatim.
-            return self.implementation_config or {}
-
         if self.inventory_profile_id and self.inventory_profile:
             profile = self.inventory_profile
+            # Build config from profile's inventory configuration
             return {
                 "targeted_ad_unit_ids": profile.inventory_config.get("ad_units", []),
                 "targeted_placement_ids": profile.inventory_config.get("placements", []),
@@ -592,18 +556,6 @@ class Product(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_products_tenant", "tenant_id"),
-        Index("idx_products_composition_source", "tenant_id", "composition_source"),
-        Index(
-            "idx_products_idempotency_key",
-            "tenant_id",
-            "composed_by_principal_id",
-            "idempotency_key",
-            unique=True,
-            postgresql_where=text("idempotency_key IS NOT NULL"),
-        ),
-        # composed_by_principal_id has no FK constraint — see migration
-        # u3v4w5x6y7z8 for the rationale. Principal existence is validated
-        # at the API boundary.
         # Enforce AdCP spec: products must have EITHER properties OR property_tags (not both, not neither)
         CheckConstraint(
             "(properties IS NOT NULL AND property_tags IS NULL) OR (properties IS NULL AND property_tags IS NOT NULL)",

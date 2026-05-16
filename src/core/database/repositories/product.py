@@ -67,39 +67,14 @@ class ProductRepository:
             )
         ).first()
 
-    def find_composed_by_idempotency_key(
-        self,
-        principal_id: str,
-        idempotency_key: str,
-    ) -> Product | None:
-        """Replay lookup for POST /api/v1/products.
-
-        Unique on (tenant_id, composed_by_principal_id, idempotency_key) when
-        non-null — see migration ``u3v4w5x6y7z8``. Returns the previously
-        composed Product so the storefront sees the same product_id on retry.
-        """
-        return self._session.scalars(
-            select(Product).where(
-                Product.tenant_id == self._tenant_id,
-                Product.composed_by_principal_id == principal_id,
-                Product.idempotency_key == idempotency_key,
-            )
-        ).first()
-
     # ------------------------------------------------------------------
     # List queries
     # ------------------------------------------------------------------
 
-    def list_all(self, include_non_catalog: bool = False) -> list[Product]:
+    def list_all(self) -> list[Product]:
         """Get all products for the tenant, ordered by product_id.
 
         Eagerly loads pricing_options and tenant to avoid N+1 queries.
-
-        By default the result is filtered to catalog products
-        (``composition_source = 'static'``): signal-driven variants and
-        storefront-composed dynamic products are not catalog items and
-        are excluded from ``get_products``. Admin/reporting callers that
-        need the full set can opt in with ``include_non_catalog=True``.
         """
         stmt = (
             select(Product)
@@ -107,15 +82,12 @@ class ProductRepository:
             .where(Product.tenant_id == self._tenant_id)
             .order_by(Product.product_id)
         )
-        if not include_non_catalog:
-            stmt = stmt.where(Product.composition_source == "static")
         return list(self._session.execute(stmt).unique().scalars().all())
 
-    def list_all_with_inventory(self, include_non_catalog: bool = False) -> list[Product]:
+    def list_all_with_inventory(self) -> list[Product]:
         """Get all products with pricing, inventory profile, and tenant loaded.
 
         Used by ``get_product_catalog`` which needs full product data for conversion.
-        Same ``composition_source = 'static'`` default as :meth:`list_all`.
         """
         stmt = (
             select(Product)
@@ -126,8 +98,6 @@ class ProductRepository:
             )
             .where(Product.tenant_id == self._tenant_id)
         )
-        if not include_non_catalog:
-            stmt = stmt.where(Product.composition_source == "static")
         return list(self._session.scalars(stmt).all())
 
     def list_by_ids(self, product_ids: list[str]) -> list[Product]:
