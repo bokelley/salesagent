@@ -247,37 +247,48 @@ class TestLockBanner:
 
 
 class TestPublisherPartnershipsEditableOnEmbedded:
-    """Publisher Partnerships section is editable on embedded tenants.
+    """Publisher Partnerships standalone page is editable on embedded tenants.
 
     Without publishers, embedded tenants cannot create Products (no
     AuthorizedProperty rows means the property selector is empty). The
     PublisherPartner table is not in the model-layer guard's locked set,
     so publishers manage their own partner roster from the embedded UI.
-    Closes #336."""
+    Closes #336.
 
-    def test_embedded_renders_publisher_partnerships_section(self, embedded_client, embedded_tenant_id):
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+    Sprint 7 Phase 2: the in-page Settings section was promoted to a
+    standalone Configure → Workspace peer page at
+    ``/tenant/<id>/publishers/``; these tests track the new URL."""
+
+    def test_embedded_renders_publisher_partnerships_page(self, embedded_client, embedded_tenant_id):
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/publishers/")
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_data(as_text=True)
-        assert "<h2>Publisher Partnerships</h2>" in body
-        assert 'data-section="publishers"' in body
+        assert "<h2>Publisher partnerships</h2>" in body
         assert "Your agent URL" in body
 
     def test_embedded_renders_edit_controls(self, embedded_client, embedded_tenant_id):
         """Add-Publisher / Refresh-All controls are rendered on embedded."""
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/publishers/")
         body = resp.get_data(as_text=True)
         assert "showAddPublisherModal()" in body
         assert 'id="add-publisher-modal"' in body
         assert "syncAllPublishers()" in body
 
     def test_open_tenant_renders_publisher_partnerships_with_edit_controls(self, embedded_client, open_tenant_id):
-        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/publishers/")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        assert "<h2>Publisher Partnerships</h2>" in body
-        assert 'data-section="publishers"' in body
+        assert "<h2>Publisher partnerships</h2>" in body
         assert "showAddPublisherModal()" in body
+
+    def test_settings_page_no_longer_renders_publishers_section(self, embedded_client, embedded_tenant_id):
+        """The in-page Settings section is gone — the tab data-attribute
+        and the section's H2 must NOT render anywhere in Tenant Settings."""
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert 'data-section="publishers"' not in body
+        assert "<h2>Publisher Partnerships</h2>" not in body
 
 
 # ---------------------------------------------------------------------------

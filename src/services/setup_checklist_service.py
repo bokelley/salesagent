@@ -608,7 +608,7 @@ class SetupChecklistService:
                 name="Authorized Properties",
                 description="At least one publisher partner whose adagents.json authorizes your agent URL.",
                 is_complete=is_complete,
-                action_url=self._settings_url("publishers"),
+                action_url=self._route_url("publisher_partners.publishers_page"),
                 details=details,
             )
         )
@@ -1032,7 +1032,7 @@ class SetupChecklistService:
                 name="Authorized Properties",
                 description="Configure properties with adagents.json for verification",
                 is_complete=properties_is_complete,
-                action_url=self._settings_url("publishers"),
+                action_url=self._route_url("publisher_partners.publishers_page"),
                 details=properties_details,
             )
         )

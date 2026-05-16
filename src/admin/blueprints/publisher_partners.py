@@ -13,7 +13,7 @@ from adcp.adagents import (
     verify_agent_authorization,
 )
 from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidationError
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
@@ -167,6 +167,25 @@ def _validate_publisher_domain(domain: str) -> tuple[bool, str]:
     if not _DOMAIN_RE.match(domain):
         return False, "Publisher domain has invalid format"
     return True, ""
+
+
+@publisher_partners_bp.route("/<tenant_id>/publishers/", methods=["GET"])
+@require_tenant_access()
+def publishers_page(tenant_id: str):
+    """Render the standalone Publishers page (Sprint 7 Phase 2).
+
+    Promoted out of ``tenant_settings.html`` into a Configure → Workspace
+    peer page. The API endpoints on this blueprint power the page's
+    AJAX behavior — see ``static/js/publishers.js``.
+    """
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    with get_db_session() as session:
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
+        return render_template("publishers.html", tenant=tenant)
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])

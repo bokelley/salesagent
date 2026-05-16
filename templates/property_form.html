@@ -18,8 +18,8 @@
                     Authorized Property records are no longer used for buyer-protocol
                     discovery — AdCP 3.0+ replaces them with the AAO model
                     (each publisher's own <code>brand.json</code> + <code>adagents.json</code>).
-                    Add publisher partners on
-                    <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id) }}#publishers">Settings</a>
+                    Add publisher partners on the
+                    <a href="{{ url_for('publisher_partners.publishers_page', tenant_id=tenant.tenant_id) }}">Publishers page</a>
                     so properties get looked up live from each publisher's own <code>brand.json</code>.
                     This screen will be removed once tenants migrate.
                 </div>

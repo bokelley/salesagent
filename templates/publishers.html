@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Publishers - {{ tenant.name }}{% endblock %}
+{% block content %}
+<style>
+    .pub-section { margin-bottom: var(--sa-space-7); }
+    .pub-section h2 {
+        font-size: var(--sa-text-lg);
+        color: var(--sa-text-strong);
+        margin: 0 0 var(--sa-space-2);
+        font-weight: 600;
+    }
+    .pub-section .pub-section-help {
+        color: var(--sa-text-muted);
+        font-size: var(--sa-text-sm);
+        margin-bottom: var(--sa-space-4);
+    }
+    .pub-card {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-border);
+        border-radius: var(--sa-radius-lg);
+        padding: var(--sa-space-5);
+        box-shadow: var(--sa-shadow-xs);
+    }
+    .pub-banner-info {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #1e40af;
+        border-radius: var(--sa-radius-lg);
+        padding: var(--sa-space-3) var(--sa-space-4);
+        margin-bottom: var(--sa-space-4);
+    }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+    .btn { padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; border: none; font-size: 0.875rem; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-secondary { background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db; }
+    .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+</style>
+
+<div id="settings-config"
+     data-script-name="{{ request.script_root }}"
+     data-tenant-id="{{ tenant.tenant_id }}"
+     data-is-embedded="{{ 'true' if embedded_view else 'false' }}"
+     style="display: none;"></div>
+
+{# Computed agent URL is the same calculation tenant_settings.html used —
+   embedded tenants surface the platform's URL, others derive from
+   custom domain / subdomain. #}
+{%- set _computed_public_agent_url -%}
+    {%- if embedded_view -%}
+        {{ tenant.public_agent_url or 'https://interchange.io' }}
+    {%- elif tenant.virtual_host -%}
+        https://{{ tenant.virtual_host }}
+    {%- elif sales_agent_domain and tenant.subdomain -%}
+        https://{{ tenant.subdomain }}.{{ sales_agent_domain }}
+    {%- else -%}
+        {{ tenant.public_agent_url or '' }}
+    {%- endif -%}
+{%- endset %}
+
+<div class="pub-section">
+    <h2>Publisher partnerships</h2>
+    <p class="pub-section-help">
+        The publishers who've authorized this sales agent in their <code>adagents.json</code>.
+    </p>
+
+    {% if embedded_view %}
+    <div class="pub-banner-info">
+        <strong>Platform-managed agent URL.</strong> Your agent URL is configured by Scope3. You manage your own publisher partner roster below.
+    </div>
+    {% endif %}
+
+    <div class="pub-card" style="margin-bottom: 1.5rem;">
+        <h3 style="margin-top: 0;">Your agent URL</h3>
+        <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+            Publishers list this URL in their <code>/.well-known/adagents.json</code> to authorize this
+            tenant. Each publisher's domain is its own house — we fetch their
+            <code>brand.json</code> + <code>adagents.json</code> live on demand.
+        </p>
+
+        <div class="form-group">
+            {% if _computed_public_agent_url %}
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <code id="public-agent-url-display" style="flex: 1; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.9rem;">{{ _computed_public_agent_url }}</code>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="copyAgentUrlToClipboard()">Copy</button>
+            </div>
+            <small style="color: #6b7280;">
+                {% if embedded_view -%}
+                    Shared platform URL — publishers list this exact value in their adagents.json.
+                {%- elif tenant.virtual_host -%}
+                    Derived from your custom domain. Make sure the same URL appears in every publisher's adagents.json.
+                {%- else -%}
+                    Default platform-prefixed URL. Set a Custom Domain on the Tenant Settings → Account screen if you want a vanity URL.
+                {%- endif %}
+            </small>
+            {% else %}
+            <div style="padding: 0.6rem 0.75rem; background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px; color: #92400e; font-size: 0.875rem;">
+                <strong>Not configured yet.</strong>
+                Set a <a href="{{ url_for('tenants.tenant_settings', tenant_id=tenant.tenant_id, section='account') }}" style="color: #92400e; text-decoration: underline;">Custom Domain</a>
+                on Tenant Settings → Account — your agent URL is derived from it. Until then,
+                publishers can't authorize this tenant via adagents.json.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="pub-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h3 style="margin: 0;">Publisher partners</h3>
+            <div style="display: flex; gap: 0.5rem;">
+                <button onclick="syncAllPublishers()" class="btn btn-secondary" id="sync-publishers-btn">
+                    <span id="sync-publishers-icon">🔄</span> Refresh all
+                </button>
+                <button onclick="showAddPublisherModal()" class="btn btn-primary">
+                    + Add Publisher
+                </button>
+            </div>
+        </div>
+
+        <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+            Add publishers by domain. We fetch <code>/.well-known/adagents.json</code> from each one
+            and show how many properties they list, plus how many authorize your agent URL above.
+        </p>
+
+        <div id="publishers-summary" style="margin-bottom: 1rem;"></div>
+
+        <div id="publishers-list" style="margin-top: 1rem;">
+            <div style="text-align: center; padding: 2rem; color: #6b7280;">
+                <span style="font-size: 1.5rem;">⏳</span>
+                <p>Loading publishers...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="add-publisher-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: white; border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto;">
+        <h3 style="margin: 0 0 1rem 0;">Add Publisher Partner</h3>
+        <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1.5rem;">
+            Enter the publisher's root domain (e.g. <code>wonderstruck.org</code>). You don't need to list
+            individual properties — we'll fetch their full inventory from <code>/.well-known/adagents.json</code>
+            and show which ones authorize your agent.
+        </p>
+
+        <form id="add-publisher-form" onsubmit="addPublisher(event)">
+            <div class="form-group">
+                <label for="publisher-domain">Publisher Domain</label>
+                <input type="text" id="publisher-domain" name="publisher_domain"
+                       placeholder="example.com" required
+                       style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
+                <small style="color: #6b7280;">Bare domain only — no scheme, no path.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="publisher-display-name">Display Name (Optional)</label>
+                <input type="text" id="publisher-display-name" name="display_name"
+                       placeholder="Example Publisher"
+                       style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
+                <small style="color: #6b7280;">Friendly name for this publisher</small>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem;">
+                <button type="button" onclick="hideAddPublisherModal()" class="btn btn-secondary">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="add-publisher-submit">Add Publisher</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+
+<script src="{{ url_for('static', filename='js/publishers.js') }}"></script>
+{% endblock %}
