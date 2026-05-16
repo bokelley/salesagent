@@ -2,7 +2,7 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [Sprint 4 (UI hardening)](./embedded-mode-sprint-4-ui-hardening.md), [Sprint 5 (Buyer Routing UX)](./embedded-mode-sprint-5-buyer-routing-ux.md)
-**Status:** Phase 1a + 1b + 4a + 4b landed; Phases 2, 3, 4c, 4d not yet started. Phase 4 reframed 2026-05-16 around instance-level capability flags (see Phase 4 below).
+**Status:** Phase 1a + 1b + 4a + 4b + 4c landed; Phases 2, 3, 4d not yet started. Phase 4 reframed 2026-05-16 around instance-level capability flags (see Phase 4 below).
 **Last updated:** 2026-05-16
 
 ## Why this sprint exists
@@ -200,7 +200,7 @@ Wrap each migrating subsection in `{% if publisher_owns('<capability>') %}`. POS
 
 If Phase 2 has already promoted Policies & Workflows / Integrations to standalone Configure peer pages by the time Phase 4b lands, apply the same gates inside the new templates. Each test gets a pair: `capability=publisher → section visible and writable`; `capability=storefront → section hidden, POST returns 403`.
 
-**Phase 4c — Unconditional removals on embedded.**
+**Phase 4c — Unconditional removals on embedded.** ✅ LANDED (2026-05-16)
 
 Three surfaces never make sense on embedded regardless of which storefront is the wrapper — no `"publisher"` answer is correct. No capability flag; hard gate on `not embedded_view`:
 

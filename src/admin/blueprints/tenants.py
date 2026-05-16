@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from src.admin.services import DashboardService
 from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_mode_auth import is_embedded_view
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
@@ -670,6 +671,21 @@ def deactivate_tenant(tenant_id):
 _SIGNING_KID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
+def _embedded_signing_blocked(tenant_id: str) -> bool:
+    """Return True if signing-key writes should be rejected for this tenant.
+
+    Sprint 7 Phase 4c: signing keys are dead code on embedded tenants —
+    the salesagent doesn't issue webhooks under its own domain there,
+    the storefront signs. There's no "publisher" answer; reject all
+    writes regardless of capability flag.
+    """
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    with get_db_session() as db_session:
+        tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
+        return tenant is not None and is_embedded_view(tenant)
+
+
 def _verify_request_same_origin() -> bool:
     """Reject signing-key POSTs from third-party origins.
 
@@ -707,11 +723,17 @@ def generate_webhook_signing_key(tenant_id):
     The session listener in ``src.services.webhook_signing`` evicts
     the per-process snapshot cache on commit; cross-replica caches
     converge within the 5-min TTL window.
+
+    Embedded tenants don't issue webhooks under the salesagent's own
+    domain — the storefront signs. Reject the write (Sprint 7 Phase 4c).
     """
     from adcp.signing.keygen import generate_signing_keypair
 
     from src.core.database.repositories import TenantSigningCredentialRepository
     from src.services.webhook_signing import _resolve_signing_keys_dir
+
+    if _embedded_signing_blocked(tenant_id):
+        return "Signing keys are not available on embedded tenants.", 403
 
     redirect_resp = redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
 
@@ -791,8 +813,13 @@ def rotate_out_webhook_signing_key(tenant_id, key_id):
     is intentionally NOT deleted — buyers may still receive webhooks
     referencing the old kid in flight, and the verifier-side JWKS
     can take time to drop the entry.
+
+    Embedded tenants: rejected — see ``generate_webhook_signing_key``.
     """
     from src.core.database.repositories import TenantSigningCredentialRepository
+
+    if _embedded_signing_blocked(tenant_id):
+        return "Signing keys are not available on embedded tenants.", 403
 
     redirect_resp = redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
 

@@ -642,7 +642,13 @@ def create_app(config=None):
     app.register_blueprint(public_bp)  # Public routes (no auth required) - MUST BE FIRST
     app.register_blueprint(core_bp)  # Core routes (/, /health, /static)
     app.register_blueprint(auth_bp)  # No url_prefix - auth routes are at root
-    app.register_blueprint(oidc_bp)  # OIDC/OAuth routes at /auth/oidc
+    # OIDC/OAuth routes at /auth/oidc — skipped on embedded instances where
+    # identity comes from X-Identity-* headers, not per-tenant OIDC config.
+    # Sprint 7 Phase 4c.
+    from src.admin.utils.embedded_mode_auth import is_managed_instance
+
+    if not is_managed_instance():
+        app.register_blueprint(oidc_bp)
     app.register_blueprint(tenant_management_settings_bp)  # Tenant management settings at /settings
     app.register_blueprint(tenants_bp, url_prefix="/tenant")
     app.register_blueprint(buyer_routing_bp)  # /tenant/<tid>/buyer-routing — Sprint 5 workstream B
