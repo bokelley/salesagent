@@ -57,12 +57,13 @@ def open_tenant_id(test_tenant_id):
 # env var is the JSON key; the marker is a substring guaranteed to be
 # present in the rendered HTML when the section is visible.
 
-# Capability gates render across two pages now. Sprint 7 Phase 2 moved the
-# business-rules subsections (creative_approval / advertising_policy /
-# product_ranking / brand_manifest) to ``/tenant/<id>/settings/policies/``;
-# the integrations subsections (slack / ai_services / creative_agents /
-# signals_agents) still live inside Tenant Settings. Each entry declares
-# the URL the test should probe.
+# Capability gates render across two standalone pages now. Sprint 7 Phase 2
+# moved the business-rules subsections (creative_approval /
+# advertising_policy / product_ranking / brand_manifest) to
+# ``/tenant/<id>/settings/policies/`` and the integrations subsections
+# (slack / ai_services / creative_agents / signals_agents) to
+# ``/tenant/<id>/settings/integrations/``. Each entry declares the URL
+# the test should probe.
 CAPABILITY_RENDER_MARKERS = {
     "creative_approval": {
         "url": "/settings/policies/",
@@ -71,10 +72,10 @@ CAPABILITY_RENDER_MARKERS = {
     "advertising_policy": {"url": "/settings/policies/", "markers": ("<h3>Advertising Policy</h3>",)},
     "product_ranking": {"url": "/settings/policies/", "markers": ("<h3>Product Ranking</h3>",)},
     "brand_manifest": {"url": "/settings/policies/", "markers": ("<h3>Brand Manifest Policy</h3>",)},
-    "slack": {"url": "/settings", "markers": ("<h3>Slack Integration</h3>",)},
-    "ai_services": {"url": "/settings", "markers": ("<h3>AI Services</h3>",)},
-    "creative_agents": {"url": "/settings", "markers": ("<h3>Creative Agents</h3>",)},
-    "signals_agents": {"url": "/settings", "markers": ("<h3>Signals Discovery Agents</h3>",)},
+    "slack": {"url": "/settings/integrations/", "markers": ("<h3>Slack Integration</h3>",)},
+    "ai_services": {"url": "/settings/integrations/", "markers": ("<h3>AI Services</h3>",)},
+    "creative_agents": {"url": "/settings/integrations/", "markers": ("<h3>Creative Agents</h3>",)},
+    "signals_agents": {"url": "/settings/integrations/", "markers": ("<h3>Signals Discovery Agents</h3>",)},
 }
 
 
@@ -152,6 +153,37 @@ def test_tenant_settings_no_longer_renders_business_rules_section(embedded_clien
     body = resp.get_data(as_text=True)
     assert 'data-section="business-rules"' not in body
     assert 'id="business-rules"' not in body
+
+
+def test_integrations_page_loads_for_open_tenant(embedded_client, open_tenant_id):
+    """Sanity: the new standalone Integrations page renders."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/integrations/")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Integrations" in body
+    # AI Services subsection is the meatiest — confirm at least one
+    # marker that proves the lift carried over.
+    assert "<h3>AI Services</h3>" in body
+    assert "<h3>Slack Integration</h3>" in body
+
+
+def test_old_integrations_deep_link_redirects(embedded_client, open_tenant_id):
+    """``/settings/integrations`` (legacy in-page anchor + the no-slash
+    form of the new URL both) redirect to the canonical standalone
+    page."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/integrations", follow_redirects=False)
+    # 302 from _PROMOTED_SECTION_REDIRECTS or 308 from Flask strict-slash;
+    # either lands on the standalone page.
+    assert resp.status_code in (302, 308)
+    assert f"/tenant/{open_tenant_id}/settings/integrations/" in resp.headers["Location"]
+
+
+def test_tenant_settings_no_longer_renders_integrations_section(embedded_client, open_tenant_id):
+    """The in-page Integrations section is gone — tab + section both."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+    body = resp.get_data(as_text=True)
+    assert 'data-section="integrations"' not in body
+    assert 'id="integrations"' not in body
 
 
 # ---------------------------------------------------------------------------

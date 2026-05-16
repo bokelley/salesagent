@@ -115,36 +115,6 @@ function formatJSON() {
     }
 }
 
-// Test Slack
-function testSlack() {
-    const webhookUrl = document.getElementById('slack_webhook_url').value;
-    if (!webhookUrl) {
-        alert('Please enter a webhook URL first');
-        return;
-    }
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/test_slack`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            webhook_url: webhookUrl
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert('✅ Test notification sent successfully!');
-        } else {
-            alert('❌ Test failed: ' + (data.error || data.message || 'Unknown error'));
-        }
-    })
-    .catch(error => {
-        alert('❌ Error: ' + error.message);
-    });
-}
-
 // Save adapter settings
 function saveAdapter() {
     const adapterType = document.querySelector('select[name="adapter_type"]').value;

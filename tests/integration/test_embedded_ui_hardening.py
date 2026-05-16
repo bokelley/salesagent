@@ -144,33 +144,22 @@ class TestSettingsHiddenSectionsOnEmbedded:
         assert 'data-section="account"' in body
         assert 'data-section="adserver"' in body
 
-    def test_embedded_default_section_is_integrations(self, embedded_client, embedded_tenant_id):
-        """Regression: in embedded mode the Account section is hidden as
-        a banner stub, so something else must be the initial-render
-        ``.active`` section. The shared ``default_section`` template
-        variable should ensure exactly one section AND its matching
-        nav item carry ``.active``, and they must agree.
-
-        After Sprint 7 Phase 2 promoted business-rules to a standalone
-        page, the embedded landing tab is Integrations (the previous
-        Business Rules tab is gone)."""
+    def test_embedded_default_section_is_account(self, embedded_client, embedded_tenant_id):
+        """After Sprint 7 Phase 2 promoted both Policies & Workflows
+        and Integrations out of Tenant Settings, embedded tenants land
+        on the Account banner stub — the page is essentially read-only
+        on embedded now (Phase 4d will hide it entirely). ``Account``
+        is the only interactive landing that explains the platform-
+        managed state."""
         import re
 
         resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        # Exactly one settings-section with .active — JS show/hide has
-        # something to display on first render.
+        # Exactly one settings-section with .active.
         active_sections = re.findall(r'<div id="([^"]+)" class="settings-section active"', body)
-        assert len(active_sections) == 1, f"Expected exactly one .active section; got {active_sections}"
-        assert active_sections[0] == "integrations"
-
-        # The matching nav item is also .active and points to the same target.
-        active_nav = re.findall(r'<a class="settings-nav-item active" data-section="([^"]+)"', body)
-        assert active_nav == ["integrations"], (
-            f"Nav-active and section-active must agree; got nav={active_nav}, section={active_sections}"
-        )
+        assert active_sections == ["account"], f"Expected only 'account' .active; got {active_sections}"
 
     def test_open_default_section_is_account(self, embedded_client, open_tenant_id):
         """Mirror of the embedded case for open-instance: Account is the

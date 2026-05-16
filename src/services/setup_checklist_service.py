@@ -824,7 +824,7 @@ class SetupChecklistService:
                 name="Slack Integration",
                 description="Configure Slack webhooks for order notifications",
                 is_complete=slack_configured,
-                action_url=self._settings_url("integrations"),
+                action_url=self._route_url("settings.integrations_page"),
                 details="Slack notifications enabled" if slack_configured else "No Slack integration",
             )
         )
@@ -882,7 +882,7 @@ class SetupChecklistService:
                 name="Signals Discovery Agent",
                 description="Enable AXE signals for advanced targeting",
                 is_complete=signals_enabled,
-                action_url=self._settings_url("integrations"),
+                action_url=self._route_url("settings.integrations_page"),
                 details="AXE signals enabled" if signals_enabled else "AXE signals not configured",
             )
         )
@@ -895,7 +895,7 @@ class SetupChecklistService:
                 name="Gemini AI Features",
                 description="Enable AI-assisted product recommendations and creative policy checks",
                 is_complete=gemini_configured,
-                action_url=self._settings_url("integrations"),
+                action_url=self._route_url("settings.integrations_page"),
                 details=(
                     "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
                 ),
@@ -1223,7 +1223,7 @@ class SetupChecklistService:
                 name="Slack Integration",
                 description="Configure Slack webhooks for order notifications",
                 is_complete=slack_configured,
-                action_url=self._settings_url("integrations"),
+                action_url=self._route_url("settings.integrations_page"),
                 details="Slack notifications enabled" if slack_configured else "No Slack integration",
             )
         )
@@ -1279,7 +1279,7 @@ class SetupChecklistService:
                 name="Signals Discovery Agent",
                 description="Enable AXE signals for advanced targeting",
                 is_complete=signals_enabled,
-                action_url=self._settings_url("integrations"),
+                action_url=self._route_url("settings.integrations_page"),
                 details="AXE signals enabled" if signals_enabled else "AXE signals not configured",
             )
         )
@@ -1292,7 +1292,7 @@ class SetupChecklistService:
                 name="Gemini AI Features",
                 description="Enable AI-assisted product recommendations and creative policy checks",
                 is_complete=gemini_configured,
-                action_url=self._settings_url("integrations"),
+                action_url=self._route_url("settings.integrations_page"),
                 details=(
                     "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
                 ),

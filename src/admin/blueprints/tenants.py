@@ -206,6 +206,7 @@ _PROMOTED_SECTION_REDIRECTS = {
     # ``/settings/policies`` (no trailing slash) hits this section
     # route instead of the standalone page; redirect it cleanly.
     "policies": "settings.policies_page",
+    "integrations": "settings.integrations_page",
 }
 
 

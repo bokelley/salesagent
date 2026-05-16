@@ -150,6 +150,46 @@ def update_admin_settings():
 # GET requests for settings are handled by src/admin/blueprints/tenants.py::settings()
 
 
+@settings_bp.route("/integrations/", methods=["GET"])
+@require_tenant_access()
+def integrations_page(tenant_id):
+    """Render the standalone Integrations page (Sprint 7 Phase 2).
+
+    Promoted out of ``tenant_settings.html`` (the ``#integrations``
+    section). Four capability-gated subsections — Slack, AI Services,
+    Creative Agents, Signals Discovery Agents — carry their gates over
+    unchanged. The Slack and AI POST endpoints, plus the Creative /
+    Signals Agents management blueprints, are unchanged: only the GET
+    render moves.
+    """
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    with get_db_session() as session:
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
+
+        # AI config drives the Status banner + the legacy-key migration
+        # alert. Same shape ``tenant_settings`` loads — kept in sync so
+        # the template renders identically here.
+        ai_config = tenant.ai_config or {}
+        current_provider = ai_config.get("provider", "")
+        current_model = ai_config.get("model", "")
+        has_logfire = bool(ai_config.get("logfire_token"))
+        has_gemini_key = bool(tenant.gemini_api_key)
+
+        return render_template(
+            "integrations.html",
+            tenant=tenant,
+            tenant_id=tenant_id,
+            current_provider=current_provider,
+            current_model=current_model,
+            has_logfire=has_logfire,
+            has_gemini_key=has_gemini_key,
+        )
+
+
 @settings_bp.route("/policies/", methods=["GET"])
 @require_tenant_access()
 def policies_page(tenant_id):
@@ -570,13 +610,13 @@ def update_slack(tenant_id):
             is_valid, error_msg = WebhookURLValidator.validate_webhook_url(webhook_url)
             if not is_valid:
                 flash(f"Invalid Slack webhook URL: {error_msg}", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+                return redirect(url_for("settings.integrations_page", tenant_id=tenant_id))
 
         if audit_webhook_url:
             is_valid, error_msg = WebhookURLValidator.validate_webhook_url(audit_webhook_url)
             if not is_valid:
                 flash(f"Invalid Slack audit webhook URL: {error_msg}", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+                return redirect(url_for("settings.integrations_page", tenant_id=tenant_id))
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -599,7 +639,7 @@ def update_slack(tenant_id):
         logger.error(f"Error updating Slack settings: {e}", exc_info=True)
         flash(f"Error updating Slack settings: {str(e)}", "error")
 
-    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+    return redirect(url_for("settings.integrations_page", tenant_id=tenant_id))
 
 
 @settings_bp.route("/ai", methods=["POST"])
@@ -668,7 +708,7 @@ def update_ai(tenant_id):
         logger.error(f"Error updating AI settings: {e}", exc_info=True)
         flash(f"Error updating AI settings: {str(e)}", "error")
 
-    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+    return redirect(url_for("settings.integrations_page", tenant_id=tenant_id))
 
 
 @settings_bp.route("/ai/test", methods=["POST"])
