@@ -156,8 +156,12 @@
                     {# Signing keys: dead code on embedded — storefront signs under
                        its own domain. Sprint 7 Phase 4c hard-hide. #}
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/signing-keys/">Signing keys</a>
-                    {% endif %}
+                    {# Tenant Settings: on embedded every remaining subsection is
+                       either promoted out, hard-hidden, or platform-managed (lock
+                       banner). Sprint 7 Phase 4d hides the entry and redirects
+                       the legacy route. #}
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings">Tenant Settings</a>
+                    {% endif %}
                 </div>
             </div>
         </div>

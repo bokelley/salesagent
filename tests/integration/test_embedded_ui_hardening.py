@@ -144,22 +144,21 @@ class TestSettingsHiddenSectionsOnEmbedded:
         assert 'data-section="account"' in body
         assert 'data-section="adserver"' in body
 
-    def test_embedded_default_section_is_account(self, embedded_client, embedded_tenant_id):
-        """After Sprint 7 Phase 2 promoted both Policies & Workflows
-        and Integrations out of Tenant Settings, embedded tenants land
-        on the Account banner stub — the page is essentially read-only
-        on embedded now (Phase 4d will hide it entirely). ``Account``
-        is the only interactive landing that explains the platform-
-        managed state."""
-        import re
-
+    def test_embedded_settings_route_renders_locked_page(self, embedded_client, embedded_tenant_id):
+        """Sprint 7 Phase 4d: Tenant Settings is collapsed on embedded.
+        Every subsection is either promoted out (Phase 2), hard-hidden,
+        or platform-managed, so the legacy multi-section page serves no
+        purpose. The route now renders ``_embedded_locked_page.html``
+        instead — a single 'Platform settings managed by …' banner."""
         resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-
-        # Exactly one settings-section with .active.
-        active_sections = re.findall(r'<div id="([^"]+)" class="settings-section active"', body)
-        assert active_sections == ["account"], f"Expected only 'account' .active; got {active_sections}"
+        # Locked-page banner present.
+        assert "embedded-lock-banner" in body
+        assert "Platform settings managed by" in body
+        # Legacy multi-section layout is gone.
+        assert 'class="settings-layout"' not in body
+        assert 'class="settings-section active"' not in body
 
     def test_open_default_section_is_account(self, embedded_client, open_tenant_id):
         """Mirror of the embedded case for open-instance: Account is the
@@ -174,6 +173,26 @@ class TestSettingsHiddenSectionsOnEmbedded:
 
         active_nav = re.findall(r'<a class="settings-nav-item active" data-section="([^"]+)"', body)
         assert active_nav == ["account"], f"Expected only 'account' nav .active; got {active_nav}"
+
+    def test_embedded_configure_menu_omits_tenant_settings_link(self, embedded_client, embedded_tenant_id):
+        """Sprint 7 Phase 4d: the Tenant Settings entry in the global
+        Configure → Workspace menu is hidden on embedded. The promoted
+        Workspace peer pages (Publishers, Policies & Workflows, Integrations)
+        cover everything embedded operators can edit."""
+        # Any embedded page renders the global nav — use the locked Tenant
+        # Settings page itself for a self-contained probe.
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        # The menu link text + href together — guard against the link being
+        # rebadged but still pointed at /settings.
+        assert ">Tenant Settings</a>" not in body
+
+    def test_open_configure_menu_includes_tenant_settings_link(self, embedded_client, open_tenant_id):
+        """Open-instance regression guard: Tenant Settings entry still
+        renders in the Workspace submenu."""
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        assert ">Tenant Settings</a>" in body
 
 
 # ---------------------------------------------------------------------------

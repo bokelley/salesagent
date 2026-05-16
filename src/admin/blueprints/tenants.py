@@ -237,6 +237,12 @@ def tenant_settings(tenant_id, section=None):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
+            # Phase 4d: every remaining tenant_settings.html subsection is either
+            # promoted out, hard-hidden, or platform-managed on embedded. Render
+            # the standard locked page instead of the legacy multi-section UI.
+            if is_embedded_view(tenant):
+                return render_template("_embedded_locked_page.html", tenant=tenant), 200
+
             # Get adapter config
             adapter_config_obj = tenant.adapter_config
 
