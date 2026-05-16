@@ -396,14 +396,6 @@ def tenant_settings(tenant_id, section=None):
 
             script_name = request.script_root or request.environ.get("SCRIPT_NAME", "")
 
-            # Outbound signing credentials (read-only summary; rotation lands in PR 3C)
-            from src.core.database.repositories import TenantSigningCredentialRepository
-
-            cred_repo = TenantSigningCredentialRepository(db_session, tenant_id)
-            signing_credentials = []
-            for purpose in ("webhook-signing", "request-signing-as-buyer"):
-                signing_credentials.extend(cred_repo.list_for_purpose(purpose, include_inactive=True))
-
             # Get available currencies from Babel
             available_currencies = get_available_currencies()
 
@@ -445,7 +437,6 @@ def tenant_settings(tenant_id, section=None):
                 setup_status=setup_status,
                 available_currencies=available_currencies,  # Currency list from Babel
                 single_tenant_mode=is_single_tenant_mode(),
-                signing_credentials=signing_credentials,
             )
 
     except Exception as e:
@@ -704,6 +695,40 @@ def _verify_request_same_origin() -> bool:
     return candidate == expected or candidate.startswith(expected + "/")
 
 
+@tenants_bp.route("/<tenant_id>/signing-keys/", methods=["GET"])
+@require_tenant_access()
+def signing_keys_page(tenant_id):
+    """Render the standalone Signing Keys page (Sprint 7 Phase 2).
+
+    Promoted out of ``tenant_settings.html`` into a Configure → Workspace
+    peer page. Hard-hidden on embedded tenants per Sprint 7 Phase 4c —
+    the salesagent doesn't issue webhooks under its own domain there,
+    the storefront signs. No "publisher" answer; reject all reads.
+    """
+    from src.core.database.repositories import TenantSigningCredentialRepository
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    with get_db_session() as db_session:
+        tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
+
+        if is_embedded_view(tenant):
+            return "Signing keys are not available on embedded tenants.", 403
+
+        cred_repo = TenantSigningCredentialRepository(db_session, tenant_id)
+        signing_credentials = []
+        for purpose in ("webhook-signing", "request-signing-as-buyer"):
+            signing_credentials.extend(cred_repo.list_for_purpose(purpose, include_inactive=True))
+
+        return render_template(
+            "signing_keys.html",
+            tenant=tenant,
+            signing_credentials=signing_credentials,
+        )
+
+
 @tenants_bp.route("/<tenant_id>/signing-keys/generate", methods=["POST"])
 @log_admin_action(
     "generate_webhook_signing_key",
@@ -735,7 +760,7 @@ def generate_webhook_signing_key(tenant_id):
     if _embedded_signing_blocked(tenant_id):
         return "Signing keys are not available on embedded tenants.", 403
 
-    redirect_resp = redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+    redirect_resp = redirect(url_for("tenants.signing_keys_page", tenant_id=tenant_id))
 
     if not _verify_request_same_origin():
         flash("Request blocked: cross-origin POST refused.", "error")
@@ -821,7 +846,7 @@ def rotate_out_webhook_signing_key(tenant_id, key_id):
     if _embedded_signing_blocked(tenant_id):
         return "Signing keys are not available on embedded tenants.", 403
 
-    redirect_resp = redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="signing-keys"))
+    redirect_resp = redirect(url_for("tenants.signing_keys_page", tenant_id=tenant_id))
 
     if not _verify_request_same_origin():
         flash("Request blocked: cross-origin POST refused.", "error")

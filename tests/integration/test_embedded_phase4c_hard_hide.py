@@ -45,31 +45,34 @@ def embedded_tenant_id(integration_db):
     cleanup_embedded_test_tenant(tid)
 
 
-class TestSigningKeysHiddenOnEmbedded:
-    """Nav entry + section disappear entirely from embedded settings page."""
+class TestSigningKeysStandalonePage:
+    """The signing-keys surface lives at a standalone Configure → Workspace
+    peer page (Sprint 7 Phase 2), not in Tenant Settings. The hard-hide on
+    embedded tenants (Sprint 7 Phase 4c) still applies — the standalone
+    page returns 403 on embedded tenants because the salesagent doesn't
+    issue webhooks under its own domain there."""
 
-    def test_signing_keys_section_hidden_on_embedded(self, embedded_client, embedded_tenant_id):
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+    def test_standalone_page_returns_403_on_embedded(self, embedded_client, embedded_tenant_id):
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/signing-keys/")
+        assert resp.status_code == 403
+        assert b"embedded" in resp.data.lower() or b"not available" in resp.data.lower()
+
+    def test_standalone_page_renders_on_open(self, embedded_client, open_tenant_id):
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/signing-keys/")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        assert 'id="signing-keys"' not in body
-        assert "🔑 Signing keys" not in body
+        assert "🔑 Signing keys" in body
+        assert "Generate Ed25519 keypair" in body
 
-    def test_signing_keys_nav_entry_hidden_on_embedded(self, embedded_client, embedded_tenant_id):
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+    def test_settings_page_no_longer_renders_signing_keys_section(self, embedded_client, open_tenant_id):
+        """The in-page Settings section is gone — the tab data-attribute
+        and the section's H2 must NOT render in Tenant Settings on either
+        open or embedded tenants."""
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+        assert resp.status_code == 200
         body = resp.get_data(as_text=True)
         assert 'data-section="signing-keys"' not in body
-
-    def test_signing_keys_section_visible_on_open(self, embedded_client, open_tenant_id):
-        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
-        body = resp.get_data(as_text=True)
-        assert 'id="signing-keys"' in body
-        assert "🔑 Signing keys" in body
-
-    def test_signing_keys_nav_entry_visible_on_open(self, embedded_client, open_tenant_id):
-        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
-        body = resp.get_data(as_text=True)
-        assert 'data-section="signing-keys"' in body
+        assert 'id="signing-keys"' not in body
 
 
 class TestSigningKeysPostRoutesRejectEmbedded:
