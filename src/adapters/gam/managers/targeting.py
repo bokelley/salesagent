@@ -667,6 +667,135 @@ class GAMTargetingManager:
 
         return unsupported
 
+    def _resolve_audience_signals(
+        self,
+        targeting_overlay,
+        custom_targeting: dict[str, str],
+    ) -> dict[str, Any] | None:
+        """Resolve operator-declared ``TenantSignal``s referenced in the
+        buyer's ``audience_include`` / ``audience_exclude`` to GAM targeting.
+
+        Each entry is a ``signal_id`` matching a ``TenantSignal`` row whose
+        ``adapter_config`` carries the GAM resolution. Two kinds today:
+
+        - ``audience_segment``: surfaces in a ``audienceTargeting`` block
+          (``includedAudienceSegmentIds`` / ``excludedAudienceSegmentIds``).
+        - ``custom_key_value``: layers onto the ``custom_targeting`` dict
+          (NOT_-prefixed for excludes, mirroring the AXE pattern). The
+          ``value_id`` is read from ``adapter_config.value_id``, falling back
+          to the literal ``signal_id`` when the operator hasn't mapped a
+          specific value (rare; usually paired with ``audience_segment`` or
+          a categorical signal carrying value_ids).
+
+        Unknown ``signal_id``s and unknown ``adapter_config.kind`` raise
+        :class:`ValueError` — fail loud, never silently drop targeting.
+
+        Args:
+            targeting_overlay: AdCP TargetingOverlay carrying the buyer's
+                audience_include / audience_exclude lists.
+            custom_targeting: Mutable accumulator that the caller threads
+                through ``build_targeting``. Custom-KV-kind signals mutate
+                it; audience-segment-kind signals do not touch it.
+
+        Returns:
+            ``audienceTargeting`` dict for the GAM line item, or ``None``
+            when no signals resolved to audience segments.
+        """
+        include_ids = list(targeting_overlay.audience_include or [])
+        exclude_ids = list(targeting_overlay.audience_exclude or [])
+        if not include_ids and not exclude_ids:
+            return None
+
+        # Lazy import — avoid pulling DB session machinery into the GAM
+        # adapter import path. The targeting manager is built per-request,
+        # so per-call lazy import is fine.
+        from src.core.database.repositories.uow import TenantSignalUoW
+
+        all_ids = list({*include_ids, *exclude_ids})
+        with TenantSignalUoW(self.tenant_id) as uow:
+            assert uow.tenant_signals is not None
+            signals_by_id = {s.signal_id: s for s in uow.tenant_signals.list_by_ids(all_ids)}
+
+        missing = [sid for sid in all_ids if sid not in signals_by_id]
+        if missing:
+            raise ValueError(
+                f"Audience targeting references signal(s) not declared on tenant "
+                f"{self.tenant_id!r}: {', '.join(sorted(missing))}. "
+                f"Author each signal via POST /api/v1/tenants/<id>/signals first."
+            )
+
+        audience_include_segments: list[str] = []
+        audience_exclude_segments: list[str] = []
+
+        for signal_id in include_ids:
+            self._apply_signal(
+                signal=signals_by_id[signal_id],
+                mode="include",
+                custom_targeting=custom_targeting,
+                segment_accumulator=audience_include_segments,
+            )
+        for signal_id in exclude_ids:
+            self._apply_signal(
+                signal=signals_by_id[signal_id],
+                mode="exclude",
+                custom_targeting=custom_targeting,
+                segment_accumulator=audience_exclude_segments,
+            )
+
+        if not audience_include_segments and not audience_exclude_segments:
+            return None
+        audience_block: dict[str, Any] = {}
+        if audience_include_segments:
+            audience_block["includedAudienceSegmentIds"] = audience_include_segments
+        if audience_exclude_segments:
+            audience_block["excludedAudienceSegmentIds"] = audience_exclude_segments
+        return audience_block
+
+    def _apply_signal(
+        self,
+        signal,
+        mode: str,
+        custom_targeting: dict[str, str],
+        segment_accumulator: list[str],
+    ) -> None:
+        """Translate one ``TenantSignal`` row + include/exclude mode into the
+        right GAM targeting structure. Mutates ``custom_targeting`` for
+        custom-KV signals; appends to ``segment_accumulator`` for
+        audience-segment signals.
+        """
+        adapter_cfg = signal.adapter_config or {}
+        kind = adapter_cfg.get("kind")
+
+        if kind == "audience_segment":
+            segment_id = adapter_cfg.get("segment_id")
+            if not segment_id:
+                raise ValueError(
+                    f"Signal {signal.signal_id!r} has kind='audience_segment' but no segment_id in adapter_config."
+                )
+            segment_accumulator.append(str(segment_id))
+            return
+
+        if kind == "custom_key_value":
+            key_id = adapter_cfg.get("key_id")
+            if not key_id:
+                raise ValueError(
+                    f"Signal {signal.signal_id!r} has kind='custom_key_value' but no key_id in adapter_config."
+                )
+            # For binary signals the operator maps a single value via
+            # adapter_config.value_id. For categorical signals the buyer
+            # would supply value selections via activate_signal (not yet
+            # wired); for now a binary toggle is sufficient.
+            value_id = adapter_cfg.get("value_id") or signal.signal_id
+            target_key = f"NOT_{key_id}" if mode == "exclude" else str(key_id)
+            custom_targeting[target_key] = str(value_id)
+            return
+
+        raise ValueError(
+            f"Signal {signal.signal_id!r} adapter_config.kind={kind!r} is not "
+            f"supported by the GAM materializer (expected 'audience_segment' or "
+            f"'custom_key_value')."
+        )
+
     def build_targeting(self, targeting_overlay) -> dict[str, Any]:
         """Build GAM targeting criteria from AdCP targeting.
 
@@ -883,28 +1012,20 @@ class GAMTargetingManager:
                     "Create the custom targeting key in GAM UI and sync using 'Sync Custom Targeting Keys' button."
                 ) from e
 
+        # Resolve operator-declared signals referenced in audience_include /
+        # audience_exclude BEFORE the custom_targeting accumulator is
+        # finalized — custom-KV-kind signals layer onto the shared dict
+        # (NOT_-prefixed for excludes, mirroring AXE). Audience-segment-kind
+        # signals return a separate ``audienceTargeting`` block.
+        audience_block = self._resolve_audience_signals(targeting_overlay, custom_targeting)
+        if audience_block:
+            gam_targeting["audienceTargeting"] = audience_block
+
         if custom_targeting:
             # Convert simple dict to GAM CustomCriteria structure
             # GAM expects: {logicalOperator, children: [{keyId, operator, valueIds, valueNames}]}
             # Our dict: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
             gam_targeting["customTargeting"] = self._build_custom_targeting_structure(custom_targeting)
-
-        # Audience segment targeting
-        # Map AdCP audiences_any_of and signals to GAM audience segment IDs
-        if targeting_overlay.audiences_any_of or targeting_overlay.signals:
-            # Note: This requires GAM audience segment ID mapping configured per tenant
-            # For now, we fail loudly to indicate it's not fully implemented
-            audience_list = []
-            if targeting_overlay.audiences_any_of:
-                audience_list.extend(targeting_overlay.audiences_any_of)
-            if targeting_overlay.signals:
-                audience_list.extend(targeting_overlay.signals)
-
-            raise ValueError(
-                f"Audience/signal targeting requested but GAM audience segment mapping not configured. "
-                f"Cannot fulfill buyer contract for: {', '.join(audience_list)}. "
-                f"Configure audience segment ID mappings in tenant adapter config to support this targeting."
-            )
 
         # Media type targeting - map to GAM environmentType
         # This should be set on line items, not in targeting dict
