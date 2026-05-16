@@ -150,6 +150,67 @@ def update_admin_settings():
 # GET requests for settings are handled by src/admin/blueprints/tenants.py::settings()
 
 
+@settings_bp.route("/policies/", methods=["GET"])
+@require_tenant_access()
+def policies_page(tenant_id):
+    """Render the standalone Policies & Workflows page (Sprint 7 Phase 2).
+
+    Promoted out of ``tenant_settings.html`` (the ~700-line
+    ``#business-rules`` section). Same form, same POST endpoint at
+    ``/settings/business-rules`` — only the GET render moves. Capability
+    gates (creative_approval, advertising_policy, product_ranking,
+    brand_manifest) carry over unchanged via ``publisher_owns()``.
+    """
+    from src.core.database.repositories import CurrencyLimitRepository
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    with get_db_session() as session:
+        repo = TenantConfigRepository(session, tenant_id)
+        tenant = repo.get_tenant()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
+
+        # Adapter config drives the "GAM network currencies" banner in
+        # the Budget Controls subsection — load it as a dict so the
+        # template can read ``adapter_config.get(...)``.
+        adapter_obj = repo.get_adapter_config()
+        adapter_config: dict[str, Any] = {}
+        if adapter_obj:
+            adapter_config = {
+                "adapter_type": adapter_obj.adapter_type,
+                "network_currency": getattr(adapter_obj, "gam_network_currency", None),
+                "secondary_currencies": getattr(adapter_obj, "gam_secondary_currencies", None) or [],
+            }
+
+        # Currency limits — embedded tenants see read-only; open tenants
+        # get the full add/remove UI. Template reads ``currency_limits``.
+        currency_limits = CurrencyLimitRepository(session, tenant_id).list_all()
+
+        # AI services key gates the Creative Review + Product Ranking
+        # subsections' "API key required" warnings. Mirrors the loader
+        # in ``tenants.tenant_settings`` so the template renders
+        # identically here.
+        ai_config = tenant.ai_config or {}
+        has_gemini_key = bool(ai_config.get("api_key") or getattr(tenant, "gemini_api_key", None))
+
+        # Shared with the legacy tenant_settings view — both surfaces need
+        # the same Babel-derived currency catalog for the Add Currency
+        # modal's autocomplete. Reusing the existing helper rather than
+        # duplicating it.
+        from src.admin.blueprints.tenants import get_available_currencies
+
+        return render_template(
+            "policies_and_workflows.html",
+            tenant=tenant,
+            tenant_id=tenant_id,
+            adapter_config=adapter_config,
+            currency_limits=currency_limits,
+            has_gemini_key=has_gemini_key,
+            available_currencies=get_available_currencies(),
+        )
+
+
 @settings_bp.route("/general", methods=["POST"])
 @require_tenant_access(role=("admin",))
 @log_admin_action("update_general_settings")
@@ -1324,7 +1385,7 @@ def update_business_rules(tenant_id):
         # Flash each validation error
         for field, error in e.errors.items():
             flash(f"{field}: {error}", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
+        return redirect(url_for("settings.policies_page", tenant_id=tenant_id))
 
     except Exception as e:
         logger.error(f"Error updating business rules: {e}", exc_info=True)
@@ -1333,7 +1394,7 @@ def update_business_rules(tenant_id):
             return jsonify({"success": False, "error": str(e)}), 500
 
         flash(f"Error updating business rules: {str(e)}", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
+        return redirect(url_for("settings.policies_page", tenant_id=tenant_id))
 
 
 @settings_bp.route("/approximated-domain-status", methods=["POST"])

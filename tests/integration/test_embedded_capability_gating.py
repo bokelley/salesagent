@@ -57,52 +57,88 @@ def open_tenant_id(test_tenant_id):
 # env var is the JSON key; the marker is a substring guaranteed to be
 # present in the rendered HTML when the section is visible.
 
+# Capability gates render across two pages now. Sprint 7 Phase 2 moved the
+# business-rules subsections (creative_approval / advertising_policy /
+# product_ranking / brand_manifest) to ``/tenant/<id>/settings/policies/``;
+# the integrations subsections (slack / ai_services / creative_agents /
+# signals_agents) still live inside Tenant Settings. Each entry declares
+# the URL the test should probe.
 CAPABILITY_RENDER_MARKERS = {
-    "creative_approval": ("<h3>Approval Workflow</h3>", "<h3>Creative Review</h3>"),
-    "advertising_policy": ("<h3>Advertising Policy</h3>",),
-    "product_ranking": ("<h3>Product Ranking</h3>",),
-    "brand_manifest": ("<h3>Brand Manifest Policy</h3>",),
-    "slack": ("<h3>Slack Integration</h3>",),
-    "ai_services": ("<h3>AI Services</h3>",),
-    "creative_agents": ("<h3>Creative Agents</h3>",),
-    "signals_agents": ("<h3>Signals Discovery Agents</h3>",),
+    "creative_approval": {
+        "url": "/settings/policies/",
+        "markers": ("<h3>Approval Workflow</h3>", "<h3>Creative Review</h3>"),
+    },
+    "advertising_policy": {"url": "/settings/policies/", "markers": ("<h3>Advertising Policy</h3>",)},
+    "product_ranking": {"url": "/settings/policies/", "markers": ("<h3>Product Ranking</h3>",)},
+    "brand_manifest": {"url": "/settings/policies/", "markers": ("<h3>Brand Manifest Policy</h3>",)},
+    "slack": {"url": "/settings", "markers": ("<h3>Slack Integration</h3>",)},
+    "ai_services": {"url": "/settings", "markers": ("<h3>AI Services</h3>",)},
+    "creative_agents": {"url": "/settings", "markers": ("<h3>Creative Agents</h3>",)},
+    "signals_agents": {"url": "/settings", "markers": ("<h3>Signals Discovery Agents</h3>",)},
 }
 
 
-@pytest.mark.parametrize("capability,markers", list(CAPABILITY_RENDER_MARKERS.items()))
-def test_section_visible_on_open_instance(embedded_client, open_tenant_id, capability, markers):
+@pytest.mark.parametrize("capability,spec", list(CAPABILITY_RENDER_MARKERS.items()))
+def test_section_visible_on_open_instance(embedded_client, open_tenant_id, capability, spec):
     """Open instances ignore EMBEDDED_CAPABILITIES — every section renders."""
-    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}{spec['url']}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    for marker in markers:
-        assert marker in body, f"{capability}: open instance missing {marker!r}"
+    for marker in spec["markers"]:
+        assert marker in body, f"{capability}: open instance missing {marker!r} at {spec['url']}"
 
 
-@pytest.mark.parametrize("capability,markers", list(CAPABILITY_RENDER_MARKERS.items()))
-def test_section_visible_on_embedded_publisher_owned(monkeypatch, embedded_client, test_tenant_id, capability, markers):
+@pytest.mark.parametrize("capability,spec", list(CAPABILITY_RENDER_MARKERS.items()))
+def test_section_visible_on_embedded_publisher_owned(monkeypatch, embedded_client, test_tenant_id, capability, spec):
     """Embedded + capability=publisher (default): section still renders."""
     monkeypatch.setenv("MANAGED_INSTANCE", "true")
     monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
 
-    resp = embedded_client.get(f"/tenant/{test_tenant_id}/settings")
+    resp = embedded_client.get(f"/tenant/{test_tenant_id}{spec['url']}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    for marker in markers:
+    for marker in spec["markers"]:
         assert marker in body, f"{capability}: publisher-owned but missing {marker!r}"
 
 
-@pytest.mark.parametrize("capability,markers", list(CAPABILITY_RENDER_MARKERS.items()))
-def test_section_hidden_when_storefront_owned(monkeypatch, embedded_client, test_tenant_id, capability, markers):
+@pytest.mark.parametrize("capability,spec", list(CAPABILITY_RENDER_MARKERS.items()))
+def test_section_hidden_when_storefront_owned(monkeypatch, embedded_client, test_tenant_id, capability, spec):
     """Embedded + capability=storefront: section is removed from the page."""
     monkeypatch.setenv("MANAGED_INSTANCE", "true")
     monkeypatch.setenv("EMBEDDED_CAPABILITIES", f'{{"{capability}": "storefront"}}')
 
-    resp = embedded_client.get(f"/tenant/{test_tenant_id}/settings")
+    resp = embedded_client.get(f"/tenant/{test_tenant_id}{spec['url']}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    for marker in markers:
+    for marker in spec["markers"]:
         assert marker not in body, f"{capability}: storefront-owned but {marker!r} still rendered"
+
+
+def test_policies_page_loads_for_open_tenant(embedded_client, open_tenant_id):
+    """Sanity: the new standalone Policies & Workflows page renders."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/policies/")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "<h2>Policies &amp; Workflows</h2>" in body or "Policies & Workflows" in body
+    assert '<form id="business-rules-form">' in body
+
+
+def test_old_business_rules_deep_link_redirects(embedded_client, open_tenant_id):
+    """``/settings/business-rules`` was the legacy deep-link before
+    Phase 2 promoted the section out. Redirect to the new standalone
+    page so bookmarks don't silently land on the default Account tab."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/business-rules", follow_redirects=False)
+    assert resp.status_code == 302
+    assert f"/tenant/{open_tenant_id}/settings/policies/" in resp.headers["Location"]
+
+
+def test_tenant_settings_no_longer_renders_business_rules_section(embedded_client, open_tenant_id):
+    """The in-page section is gone — the tab data-attribute and the
+    section's H2 must NOT render in Tenant Settings."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+    body = resp.get_data(as_text=True)
+    assert 'data-section="business-rules"' not in body
+    assert 'id="business-rules"' not in body
 
 
 # ---------------------------------------------------------------------------

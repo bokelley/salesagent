@@ -564,7 +564,7 @@ class SetupChecklistService:
                     name="Currency Configuration",
                     description="At least one currency must be configured for media buys",
                     is_complete=currency_count > 0,
-                    action_url=self._settings_url("business-rules"),
+                    action_url=self._route_url("settings.policies_page"),
                     details=(
                         f"{currency_count} currencies configured" if currency_count > 0 else "No currencies configured"
                     ),
@@ -731,7 +731,7 @@ class SetupChecklistService:
                 name="Creative Approval Guidelines",
                 description="Configure auto-approval rules and manual review settings",
                 is_complete=has_approval_config,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details=(
                     "Auto-approval formats configured"
                     if has_approval_config
@@ -749,7 +749,7 @@ class SetupChecklistService:
                 name="Naming Conventions",
                 description="Customize order and line item naming templates",
                 is_complete=has_custom_naming,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details="Custom templates configured" if has_custom_naming else "Using default naming templates",
             )
         )
@@ -777,7 +777,7 @@ class SetupChecklistService:
                 name="Budget Controls",
                 description="Set maximum daily budget limits for safety",
                 is_complete=has_budget_limits,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details=details,
             )
         )
@@ -912,7 +912,7 @@ class SetupChecklistService:
                 name="Multiple Currencies",
                 description="Support international advertisers with EUR, GBP, etc.",
                 is_complete=multiple_currencies,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details=(
                     f"{currency_count} currencies supported" if multiple_currencies else "Only 1 currency configured"
                 ),
@@ -1008,7 +1008,7 @@ class SetupChecklistService:
                     name="Currency Configuration",
                     description="At least one currency must be configured for media buys",
                     is_complete=currency_count > 0,
-                    action_url=self._settings_url("business-rules"),
+                    action_url=self._route_url("settings.policies_page"),
                     details=(
                         f"{currency_count} currencies configured" if currency_count > 0 else "No currencies configured"
                     ),
@@ -1142,7 +1142,7 @@ class SetupChecklistService:
                 name="Creative Approval Guidelines",
                 description="Configure auto-approval rules and manual review settings",
                 is_complete=has_approval_config,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details=(
                     "Auto-approval formats configured"
                     if has_approval_config
@@ -1160,7 +1160,7 @@ class SetupChecklistService:
                 name="Naming Conventions",
                 description="Customize order and line item naming templates",
                 is_complete=has_custom_naming,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details="Custom templates configured" if has_custom_naming else "Using default naming templates",
             )
         )
@@ -1173,7 +1173,7 @@ class SetupChecklistService:
                 name="Budget Controls",
                 description="Set maximum daily budget limits for safety",
                 is_complete=has_budget_limits,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details=(
                     f"{budget_limit_count} currency limit(s) with daily budget controls"
                     if has_budget_limits
@@ -1307,7 +1307,7 @@ class SetupChecklistService:
                 name="Multiple Currencies",
                 description="Support international advertisers with EUR, GBP, etc.",
                 is_complete=multiple_currencies,
-                action_url=self._settings_url("business-rules"),
+                action_url=self._route_url("settings.policies_page"),
                 details=(
                     f"{currency_count} currencies supported" if multiple_currencies else "Only 1 currency configured"
                 ),

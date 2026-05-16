@@ -35,3 +35,13 @@ class CurrencyLimitRepository:
             currency_code=currency_code,
         )
         return self._session.scalars(stmt).first()
+
+    def list_all(self) -> list[CurrencyLimit]:
+        """Return every CurrencyLimit row for this tenant.
+
+        Used by settings pages that render the full per-currency table
+        (budget controls). Order is whatever the DB returns — callers
+        sort if they need stability.
+        """
+        stmt = select(CurrencyLimit).filter_by(tenant_id=self._tenant_id)
+        return list(self._session.scalars(stmt).all())

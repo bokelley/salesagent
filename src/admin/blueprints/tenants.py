@@ -201,6 +201,7 @@ _PROMOTED_SECTION_REDIRECTS = {
     # instead. Each entry is ``section_slug → endpoint_name``.
     "publishers": "publisher_partners.publishers_page",
     "signing-keys": "tenants.signing_keys_page",
+    "business-rules": "settings.policies_page",
 }
 
 

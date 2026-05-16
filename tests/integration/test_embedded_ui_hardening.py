@@ -144,12 +144,16 @@ class TestSettingsHiddenSectionsOnEmbedded:
         assert 'data-section="account"' in body
         assert 'data-section="adserver"' in body
 
-    def test_embedded_default_section_is_business_rules(self, embedded_client, embedded_tenant_id):
+    def test_embedded_default_section_is_integrations(self, embedded_client, embedded_tenant_id):
         """Regression: in embedded mode the Account section is hidden as
         a banner stub, so something else must be the initial-render
         ``.active`` section. The shared ``default_section`` template
         variable should ensure exactly one section AND its matching
-        nav item carry ``.active``, and they must agree."""
+        nav item carry ``.active``, and they must agree.
+
+        After Sprint 7 Phase 2 promoted business-rules to a standalone
+        page, the embedded landing tab is Integrations (the previous
+        Business Rules tab is gone)."""
         import re
 
         resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
@@ -160,11 +164,11 @@ class TestSettingsHiddenSectionsOnEmbedded:
         # something to display on first render.
         active_sections = re.findall(r'<div id="([^"]+)" class="settings-section active"', body)
         assert len(active_sections) == 1, f"Expected exactly one .active section; got {active_sections}"
-        assert active_sections[0] == "business-rules"
+        assert active_sections[0] == "integrations"
 
         # The matching nav item is also .active and points to the same target.
         active_nav = re.findall(r'<a class="settings-nav-item active" data-section="([^"]+)"', body)
-        assert active_nav == ["business-rules"], (
+        assert active_nav == ["integrations"], (
             f"Nav-active and section-active must agree; got nav={active_nav}, section={active_sections}"
         )
 
@@ -189,10 +193,14 @@ class TestSettingsHiddenSectionsOnEmbedded:
 
 
 class TestCurrencyLockOnEmbedded:
+    """Sprint 7 Phase 2: currency limits UI moved to the new standalone
+    Policies & Workflows page (``/tenant/<id>/settings/policies/``).
+    Tests now probe that URL."""
+
     def test_embedded_currency_renders_read_only(self, embedded_client, embedded_tenant_id):
         """No add/remove inputs — currency is provisioned by the upstream
         platform and surfaces as plain text."""
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings/policies/")
         body = resp.get_data(as_text=True)
         # The currency value itself must be visible.
         assert "USD" in body
@@ -204,7 +212,7 @@ class TestCurrencyLockOnEmbedded:
         assert 'id="new-currency-code"' not in body
 
     def test_open_tenant_renders_editable_currency_ui(self, embedded_client, open_tenant_id):
-        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/policies/")
         body = resp.get_data(as_text=True)
         assert "showAddCurrencyModal()" in body
         assert 'name="currency_limits[USD][min_package_budget]"' in body
