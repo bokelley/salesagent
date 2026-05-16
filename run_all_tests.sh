@@ -81,7 +81,7 @@ elif [ "$MODE" = "ci" ]; then
         echo -e "${BLUE}Running targeted: $PYTEST_TARGET $PYTEST_ARGS${NC}"
         set +e
         uv run pytest "$PYTEST_TARGET" \
-            -m "not requires_server and not skip_ci" \
+            -m "not requires_server and not skip_ci and not live" \
             --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
             -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
         TOX_RC=$?
