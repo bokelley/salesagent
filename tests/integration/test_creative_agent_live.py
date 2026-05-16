@@ -7,6 +7,15 @@ In CI, set CREATIVE_AGENT_URL to point at the local mock server started by the w
 NOTE: The conftest test_environment fixture sets ADCP_TESTING=true globally,
 which enables mock mode. These tests override it back to false via the
 enable_live_mode fixture so they exercise the real MCP code path.
+
+Marked ``pytest.mark.live`` so the default integration suite (incl. the
+pre-push hook) deselects them — they hit a real public URL that
+periodically rate-limits or goes down and would otherwise spuriously
+fail the push. To run them explicitly::
+
+    uv run pytest tests/integration/test_creative_agent_live.py -m live -v
+
+This matches the pattern already used by ``test_freewheel_live.py``.
 """
 
 import os
@@ -16,6 +25,8 @@ import pytest
 from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPNotFoundError
+
+pytestmark = pytest.mark.live
 
 # The live creative agent URL — reads env var so CI can point at a containerized agent
 CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
