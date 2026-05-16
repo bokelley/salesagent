@@ -132,6 +132,19 @@ def test_old_business_rules_deep_link_redirects(embedded_client, open_tenant_id)
     assert f"/tenant/{open_tenant_id}/settings/policies/" in resp.headers["Location"]
 
 
+def test_no_slash_policies_deep_link_redirects(embedded_client, open_tenant_id):
+    """``/settings/policies`` (no trailing slash) was ambiguous before:
+    it could match the legacy ``<section>`` route and silently render
+    Tenant Settings with no matching tab. Flask's strict-slash auto-
+    redirect (308) gets there first because the canonical
+    ``/settings/policies/`` is registered with a trailing slash —
+    either way the user lands on the standalone page."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/policies", follow_redirects=False)
+    # 302 (my redirect map) or 308 (Flask strict-slash) — both fine.
+    assert resp.status_code in (302, 308)
+    assert f"/tenant/{open_tenant_id}/settings/policies/" in resp.headers["Location"]
+
+
 def test_tenant_settings_no_longer_renders_business_rules_section(embedded_client, open_tenant_id):
     """The in-page section is gone — the tab data-attribute and the
     section's H2 must NOT render in Tenant Settings."""

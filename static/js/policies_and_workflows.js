@@ -182,7 +182,11 @@ function addCurrencyLimit() {
     const minBudget = document.getElementById('new-currency-min').value;
     const maxSpend = document.getElementById('new-currency-max').value;
 
-    if (!currencyCode || currencyCode.length !== 3) {
+    // Strict whitelist — the value is interpolated into innerHTML attribute
+    // contexts six places below, so we need a regex that admits only safe
+    // chars. The length check alone would let ``"AB`` or ``';X`` slip
+    // through and break out of an HTML attribute → self-XSS.
+    if (!/^[A-Z]{3}$/.test(currencyCode)) {
         alert('Please enter a valid 3-letter currency code (e.g., EUR, GBP, CAD)');
         return;
     }

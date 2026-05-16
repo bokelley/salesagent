@@ -202,6 +202,10 @@ _PROMOTED_SECTION_REDIRECTS = {
     "publishers": "publisher_partners.publishers_page",
     "signing-keys": "tenants.signing_keys_page",
     "business-rules": "settings.policies_page",
+    # Cover the new endpoint slugs too — a user typing
+    # ``/settings/policies`` (no trailing slash) hits this section
+    # route instead of the standalone page; redirect it cleanly.
+    "policies": "settings.policies_page",
 }
 
 
