@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Signals - Sales Agent Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <header class="sa-page-header">
+                <div>
+                    <h2 class="sa-page-header__title">Tenant Signals</h2>
+                    <p class="sa-page-header__subtitle">
+                        Operator-declared targeting capabilities. Surface to storefronts via the AdCP
+                        <code>get_signals</code> tool.
+                    </p>
+                </div>
+                <div class="sa-page-header__actions">
+                    <a href="{{ url_for('tenant_signals.add_signal', tenant_id=tenant_id) }}"
+                       class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Create Signal
+                    </a>
+                </div>
+            </header>
+
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">{{ signals|length }} signal{{ 's' if signals|length != 1 else '' }}</h5>
+                </div>
+                <div class="card-body">
+                    {% if signals %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>signal_id</th>
+                                    <th>Name</th>
+                                    <th>Value type</th>
+                                    <th>Adapter kind</th>
+                                    <th>Dimension</th>
+                                    <th>Provider</th>
+                                    <th>Updated</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in signals %}
+                                <tr>
+                                    <td><code>{{ s.signal_id }}</code></td>
+                                    <td>{{ s.name }}</td>
+                                    <td><span class="badge bg-secondary">{{ s.value_type }}</span></td>
+                                    <td>
+                                        {% if s.adapter_kind %}<code>{{ s.adapter_kind }}</code>{% else %}<span class="text-muted">—</span>{% endif %}
+                                    </td>
+                                    <td>{{ s.targeting_dimension or '—' }}</td>
+                                    <td>{{ s.data_provider or '—' }}</td>
+                                    <td><small class="text-muted">{{ s.updated_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
+                                    <td class="text-end">
+                                        <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
+                                           class="btn btn-sm btn-outline-secondary">Edit</a>
+                                        <form method="POST"
+                                              action="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
+                                              class="d-inline"
+                                              onsubmit="return confirm('Delete signal {{ s.signal_id }}?');">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center py-4">
+                        No signals declared yet. Click <strong>Create Signal</strong> to declare your first
+                        adapter targeting capability.
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -669,6 +669,12 @@ def create_app(config=None):
     app.register_blueprint(signals_agents_bp, url_prefix="/tenant/<tenant_id>/signals-agents")
     app.register_blueprint(inventory_bp)  # Has its own internal routing
     app.register_blueprint(inventory_profiles_bp, url_prefix="/tenant/<tenant_id>/inventory-profiles")
+    try:
+        from src.admin.blueprints.tenant_signals import tenant_signals_bp
+
+        app.register_blueprint(tenant_signals_bp, url_prefix="/tenant/<tenant_id>/signals")
+    except ImportError:
+        logger.warning("tenant_signals blueprint not found")
     app.register_blueprint(publisher_partners_bp, url_prefix="/tenant")  # Publisher partnerships
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(format_search_bp)  # Format search API (/api/formats)

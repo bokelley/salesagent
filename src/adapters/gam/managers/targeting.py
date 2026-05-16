@@ -712,35 +712,38 @@ class GAMTargetingManager:
         from src.core.database.repositories.uow import TenantSignalUoW
 
         all_ids = list({*include_ids, *exclude_ids})
+        audience_include_segments: list[str] = []
+        audience_exclude_segments: list[str] = []
+
+        # Hold the UoW open across resolution so ORM attribute access
+        # (``signal.adapter_config``) doesn't trip lazy-load on a detached
+        # instance after the session has closed.
         with TenantSignalUoW(self.tenant_id) as uow:
             assert uow.tenant_signals is not None
             signals_by_id = {s.signal_id: s for s in uow.tenant_signals.list_by_ids(all_ids)}
 
-        missing = [sid for sid in all_ids if sid not in signals_by_id]
-        if missing:
-            raise ValueError(
-                f"Audience targeting references signal(s) not declared on tenant "
-                f"{self.tenant_id!r}: {', '.join(sorted(missing))}. "
-                f"Author each signal via POST /api/v1/tenants/<id>/signals first."
-            )
+            missing = [sid for sid in all_ids if sid not in signals_by_id]
+            if missing:
+                raise ValueError(
+                    f"Audience targeting references signal(s) not declared on tenant "
+                    f"{self.tenant_id!r}: {', '.join(sorted(missing))}. "
+                    f"Author each signal via POST /api/v1/tenants/<id>/signals first."
+                )
 
-        audience_include_segments: list[str] = []
-        audience_exclude_segments: list[str] = []
-
-        for signal_id in include_ids:
-            self._apply_signal(
-                signal=signals_by_id[signal_id],
-                mode="include",
-                custom_targeting=custom_targeting,
-                segment_accumulator=audience_include_segments,
-            )
-        for signal_id in exclude_ids:
-            self._apply_signal(
-                signal=signals_by_id[signal_id],
-                mode="exclude",
-                custom_targeting=custom_targeting,
-                segment_accumulator=audience_exclude_segments,
-            )
+            for signal_id in include_ids:
+                self._apply_signal(
+                    signal=signals_by_id[signal_id],
+                    mode="include",
+                    custom_targeting=custom_targeting,
+                    segment_accumulator=audience_include_segments,
+                )
+            for signal_id in exclude_ids:
+                self._apply_signal(
+                    signal=signals_by_id[signal_id],
+                    mode="exclude",
+                    custom_targeting=custom_targeting,
+                    segment_accumulator=audience_exclude_segments,
+                )
 
         if not audience_include_segments and not audience_exclude_segments:
             return None

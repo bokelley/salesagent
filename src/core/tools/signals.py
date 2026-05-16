@@ -66,10 +66,15 @@ def _tenant_signal_to_adcp(
     # trips the same identifier through activation.
     wire_id = ts.signal_id.replace(".", "_")
 
+    # AdCP validates ``signal_id.agent_url`` as a URL; the sample signals
+    # use the public salesagent host. Fall back to the same when the tenant
+    # hasn't set ``public_agent_url`` so projection doesn't fail validation.
+    resolved_agent_url = agent_url or "https://salesagent.adcontextprotocol.org/signals"
+
     signal_kwargs: dict = {
         "signal_id": {
             "source": "agent",
-            "agent_url": agent_url or "",
+            "agent_url": resolved_agent_url,
             "id": wire_id,
         },
         "signal_agent_segment_id": wire_id,

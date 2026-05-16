@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}{{ "Edit" if mode == "edit" else "Create" }} Signal - Sales Agent Admin{% endblock %}
+
+{% block content %}
+{% set effective = form_data if form_data else (
+    {
+        "signal_id": signal.signal_id,
+        "name": signal.name,
+        "description": signal.description or "",
+        "value_type": signal.value_type,
+        "categories": (signal.categories or []) | join(", "),
+        "range_min": signal.range_min if signal.range_min is not none else "",
+        "range_max": signal.range_max if signal.range_max is not none else "",
+        "targeting_dimension": signal.targeting_dimension or "",
+        "data_provider": signal.data_provider or "",
+        "adapter_config": (signal.adapter_config or {}) | tojson(indent=2),
+    } if signal else {
+        "signal_id": "",
+        "name": "",
+        "description": "",
+        "value_type": "binary",
+        "categories": "",
+        "range_min": "",
+        "range_max": "",
+        "targeting_dimension": "",
+        "data_provider": "",
+        "adapter_config": "",
+    }
+) %}
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">{{ "Edit" if mode == "edit" else "Create" }} Signal</h2>
+            <p class="sa-page-header__subtitle">
+                Declare an adapter targeting capability. Storefronts discover it via AdCP <code>get_signals</code>;
+                buyers reference the <code>signal_id</code> in <code>audience_include</code> / <code>audience_exclude</code>.
+            </p>
+        </div>
+    </header>
+
+    <form method="POST">
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Identity</h5></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">signal_id</label>
+                    {% if mode == "edit" %}
+                    <input type="text" class="form-control" value="{{ effective.signal_id }}" disabled>
+                    <small class="form-text text-muted">Immutable. Delete + recreate to rename.</small>
+                    {% else %}
+                    <input type="text" name="signal_id" class="form-control{% if errors and errors.signal_id %} is-invalid{% endif %}"
+                           value="{{ effective.signal_id }}"
+                           placeholder="e.g. audience_sports_fans, kv_vertical_news, weather_temp_f"
+                           required>
+                    <small class="form-text text-muted">Stable id buyers reference. AdCP regex: <code>^[a-zA-Z0-9_-]+$</code> (no dots).</small>
+                    {% if errors and errors.signal_id %}<div class="invalid-feedback">{{ errors.signal_id }}</div>{% endif %}
+                    {% endif %}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Name</label>
+                    <input type="text" name="name" class="form-control{% if errors and errors.name %} is-invalid{% endif %}"
+                           value="{{ effective.name }}" required>
+                    {% if errors and errors.name %}<div class="invalid-feedback">{{ errors.name }}</div>{% endif %}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea name="description" class="form-control" rows="2">{{ effective.description }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Schema (AdCP <code>Signal</code> shape)</h5></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Value type</label>
+                    <select name="value_type" class="form-select{% if errors and errors.value_type %} is-invalid{% endif %}">
+                        {% for vt in value_types %}
+                        <option value="{{ vt }}" {% if effective.value_type == vt %}selected{% endif %}>{{ vt }}</option>
+                        {% endfor %}
+                    </select>
+                    <small class="form-text text-muted">
+                        <strong>binary</strong>: signal applies / doesn't apply.
+                        <strong>categorical</strong>: buyer picks from <em>categories</em> below.
+                        <strong>numeric</strong>: buyer narrows within <em>range</em> below.
+                    </small>
+                    {% if errors and errors.value_type %}<div class="invalid-feedback">{{ errors.value_type }}</div>{% endif %}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Categories (comma-separated, for categorical)</label>
+                    <input type="text" name="categories" class="form-control" value="{{ effective.categories }}"
+                           placeholder="e.g. sports, news, weather">
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <label class="form-label">Range min (for numeric)</label>
+                        <input type="text" name="range_min" class="form-control" value="{{ effective.range_min }}">
+                    </div>
+                    <div class="col">
+                        <label class="form-label">Range max (for numeric)</label>
+                        <input type="text" name="range_max" class="form-control" value="{{ effective.range_max }}">
+                    </div>
+                </div>
+                {% if errors and errors.range %}<div class="text-danger mt-1">{{ errors.range }}</div>{% endif %}
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Storefront metadata</h5></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Targeting dimension</label>
+                    <input type="text" name="targeting_dimension" class="form-control"
+                           value="{{ effective.targeting_dimension }}"
+                           placeholder="audience | contextual | weather | geo | demo">
+                    <small class="form-text text-muted">AdCP-standard targeting dimension this signal narrows.</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Data provider</label>
+                    <input type="text" name="data_provider" class="form-control"
+                           value="{{ effective.data_provider }}"
+                           placeholder="publisher_1p | liveramp | weather.com">
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Adapter resolution (operator-only; never surfaced to storefront)</h5></div>
+            <div class="card-body">
+                <p class="text-muted">
+                    JSON object the per-adapter materializer reads at <code>create_media_buy</code> time. Shape varies by adapter:
+                </p>
+                <ul class="text-muted small">
+                    <li>GAM custom KV: <code>{"kind": "custom_key_value", "key_id": "12345", "value_id": "67890"}</code></li>
+                    <li>GAM audience: <code>{"kind": "audience_segment", "segment_id": "98765"}</code></li>
+                    <li>Freewheel audience: <code>{"kind": "audience_item", "audience_item_id": "..."}</code></li>
+                </ul>
+                <textarea name="adapter_config"
+                          class="form-control font-monospace{% if errors and errors.adapter_config %} is-invalid{% endif %}"
+                          rows="8"
+                          placeholder='{"kind": "audience_segment", "segment_id": "98765"}'>{{ effective.adapter_config }}</textarea>
+                {% if errors and errors.adapter_config %}<div class="invalid-feedback">{{ errors.adapter_config }}</div>{% endif %}
+            </div>
+        </div>
+
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">{{ "Save changes" if mode == "edit" else "Create signal" }}</button>
+            <a href="{{ url_for('tenant_signals.list_signals', tenant_id=tenant_id) }}" class="btn btn-link">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

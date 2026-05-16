@@ -39,6 +39,7 @@ from tests.factories.signing import (
     TenantSigningPolicyFactory,
 )
 from tests.factories.sync_job import SyncJobFactory
+from tests.factories.tenant_signal import TenantSignalFactory
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory, WebhookSubscriptionFactory
 from tests.factories.workflow import (
@@ -75,6 +76,7 @@ ALL_FACTORIES = [
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
     SyncJobFactory,
+    TenantSignalFactory,
     TenantSigningCredentialFactory,
     TenantSigningPolicyFactory,
     UserFactory,
@@ -114,6 +116,7 @@ __all__ = [
     "SyncJobFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",
+    "TenantSignalFactory",
     "TenantSigningCredentialFactory",
     "TenantSigningPolicyFactory",
     "UserFactory",
