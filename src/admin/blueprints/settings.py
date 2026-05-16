@@ -270,15 +270,23 @@ def update_general(tenant_id):
                     )
                     db_session.add(limit)
 
-            if "enable_axe_signals" in request.form:
-                tenant.enable_axe_signals = request.form.get("enable_axe_signals") == "on"
-            else:
-                tenant.enable_axe_signals = False
+            # Headless gate (Sprint 7 Phase 4b): when the storefront owns
+            # the corresponding workflow, never touch these fields — not even
+            # to reset them to ``False``. The "checkbox-absent means unchecked"
+            # logic would otherwise silently clobber storefront-owned state
+            # on every save (e.g., a currency-only edit posts no
+            # ``enable_axe_signals`` checkbox → would set the field to False).
+            if publisher_owns("signals_agents"):
+                if "enable_axe_signals" in request.form:
+                    tenant.enable_axe_signals = request.form.get("enable_axe_signals") == "on"
+                else:
+                    tenant.enable_axe_signals = False
 
-            if "human_review_required" in request.form:
-                tenant.human_review_required = request.form.get("human_review_required") == "on"
-            else:
-                tenant.human_review_required = False
+            if publisher_owns("creative_approval"):
+                if "human_review_required" in request.form:
+                    tenant.human_review_required = request.form.get("human_review_required") == "on"
+                else:
+                    tenant.human_review_required = False
 
             tenant.updated_at = datetime.now(UTC)
             db_session.commit()

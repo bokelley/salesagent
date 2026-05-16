@@ -245,6 +245,15 @@ def login():
                         test_mode = True
                     logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
 
+    # Embedded instances skip OIDC entirely — the blueprint isn't
+    # registered (see ``src/admin/app.py``), so any ``url_for("oidc.login", ...)``
+    # would BuildError → 500. Identity on embedded comes from
+    # X-Identity-* headers; per-tenant OIDC is for open instances.
+    # Sprint 7 Phase 4c.
+    from src.admin.utils.embedded_mode_auth import is_managed_instance
+
+    oidc_disabled_by_managed_instance = is_managed_instance()
+
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
     if tenant_context:
         # For detected tenant, check if it has OIDC configured
@@ -252,7 +261,7 @@ def login():
 
         with get_db_session() as db_session:
             config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_context)).first()
-            if config and config.oidc_client_id:
+            if config and config.oidc_client_id and not oidc_disabled_by_managed_instance:
                 oidc_configured = True
                 oidc_enabled = config.oidc_enabled
 
@@ -271,7 +280,7 @@ def login():
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id="default")).first()
             config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id="default")).first()
-            if config and config.oidc_client_id:
+            if config and config.oidc_client_id and not oidc_disabled_by_managed_instance:
                 oidc_configured = True
                 oidc_enabled = config.oidc_enabled
             # Only use auth_setup_mode in single-tenant mode if no global OAuth

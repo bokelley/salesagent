@@ -61,6 +61,7 @@ CAPABILITY_RENDER_MARKERS = {
     "creative_approval": ("<h3>Approval Workflow</h3>", "<h3>Creative Review</h3>"),
     "advertising_policy": ("<h3>Advertising Policy</h3>",),
     "product_ranking": ("<h3>Product Ranking</h3>",),
+    "brand_manifest": ("<h3>Brand Manifest Policy</h3>",),
     "slack": ("<h3>Slack Integration</h3>",),
     "ai_services": ("<h3>AI Services</h3>",),
     "creative_agents": ("<h3>Creative Agents</h3>",),
@@ -204,6 +205,111 @@ class TestBusinessRulesPostGated:
             },
         )
         assert resp.status_code == 302  # success → redirect
+
+    def test_brand_manifest_storefront_does_not_break_naming_only_post(
+        self, monkeypatch, embedded_client, test_tenant_id
+    ):
+        """Regression for the code-reviewer's #1 blocker: when
+        ``brand_manifest`` is storefront-owned, the template must hide
+        the dropdown so the form doesn't auto-submit
+        ``brand_manifest_policy`` and trigger a false 403 on otherwise-
+        innocuous saves.
+
+        Pre-fix bug: the brand-manifest section was unconditionally
+        rendered. Its ``<select>`` always submitted a value with the
+        business-rules form. The capability gate saw the field, matched
+        ``brand_manifest=storefront``, and 403d every save."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"brand_manifest": "storefront"}')
+
+        # Render the form on the embedded settings page. The brand-manifest
+        # dropdown must NOT render — otherwise the publisher's normal save
+        # would always 403.
+        resp = embedded_client.get(f"/tenant/{test_tenant_id}/settings")
+        body = resp.get_data(as_text=True)
+        assert 'name="brand_manifest_policy"' not in body
+
+        # Posting only naming-template fields (i.e., not brand_manifest_policy)
+        # must succeed — proves the gate is correctly scoped.
+        resp = embedded_client.post(
+            f"/tenant/{test_tenant_id}/settings/business-rules",
+            data={"order_name_template": "{promoted_offering}"},
+        )
+        assert resp.status_code == 302
+
+
+class TestGeneralSettingsPostGated:
+    """``settings.update_general`` must not silently clobber storefront-
+    owned ``enable_axe_signals`` / ``human_review_required`` to False on
+    every save. Security review H1."""
+
+    def test_enable_axe_signals_preserved_when_signals_agents_storefront_owned(
+        self, monkeypatch, embedded_client, test_tenant_id
+    ):
+        """``update_general``'s ``checkbox-absent means False`` logic
+        would clobber the storefront-owned field on every save. After
+        the gate, the field must be left alone."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Tenant
+
+        # Seed: tenant.enable_axe_signals = True
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=test_tenant_id)).first()
+            tenant.enable_axe_signals = True
+            session.commit()
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"signals_agents": "storefront"}')
+
+        # Submit a /general POST that does NOT include enable_axe_signals
+        # (a normal tenant-name edit).
+        resp = embedded_client.post(
+            f"/tenant/{test_tenant_id}/settings/general",
+            data={"name": "Renamed Tenant"},
+        )
+        # The route may redirect (302) on success — the key check is the field.
+        assert resp.status_code in (200, 302)
+
+        # The storefront-owned field must still be True.
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=test_tenant_id)).first()
+            assert tenant.enable_axe_signals is True, (
+                "update_general silently clobbered storefront-owned enable_axe_signals to False — H1 regression"
+            )
+
+    def test_human_review_required_preserved_when_creative_approval_storefront_owned(
+        self, monkeypatch, embedded_client, test_tenant_id
+    ):
+        """Same shape: ``human_review_required`` must not flip to False
+        on a /general save when ``creative_approval`` is storefront-owned."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Tenant
+
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=test_tenant_id)).first()
+            tenant.human_review_required = True
+            session.commit()
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval": "storefront"}')
+
+        resp = embedded_client.post(
+            f"/tenant/{test_tenant_id}/settings/general",
+            data={"name": "Renamed Tenant"},
+        )
+        assert resp.status_code in (200, 302)
+
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=test_tenant_id)).first()
+            assert tenant.human_review_required is True, (
+                "update_general silently clobbered storefront-owned human_review_required to False — H1 regression"
+            )
 
 
 class TestCreativeAgentsBlueprintGated:

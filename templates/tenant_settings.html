@@ -1251,6 +1251,8 @@
                     {% endif %}{# End currency lock for embedded tenants #}
                 </div>
 
+                {# Headless capability: hidden when the storefront owns the brand-manifest policy. #}
+                {% if publisher_owns('brand_manifest') %}
                 <!-- Brand Manifest Policy -->
                 <div class="form-section">
                     <h3>Brand Manifest Policy</h3>
@@ -1300,6 +1302,7 @@
                         </details>
                     </div>
                 </div>
+                {% endif %}
 
                 <!-- Naming Conventions -->
                 <div class="form-section">

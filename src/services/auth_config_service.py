@@ -297,7 +297,11 @@ def is_oidc_config_valid(tenant_id: str) -> bool:
 def get_oidc_config_for_auth(tenant_id: str) -> dict | None:
     """Get OIDC configuration for authentication.
 
-    Returns the config only if OIDC is enabled and valid.
+    Returns the config only if OIDC is enabled and valid. On embedded
+    instances (``MANAGED_INSTANCE=true``) the OIDC blueprint isn't
+    registered, so any leftover ``TenantAuthConfig`` row must be ignored
+    to avoid ``BuildError`` on the next ``url_for("oidc.login", ...)``.
+    Sprint 7 Phase 4c.
 
     Args:
         tenant_id: The tenant ID
@@ -305,6 +309,11 @@ def get_oidc_config_for_auth(tenant_id: str) -> dict | None:
     Returns:
         Dict with client_id, client_secret, discovery_url, scopes or None
     """
+    from src.admin.utils.embedded_mode_auth import is_managed_instance
+
+    if is_managed_instance():
+        return None
+
     with get_db_session() as session:
         config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
 
