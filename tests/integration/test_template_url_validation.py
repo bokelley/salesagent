@@ -92,6 +92,8 @@ class TestTemplateUrlValidation:
                             test_params["account_id"] = "test_account"
                         if "key_id" in params:
                             test_params["key_id"] = "test_key"
+                        if "signal_id" in params:
+                            test_params["signal_id"] = "test_signal"
 
                         # Try to build the URL
                         url = url_for(endpoint, **test_params)

@@ -499,11 +499,7 @@ def _get_media_buy_delivery_impl(
                         # below (line ~552) — same pragma noted there.
                         if pricing_info:
                             pkg_pricing_model = pricing_info.get("pricing_model")
-                            pkg_rate = (
-                                float(pricing_info.get("rate"))
-                                if pricing_info.get("rate") is not None
-                                else None
-                            )
+                            pkg_rate = float(pricing_info.get("rate")) if pricing_info.get("rate") is not None else None
                             pkg_currency = pricing_info.get("currency")
                         elif pricing_option:
                             pkg_pricing_model = pricing_option.pricing_model

@@ -44,6 +44,11 @@ cmd_up() {
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
+    # LOCKFILE_HASH invalidates the Dockerfile uv-install layer when uv.lock
+    # changes — same mechanism as ``make compose-build``. Without it, the
+    # Dockerfile's build-arg guard fails and no image is produced.
+    export LOCKFILE_HASH="${LOCKFILE_HASH:-$(shasum -a 256 uv.lock | awk '{print $1}')}"
+
     dc build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -10
     dc up -d || { dc logs; exit 1; }
 
