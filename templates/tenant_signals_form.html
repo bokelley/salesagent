@@ -126,23 +126,193 @@
         </div>
 
         <div class="card mb-3">
-            <div class="card-header"><h5 class="mb-0">Adapter resolution (operator-only; never surfaced to storefront)</h5></div>
+            <div class="card-header">
+                <h5 class="mb-0">Adapter resolution (operator-only; never surfaced to storefront)</h5>
+            </div>
             <div class="card-body">
-                <p class="text-muted">
-                    JSON object the per-adapter materializer reads at <code>create_media_buy</code> time. Shape varies by adapter:
-                </p>
-                <ul class="text-muted small">
-                    <li>GAM custom KV: <code>{"kind": "custom_key_value", "key_id": "12345", "value_id": "67890"}</code></li>
-                    <li>GAM audience: <code>{"kind": "audience_segment", "segment_id": "98765"}</code></li>
-                    <li>Freewheel audience: <code>{"kind": "audience_item", "audience_item_id": "..."}</code></li>
-                </ul>
-                <textarea name="adapter_config"
-                          class="form-control font-monospace{% if errors and errors.adapter_config %} is-invalid{% endif %}"
-                          rows="8"
-                          placeholder='{"kind": "audience_segment", "segment_id": "98765"}'>{{ effective.adapter_config }}</textarea>
-                {% if errors and errors.adapter_config %}<div class="invalid-feedback">{{ errors.adapter_config }}</div>{% endif %}
+                <div class="btn-group mb-3" role="group" aria-label="Authoring mode">
+                    <input type="radio" class="btn-check" name="authoring_mode" id="authoring_simple"
+                           value="simple" checked>
+                    <label class="btn btn-outline-secondary" for="authoring_simple">Simple (pass-through)</label>
+                    <input type="radio" class="btn-check" name="authoring_mode" id="authoring_advanced"
+                           value="advanced">
+                    <label class="btn btn-outline-secondary" for="authoring_advanced">Advanced (composed / JSON)</label>
+                </div>
+
+                <!-- Simple form: pick a kind, fill its fields. Hidden field
+                     ``adapter_config`` is rebuilt on submit by inline JS so
+                     server-side parsing stays the same. -->
+                <div id="authoring-simple-pane">
+                    <div class="mb-3">
+                        <label class="form-label">Kind</label>
+                        <select id="simple-kind" class="form-select">
+                            <optgroup label="Google Ad Manager">
+                                <option value="audience_segment">audience_segment — GAM audience segment id</option>
+                                <option value="custom_key_value">custom_key_value — GAM custom KV (key + value)</option>
+                            </optgroup>
+                            <optgroup label="Freewheel">
+                                <option value="freewheel_viewership_profile">freewheel_viewership_profile</option>
+                                <option value="freewheel_audience_item">freewheel_audience_item</option>
+                                <option value="freewheel_custom_kv">freewheel_custom_kv</option>
+                            </optgroup>
+                        </select>
+                    </div>
+
+                    <div class="simple-field" data-kinds="audience_segment">
+                        <label class="form-label">GAM segment id</label>
+                        <input type="text" id="simple-segment-id" class="form-control" placeholder="98765">
+                    </div>
+
+                    <div class="simple-field" data-kinds="custom_key_value freewheel_custom_kv" style="display:none">
+                        <div class="row">
+                            <div class="col">
+                                <label class="form-label">key_id (GAM) / key (Freewheel)</label>
+                                <input type="text" id="simple-key-id" class="form-control" placeholder="11111">
+                            </div>
+                            <div class="col">
+                                <label class="form-label">value_id</label>
+                                <input type="text" id="simple-value-id" class="form-control" placeholder="22222">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="simple-field" data-kinds="freewheel_viewership_profile" style="display:none">
+                        <label class="form-label">Freewheel viewership profile id (int)</label>
+                        <input type="number" id="simple-profile-id" class="form-control" placeholder="4711">
+                    </div>
+
+                    <div class="simple-field" data-kinds="freewheel_audience_item" style="display:none">
+                        <label class="form-label">Freewheel audience item id (int)</label>
+                        <input type="number" id="simple-item-id" class="form-control" placeholder="9876">
+                    </div>
+                </div>
+
+                <!-- Advanced: full JSON for composed (or any custom shape). -->
+                <div id="authoring-advanced-pane" style="display:none">
+                    <p class="text-muted">
+                        JSON object the per-adapter materializer reads. Two shapes:
+                    </p>
+                    <ul class="text-muted small">
+                        <li><strong>Pass-through</strong>: one signal = one primitive.<br>
+                            <code>{"type": "passthrough", "kind": "audience_segment", "segment_id": "98765"}</code></li>
+                        <li><strong>Composed</strong>: AND of criteria. Each criterion has its own <code>mode</code>.<br>
+                            <code>{"type": "composed", "criteria": [{...}, {...}]}</code></li>
+                    </ul>
+                    <textarea id="adapter-config-textarea"
+                              class="form-control font-monospace{% if errors and errors.adapter_config %} is-invalid{% endif %}"
+                              rows="10"
+                              placeholder='{"type": "composed", "criteria": [...]}'>{{ effective.adapter_config }}</textarea>
+                    {% if errors and errors.adapter_config %}<div class="invalid-feedback">{{ errors.adapter_config }}</div>{% endif %}
+                </div>
+
+                <!-- Hidden field that actually submits. Inline JS keeps it
+                     in sync with whichever pane is active. -->
+                <textarea name="adapter_config" id="adapter-config-hidden" style="display:none">{{ effective.adapter_config }}</textarea>
             </div>
         </div>
+
+        <script>
+        (function() {
+            // ---- Mode toggle -----------------------------------------------
+            const simplePane = document.getElementById('authoring-simple-pane');
+            const advancedPane = document.getElementById('authoring-advanced-pane');
+            const hidden = document.getElementById('adapter-config-hidden');
+            const textarea = document.getElementById('adapter-config-textarea');
+            const kindSelect = document.getElementById('simple-kind');
+
+            function setMode(mode) {
+                if (mode === 'simple') {
+                    simplePane.style.display = '';
+                    advancedPane.style.display = 'none';
+                    syncFromSimple();
+                } else {
+                    simplePane.style.display = 'none';
+                    advancedPane.style.display = '';
+                    hidden.value = textarea.value;
+                }
+            }
+
+            document.querySelectorAll('input[name="authoring_mode"]').forEach(radio => {
+                radio.addEventListener('change', e => setMode(e.target.value));
+            });
+
+            // ---- Simple-pane kind switcher --------------------------------
+            function refreshSimpleFields() {
+                const kind = kindSelect.value;
+                document.querySelectorAll('.simple-field').forEach(el => {
+                    const kinds = el.dataset.kinds.split(' ');
+                    el.style.display = kinds.includes(kind) ? '' : 'none';
+                });
+                syncFromSimple();
+            }
+            kindSelect.addEventListener('change', refreshSimpleFields);
+            simplePane.addEventListener('input', syncFromSimple);
+
+            function syncFromSimple() {
+                const kind = kindSelect.value;
+                let payload = { type: 'passthrough', kind: kind };
+                if (kind === 'audience_segment') {
+                    payload.segment_id = document.getElementById('simple-segment-id').value.trim();
+                } else if (kind === 'custom_key_value') {
+                    payload.key_id = document.getElementById('simple-key-id').value.trim();
+                    payload.value_id = document.getElementById('simple-value-id').value.trim();
+                } else if (kind === 'freewheel_custom_kv') {
+                    payload.key = document.getElementById('simple-key-id').value.trim();
+                    payload.value_id = document.getElementById('simple-value-id').value.trim();
+                } else if (kind === 'freewheel_viewership_profile') {
+                    const v = document.getElementById('simple-profile-id').value.trim();
+                    if (v) payload.profile_id = parseInt(v, 10);
+                } else if (kind === 'freewheel_audience_item') {
+                    const v = document.getElementById('simple-item-id').value.trim();
+                    if (v) payload.item_id = parseInt(v, 10);
+                }
+                hidden.value = JSON.stringify(payload, null, 2);
+                // Mirror to the advanced textarea so toggling modes is seamless.
+                textarea.value = hidden.value;
+            }
+
+            // ---- Initial state --------------------------------------------
+            // If existing adapter_config doesn't fit a simple pass-through
+            // shape (composed expressions; unknown kinds), default to
+            // Advanced mode so the operator sees what's there.
+            try {
+                const existing = textarea.value ? JSON.parse(textarea.value) : null;
+                const isSimplePassthrough = existing && (
+                    existing.type === 'passthrough'
+                    || (!existing.type && existing.kind && typeof existing.kind === 'string')
+                );
+                if (!isSimplePassthrough && textarea.value.trim()) {
+                    document.getElementById('authoring_advanced').checked = true;
+                    setMode('advanced');
+                } else if (isSimplePassthrough) {
+                    // Hydrate the simple form fields from existing JSON.
+                    const kind = existing.kind;
+                    if (kindSelect.querySelector(`option[value="${kind}"]`)) {
+                        kindSelect.value = kind;
+                    }
+                    if (kind === 'audience_segment') {
+                        document.getElementById('simple-segment-id').value = existing.segment_id || '';
+                    } else if (kind === 'custom_key_value') {
+                        document.getElementById('simple-key-id').value = existing.key_id || '';
+                        document.getElementById('simple-value-id').value = existing.value_id || '';
+                    } else if (kind === 'freewheel_custom_kv') {
+                        document.getElementById('simple-key-id').value = existing.key || '';
+                        document.getElementById('simple-value-id').value = existing.value_id || '';
+                    } else if (kind === 'freewheel_viewership_profile') {
+                        document.getElementById('simple-profile-id').value = existing.profile_id || '';
+                    } else if (kind === 'freewheel_audience_item') {
+                        document.getElementById('simple-item-id').value = existing.item_id || '';
+                    }
+                    refreshSimpleFields();
+                } else {
+                    refreshSimpleFields();
+                }
+            } catch (e) {
+                document.getElementById('authoring_advanced').checked = true;
+                setMode('advanced');
+            }
+        })();
+        </script>
 
         <div class="d-flex gap-2">
             <button type="submit" class="btn btn-primary">{{ "Save changes" if mode == "edit" else "Create signal" }}</button>
