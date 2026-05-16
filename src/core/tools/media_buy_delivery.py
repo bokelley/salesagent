@@ -489,6 +489,43 @@ def _get_media_buy_delivery_impl(
                                 reverse=True,
                             )
 
+                        # Resolve pricing for this package with cascade:
+                        #   package_config.pricing_info → pricing_option (from raw_request) → media buy defaults.
+                        # AdCP ByPackageItem requires pricing_model, rate, currency.
+                        # When the test harness creates a media buy with no pricing_info
+                        # on the package, cascade to the buy's currency and the spec's
+                        # 'cpm' default so the wire response stays schema-valid. The
+                        # buy-level default mirrors the MediaBuyDeliveryData fallback
+                        # below (line ~552) — same pragma noted there.
+                        if pricing_info:
+                            pkg_pricing_model = pricing_info.get("pricing_model")
+                            pkg_rate = (
+                                float(pricing_info.get("rate"))
+                                if pricing_info.get("rate") is not None
+                                else None
+                            )
+                            pkg_currency = pricing_info.get("currency")
+                        elif pricing_option:
+                            pkg_pricing_model = pricing_option.pricing_model
+                            pkg_rate = float(pricing_option.rate) if pricing_option.rate is not None else None
+                            po_currency = getattr(pricing_option, "currency", None)
+                            pkg_currency = po_currency if isinstance(po_currency, str) else None
+                        else:
+                            pkg_pricing_model = None
+                            pkg_rate = None
+                            pkg_currency = None
+
+                        if not isinstance(pkg_pricing_model, str):
+                            pkg_pricing_model = PricingModel.cpm.value
+                        if not isinstance(pkg_currency, str):
+                            buy_currency = buy.currency if isinstance(buy.currency, str) else None
+                            pkg_currency = buy_currency or "USD"
+                        if pkg_rate is None:
+                            # AdCP ByPackageItem requires rate, but auction-based pricing
+                            # has no fixed rate. Emit 0 to satisfy the wire schema; buyers
+                            # should treat 0 as "rate unknown" for non-fixed pricing.
+                            pkg_rate = 0.0
+
                         package_deliveries.append(
                             PackageDelivery(
                                 package_id=package_id,
@@ -500,14 +537,9 @@ def _get_media_buy_delivery_impl(
                                 # don't fire there — see #225 Phase 2.
                                 completed_views=package_completed_views,
                                 pacing_index=1.0 if status == "active" else 0.0,
-                                # Add pricing fields from package_config
-                                pricing_model=pricing_info.get("pricing_model") if pricing_info else None,
-                                rate=(
-                                    float(pricing_info.get("rate"))
-                                    if pricing_info and pricing_info.get("rate") is not None
-                                    else None
-                                ),
-                                currency=pricing_info.get("currency") if pricing_info else None,
+                                pricing_model=pkg_pricing_model,
+                                rate=pkg_rate,
+                                currency=pkg_currency,
                                 by_placement=placement_breakdown,
                             )
                         )
