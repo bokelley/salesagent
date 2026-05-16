@@ -590,7 +590,7 @@ class FreeWheelAdapter(AdServerAdapter):
             "rate_type": rate_type,
             "ad_unit_package_id": product_config.get("ad_unit_package_id"),
             "price_model": product_config.get("price_model"),
-            "targeting": build_targeting(package.targeting_overlay, product_config),
+            "targeting": build_targeting(package.targeting_overlay, product_config, tenant_id=self.tenant_id),
             "external_id": package.package_id,
         }
         for dim in list_dimensions:
