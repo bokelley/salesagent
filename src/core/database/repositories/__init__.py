@@ -23,12 +23,12 @@ from src.core.database.repositories.advertiser_mapping import (
 )
 from src.core.database.repositories.audit_log import AuditLogRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
-from src.core.database.repositories.custom_targeting_profile import CustomTargetingProfileRepository
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
+from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_signing_credentials import TenantSigningCredentialRepository
 from src.core.database.repositories.tenant_signing_policy import TenantSigningPolicyRepository
@@ -45,7 +45,6 @@ __all__ = [
     "GamAdvertiserRepository",
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
-    "CustomTargetingProfileRepository",
     "InventoryProfileRepository",
     "MediaBuyRepository",
     "MediaBuyUoW",
@@ -53,6 +52,7 @@ __all__ = [
     "ProductRepository",
     "ProductUoW",
     "SyncJobRepository",
+    "TenantSignalRepository",
     "TenantConfigRepository",
     "TenantConfigUoW",
     "TenantSigningCredentialRepository",

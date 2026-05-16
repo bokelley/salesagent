@@ -465,9 +465,6 @@ class Product(Base, JSONValidatorMixin):
     # Storefront-supplied key for replay-safe composition. Unique per
     # (tenant, composed_by_principal_id) when non-null.
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Custom targeting profile ids referenced at composition time. Resolution
-    # into implementation_config happens at write time; this is the trail.
-    custom_targeting_profile_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Relationships
     tenant = relationship("Tenant", back_populates="products")
     inventory_profile = relationship("InventoryProfile", back_populates="products")
@@ -1702,19 +1699,32 @@ class InventoryProfile(Base, JSONValidatorMixin):
     )
 
 
-class CustomTargetingProfile(Base, JSONValidatorMixin):
-    """Composable overlay for adapter-specific targeting.
+class TenantSignal(Base, JSONValidatorMixin):
+    """Operator-authored map of one adapter targeting capability.
 
-    Scope is targeting that AdCP cannot express natively: operator-specific
-    custom key-values, adapter-opaque audience segment ids. AdCP-native
-    targeting (geo, daypart, device, contextual, standard demos) flows
-    through the create_media_buy request per spec — not here.
+    Replaces ``CustomTargetingProfile``. The previous shape baked
+    GAM-specific structure (``key_values``, ``audience_segments``) into the
+    schema, which doesn't generalize across Freewheel, Broadstreet,
+    SpringServe, or future adapters. The new shape mirrors AdCP's existing
+    ``Signal`` type so the storefront can render UI for any signal type —
+    categorical taxonomies, numeric ranges, binary toggles — without
+    per-adapter branching.
 
-    Storefronts compose products by referencing a stable profile id;
-    adapter-specific ids stay hidden behind the profile.
+    The storefront sees the AdCP-vocab fields (``signal_id``, ``name``,
+    ``value_type``, ``categories``, ``range``, ``targeting_dimension``).
+    The ``adapter_config`` blob is operator-authored, opaque to the
+    storefront, and consumed by the per-adapter materializer at compose
+    time to produce the right ``implementation_config`` for whichever ad
+    server the tenant uses.
+
+    Composition of multiple signals on a single buy (e.g. ``audience.X``
+    AND ``geo.Y`` AND NOT ``audience.Z``) reuses the existing
+    custom-targeting expression machinery — no parallel "signal bundle"
+    entity. Operators declare atomic capabilities; storefronts compose at
+    request time.
     """
 
-    __tablename__ = "custom_targeting_profiles"
+    __tablename__ = "tenant_signals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(
@@ -1722,31 +1732,45 @@ class CustomTargetingProfile(Base, JSONValidatorMixin):
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
         nullable=False,
     )
-    custom_targeting_profile_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Stable AdCP-style identifier (e.g. ``audience.sports_fans``,
+    # ``kv.vertical``, ``weather.temperature_f``). Storefront references this.
+    signal_id: Mapped[str] = mapped_column(String(200), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Adapter-specific overlays only. Shape:
-    # {
-    #   "key_values": [{"key": str, "values": [str], "mode": "include"|"exclude"}],
-    #   "audience_segments": [{"segment_id": str, "mode": "include"|"exclude"}],
-    #   ...
-    # }
-    components: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
+    # AdCP SignalValueType — drives storefront UI rendering.
+    # ``binary`` (boolean toggle), ``categorical`` (multi-select), ``numeric``
+    # (slider / range picker).
+    value_type: Mapped[str] = mapped_column(String(32), nullable=False)
 
-    # Resolved adapter ids + metadata cached at write time so the composition
-    # endpoint can validate without re-resolving from the adapter on every
-    # call. Source of truth remains the adapter; this is a cache.
+    # Categorical taxonomy. Empty list for non-categorical signals.
+    categories: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+
+    # Numeric bounds (when value_type='numeric'). NULL when N/A.
+    range_min: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)
+    range_max: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)
+
+    # Adapter-specific resolution map. Operator-authored, opaque to the
+    # storefront, consumed by the per-adapter materializer. Examples:
+    #   GAM custom KV: {"kind": "custom_key_value", "key_id": "12345",
+    #                   "value_ids": {"sports": "11111", "news": "22222"}}
+    #   GAM audience:  {"kind": "audience_segment", "segment_id": "98765"}
+    #   Freewheel:     {"kind": "audience_item", "audience_item_id": "..."}
+    #                | {"kind": "viewership_profile", "id": "..."}
+    # Adapter materializers validate shape at compose time.
     adapter_config: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
 
-    # AdCP-standard targeting-dimension names this profile narrows. Lets the
-    # storefront pre-validate (bundle ∩ profile ∩ buyer_targeting) client-side.
-    touches_dimensions: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    # Where the signal originates (publisher first-party, 3p data provider,
+    # derived). Informational only; storefront UX may surface it.
+    data_provider: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
-    # Content hash for cache invalidation via If-None-Match on the REST API.
+    # AdCP-standard targeting-dimension this signal narrows. Cross-checked
+    # against ``InventoryProfile.constraints.targeting_dimensions`` so the
+    # storefront can pre-validate compositions client-side.
+    targeting_dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
@@ -1755,12 +1779,8 @@ class CustomTargetingProfile(Base, JSONValidatorMixin):
     tenant = relationship("Tenant")
 
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id",
-            "custom_targeting_profile_id",
-            name="uq_custom_targeting_profile",
-        ),
-        Index("idx_custom_targeting_profiles_tenant", "tenant_id"),
+        UniqueConstraint("tenant_id", "signal_id", name="uq_tenant_signal"),
+        Index("idx_tenant_signals_tenant", "tenant_id"),
     )
 
 

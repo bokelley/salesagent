@@ -1,8 +1,21 @@
-"""Pydantic schemas for the Embedded Composition API (`/api/v1/...`).
+"""Pydantic schemas for the Embedded Composition API (``/api/v1/...``).
 
 Server-to-server REST surface that lets an embedding storefront compose
-products from primitives (inventory profile + custom targeting profile +
-agreed price). See ``.context/embedded-composition-design.md``.
+products from primitives — inventory profile + signal selections + price.
+See ``.context/embedded-composition-design.md``.
+
+Adapter-agnostic at the storefront boundary:
+- ``InventoryProfileRead`` (what storefront sees) carries only AdCP-vocab
+  metadata. Adapter-specific config is operator-authored on Create/Update
+  and never echoed in storefront-facing reads.
+- ``TenantSignalRead`` mirrors AdCP's existing ``Signal`` shape
+  (``value_type``, ``categories``, ``range``). Adapter-specific resolution
+  lives in ``adapter_config`` on Create/Update only.
+
+Composition body uses ``signal_selections`` (a buyer-style selection over
+operator-declared signals), not opaque profile references — so the
+storefront can compose with the same vocabulary it uses for AdCP signals
+elsewhere.
 
 All schemas follow the project ``get_pydantic_extra_mode()`` convention:
 forbid unknown fields in dev/CI, ignore them in production.
@@ -11,6 +24,7 @@ forbid unknown fields in dev/CI, ignore them in production.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,16 +40,17 @@ def _config() -> ConfigDict:
 
 
 # ---------------------------------------------------------------------------
-# Capability narrowings
+# Capability narrowings (AdCP-vocab; storefront-visible)
 # ---------------------------------------------------------------------------
 
 
 class ProfileConstraints(BaseModel):
-    """Typed AdCP capability narrowings on an inventory profile or targeting profile.
+    """Typed AdCP capability narrowings on an inventory profile.
 
     Vocabulary references the agent's declared ``DecisioningCapabilities``;
     profiles express narrowings, never redeclarations. Lets the storefront
-    pre-validate ``(inventory ∩ targeting ∩ buyer_request)`` client-side.
+    pre-validate ``(inventory ∩ signal_selections ∩ buyer_targeting)``
+    client-side.
     """
 
     model_config = _config()
@@ -54,6 +69,10 @@ class ProfileConstraints(BaseModel):
 
 
 class InventoryProfileCreate(BaseModel):
+    """Operator-authored. Includes the adapter-shaped ``inventory_config``
+    blob (GAM placements, FW sites, Broadstreet zones, …) and the
+    AdCP-vocab ``constraints`` narrowings."""
+
     model_config = _config()
 
     profile_id: str = Field(..., min_length=1, max_length=100)
@@ -61,7 +80,12 @@ class InventoryProfileCreate(BaseModel):
     description: str | None = None
     inventory_config: dict = Field(
         default_factory=dict,
-        description='{"ad_units": [...], "placements": [...], "include_descendants": bool}',
+        description=(
+            "Adapter-specific inventory selection. Operator-authored, opaque to the "
+            "storefront. Shape depends on tenant.ad_server (GAM: {ad_units, placements, "
+            "include_descendants}; Freewheel: {site_ids, video_group_ids, ...}; "
+            "Broadstreet: {zone_ids}; etc.)."
+        ),
     )
     format_ids: list[dict] = Field(default_factory=list)
     publisher_properties: list[dict] = Field(default_factory=list)
@@ -82,15 +106,16 @@ class InventoryProfileUpdate(BaseModel):
 
 
 class InventoryProfileRead(BaseModel):
+    """Storefront-facing read. AdCP-vocab metadata only — no adapter-shaped
+    fields. Operators that need to inspect the underlying ``inventory_config``
+    can use the admin UI; this surface is for storefront discovery and
+    composition."""
+
     model_config = _config()
 
     profile_id: str
     name: str
     description: str | None
-    inventory_config: dict
-    format_ids: list[dict]
-    publisher_properties: list[dict]
-    targeting_template: dict | None
     constraints: ProfileConstraints | None
     etag: str | None
     created_at: datetime
@@ -103,124 +128,113 @@ class InventoryProfileListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Custom targeting profiles
+# Tenant signals — operator's map of adapter targeting capabilities
 # ---------------------------------------------------------------------------
 
 
-_MODE = Literal["include", "exclude"]
+_SIGNAL_VALUE_TYPE = Literal["binary", "categorical", "numeric"]
 
 
-class KeyValueComponent(BaseModel):
-    model_config = _config()
-
-    key: str = Field(..., min_length=1, max_length=200)
-    values: list[str] = Field(..., min_length=1)
-    mode: _MODE = "include"
-
-
-class AudienceSegmentComponent(BaseModel):
-    model_config = _config()
-
-    segment_id: str = Field(..., min_length=1)
-    mode: _MODE = "include"
-
-
-class TargetingComponents(BaseModel):
-    """Adapter-specific overlays only. AdCP-native targeting (geo, daypart, etc.)
-    flows through the create_media_buy request — not here.
-    """
+class SignalRange(BaseModel):
+    """Numeric bounds for a ``value_type='numeric'`` signal."""
 
     model_config = _config()
 
-    key_values: list[KeyValueComponent] = Field(default_factory=list)
-    audience_segments: list[AudienceSegmentComponent] = Field(default_factory=list)
+    min: Decimal | None = None
+    max: Decimal | None = None
 
 
-class CustomTargetingProfileCreate(BaseModel):
+class TenantSignalCreate(BaseModel):
+    """Operator-authored. ``adapter_config`` is the opaque resolution map
+    consumed by the per-adapter materializer at compose time."""
+
     model_config = _config()
 
-    custom_targeting_profile_id: str = Field(..., min_length=1, max_length=100)
+    signal_id: str = Field(..., min_length=1, max_length=200)
     name: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
-    components: TargetingComponents = Field(default_factory=TargetingComponents)
-    touches_dimensions: list[str] = Field(
-        default_factory=list,
-        description="AdCP-standard dimension names this profile narrows",
+    value_type: _SIGNAL_VALUE_TYPE
+    categories: list[str] = Field(default_factory=list, description="Taxonomy when value_type='categorical'")
+    range: SignalRange | None = Field(default=None, description="Bounds when value_type='numeric'")
+    adapter_config: dict = Field(
+        default_factory=dict,
+        description=(
+            "Adapter-specific resolution map. Operator-authored, opaque to storefront. "
+            "Examples: GAM custom KV → {kind: 'custom_key_value', key_id: '...', value_ids: {...}}; "
+            "GAM audience → {kind: 'audience_segment', segment_id: '...'}; "
+            "Freewheel → {kind: 'audience_item', audience_item_id: '...'}."
+        ),
+    )
+    data_provider: str | None = None
+    targeting_dimension: str | None = Field(
+        default=None,
+        description="AdCP-standard dimension this signal narrows (audience, contextual, weather, ...)",
     )
 
 
-class CustomTargetingProfileUpdate(BaseModel):
+class TenantSignalUpdate(BaseModel):
     model_config = _config()
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
-    components: TargetingComponents | None = None
-    touches_dimensions: list[str] | None = None
+    value_type: _SIGNAL_VALUE_TYPE | None = None
+    categories: list[str] | None = None
+    range: SignalRange | None = None
+    adapter_config: dict | None = None
+    data_provider: str | None = None
+    targeting_dimension: str | None = None
 
 
-class CustomTargetingProfileRead(BaseModel):
+class TenantSignalRead(BaseModel):
+    """Storefront-facing read. Mirrors AdCP ``Signal`` vocabulary — no
+    ``adapter_config`` echo. Storefront uses ``value_type`` + ``categories`` /
+    ``range`` to render UI."""
+
     model_config = _config()
 
-    custom_targeting_profile_id: str
+    signal_id: str
     name: str
     description: str | None
-    components: TargetingComponents
-    touches_dimensions: list[str]
+    value_type: _SIGNAL_VALUE_TYPE
+    categories: list[str]
+    range: SignalRange | None
+    data_provider: str | None
+    targeting_dimension: str | None
     etag: str | None
     created_at: datetime
     updated_at: datetime
 
 
-class CustomTargetingProfileListResponse(BaseModel):
+class TenantSignalListResponse(BaseModel):
     model_config = _config()
-    custom_targeting_profiles: list[CustomTargetingProfileRead]
+    signals: list[TenantSignalRead]
 
 
 # ---------------------------------------------------------------------------
-# Discovery (raw adapter primitives)
+# Signal selections (storefront → sales agent on compose)
 # ---------------------------------------------------------------------------
 
 
-class CustomTargetingKey(BaseModel):
+class SignalSelection(BaseModel):
+    """One storefront-issued selection over an operator-declared signal.
+
+    Shape echoes how AdCP buyers narrow on signals on ``create_media_buy``:
+    a ``signal_id`` plus value(s) appropriate to the signal's ``value_type``.
+    Include vs exclude is expressed via ``mode``; the per-adapter materializer
+    translates to the adapter's native operator (GAM ``IS``/``IS_NOT``,
+    Freewheel inclusion lists vs exclusion lists, …).
+    """
+
     model_config = _config()
 
-    key: str
-    display_name: str | None = None
-    description: str | None = None
-    value_count: int | None = None
-
-
-class CustomTargetingKeyValue(BaseModel):
-    model_config = _config()
-
-    value: str
-    display_name: str | None = None
-
-
-class AudienceSegment(BaseModel):
-    model_config = _config()
-
-    segment_id: str
-    name: str
-    description: str | None = None
-    size: int | None = None
-    active: bool = True
-
-
-class CustomTargetingKeysResponse(BaseModel):
-    model_config = _config()
-    custom_targeting_keys: list[CustomTargetingKey]
-
-
-class CustomTargetingKeyValuesResponse(BaseModel):
-    model_config = _config()
-    key: str
-    values: list[CustomTargetingKeyValue]
-
-
-class AudienceSegmentsResponse(BaseModel):
-    model_config = _config()
-    audience_segments: list[AudienceSegment]
+    signal_id: str = Field(..., min_length=1, max_length=200)
+    mode: Literal["include", "exclude"] = "include"
+    # For value_type='categorical': pick from signal.categories.
+    values: list[str] = Field(default_factory=list)
+    # For value_type='numeric': bounded range (any field optional → unbounded that side).
+    range: SignalRange | None = None
+    # For value_type='binary': True = signal applies, False = signal explicitly off.
+    enabled: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -320,15 +334,15 @@ class DynamicProductCreate(BaseModel):
     """Body for ``POST /api/v1/products``. Idempotency-Key header is required.
 
     Pricing flows through AdCP's typed ``PricingOption`` — same wire shape
-    ``create_media_buy`` and ``get_products`` use. No translation, no
-    impedance mismatch. The storefront sets the price; the sales agent
-    records it (no floor enforcement).
+    ``create_media_buy`` and ``get_products`` use. Targeting flows through
+    ``signal_selections`` over the operator's declared signals. No
+    adapter-specific fields on this surface.
     """
 
     model_config = _config()
 
     inventory_profile_id: str = Field(..., min_length=1)
-    custom_targeting_profile_ids: list[str] = Field(default_factory=list)
+    signal_selections: list[SignalSelection] = Field(default_factory=list)
     adcp_targeting: dict | None = Field(
         default=None,
         description="Optional AdCP-native targeting baked into the product at compose time",
@@ -352,7 +366,7 @@ class DynamicProductRead(BaseModel):
     product_id: str
     composition_source: Literal["storefront_composed"]
     inventory_profile_id: str
-    custom_targeting_profile_ids: list[str]
+    signal_selections: list[SignalSelection]
     pricing_option: AdCPPricingOption
     flight_start: date
     flight_end: date
@@ -371,12 +385,12 @@ _COMPOSITION_ERROR_CODES = Literal[
     "channel_mismatch",
     "dimension_unsupported",
     "unknown_inventory_profile",
-    "unknown_custom_targeting_profile",
-    "unknown_segment",
+    "unknown_signal",
     "expired_inventory_profile",
-    "expired_custom_targeting_profile",
     "invalid_flight_dates",
     "unsupported_pricing_model",
+    "unsupported_adapter",
+    "invalid_signal_selection",
 ]
 
 
@@ -387,12 +401,12 @@ class CompositionErrorDetail(BaseModel):
 
     code: _COMPOSITION_ERROR_CODES
     inventory_profile_id: str | None = None
-    custom_targeting_profile_id: str | None = None
-    segment_id: str | None = None
+    signal_id: str | None = None
     dimension: str | None = None
     format_id: str | None = None
     channel: str | None = None
     pricing_model: str | None = None
+    adapter: str | None = None
     expected: str | None = None
     got: str | None = None
     message: str | None = None

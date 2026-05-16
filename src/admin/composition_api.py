@@ -1,21 +1,27 @@
 """Embedded Composition API — REST blueprint at ``/api/v1/tenants/<tenant_id>/...``.
 
 Server-to-server surface for an embedding storefront (e.g. Scope3) to manage
-the primitives it composes products from: inventory profiles, custom targeting
-profiles, advertiser mappings, and dynamic product creation.
+the primitives it composes products from: inventory profiles, tenant
+signals (operator's map of adapter targeting capabilities), advertiser
+mappings, and dynamic product creation.
 
 Auth: same operator/wrapper API key as the Tenant Management API
-(``X-Tenant-Management-API-Key``). No new MCP tools — this is REST only.
+(``X-Tenant-Management-API-Key``). No new MCP tools — REST only.
 
-Vocabulary mirrors the AdCP spec (``PricingOption``, ``AccountReference``) so
-storefronts can paste the same shapes they already construct for the buyer
-protocol. Pricing flows through ``PricingOption`` — the storefront sets the
-price end-to-end; the sales agent records it (no floor enforcement).
+Adapter-agnostic at the storefront boundary:
+- ``GET /inventory-profiles`` returns AdCP-vocab metadata only (no
+  adapter-shaped fields). Operators author the adapter-specific
+  ``inventory_config`` on Create/Update; storefront never sees it.
+- Targeting is expressed as ``SignalSelection`` over the operator's
+  declared ``TenantSignal`` catalog. Each signal carries AdCP ``Signal``
+  shape (``value_type``, ``categories``, ``range``); the per-adapter
+  materializer resolves selections into adapter ``implementation_config``
+  at compose time.
 
-In embedded mode the host (storefront) is the only agent. The sales agent
-never receives requests directly from a buyer, so there is no per-buyer
-principal API on this surface — the tenant's embedded principal is
-auto-resolved (lazy-created on first compose).
+In embedded mode the host (storefront) is the only agent. The sales
+agent never receives requests directly from a buyer, so there is no
+per-buyer principal API on this surface — the tenant's embedded principal
+is auto-resolved (lazy-created on first compose).
 
 See ``.context/embedded-composition-design.md``.
 """
@@ -41,44 +47,49 @@ from src.admin.api_schemas.composition import (
     AdvertiserMappingUpdate,
     AdvertiserSummary,
     ApiError,
-    AudienceSegmentsResponse,
     CompositionError,
     CompositionErrorDetail,
-    CustomTargetingKeysResponse,
-    CustomTargetingKeyValuesResponse,
-    CustomTargetingProfileCreate,
-    CustomTargetingProfileListResponse,
-    CustomTargetingProfileRead,
-    CustomTargetingProfileUpdate,
     DynamicProductCreate,
     DynamicProductRead,
     InventoryProfileCreate,
     InventoryProfileListResponse,
     InventoryProfileRead,
     InventoryProfileUpdate,
-    TargetingComponents,
+    SignalRange,
+    SignalSelection,
+    TenantSignalCreate,
+    TenantSignalListResponse,
+    TenantSignalRead,
+    TenantSignalUpdate,
 )
 from src.admin.auth_helpers import require_api_key_auth
+from src.admin.composition_materializers import (
+    MaterializationError,
+    MaterializerContext,
+    supported_adapters,
+)
+from src.admin.composition_materializers import (
+    get as get_materializer,
+)
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    AdapterConfig,
     AdvertiserRoutingRule,
-    CustomTargetingProfile,
     InventoryProfile,
     PricingOption,
     Principal,
     Product,
     Tenant,
+    TenantSignal,
 )
 from src.core.database.repositories.advertiser_mapping import (
     AdvertiserMappingRepository,
     GamAdvertiserRepository,
 )
-from src.core.database.repositories.custom_targeting_profile import CustomTargetingProfileRepository
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.tenant_signal import TenantSignalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -119,25 +130,15 @@ def _parse_updated_since() -> datetime | None:
 
 
 def _compute_etag(payload: Any) -> str:
-    """Deterministic ETag over a JSON-serializable payload."""
     raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
 def _maybe_304(etag: str):
-    """Return a 304 if If-None-Match matches; otherwise None."""
     inm = request.headers.get("If-None-Match")
     if inm and inm.strip('"') == etag:
         return ("", 304, {"ETag": f'"{etag}"'})
     return None
-
-
-def _ensure_tenant_or_404(tenant_id: str) -> Tenant | tuple[Any, int]:
-    with get_db_session() as session:
-        tenant = session.get(Tenant, tenant_id)
-        if tenant is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        return tenant
 
 
 # ---------------------------------------------------------------------------
@@ -146,14 +147,14 @@ def _ensure_tenant_or_404(tenant_id: str) -> Tenant | tuple[Any, int]:
 
 
 def _inventory_profile_to_read(profile: InventoryProfile) -> dict:
+    """Storefront-facing read. Adapter-shaped fields (``inventory_config``,
+    ``format_ids``, ``publisher_properties``, ``targeting_template``) are
+    intentionally omitted — operators manage them, storefront composes
+    against the AdCP-vocab metadata only."""
     return InventoryProfileRead(
         profile_id=profile.profile_id,
         name=profile.name,
         description=profile.description,
-        inventory_config=profile.inventory_config or {},
-        format_ids=profile.format_ids or [],
-        publisher_properties=profile.publisher_properties or [],
-        targeting_template=profile.targeting_template,
         constraints=profile.constraints,
         etag=profile.etag,
         created_at=profile.created_at,
@@ -298,38 +299,48 @@ def delete_inventory_profile(tenant_id: str, profile_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Custom targeting profiles
+# Tenant signals (operator-authored capability map; storefront-visible)
 # ---------------------------------------------------------------------------
 
 
-def _custom_targeting_profile_to_read(profile: CustomTargetingProfile) -> dict:
-    components = TargetingComponents.model_validate(profile.components or {})
-    return CustomTargetingProfileRead(
-        custom_targeting_profile_id=profile.custom_targeting_profile_id,
-        name=profile.name,
-        description=profile.description,
-        components=components,
-        touches_dimensions=profile.touches_dimensions or [],
-        etag=profile.etag,
-        created_at=profile.created_at,
-        updated_at=profile.updated_at,
+def _signal_range(signal: TenantSignal) -> SignalRange | None:
+    if signal.range_min is None and signal.range_max is None:
+        return None
+    return SignalRange(min=signal.range_min, max=signal.range_max)
+
+
+def _signal_to_read(signal: TenantSignal) -> dict:
+    """Storefront-facing read. AdCP-vocab fields only — ``adapter_config`` is
+    operator-authored and never echoed."""
+    return TenantSignalRead(
+        signal_id=signal.signal_id,
+        name=signal.name,
+        description=signal.description,
+        value_type=signal.value_type,
+        categories=list(signal.categories or []),
+        range=_signal_range(signal),
+        data_provider=signal.data_provider,
+        targeting_dimension=signal.targeting_dimension,
+        etag=signal.etag,
+        created_at=signal.created_at,
+        updated_at=signal.updated_at,
     ).model_dump(mode="json")
 
 
-def _refresh_custom_targeting_profile_etag(profile: CustomTargetingProfile) -> None:
-    profile.etag = _compute_etag(_custom_targeting_profile_to_read(profile))
+def _refresh_signal_etag(signal: TenantSignal) -> None:
+    signal.etag = _compute_etag(_signal_to_read(signal))
 
 
-@composition_api.route("/tenants/<tenant_id>/custom-targeting-profiles", methods=["GET"])
+@composition_api.route("/tenants/<tenant_id>/signals", methods=["GET"])
 @require_composition_api_key
-def list_custom_targeting_profiles(tenant_id: str):
+def list_signals(tenant_id: str):
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = CustomTargetingProfileRepository(session, tenant_id)
-        profiles = repo.list_all(updated_since=_parse_updated_since())
-        items = [_custom_targeting_profile_to_read(p) for p in profiles]
-        body = CustomTargetingProfileListResponse(custom_targeting_profiles=items).model_dump(mode="json")
+        repo = TenantSignalRepository(session, tenant_id)
+        rows = repo.list_all(updated_since=_parse_updated_since())
+        items = [_signal_to_read(s) for s in rows]
+        body = TenantSignalListResponse(signals=items).model_dump(mode="json")
         etag = _compute_etag(body)
         not_modified = _maybe_304(etag)
         if not_modified:
@@ -337,123 +348,105 @@ def list_custom_targeting_profiles(tenant_id: str):
         return jsonify(body), 200, {"ETag": f'"{etag}"'}
 
 
-@composition_api.route(
-    "/tenants/<tenant_id>/custom-targeting-profiles/<profile_id>",
-    methods=["GET"],
-)
+@composition_api.route("/tenants/<tenant_id>/signals/<signal_id>", methods=["GET"])
 @require_composition_api_key
-def get_custom_targeting_profile(tenant_id: str, profile_id: str):
+def get_signal(tenant_id: str, signal_id: str):
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = CustomTargetingProfileRepository(session, tenant_id)
-        profile = repo.get_by_id(profile_id)
-        if profile is None:
-            return _api_error(
-                "custom_targeting_profile_not_found",
-                f"Custom targeting profile {profile_id!r} not found.",
-                404,
-            )
-        body = _custom_targeting_profile_to_read(profile)
-        etag = profile.etag or _compute_etag(body)
+        signal = TenantSignalRepository(session, tenant_id).get_by_id(signal_id)
+        if signal is None:
+            return _api_error("signal_not_found", f"Signal {signal_id!r} not found.", 404)
+        body = _signal_to_read(signal)
+        etag = signal.etag or _compute_etag(body)
         not_modified = _maybe_304(etag)
         if not_modified:
             return not_modified
         return jsonify(body), 200, {"ETag": f'"{etag}"'}
 
 
-@composition_api.route("/tenants/<tenant_id>/custom-targeting-profiles", methods=["POST"])
+@composition_api.route("/tenants/<tenant_id>/signals", methods=["POST"])
 @require_composition_api_key
-def create_custom_targeting_profile(tenant_id: str):
+def create_signal(tenant_id: str):
     try:
-        payload = CustomTargetingProfileCreate.model_validate(request.get_json() or {})
+        payload = TenantSignalCreate.model_validate(request.get_json() or {})
     except Exception as exc:
         return _api_error("invalid_request", str(exc), 400)
 
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = CustomTargetingProfileRepository(session, tenant_id)
-        if repo.get_by_id(payload.custom_targeting_profile_id) is not None:
-            return _api_error(
-                "conflict",
-                f"Custom targeting profile {payload.custom_targeting_profile_id!r} already exists.",
-                409,
-            )
-        profile = CustomTargetingProfile(
+        repo = TenantSignalRepository(session, tenant_id)
+        if repo.get_by_id(payload.signal_id) is not None:
+            return _api_error("conflict", f"Signal {payload.signal_id!r} already exists.", 409)
+        signal = TenantSignal(
             tenant_id=tenant_id,
-            custom_targeting_profile_id=payload.custom_targeting_profile_id,
+            signal_id=payload.signal_id,
             name=payload.name,
             description=payload.description,
-            components=payload.components.model_dump(),
-            adapter_config={},
-            touches_dimensions=payload.touches_dimensions,
+            value_type=payload.value_type,
+            categories=list(payload.categories),
+            range_min=payload.range.min if payload.range else None,
+            range_max=payload.range.max if payload.range else None,
+            adapter_config=payload.adapter_config,
+            data_provider=payload.data_provider,
+            targeting_dimension=payload.targeting_dimension,
         )
-        repo.add(profile)
+        repo.add(signal)
         session.flush()
-        _refresh_custom_targeting_profile_etag(profile)
+        _refresh_signal_etag(signal)
         session.commit()
-        body = _custom_targeting_profile_to_read(profile)
-        return jsonify(body), 201, {"ETag": f'"{profile.etag}"'}
+        return jsonify(_signal_to_read(signal)), 201, {"ETag": f'"{signal.etag}"'}
 
 
-@composition_api.route(
-    "/tenants/<tenant_id>/custom-targeting-profiles/<profile_id>",
-    methods=["PUT"],
-)
+@composition_api.route("/tenants/<tenant_id>/signals/<signal_id>", methods=["PUT"])
 @require_composition_api_key
-def update_custom_targeting_profile(tenant_id: str, profile_id: str):
+def update_signal(tenant_id: str, signal_id: str):
     try:
-        payload = CustomTargetingProfileUpdate.model_validate(request.get_json() or {})
+        payload = TenantSignalUpdate.model_validate(request.get_json() or {})
     except Exception as exc:
         return _api_error("invalid_request", str(exc), 400)
 
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = CustomTargetingProfileRepository(session, tenant_id)
-        profile = repo.get_by_id(profile_id)
-        if profile is None:
-            return _api_error(
-                "custom_targeting_profile_not_found",
-                f"Custom targeting profile {profile_id!r} not found.",
-                404,
-            )
+        repo = TenantSignalRepository(session, tenant_id)
+        signal = repo.get_by_id(signal_id)
+        if signal is None:
+            return _api_error("signal_not_found", f"Signal {signal_id!r} not found.", 404)
         if payload.name is not None:
-            profile.name = payload.name
+            signal.name = payload.name
         if payload.description is not None:
-            profile.description = payload.description
-        if payload.components is not None:
-            profile.components = payload.components.model_dump()
-        if payload.touches_dimensions is not None:
-            profile.touches_dimensions = payload.touches_dimensions
-        _refresh_custom_targeting_profile_etag(profile)
+            signal.description = payload.description
+        if payload.value_type is not None:
+            signal.value_type = payload.value_type
+        if payload.categories is not None:
+            signal.categories = list(payload.categories)
+        if payload.range is not None:
+            signal.range_min = payload.range.min
+            signal.range_max = payload.range.max
+        if payload.adapter_config is not None:
+            signal.adapter_config = payload.adapter_config
+        if payload.data_provider is not None:
+            signal.data_provider = payload.data_provider
+        if payload.targeting_dimension is not None:
+            signal.targeting_dimension = payload.targeting_dimension
+        _refresh_signal_etag(signal)
         session.commit()
-        return (
-            jsonify(_custom_targeting_profile_to_read(profile)),
-            200,
-            {"ETag": f'"{profile.etag}"'},
-        )
+        return jsonify(_signal_to_read(signal)), 200, {"ETag": f'"{signal.etag}"'}
 
 
-@composition_api.route(
-    "/tenants/<tenant_id>/custom-targeting-profiles/<profile_id>",
-    methods=["DELETE"],
-)
+@composition_api.route("/tenants/<tenant_id>/signals/<signal_id>", methods=["DELETE"])
 @require_composition_api_key
-def delete_custom_targeting_profile(tenant_id: str, profile_id: str):
+def delete_signal(tenant_id: str, signal_id: str):
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        repo = CustomTargetingProfileRepository(session, tenant_id)
-        profile = repo.get_by_id(profile_id)
-        if profile is None:
-            return _api_error(
-                "custom_targeting_profile_not_found",
-                f"Custom targeting profile {profile_id!r} not found.",
-                404,
-            )
-        repo.delete(profile)
+        repo = TenantSignalRepository(session, tenant_id)
+        signal = repo.get_by_id(signal_id)
+        if signal is None:
+            return _api_error("signal_not_found", f"Signal {signal_id!r} not found.", 404)
+        repo.delete(signal)
         session.commit()
         return "", 204
 
@@ -463,24 +456,10 @@ def delete_custom_targeting_profile(tenant_id: str, profile_id: str):
 # ---------------------------------------------------------------------------
 
 
-# Reserved external_id marker for the per-tenant embedded principal. The
-# host (storefront) is the only agent in embedded mode; this principal
-# exists so composed Products can be scoped to a principal_id for
-# get_products filtering and AuditLog consistency.
 _EMBEDDED_PRINCIPAL_EXTERNAL_ID = "__embedded_host__"
 
 
 def _resolve_or_create_embedded_principal(session, tenant: Tenant) -> Principal:
-    """Return the tenant's embedded principal, creating it on first call.
-
-    The embedded principal has NULL ``access_token`` (no direct-to-/mcp
-    auth path in embedded mode). The ``platform_mappings`` entry is a
-    sentinel under the tenant's ad-server key — actual GAM (or other
-    adapter) advertiser resolution flows through advertiser routing rules,
-    not through this row. The key just satisfies the
-    ``PlatformMappingModel`` validator which requires at least one known
-    adapter key.
-    """
     repo = PrincipalRepository(session, tenant.tenant_id)
     existing = repo.get_by_external_id(_EMBEDDED_PRINCIPAL_EXTERNAL_ID)
     if existing is not None:
@@ -501,7 +480,6 @@ def _resolve_or_create_embedded_principal(session, tenant: Tenant) -> Principal:
     try:
         session.flush()
     except IntegrityError:
-        # Race: a concurrent compose claimed the slot. Re-read.
         session.rollback()
         replay = repo.get_by_external_id(_EMBEDDED_PRINCIPAL_EXTERNAL_ID)
         if replay is None:
@@ -511,76 +489,12 @@ def _resolve_or_create_embedded_principal(session, tenant: Tenant) -> Principal:
 
 
 # ---------------------------------------------------------------------------
-# Discovery
+# Compose helpers
 # ---------------------------------------------------------------------------
 
 
-def _load_custom_targeting_keys(session, tenant_id: str) -> dict[str, Any]:
-    """Operator's custom-targeting-key taxonomy lives on AdapterConfig as a
-    name→GAM-id map. Returns the raw mapping (empty dict if no adapter config)."""
-    config = session.get(AdapterConfig, tenant_id)
-    if config is None:
-        return {}
-    return dict(getattr(config, "custom_targeting_keys", {}) or {})
-
-
-@composition_api.route("/tenants/<tenant_id>/custom-targeting-keys", methods=["GET"])
-@require_composition_api_key
-def list_custom_targeting_keys(tenant_id: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        mapping = _load_custom_targeting_keys(session, tenant_id)
-        items = [{"key": key} for key in sorted(mapping.keys())]
-        body = CustomTargetingKeysResponse.model_validate({"custom_targeting_keys": items}).model_dump(mode="json")
-        return jsonify(body), 200
-
-
-@composition_api.route(
-    "/tenants/<tenant_id>/custom-targeting-keys/<key>/values",
-    methods=["GET"],
-)
-@require_composition_api_key
-def list_custom_targeting_key_values(tenant_id: str, key: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        mapping = _load_custom_targeting_keys(session, tenant_id)
-        if key not in mapping:
-            return _api_error(
-                "custom_targeting_key_not_found",
-                f"Custom targeting key {key!r} not found.",
-                404,
-            )
-        # The adapter taxonomy stores key→id; per-value enumeration requires
-        # an adapter round-trip (e.g. GAM CustomTargetingService) which lands
-        # in a later phase. v1 returns the key but no values until adapter
-        # discovery is wired in.
-        body = CustomTargetingKeyValuesResponse.model_validate({"key": key, "values": []}).model_dump(mode="json")
-        return jsonify(body), 200
-
-
-@composition_api.route("/tenants/<tenant_id>/audience-segments", methods=["GET"])
-@require_composition_api_key
-def list_audience_segments(tenant_id: str):
-    with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
-            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
-        # Adapter-provided audience segments require an adapter round-trip
-        # (GAM AudienceSegmentService) which lands in a later phase. v1
-        # returns an empty list — the endpoint exists so storefront clients
-        # can wire their UI now and pick up live data later without a
-        # contract change.
-        body = AudienceSegmentsResponse.model_validate({"audience_segments": []}).model_dump(mode="json")
-        return jsonify(body), 200
-
-
-# ---------------------------------------------------------------------------
-# Dynamic product composition
-# ---------------------------------------------------------------------------
-
-
-DEFAULT_TTL_SECONDS = 7 * 24 * 3600  # fallback if neither request nor tenant set one
+DEFAULT_TTL_SECONDS = 7 * 24 * 3600
+SUPPORTED_PRICING_MODELS: frozenset[str] = frozenset({"cpm"})
 
 
 def _compute_expires_at(
@@ -589,142 +503,45 @@ def _compute_expires_at(
     requested_ttl_seconds: int | None,
     tenant_max_ttl_seconds: int | None,
 ) -> datetime:
-    """``min(flight_start, created_at + tenant_max_ttl, created_at + requested_ttl)``.
-
-    Flight-start cap protects against indefinite price commitments; tenant max
-    is the operator's policy upper bound; requested is the storefront's hint.
-    """
     now = datetime.now(UTC)
-    candidates: list[datetime] = []
-
-    flight_start_dt = datetime.combine(flight_start, datetime.min.time(), tzinfo=UTC)
-    candidates.append(flight_start_dt)
-
+    candidates: list[datetime] = [datetime.combine(flight_start, datetime.min.time(), tzinfo=UTC)]
     if tenant_max_ttl_seconds and tenant_max_ttl_seconds > 0:
         candidates.append(now + timedelta(seconds=tenant_max_ttl_seconds))
-
     if requested_ttl_seconds and requested_ttl_seconds > 0:
         candidates.append(now + timedelta(seconds=requested_ttl_seconds))
-
     if len(candidates) == 1:
-        # only the flight-start cap available; fall back to default TTL too
         candidates.append(now + timedelta(seconds=DEFAULT_TTL_SECONDS))
-
     return min(candidates)
 
 
-def _materialize_implementation_config(
+def _validate_signal_narrowing(
     *,
     inventory_profile: InventoryProfile,
-    custom_targeting_profiles: list[CustomTargetingProfile],
-) -> dict:
-    """Merge inventory profile inventory_config + each profile's components
-    into a single ``implementation_config`` the adapter layer consumes directly.
-
-    Field names match what the GAM adapter (``src/adapters/gam/managers/orders.py``)
-    and the GAM implementation config schema expect, so adapters need no changes:
-
-      {
-        "targeted_ad_unit_ids": [...],
-        "targeted_placement_ids": [...],
-        "include_descendants": bool,
-        "custom_targeting_keys": {
-            key: {"values": [...], "operator": "IS"|"IS_NOT"}
-        },
-        "audience_segment_ids": [...],
-        "excluded_audience_segment_ids": [...],
-      }
-
-    NB on custom-targeting key/value identifiers: GAM's ``CustomCriteriaSet``
-    uses numeric ``keyId`` and ``valueIds``. The storefront supplies whatever
-    string is the right identifier for the operator's adapter — the operator's
-    admin UI / discovery endpoints translate human-readable names to ids.
-    Storefront ↔ adapter id translation is a known follow-up; the wire shape
-    here is stable.
-    """
-    inv = inventory_profile.inventory_config or {}
-    config: dict[str, Any] = {
-        "targeted_ad_unit_ids": list(inv.get("ad_units", []) or []),
-        "targeted_placement_ids": list(inv.get("placements", []) or []),
-        "include_descendants": bool(inv.get("include_descendants", True)),
-    }
-
-    custom_targeting_keys: dict[str, dict[str, Any]] = {}
-    aud_include: list[str] = []
-    aud_exclude: list[str] = []
-
-    for profile in custom_targeting_profiles:
-        components = profile.components or {}
-        for kv in components.get("key_values", []) or []:
-            key = kv["key"]
-            mode = kv.get("mode", "include")
-            gam_operator = "IS" if mode == "include" else "IS_NOT"
-            existing = custom_targeting_keys.get(key)
-            if existing is not None and existing.get("operator") != gam_operator:
-                # Mixed include/exclude on the same key from different profiles
-                # is contradictory; the second wins but emit a structured field
-                # so downstream debug is possible. Composition validation
-                # could later reject this at compose time.
-                logger.warning(
-                    "custom targeting key %r has conflicting include/exclude across profiles; later one wins",
-                    key,
-                )
-            slot = custom_targeting_keys.setdefault(key, {"values": [], "operator": gam_operator})
-            slot["operator"] = gam_operator
-            slot["values"].extend(kv.get("values", []))
-        for seg in components.get("audience_segments", []) or []:
-            target = aud_include if seg.get("mode", "include") == "include" else aud_exclude
-            target.append(seg["segment_id"])
-
-    if custom_targeting_keys:
-        config["custom_targeting_keys"] = custom_targeting_keys
-    if aud_include:
-        config["audience_segment_ids"] = aud_include
-    if aud_exclude:
-        config["excluded_audience_segment_ids"] = aud_exclude
-
-    return config
-
-
-def _validate_capability_narrowing(
-    *,
-    inventory_profile: InventoryProfile,
-    custom_targeting_profiles: list[CustomTargetingProfile],
+    signals: list[TenantSignal],
 ) -> list[CompositionErrorDetail]:
-    """Cross-check that each custom targeting profile's ``touches_dimensions``
-    is a subset of the inventory profile's allowed ``constraints.targeting_dimensions``.
-
-    Best-effort: only runs when both sides declare constraints. Missing
-    constraints metadata is treated as "no narrowing claimed" and skipped —
-    operators can adopt the typed constraints gradually.
-    """
-    errors: list[CompositionErrorDetail] = []
-    inv_constraints = inventory_profile.constraints or {}
-    allowed = inv_constraints.get("targeting_dimensions")
+    """Each signal's ``targeting_dimension`` must be in the inventory profile's
+    allowed ``constraints.targeting_dimensions`` (when both are declared)."""
+    constraints = inventory_profile.constraints or {}
+    allowed = constraints.get("targeting_dimensions")
     if not allowed:
-        return errors
+        return []
     allowed_set = set(allowed)
-    for profile in custom_targeting_profiles:
-        touches = profile.touches_dimensions or []
-        for dim in touches:
-            if dim not in allowed_set:
-                errors.append(
-                    CompositionErrorDetail(
-                        code="dimension_unsupported",
-                        inventory_profile_id=inventory_profile.profile_id,
-                        custom_targeting_profile_id=profile.custom_targeting_profile_id,
-                        dimension=dim,
-                        message=f"Inventory profile does not support targeting dimension {dim!r}.",
-                    )
+    errors: list[CompositionErrorDetail] = []
+    for signal in signals:
+        dim = signal.targeting_dimension
+        if dim and dim not in allowed_set:
+            errors.append(
+                CompositionErrorDetail(
+                    code="dimension_unsupported",
+                    inventory_profile_id=inventory_profile.profile_id,
+                    signal_id=signal.signal_id,
+                    dimension=dim,
+                    message=(
+                        f"Inventory profile does not support targeting dimension {dim!r} (signal {signal.signal_id!r})."
+                    ),
                 )
+            )
     return errors
-
-
-# Supported pricing models — mirrors core/main.py build_router declaration.
-# Storefront-composed products may only use a pricing_model the agent's
-# DecisioningCapabilities declared support for. Per-tenant override could
-# come later when adapters declare distinct capability sets.
-SUPPORTED_PRICING_MODELS: frozenset[str] = frozenset({"cpm"})
 
 
 def _persist_pricing_option(
@@ -734,11 +551,6 @@ def _persist_pricing_option(
     product_id: str,
     pricing_option,
 ) -> PricingOption:
-    """Translate an AdCP PricingOption into the ORM row that ``Product.pricing_options``
-    expects. The full AdCP shape is also cached on ``parameters`` so the read
-    path is lossless even though the ORM column model is flatter than the
-    spec.
-    """
     po_dict = pricing_option.model_dump(mode="json")
     rate: Decimal | None
     if pricing_option.fixed_price is not None:
@@ -750,14 +562,11 @@ def _persist_pricing_option(
     else:
         rate = None
         is_fixed = False
-
     parameters: dict[str, Any] = {"_pricing_option": po_dict}
-
     min_spend = (
         Decimal(str(pricing_option.min_spend_per_package)) if pricing_option.min_spend_per_package is not None else None
     )
     price_guidance = pricing_option.price_guidance.model_dump() if pricing_option.price_guidance else None
-
     po_row = PricingOption(
         tenant_id=tenant_id,
         product_id=product_id,
@@ -774,8 +583,6 @@ def _persist_pricing_option(
 
 
 def _read_pricing_option(po_row: PricingOption) -> dict:
-    """Return the AdCP PricingOption dict cached on the row. Falls back to a
-    minimal reconstruction for rows that didn't come through this API path."""
     params = po_row.parameters or {}
     cached = params.get("_pricing_option")
     if cached:
@@ -789,18 +596,31 @@ def _read_pricing_option(po_row: PricingOption) -> dict:
     }
 
 
-def _dynamic_product_to_read(product: Product, pricing_option_dict: dict) -> dict:
+def _read_signal_selections(product: Product) -> list[dict]:
+    """Snapshot of the storefront's signal selections, stored on
+    ``Product.implementation_config['_signal_selections']`` at compose time."""
+    config = product.implementation_config or {}
+    return list(config.get("_signal_selections") or [])
+
+
+def _dynamic_product_to_read(
+    product: Product,
+    pricing_option_dict: dict,
+    signal_selections: list[dict],
+) -> dict:
     flight_start = (product.expires_at and product.expires_at.date()) or date.today()
     return DynamicProductRead(
         product_id=product.product_id,
         composition_source="storefront_composed",
         inventory_profile_id=(product.inventory_profile.profile_id if product.inventory_profile else ""),
-        custom_targeting_profile_ids=list(product.custom_targeting_profile_ids or []),
+        signal_selections=[SignalSelection.model_validate(s) for s in signal_selections],
         pricing_option=pricing_option_dict,
         flight_start=flight_start,
         flight_end=flight_start,
         expires_at=product.expires_at or datetime.now(UTC),
-        implementation_config_summary=product.implementation_config or {},
+        implementation_config_summary={
+            k: v for k, v in (product.implementation_config or {}).items() if not k.startswith("_")
+        },
         created_at=getattr(product, "created_at", datetime.now(UTC)),
     ).model_dump(mode="json")
 
@@ -808,12 +628,11 @@ def _dynamic_product_to_read(product: Product, pricing_option_dict: dict) -> dic
 @composition_api.route("/tenants/<tenant_id>/products", methods=["POST"])
 @require_composition_api_key
 def compose_product(tenant_id: str):
-    """Materialize a dynamic product from primitives. Idempotency-Key header required.
+    """Materialize a dynamic product from primitives. Idempotency-Key required.
 
-    The storefront supplies a full ``PricingOption`` (AdCP's typed wire shape);
-    the sales agent records it as a ``Product.pricing_options`` row and returns
-    it lossless on read. No agent identification needed — in embedded mode the
-    host is the only agent, auto-resolved on first compose.
+    Inputs: ``inventory_profile_id`` + ``signal_selections`` (over
+    operator-declared signals) + ``pricing_option`` + dates. Adapter-agnostic;
+    materialization dispatches on ``tenant.ad_server``.
     """
     idempotency_key = request.headers.get("Idempotency-Key")
     if not idempotency_key:
@@ -854,8 +673,8 @@ def compose_product(tenant_id: str):
                             expected=",".join(sorted(SUPPORTED_PRICING_MODELS)),
                             got=payload.pricing_option.pricing_model,
                             message=(
-                                f"pricing_model={payload.pricing_option.pricing_model!r} is not in the "
-                                f"agent's declared supported_pricing_models."
+                                f"pricing_model={payload.pricing_option.pricing_model!r} is not in "
+                                "the agent's declared supported_pricing_models."
                             ),
                         )
                     ]
@@ -869,19 +688,40 @@ def compose_product(tenant_id: str):
         if tenant is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
 
-        # Auto-resolve the embedded principal — no buyer-side principal API.
-        embedded_principal = _resolve_or_create_embedded_principal(session, tenant)
+        materializer = get_materializer(tenant.ad_server or "")
+        if materializer is None:
+            return (
+                jsonify(
+                    CompositionError(
+                        details=[
+                            CompositionErrorDetail(
+                                code="unsupported_adapter",
+                                adapter=tenant.ad_server,
+                                expected=",".join(supported_adapters()),
+                                got=tenant.ad_server or "",
+                                message=(
+                                    f"Tenant ad_server={tenant.ad_server!r} has no composition materializer registered."
+                                ),
+                            )
+                        ]
+                    ).model_dump(mode="json")
+                ),
+                422,
+            )
 
+        embedded_principal = _resolve_or_create_embedded_principal(session, tenant)
         products = ProductRepository(session, tenant_id)
 
-        # Idempotency replay — return the previously composed product unchanged.
         existing = products.find_composed_by_idempotency_key(
             principal_id=embedded_principal.principal_id,
             idempotency_key=idempotency_key,
         )
         if existing is not None:
             existing_pricing = _read_pricing_option(existing.pricing_options[0]) if existing.pricing_options else {}
-            return jsonify(_dynamic_product_to_read(existing, existing_pricing)), 200
+            return (
+                jsonify(_dynamic_product_to_read(existing, existing_pricing, _read_signal_selections(existing))),
+                200,
+            )
 
         inv_repo = InventoryProfileRepository(session, tenant_id)
         inventory_profile = inv_repo.get_by_id(payload.inventory_profile_id)
@@ -901,43 +741,54 @@ def compose_product(tenant_id: str):
                 422,
             )
 
-        ctp_repo = CustomTargetingProfileRepository(session, tenant_id)
-        custom_targeting_profiles = (
-            ctp_repo.list_by_ids(payload.custom_targeting_profile_ids) if payload.custom_targeting_profile_ids else []
-        )
-        if len(custom_targeting_profiles) != len(payload.custom_targeting_profile_ids):
-            found = {p.custom_targeting_profile_id for p in custom_targeting_profiles}
-            missing = [pid for pid in payload.custom_targeting_profile_ids if pid not in found]
+        signal_repo = TenantSignalRepository(session, tenant_id)
+        selected_ids = [s.signal_id for s in payload.signal_selections]
+        signals = signal_repo.list_by_ids(selected_ids) if selected_ids else []
+        if len(signals) != len(set(selected_ids)):
+            found_ids = {s.signal_id for s in signals}
+            missing = [sid for sid in selected_ids if sid not in found_ids]
             return (
                 jsonify(
                     CompositionError(
                         details=[
                             CompositionErrorDetail(
-                                code="unknown_custom_targeting_profile",
-                                custom_targeting_profile_id=pid,
-                                message=f"Custom targeting profile {pid!r} not found.",
+                                code="unknown_signal",
+                                signal_id=sid,
+                                message=f"Signal {sid!r} not declared on tenant.",
                             )
-                            for pid in missing
+                            for sid in missing
                         ]
                     ).model_dump(mode="json")
                 ),
                 422,
             )
 
-        narrowing_errors = _validate_capability_narrowing(
-            inventory_profile=inventory_profile,
-            custom_targeting_profiles=custom_targeting_profiles,
-        )
+        narrowing_errors = _validate_signal_narrowing(inventory_profile=inventory_profile, signals=signals)
         if narrowing_errors:
             return (
                 jsonify(CompositionError(details=narrowing_errors).model_dump(mode="json")),
                 422,
             )
 
-        implementation_config = _materialize_implementation_config(
+        signals_by_id = {s.signal_id: s for s in signals}
+        ctx = MaterializerContext(
             inventory_profile=inventory_profile,
-            custom_targeting_profiles=custom_targeting_profiles,
+            signal_selections=list(payload.signal_selections),
+            signals_by_id=signals_by_id,
+            adcp_targeting=payload.adcp_targeting,
         )
+        try:
+            implementation_config = materializer.materialize(ctx)
+        except MaterializationError as exc:
+            return (
+                jsonify(CompositionError(details=exc.details).model_dump(mode="json")),
+                422,
+            )
+
+        # Snapshot the storefront's signal_selections trail onto the
+        # materialized config so GET round-trips return what was composed
+        # (the adapter ignores keys it doesn't recognize).
+        implementation_config["_signal_selections"] = [s.model_dump(mode="json") for s in payload.signal_selections]
 
         expires_at = _compute_expires_at(
             flight_start=payload.flight_start,
@@ -956,15 +807,11 @@ def compose_product(tenant_id: str):
             delivery_type="non_guaranteed",
             implementation_config=implementation_config,
             inventory_profile_id=inventory_profile.id,
-            # XOR constraint: must set exactly one of properties / property_tags.
-            # The effective publisher properties come via the inventory profile;
-            # the Product row carries a placeholder tag so the DB-level XOR check passes.
             property_tags=["all_inventory"],
             expires_at=expires_at,
             composition_source="storefront_composed",
             composed_by_principal_id=embedded_principal.principal_id,
             idempotency_key=idempotency_key,
-            custom_targeting_profile_ids=list(payload.custom_targeting_profile_ids),
             allowed_principal_ids=[embedded_principal.principal_id],
         )
         products.create(product)
@@ -978,9 +825,6 @@ def compose_product(tenant_id: str):
         try:
             session.commit()
         except IntegrityError as exc:
-            # Race: another writer claimed this (principal, idempotency_key)
-            # between our replay probe and commit. Re-read and serve the
-            # winning row so the storefront still gets a consistent result.
             session.rollback()
             replay = products.find_composed_by_idempotency_key(
                 principal_id=embedded_principal.principal_id,
@@ -988,20 +832,23 @@ def compose_product(tenant_id: str):
             )
             if replay is not None:
                 replay_pricing = _read_pricing_option(replay.pricing_options[0]) if replay.pricing_options else {}
-                return jsonify(_dynamic_product_to_read(replay, replay_pricing)), 200
+                return (
+                    jsonify(_dynamic_product_to_read(replay, replay_pricing, _read_signal_selections(replay))),
+                    200,
+                )
             return _api_error("conflict", str(exc), 409)
 
-        # Snapshot before exiting the session (audit-logger opens its own
-        # session; lazy-loads after that can detach).
         pricing_option_dict = payload.pricing_option.model_dump(mode="json")
-        response_body = _dynamic_product_to_read(product, pricing_option_dict)
+        signal_selections_dump = [s.model_dump(mode="json") for s in payload.signal_selections]
+        response_body = _dynamic_product_to_read(product, pricing_option_dict, signal_selections_dump)
         audit_details = {
             "product_id": product.product_id,
             "inventory_profile_id": inventory_profile.profile_id,
-            "custom_targeting_profile_ids": list(payload.custom_targeting_profile_ids),
+            "signal_selections": signal_selections_dump,
             "pricing_option": pricing_option_dict,
             "idempotency_key": idempotency_key,
             "expires_at": expires_at.isoformat(),
+            "adapter": tenant.ad_server,
         }
         principal_name = embedded_principal.name
         principal_id_value = embedded_principal.principal_id
@@ -1016,8 +863,6 @@ def compose_product(tenant_id: str):
             details=audit_details,
         )
     except Exception:
-        # Audit-log failures must not fail the operation. The audit logger
-        # already falls back to file logging on DB errors.
         logger.exception("Audit log emission failed for composed product %s", audit_details["product_id"])
 
     return jsonify(response_body), 201
@@ -1038,7 +883,10 @@ def get_composed_product(tenant_id: str, product_id: str):
                 404,
             )
         pricing_option_dict = _read_pricing_option(product.pricing_options[0]) if product.pricing_options else {}
-        return jsonify(_dynamic_product_to_read(product, pricing_option_dict)), 200
+        return (
+            jsonify(_dynamic_product_to_read(product, pricing_option_dict, _read_signal_selections(product))),
+            200,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1047,9 +895,6 @@ def get_composed_product(tenant_id: str, product_id: str):
 
 
 def _account_from_rule(rule: AdvertiserRoutingRule) -> dict:
-    """Translate an ``AdvertiserRoutingRule``'s internal columns into the
-    :class:`AccountPattern` wire shape. NULL ``brand_house``/``brand_id``
-    surface as omitted fields so the wildcard semantics survive the round trip."""
     account: dict[str, Any] = {"operator": rule.operator_domain, "sandbox": False}
     if rule.brand_house is not None or rule.brand_id is not None:
         brand: dict[str, Any] = {}
@@ -1072,13 +917,6 @@ def _advertiser_mapping_to_read(rule: AdvertiserRoutingRule) -> dict:
 
 
 def _account_to_columns(account) -> tuple[str, str | None, str | None]:
-    """Pull (operator_domain, brand_house, brand_id) from an AccountPattern.
-
-    The strict AdCP ``AccountReference`` is a discriminated union (variant 1:
-    account_id, variant 2: operator + brand + sandbox). Routing rules use a
-    looser :class:`AccountPattern` where ``brand`` and its components may be
-    omitted to express wildcards — same vocabulary, additional flexibility.
-    """
     operator_domain = account.operator
     brand = account.brand
     brand_house = brand.domain if brand else None
@@ -1130,9 +968,6 @@ def create_advertiser_mapping(tenant_id: str):
         if session.get(Tenant, tenant_id) is None:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
         repo = AdvertiserMappingRepository(session, tenant_id)
-        # The natural key uniqueness check is enforced at DB level via the
-        # uq_routing_rule_natural_key index; this lookup short-circuits the
-        # happy path so callers see a clean 409 instead of an IntegrityError.
         existing = repo.find_by_natural_key(
             principal_id=None,
             operator_domain=operator_domain,
@@ -1150,7 +985,7 @@ def create_advertiser_mapping(tenant_id: str):
         rule = AdvertiserRoutingRule(
             id=f"rule_{secrets.token_hex(10)}",
             tenant_id=tenant_id,
-            principal_id=None,  # embedded mode: no per-agent narrowing
+            principal_id=None,
             operator_domain=operator_domain,
             brand_house=brand_house,
             brand_id=brand_id,
@@ -1171,8 +1006,6 @@ def create_advertiser_mapping(tenant_id: str):
 )
 @require_composition_api_key
 def update_advertiser_mapping(tenant_id: str, mapping_id: str):
-    """Only ``adapter_advertiser_id`` is mutable. Changing the natural key
-    requires DELETE + POST so the uniqueness index can't be silently violated."""
     try:
         payload = AdvertiserMappingUpdate.model_validate(request.get_json() or {})
     except Exception as exc:
@@ -1224,8 +1057,6 @@ def delete_advertiser_mapping(tenant_id: str, mapping_id: str):
 @composition_api.route("/tenants/<tenant_id>/advertisers", methods=["GET"])
 @require_composition_api_key
 def list_advertisers(tenant_id: str):
-    """Synced cache of adapter advertisers for the picker. Read-only — the
-    sync job hydrates this from the adapter (GAM ``CompanyService``)."""
     include_inactive = request.args.get("include_inactive", "").lower() in ("true", "1", "yes")
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
