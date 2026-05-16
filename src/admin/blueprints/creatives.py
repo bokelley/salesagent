@@ -666,10 +666,14 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         # were handled by the media_buy_actions loop above), push the
         # newly-approved creative to the live line item now.
         already_handled_buy_ids = {a["media_buy_id"] for a in media_buy_actions}
+        # Snapshot the flag value inside the UoW context — the Tenant ORM
+        # instance is detached once the session closes, so accessing flag
+        # columns outside this block raises DetachedInstanceError.
         with AdminCreativeUoW(tenant_id) as uow_check:
             assert uow_check.tenant_config is not None
             tenant_for_flag = uow_check.tenant_config.get_tenant()
-        if is_creative_pre_approval_gate_enabled(tenant_for_flag):
+            pre_approval_gate_enabled = is_creative_pre_approval_gate_enabled(tenant_for_flag)
+        if pre_approval_gate_enabled:
             from src.core.tools.media_buy_create import push_creative_to_existing_buy
 
             for assignment in assignments:

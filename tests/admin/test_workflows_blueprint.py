@@ -62,7 +62,7 @@ def test_tenant(integration_db):
             tenant_id=_TENANT_ID,
             principal_id="wf_test_principal",
             name="Workflow Test Principal",
-            platform_mappings={"mock": {}},
+            platform_mappings={"mock": {"advertiser_id": f"wf-test-adv-{uuid.uuid4().hex[:8]}"}},
             access_token=f"wf-test-token-{uuid.uuid4().hex}",
         )
         session.add(principal)
