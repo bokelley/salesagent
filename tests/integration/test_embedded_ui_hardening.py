@@ -153,7 +153,8 @@ class TestSettingsHiddenSectionsOnEmbedded:
         resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/settings")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        # Locked-page banner present.
+        # Locked-page wrapper (template title block + banner partial).
+        assert "Managed by Platform" in body
         assert "embedded-lock-banner" in body
         assert "Platform settings managed by" in body
         # Legacy multi-section layout is gone.
