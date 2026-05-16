@@ -74,6 +74,29 @@ class TestSigningKeysStandalonePage:
         assert 'data-section="signing-keys"' not in body
         assert 'id="signing-keys"' not in body
 
+    def test_old_settings_deep_link_redirects_to_standalone(self, embedded_client, open_tenant_id):
+        """``/settings/signing-keys`` was the legacy deep-link before
+        Phase 2 promoted Signing Keys out of Tenant Settings. Bookmarks
+        and external references to that URL must redirect to the new
+        standalone page, not silently render the default section."""
+        resp = embedded_client.get(
+            f"/tenant/{open_tenant_id}/settings/signing-keys",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert f"/tenant/{open_tenant_id}/signing-keys/" in resp.headers["Location"]
+
+    def test_old_publishers_deep_link_redirects_to_standalone(self, embedded_client, open_tenant_id):
+        """Same shape as signing-keys for the Publishers promotion (#431).
+        Pinned here because the redirect map is the canonical place
+        where each promoted section gets its forwarding rule."""
+        resp = embedded_client.get(
+            f"/tenant/{open_tenant_id}/settings/publishers",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert f"/tenant/{open_tenant_id}/publishers/" in resp.headers["Location"]
+
 
 class TestSigningKeysPostRoutesRejectEmbedded:
     """POST routes return 403 when the tenant is embedded — defense-in-depth

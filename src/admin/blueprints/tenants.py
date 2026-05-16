@@ -193,6 +193,17 @@ def setup_checklist(tenant_id):
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
+_PROMOTED_SECTION_REDIRECTS = {
+    # Sprint 7 Phase 2 entity promotions. Old deep-links like
+    # ``/settings/publishers`` or ``/settings/signing-keys`` would silently
+    # render the default account section now that the in-page sections
+    # are gone — give them a clean redirect to the new standalone page
+    # instead. Each entry is ``section_slug → endpoint_name``.
+    "publishers": "publisher_partners.publishers_page",
+    "signing-keys": "tenants.signing_keys_page",
+}
+
+
 @tenants_bp.route("/<tenant_id>/settings")
 @tenants_bp.route("/<tenant_id>/settings/<section>")
 @require_tenant_access()
@@ -207,6 +218,8 @@ def tenant_settings(tenant_id, section=None):
     - GAM OAuth status
     - Template rendering with active_adapter variable
     """
+    if section and section in _PROMOTED_SECTION_REDIRECTS:
+        return redirect(url_for(_PROMOTED_SECTION_REDIRECTS[section], tenant_id=tenant_id))
     try:
         with get_db_session() as db_session:
             from sqlalchemy import select
