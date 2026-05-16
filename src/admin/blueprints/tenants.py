@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from src.admin.services import DashboardService
 from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import capability_owned_response, publisher_owns
 from src.admin.utils.embedded_mode_auth import is_embedded_view
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
@@ -550,6 +551,8 @@ def test_slack(tenant_id):
     Read-only probe — sends a test message to the configured webhook and
     never writes to tenant state — so it opts into the embedded-write gate.
     """
+    if not publisher_owns("slack"):
+        return capability_owned_response("slack")
     try:
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()

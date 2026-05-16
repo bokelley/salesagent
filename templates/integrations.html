@@ -35,10 +35,6 @@
      data-tenant-id="{{ tenant.tenant_id }}"
      style="display: none;"></div>
 
-<div class="int-section">
-    <h2>Integrations</h2>
-    <p class="int-section-help">Connect external services and configure webhooks.</p>
-
 <div class="settings-header">
     <h2>Integrations</h2>
     <p>Connect external services and configure webhooks</p>
@@ -188,9 +184,10 @@
     <div id="ai-test-result" style="display: none; margin-top: 1rem; padding: 0.75rem; border-radius: 6px;"></div>
 
     <script>
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const currentProvider = '{{ current_provider }}';
-    const currentModel = '{{ current_model }}';
+    const scriptRoot = {{ request.script_root | tojson }} || '';
+    const tenantId = {{ tenant.tenant_id | tojson }};
+    const currentProvider = {{ current_provider | tojson }};
+    const currentModel = {{ current_model | tojson }};
     let aiModelsData = null;
 
     // Preferred order for providers (most common first)
@@ -203,7 +200,7 @@
 
     async function loadAIModels() {
         try {
-            const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/models', {
+            const response = await fetch(scriptRoot + '/tenant/' + encodeURIComponent(tenantId) + '/settings/ai/models', {
                 credentials: 'same-origin'
             });
             aiModelsData = await response.json();
@@ -327,7 +324,7 @@
         resultDiv.innerHTML = '<strong>Testing connection...</strong> This may take a few seconds.';
 
         try {
-            const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/test', {
+            const response = await fetch(scriptRoot + '/tenant/' + encodeURIComponent(tenantId) + '/settings/ai/test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
@@ -378,7 +375,7 @@
         resultDiv.innerHTML = 'Testing Logfire connection...';
 
         try {
-            const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/test-logfire', {
+            const response = await fetch(scriptRoot + '/tenant/' + encodeURIComponent(tenantId) + '/settings/ai/test-logfire', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
@@ -467,8 +464,6 @@
     </div>
 </div>
 {% endif %}
-
-</div>
 
 <script src="{{ url_for('static', filename='js/integrations.js') }}"></script>
 {% endblock %}
