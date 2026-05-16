@@ -124,79 +124,90 @@ class TestTenantSignalsDiscovery:
         assert wire["range"] == {"min": -40.0, "max": 120.0}
 
 
-class TestGamSignalResolution:
-    """GAMTargetingManager._resolve_audience_signals translates buyer-supplied
-    signal_ids into GAM line-item targeting via ``TenantSignal.adapter_config``.
+def _gam_tm(tenant_id: str):
+    """Shared GAMTargetingManager builder — no external GAM, no AXE keys."""
+    from src.adapters.gam.managers.targeting import GAMTargetingManager
+
+    return GAMTargetingManager(
+        tenant_id=tenant_id,
+        gam_client=None,
+        targeting_config={
+            "custom_targeting_keys": {},
+            "axe_include_key": None,
+            "axe_exclude_key": None,
+            "axe_macro_key": None,
+        },
+    )
+
+
+class TestGamPassthroughSignals:
+    """Pass-through signals (one signal = one adapter primitive).
+
+    Includes legacy ``{kind, ...}`` rows without explicit ``type`` for
+    backward compatibility.
     """
 
-    def test_audience_include_resolves_to_audience_targeting(self, integration_db):
-        from src.adapters.gam.managers.targeting import GAMTargetingManager
+    def test_audience_segment_passthrough_legacy_shape(self, integration_db):
         from tests.factories import TenantFactory, TenantSignalFactory
 
         with _SignalFlowEnv() as env:
-            tenant = TenantFactory(tenant_id="gam_res_t1", ad_server="google_ad_manager")
+            tenant = TenantFactory(tenant_id="gam_pt_t1", ad_server="google_ad_manager")
             TenantSignalFactory(
                 tenant=tenant,
                 signal_id="audience_sports_fans",
+                # Legacy shape: no ``type`` field, just kind + segment_id.
                 adapter_config={"kind": "audience_segment", "segment_id": "98765"},
             )
-            env.get_session()  # commit factory data
-
-            tm = GAMTargetingManager(
-                tenant_id="gam_res_t1",
-                gam_client=None,
-                targeting_config={
-                    "custom_targeting_keys": {},
-                    "axe_include_key": None,
-                    "axe_exclude_key": None,
-                    "axe_macro_key": None,
-                },
-            )
-            custom_targeting: dict[str, str] = {}
-            audience_block = tm._resolve_audience_signals(
+            env.get_session()
+            audience_block = _gam_tm("gam_pt_t1")._resolve_audience_signals(
                 TargetingOverlay(audience_include=["audience_sports_fans"]),
-                custom_targeting,
+                {},
             )
-
         assert audience_block == {"includedAudienceSegmentIds": ["98765"]}
-        assert custom_targeting == {}, "audience-segment signals must not pollute custom_targeting"
 
-    def test_audience_exclude_resolves_to_excluded_block(self, integration_db):
-        from src.adapters.gam.managers.targeting import GAMTargetingManager
+    def test_audience_segment_passthrough_explicit_type(self, integration_db):
         from tests.factories import TenantFactory, TenantSignalFactory
 
         with _SignalFlowEnv() as env:
-            tenant = TenantFactory(tenant_id="gam_res_t2", ad_server="google_ad_manager")
+            tenant = TenantFactory(tenant_id="gam_pt_t2", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="audience_sports_fans",
+                adapter_config={
+                    "type": "passthrough",
+                    "kind": "audience_segment",
+                    "segment_id": "98765",
+                },
+            )
+            env.get_session()
+            audience_block = _gam_tm("gam_pt_t2")._resolve_audience_signals(
+                TargetingOverlay(audience_include=["audience_sports_fans"]),
+                {},
+            )
+        assert audience_block == {"includedAudienceSegmentIds": ["98765"]}
+
+    def test_audience_segment_excluded_at_buyer_level(self, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_pt_t3", ad_server="google_ad_manager")
             TenantSignalFactory(
                 tenant=tenant,
                 signal_id="audience_competitors",
                 adapter_config={"kind": "audience_segment", "segment_id": "55555"},
             )
             env.get_session()
-
-            tm = GAMTargetingManager(
-                tenant_id="gam_res_t2",
-                gam_client=None,
-                targeting_config={
-                    "custom_targeting_keys": {},
-                    "axe_include_key": None,
-                    "axe_exclude_key": None,
-                    "axe_macro_key": None,
-                },
-            )
-            audience_block = tm._resolve_audience_signals(
+            audience_block = _gam_tm("gam_pt_t3")._resolve_audience_signals(
                 TargetingOverlay(audience_exclude=["audience_competitors"]),
                 {},
             )
-
         assert audience_block == {"excludedAudienceSegmentIds": ["55555"]}
 
-    def test_custom_key_value_signal_layers_into_custom_targeting(self, integration_db):
-        from src.adapters.gam.managers.targeting import GAMTargetingManager
+    def test_custom_key_value_passthrough_layers_into_custom_targeting(self, integration_db):
         from tests.factories import TenantFactory, TenantSignalFactory
 
         with _SignalFlowEnv() as env:
-            tenant = TenantFactory(tenant_id="gam_res_t3", ad_server="google_ad_manager")
+            tenant = TenantFactory(tenant_id="gam_pt_t4", ad_server="google_ad_manager")
             TenantSignalFactory(
                 tenant=tenant,
                 signal_id="kv_vertical_news",
@@ -205,86 +216,182 @@ class TestGamSignalResolution:
                     "key_id": "11111",
                     "value_id": "22222",
                 },
-                targeting_dimension="contextual",
             )
             env.get_session()
+            tm = _gam_tm("gam_pt_t4")
 
-            tm = GAMTargetingManager(
-                tenant_id="gam_res_t3",
-                gam_client=None,
-                targeting_config={
-                    "custom_targeting_keys": {},
-                    "axe_include_key": None,
-                    "axe_exclude_key": None,
-                    "axe_macro_key": None,
-                },
-            )
-            custom_targeting: dict[str, str] = {}
-
-            # Include
+            ct_include: dict[str, str] = {}
             audience_block = tm._resolve_audience_signals(
                 TargetingOverlay(audience_include=["kv_vertical_news"]),
-                custom_targeting,
+                ct_include,
             )
-            assert audience_block is None, "custom-KV signals must not surface in audienceTargeting"
-            assert custom_targeting == {"11111": "22222"}
+            assert audience_block is None
+            assert ct_include == {"11111": "22222"}
 
-            # Exclude — mirrors AXE NOT_ prefix
-            custom_targeting_exclude: dict[str, str] = {}
+            ct_exclude: dict[str, str] = {}
             tm._resolve_audience_signals(
                 TargetingOverlay(audience_exclude=["kv_vertical_news"]),
-                custom_targeting_exclude,
+                ct_exclude,
             )
-            assert custom_targeting_exclude == {"NOT_11111": "22222"}
+            assert ct_exclude == {"NOT_11111": "22222"}
 
-    def test_unknown_signal_id_raises_with_clear_message(self, integration_db):
-        from src.adapters.gam.managers.targeting import GAMTargetingManager
-        from tests.factories import TenantFactory
+
+class TestGamComposedSignals:
+    """Composed signals (AND of criteria, mixed kinds, per-criterion mode).
+
+    Operator pre-bundles common combinations into a single signal id so the
+    storefront/buyer references one thing.
+    """
+
+    def test_composed_mixes_kv_and_segment_criteria(self, integration_db):
+        """``premium_sports = vertical=sports AND audience_segment=12345``"""
+        from tests.factories import TenantFactory, TenantSignalFactory
 
         with _SignalFlowEnv() as env:
-            TenantFactory(tenant_id="gam_res_t4", ad_server="google_ad_manager")
-            env.get_session()
-
-            tm = GAMTargetingManager(
-                tenant_id="gam_res_t4",
-                gam_client=None,
-                targeting_config={
-                    "custom_targeting_keys": {},
-                    "axe_include_key": None,
-                    "axe_exclude_key": None,
-                    "axe_macro_key": None,
+            tenant = TenantFactory(tenant_id="gam_co_t1", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="premium_sports",
+                adapter_config={
+                    "type": "composed",
+                    "criteria": [
+                        {
+                            "kind": "custom_key_value",
+                            "key_id": "11111",
+                            "value_id": "22222",
+                            "mode": "include",
+                        },
+                        {"kind": "audience_segment", "segment_id": "12345", "mode": "include"},
+                    ],
                 },
             )
-            with pytest.raises(ValueError) as exc_info:
-                tm._resolve_audience_signals(
-                    TargetingOverlay(audience_include=["nope_unknown_signal"]),
+            env.get_session()
+            ct: dict[str, str] = {}
+            audience_block = _gam_tm("gam_co_t1")._resolve_audience_signals(
+                TargetingOverlay(audience_include=["premium_sports"]),
+                ct,
+            )
+        assert audience_block == {"includedAudienceSegmentIds": ["12345"]}
+        assert ct == {"11111": "22222"}
+
+    def test_composed_per_criterion_exclude_mode(self, integration_db):
+        """A criterion can be exclude even when the signal is included."""
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_co_t2", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="premium_sports_minus_competitors",
+                adapter_config={
+                    "type": "composed",
+                    "criteria": [
+                        {
+                            "kind": "audience_segment",
+                            "segment_id": "12345",
+                            "mode": "include",
+                        },
+                        {
+                            "kind": "audience_segment",
+                            "segment_id": "99999",
+                            "mode": "exclude",
+                        },
+                    ],
+                },
+            )
+            env.get_session()
+            audience_block = _gam_tm("gam_co_t2")._resolve_audience_signals(
+                TargetingOverlay(audience_include=["premium_sports_minus_competitors"]),
+                {},
+            )
+        assert audience_block == {
+            "includedAudienceSegmentIds": ["12345"],
+            "excludedAudienceSegmentIds": ["99999"],
+        }
+
+    def test_composed_signal_in_audience_exclude_inverts_criteria(self, integration_db):
+        """Outer ``exclude`` mode XORs with each criterion's mode."""
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_co_t3", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="comp",
+                adapter_config={
+                    "type": "composed",
+                    "criteria": [
+                        {
+                            "kind": "audience_segment",
+                            "segment_id": "include_seg",
+                            "mode": "include",
+                        },
+                        {
+                            "kind": "audience_segment",
+                            "segment_id": "exclude_seg",
+                            "mode": "exclude",
+                        },
+                    ],
+                },
+            )
+            env.get_session()
+            # Signal in audience_exclude → flip each criterion's mode
+            audience_block = _gam_tm("gam_co_t3")._resolve_audience_signals(
+                TargetingOverlay(audience_exclude=["comp"]),
+                {},
+            )
+        # include_seg → excluded; exclude_seg → included (double negative)
+        assert audience_block == {
+            "includedAudienceSegmentIds": ["exclude_seg"],
+            "excludedAudienceSegmentIds": ["include_seg"],
+        }
+
+    def test_composed_validates_missing_segment_id(self, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_co_t4", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="malformed",
+                adapter_config={
+                    "type": "composed",
+                    "criteria": [{"kind": "audience_segment"}],  # missing segment_id
+                },
+            )
+            env.get_session()
+            with pytest.raises(ValueError, match="requires segment_id"):
+                _gam_tm("gam_co_t4")._resolve_audience_signals(
+                    TargetingOverlay(audience_include=["malformed"]),
                     {},
                 )
 
-        message = str(exc_info.value)
-        assert "nope_unknown_signal" in message
-        assert "gam_res_t4" in message
 
-    def test_empty_overlay_returns_none(self, integration_db):
-        from src.adapters.gam.managers.targeting import GAMTargetingManager
+class TestGamSignalErrors:
+    """Failure modes — fail loud, never silently drop targeting."""
+
+    def test_unknown_signal_id_raises(self, integration_db):
         from tests.factories import TenantFactory
 
         with _SignalFlowEnv() as env:
-            TenantFactory(tenant_id="gam_res_t5", ad_server="google_ad_manager")
+            TenantFactory(tenant_id="gam_err_t1", ad_server="google_ad_manager")
             env.get_session()
+            with pytest.raises(ValueError) as exc_info:
+                _gam_tm("gam_err_t1")._resolve_audience_signals(
+                    TargetingOverlay(audience_include=["nope_unknown"]),
+                    {},
+                )
+        message = str(exc_info.value)
+        assert "nope_unknown" in message
+        assert "gam_err_t1" in message
 
-            tm = GAMTargetingManager(
-                tenant_id="gam_res_t5",
-                gam_client=None,
-                targeting_config={
-                    "custom_targeting_keys": {},
-                    "axe_include_key": None,
-                    "axe_exclude_key": None,
-                    "axe_macro_key": None,
-                },
-            )
-            custom_targeting: dict[str, str] = {}
-            audience_block = tm._resolve_audience_signals(TargetingOverlay(), custom_targeting)
+    def test_empty_overlay_returns_none(self, integration_db):
+        from tests.factories import TenantFactory
 
+        with _SignalFlowEnv() as env:
+            TenantFactory(tenant_id="gam_err_t2", ad_server="google_ad_manager")
+            env.get_session()
+            ct: dict[str, str] = {}
+            audience_block = _gam_tm("gam_err_t2")._resolve_audience_signals(TargetingOverlay(), ct)
         assert audience_block is None
-        assert custom_targeting == {}
+        assert ct == {}
