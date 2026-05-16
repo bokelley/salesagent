@@ -2,7 +2,7 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [Sprint 4 (UI hardening)](./embedded-mode-sprint-4-ui-hardening.md), [Sprint 5 (Buyer Routing UX)](./embedded-mode-sprint-5-buyer-routing-ux.md)
-**Status:** Draft. Phase 1a + 1b cleanup landed; Phases 2–4 not yet started. Phase 4 reframed 2026-05-16 around instance-level capability flags (see Phase 4 below).
+**Status:** Phase 1a + 1b + 4a + 4b landed; Phases 2, 3, 4c, 4d not yet started. Phase 4 reframed 2026-05-16 around instance-level capability flags (see Phase 4 below).
 **Last updated:** 2026-05-16
 
 ## Why this sprint exists
@@ -176,14 +176,14 @@ def capability_owner(name: str) -> Literal["publisher", "storefront"]:
 
 Exposed to Jinja as `{{ capability_owner('creative_approval') }}` plus a convenience: `{{ publisher_owns('creative_approval') }}` (sugar for `== 'publisher'`).
 
-**Phase 4a — Capability infrastructure.**
+**Phase 4a — Capability infrastructure.** ✅ LANDED (2026-05-16)
 
 - Parse `EMBEDDED_CAPABILITIES` into `settings.embedded_capabilities: dict[str, str]` at startup. Fail loud on malformed JSON.
 - Add `capability_owner()` and `publisher_owns()` helpers; register both as Jinja globals.
 - Unit tests: defaults, open-instance no-op, malformed JSON failure, individual capability resolution.
 - No UI or template changes in this phase. Mergeable on its own.
 
-**Phase 4b — Per-section flag gating.**
+**Phase 4b — Per-section flag gating.** ✅ LANDED (2026-05-16)
 
 Wrap each migrating subsection in `{% if publisher_owns('<capability>') %}`. POST handlers reject writes with `403 Forbidden` and a banner ("This is managed by your platform") when the capability is `storefront`.
 

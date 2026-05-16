@@ -77,3 +77,59 @@ def publisher_owns(name: str) -> bool:
     """Sugar for ``capability_owner(name) == "publisher"``. Used in
     Jinja gates: ``{% if publisher_owns('creative_approval') %}``."""
     return capability_owner(name) == "publisher"
+
+
+def require_capability_blueprint(capability: str):
+    """Build a Flask ``before_request`` handler that blocks every route
+    on a blueprint when ``capability`` is storefront-owned.
+
+    Use when an entire surface (e.g. the Creative Agents management
+    pages) should disappear on embedded instances that have centralized
+    that workflow upstream::
+
+        my_bp.before_request(require_capability_blueprint("creative_agents"))
+
+    Returns ``None`` when the publisher owns the capability so Flask
+    proceeds to the route; otherwise returns a 403 response from
+    :func:`capability_owned_response`.
+    """
+
+    def _hook():
+        if not publisher_owns(capability):
+            return capability_owned_response(capability)
+        return None
+
+    _hook.__name__ = f"_require_capability_{capability}"
+    return _hook
+
+
+def capability_owned_response(capability: str):
+    """Build the 403 response for a write attempt on a storefront-owned
+    workflow. JSON requests get a structured body; everything else gets a
+    plain-text 403.
+
+    The UI shouldn't be reaching these endpoints when the section is
+    gated off — this is defense-in-depth against direct POSTs, stale
+    forms cached in a browser, and template gate bugs.
+
+    Lives next to ``publisher_owns()`` so blueprint code can stay terse::
+
+        if not publisher_owns("slack"):
+            return capability_owned_response("slack")
+    """
+    from flask import jsonify, request
+
+    message = f"The '{capability}' workflow is managed by your platform."
+    if request.is_json or request.headers.get("Accept", "").startswith("application/json"):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "capability_owned_by_storefront",
+                    "capability": capability,
+                    "message": message,
+                }
+            ),
+            403,
+        )
+    return message, 403, {"Content-Type": "text/plain; charset=utf-8"}

@@ -1438,6 +1438,8 @@
                     </small>
                 </div>
 
+                {# Headless capability: hidden when the storefront owns creative approval. #}
+                {% if publisher_owns('creative_approval') %}
                 <!-- Approval Workflow -->
                 <div class="form-section">
                     <h3>Approval Workflow</h3>
@@ -1646,7 +1648,10 @@ REJECT - Creative cannot be approved:
                         </div>
                     </div>
                 </div>
+                {% endif %}
 
+                {# Headless capability: hidden when the storefront owns advertising policy. #}
+                {% if publisher_owns('advertising_policy') %}
                 <!-- Advertising Policy Section -->
                 <div class="form-section">
                     <h3>Advertising Policy</h3>
@@ -1718,7 +1723,10 @@ REJECT - Creative cannot be approved:
                         </div>
                     </div>
                 </div>
+                {% endif %}
 
+                {# Headless capability: hidden when the storefront owns product ranking. #}
+                {% if publisher_owns('product_ranking') %}
                 <!-- Product Ranking Section -->
                 <div class="form-section">
                     <h3>Product Ranking</h3>
@@ -1774,6 +1782,7 @@ Exclude any products that don't match the brand's tone.</pre>
                         </ul>
                     </div>
                 </div>
+                {% endif %}
 
                 <div class="button-group">
                     <button type="button" onclick="saveBusinessRules()" class="btn btn-primary">
@@ -2260,6 +2269,8 @@ Exclude any products that don't match the brand's tone.</pre>
                 <p>Connect external services and configure webhooks</p>
             </div>
 
+            {# Headless capability: hidden when the storefront centralizes Slack notifications. #}
+            {% if publisher_owns('slack') %}
             <div class="form-section">
                 <h3>Slack Integration</h3>
                 <p class="form-section-description">
@@ -2310,7 +2321,10 @@ Exclude any products that don't match the brand's tone.</pre>
                     </div>
                 </form>
             </div>
+            {% endif %}
 
+            {# Headless capability: hidden when the storefront centralizes AI services. #}
+            {% if publisher_owns('ai_services') %}
             <div class="form-section">
                 <h3>AI Services</h3>
                 <p class="form-section-description">
@@ -2625,7 +2639,10 @@ Exclude any products that don't match the brand's tone.</pre>
                 document.addEventListener('DOMContentLoaded', loadAIModels);
                 </script>
             </div>
+            {% endif %}
 
+            {# Headless capability: hidden when the storefront centralizes creative agents. #}
+            {% if publisher_owns('creative_agents') %}
             <div class="form-section">
                 <h3>Creative Agents</h3>
                 <p class="form-section-description">
@@ -2648,7 +2665,10 @@ Exclude any products that don't match the brand's tone.</pre>
                     </p>
                 </div>
             </div>
+            {% endif %}
 
+            {# Headless capability: hidden when the storefront centralizes signals agents. #}
+            {% if publisher_owns('signals_agents') %}
             <div class="form-section">
                 <h3>Signals Discovery Agents</h3>
                 <p class="form-section-description">
@@ -2671,6 +2691,7 @@ Exclude any products that don't match the brand's tone.</pre>
                     </p>
                 </div>
             </div>
+            {% endif %}
         </div>
 
         <!-- API Settings -->
