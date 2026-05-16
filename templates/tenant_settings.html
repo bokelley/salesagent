@@ -416,10 +416,17 @@
         </a>
         {% endif %}
 
+        {# Embedded tenants don't issue webhooks under the salesagent's own
+           domain — the storefront signs. Self-signing inside the storefront's
+           perimeter is dead code, so hide the nav entry entirely. No
+           capability flag: there's no "publisher" answer that ever makes
+           sense on embedded. (Sprint 7 Phase 4c.) #}
+        {% if not embedded_view %}
         <a class="settings-nav-item{% if default_section == 'signing-keys' %} active{% endif %}" data-section="signing-keys">
             <span class="settings-nav-icon">🔑</span>
             <span>Signing keys</span>
         </a>
+        {% endif %}
 
         {% if not single_tenant_mode and not embedded_view %}
         {# Scope3 owns tenant lifecycle (provision / deactivate / reactivate via
@@ -2783,6 +2790,12 @@ result = await client.tools.get_products(brief="video ads")</pre>
             </div>
         </div>
 
+        {# Embedded tenants: signing keys are dead code (see nav entry above
+           for full rationale). The section is rendered empty rather than as
+           a banner — there's nothing to explain to the publisher because
+           there's no concept of "your platform manages signing" here, the
+           feature itself is irrelevant. (Sprint 7 Phase 4c.) #}
+        {% if not embedded_view %}
         <!-- Outbound signing keys (RFC 9421) -->
         <div id="signing-keys" class="settings-section{% if default_section == 'signing-keys' %} active{% endif %}">
             <div class="settings-header">
@@ -2878,6 +2891,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
             </div>
             {% endif %}
         </div>
+        {% endif %}
 
         {# Scope3 owns tenant lifecycle (provision / deactivate / reactivate via
            Tenant Management API) on embedded tenants. #}
