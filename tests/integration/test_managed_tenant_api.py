@@ -357,7 +357,9 @@ class TestProvision:
             _raise_on_spawn,
         )
         # Advertisers spawn would otherwise try to import a real GAM client;
-        # neuter it so this test isolates the inventory failure.
+        # neuter it so this test isolates the inventory failure. The
+        # advertisers row is intentionally not asserted on — its spawn
+        # path is separate and warrants its own test if regressed.
         monkeypatch.setattr(
             "src.services.gam_advertisers_sync.sync_advertisers",
             lambda **_kw: None,

@@ -2050,8 +2050,20 @@ def _mark_sync_failed_on_spawn(tenant_id: str, sync_ids: list[str], error_messag
     try:
         with get_db_session() as session:
             repo = SyncJobRepository(session, tenant_id)
-            repo.mark_pending_as_failed(sync_ids, f"Worker spawn failed: {error_message}")
+            transitioned = repo.mark_pending_as_failed(sync_ids, f"Worker spawn failed: {error_message}")
             session.commit()
+            if transitioned == 0:
+                # The rows we tried to mark failed weren't in 'pending' —
+                # most likely a worker that started before the spawn-time
+                # exception fired already promoted them to 'running'.
+                # That worker now owns the lifecycle; surface a warning so
+                # this race is visible if it ever happens in practice.
+                logger.warning(
+                    "Spawn failure but no SyncJob rows transitioned to failed for tenant=%s "
+                    "sync_ids=%s — rows already moved past 'pending'; worker owns the lifecycle",
+                    tenant_id,
+                    sync_ids,
+                )
     except Exception:
         logger.exception("Failed to mark SyncJob rows failed after spawn error: %s", sync_ids)
 

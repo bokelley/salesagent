@@ -107,7 +107,12 @@ def _test_freewheel(config: dict[str, Any]) -> tuple[bool, str | None]:
         return False, "FreeWheel config requires either (username + password) or api_token"
 
     try:
-        from src.adapters.freewheel.client import FreeWheelAuthError, FreeWheelClient
+        from src.adapters.freewheel._transport import (
+            FreeWheelAuthError,
+            FreeWheelError,
+            FreeWheelForbiddenError,
+        )
+        from src.adapters.freewheel.client import FreeWheelClient
         from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
     except Exception as exc:  # pragma: no cover - environmental
         logger.exception("FreeWheel imports failed")
@@ -126,9 +131,20 @@ def _test_freewheel(config: dict[str, Any]) -> tuple[bool, str | None]:
         client.token_info()
     except FreeWheelAuthError as exc:
         return False, f"FreeWheel auth rejected: {exc}"
+    except FreeWheelForbiddenError as exc:
+        # Bearer is valid but lacks the entitlements to introspect itself.
+        # Treat as a credential problem — the configured key isn't usable.
+        return False, f"FreeWheel bearer lacks entitlements: {exc}"
+    except FreeWheelError as exc:
+        # Other FreeWheel-side error (4xx validation, 5xx server). Surface
+        # the status code so the host product can distinguish transient
+        # infra failures from bad credentials.
+        return False, f"FreeWheel API error (status={exc.status_code}): {exc}"
     except Exception as exc:
-        logger.warning("FreeWheel token_info() raised: %s", exc)
-        return False, f"FreeWheel connection probe failed: {exc}"
+        # Network / transport failure (DNS, TLS, timeout, JSON decode).
+        # Not a credentials problem; the host product may want to retry.
+        logger.warning("FreeWheel token_info() transport failure: %s", exc)
+        return False, f"FreeWheel transport failure: {type(exc).__name__}: {exc}"
 
     return True, None
 
