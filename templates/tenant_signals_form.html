@@ -578,7 +578,11 @@
 
     // ---- Restore picked entities from server re-render of structured form
     try {
-        const initial = {{ effective.entities | tojson if effective.entities else '""' }};
+        {# ``|tojson`` produces JS-safe output that Jinja knows not to
+           HTML-escape; falling back to the literal ``'""'`` would render
+           as ``&#34;&#34;`` inside a <script> tag (entities aren't decoded
+           there) and break parsing. #}
+        const initial = {{ (effective.entities or '') | tojson }};
         if (initial) {
             const arr = typeof initial === 'string' ? JSON.parse(initial) : initial;
             const kind = sourceKindSelect.value;
