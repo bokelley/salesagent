@@ -591,8 +591,8 @@ components:
             - principal.created
             - product.created
             - product.updated
-            - sync.completed
-            - sync.failed
+            - sync_run.completed
+            - sync_run.failed
             - tenant.config_changed
             type: string
           title: Event Types
@@ -2354,12 +2354,49 @@ components:
       - name
       title: ProvisionedPrincipalResponse
       type: object
+    RefreshConflictResponse.f44f287:
+      additionalProperties: false
+      description: "``POST /tenants/{tid}/refresh`` response (HTTP 409) \u2014 sync\
+        \ already running.\n\nMirrors the 202 :class:`RefreshResponse` shape (``sync_run_ids``\
+        \ +\n``started_at`` at the top level so receivers don't need a second\nparse\
+        \ path) plus a structured error block. Issue #463: the\nstorefront's \"Retry\"\
+        \ UI needs a clear signal that the click\ntriggered nothing new \u2014 the\
+        \ indistinguishable 202-with-reused-ids\nresponse is the problem this shape\
+        \ fixes."
+      properties:
+        error:
+          default: sync_already_running
+          title: Error
+          type: string
+        message:
+          title: Message
+          type: string
+        running_sync_types:
+          items:
+            type: string
+          title: Running Sync Types
+          type: array
+        started_at:
+          format: date-time
+          title: Started At
+          type: string
+        sync_run_ids:
+          additionalProperties:
+            type: string
+          title: Sync Run Ids
+          type: object
+      required:
+      - message
+      - started_at
+      title: RefreshConflictResponse
+      type: object
     RefreshResponse.f44f287:
       additionalProperties: false
-      description: "``POST /tenants/{tid}/refresh`` response \u2014 fan-out of sync\
-        \ run ids.\n\nStorefront polls ``GET /status.syncs`` for progress per sync\
-        \ type.\nRe-POST within 60 seconds returns the SAME ids (idempotent \u2014\
-        \ avoids\nhammering GAM when a publisher mashes the button)."
+      description: "``POST /tenants/{tid}/refresh`` response (HTTP 202) \u2014 fan-out\
+        \ of sync run ids.\n\nStorefront reads ``GET /tenants/{tid}/status`` (``syncs``\
+        \ block) for\nprogress per sync type. Re-POST within 60 seconds returns the\
+        \ SAME\nids (idempotent \u2014 avoids hammering GAM when a publisher mashes\
+        \ the\nbutton)."
       properties:
         started_at:
           format: date-time
@@ -4243,14 +4280,15 @@ paths:
         \ if one started in the last 60 seconds (or is currently running), or create\
         \ a new pending SyncJob. The actual sync work is picked up by the existing\
         \ background sync infrastructure.\n\nReturns 202 Accepted with ``sync_run_ids``\
-        \ mapping sync_type \u2192 sync_id. Storefront polls ``GET /status.syncs``\
-        \ for per-type progress.\n\nReturns 409 ``sync_already_running`` when at least\
-        \ one sync_type has a ``running`` row that started *before* the 60s idempotency\
-        \ window \u2014 i.e. a long-running in-flight sync that the caller's retry\
-        \ would just shadow. The response body still carries ``sync_run_ids`` so the\
-        \ storefront can correlate the conflict to the in-flight run and ``details.running_sync_types``\
-        \ lists which types are in conflict. Issue #463: a UI \"Retry\" button needs\
-        \ a clear signal that the click triggered nothing new instead of an indistinguishable\
+        \ mapping sync_type \u2192 sync_id. Storefront reads ``GET /tenants/{tid}/status``\
+        \ (``syncs`` block) for per-type progress.\n\nReturns 409 ``sync_already_running``\
+        \ when at least one sync_type has a ``running`` row that started *before*\
+        \ the 60s idempotency window \u2014 i.e. a long-running in-flight sync that\
+        \ the caller's retry would just shadow. The 409 body shape mirrors the 202\
+        \ body (``sync_run_ids`` + ``started_at`` at the top level) plus the ``error``,\
+        \ ``message``, and ``running_sync_types`` fields \u2014 so receivers don't\
+        \ need a second parse path. Issue #463: a UI \"Retry\" button needs a clear\
+        \ signal that the click triggered nothing new instead of an indistinguishable\
         \ 202."
       operationId: post__api_v1_tenant-management_tenants_{tenant_id}_refresh
       parameters:
@@ -4277,7 +4315,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiError.f44f287'
+                $ref: '#/components/schemas/RefreshConflictResponse.f44f287'
           description: Conflict
         '422':
           content:

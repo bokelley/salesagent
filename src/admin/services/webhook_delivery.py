@@ -156,6 +156,14 @@ def _extract_host(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Envelope-level schema version. Bumps when any event's ``data`` block
+# shape changes in a breaking way (added required field, removed field,
+# renamed key, changed type). Receivers can use this to gate consumption
+# of the wire format. Today only one version exists; the field is here
+# so future bumps don't require parallel webhook URLs to roll out.
+EVENT_SCHEMA_VERSION = "1"
+
+
 def build_envelope(
     *,
     event_type: str,
@@ -169,11 +177,14 @@ def build_envelope(
 
     Shape per the spec's "Payload format" section. The same ``event_id`` is
     reused on retries so receivers can dedupe; ``delivery_attempt`` increments
-    on each retry.
+    on each retry. ``event_schema_version`` is at the envelope level so any
+    event-type's data block can rev independently when it ships a breaking
+    change.
     """
     return {
         "event_id": event_id or f"evt_{uuid.uuid4().hex}",
         "event_type": event_type,
+        "event_schema_version": EVENT_SCHEMA_VERSION,
         "tenant_id": tenant_id,
         "occurred_at": (occurred_at or datetime.now(UTC)).isoformat(),
         "delivery_attempt": delivery_attempt,

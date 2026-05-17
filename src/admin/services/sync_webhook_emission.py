@@ -1,11 +1,13 @@
-"""Emit ``sync.completed`` and ``sync.failed`` webhooks on SyncJob terminal transitions.
+"""Emit ``sync_run.completed`` and ``sync_run.failed`` webhooks on SyncJob terminal transitions.
 
 Issue #463: the storefront UI proxied by agentic-api wants push notifications
 when a tenant's inventory / custom_targeting / advertisers sync finishes —
 without polling, and without depending on a managed-tenant scheduler keeping
-state in sync. ``WEBHOOK_EVENT_TYPES`` has long declared ``sync.completed`` /
-``sync.failed`` as valid subscription events, but no emission point was wired
-to the sync workers.
+state in sync. The catalog originally declared ``sync.completed`` /
+``sync.failed`` but no emission point was wired; PR #465 wired emission and
+renamed the events to ``sync_run.*`` to match the ``<entity>.<verb-past>``
+catalog convention (the entity is the SyncJob row, surfaced as
+``data.sync_run_id``).
 
 Sync runs reach a terminal state from 15+ call sites (background workers,
 adapter sync managers, admin endpoints, repository helpers). Sprinkling
@@ -142,7 +144,7 @@ def register_sync_webhook_emission() -> None:
         engine = get_engine()
         with RawSession(engine) as fresh:
             for snap in snapshots:
-                event_type = "sync.completed" if snap["_status"] == "completed" else "sync.failed"
+                event_type = "sync_run.completed" if snap["_status"] == "completed" else "sync_run.failed"
                 try:
                     emit_event(
                         snap["tenant_id"],
@@ -211,29 +213,110 @@ def _dedup_snapshots(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+# Internal ``triggered_by`` labels that map to the public ``manual`` trigger.
+# Positive-list — anything not on this list AND not matching the
+# provisioning / scheduled branches surfaces as ``unknown``, which lets
+# receivers detect taxonomy drift instead of silently misattributing new
+# internal labels to user action.
+_MANUAL_TRIGGERED_BY = frozenset(
+    {
+        "admin_ui",
+        "admin_button",
+        "admin_scheduling_ui",
+        "api",
+        "order_creation",
+        "worker",
+    }
+)
+
+
 def _normalize_trigger(triggered_by: str | None, triggered_by_id: str | None) -> str:
     """Map internal ``triggered_by`` taxonomy onto the public trigger Literal.
 
     The internal taxonomy has grown organically (``admin_ui``,
     ``admin_button``, ``scheduler_reporting``, ``order_creation``, ``api``,
-    ``worker`` ...). The public surface stays at three values so integrators
+    ``worker`` ...). The public surface stays at four values so integrators
     don't have to track every internal label as it shifts.
 
-    * ``initial`` — the first-sync side effect of provisioning. Distinguished
-      by ``triggered_by_id`` containing ``:provision`` (set by the
-      tenant-management provision flow).
+    * ``provisioning`` — first-sync side effect of provisioning. Detected
+      via ``triggered_by_id`` containing ``:provision`` (set by the
+      tenant-management provision flow). Named after the call-site
+      signal, not the semantic "this is the first ever sync" — a
+      re-provision of an existing tenant still emits ``provisioning``.
     * ``scheduled`` — recurring scheduler runs. ``triggered_by`` starting
-      with ``scheduler`` (covers ``scheduler``, ``scheduler_reporting``) or
-      equal to ``cron``.
-    * ``manual`` — everything else (admin UI buttons, ``/refresh`` API,
-      order-creation triggered cache rebuilds, worker spawns).
+      with ``scheduler`` (covers ``scheduler``, ``scheduler_reporting``)
+      or equal to ``cron``.
+    * ``manual`` — positive-match against a known set of user-driven
+      labels (admin UI buttons, ``/refresh`` API, order-creation triggered
+      cache rebuilds, worker spawns).
+    * ``unknown`` — anything else. Default lets receivers detect drift
+      when a new internal label lands without a normalizer update,
+      instead of silently misattributing it to a user action.
     """
     if triggered_by_id and ":provision" in triggered_by_id:
-        return "initial"
+        return "provisioning"
     tb = (triggered_by or "").lower()
     if tb.startswith("scheduler") or tb == "cron":
         return "scheduled"
-    return "manual"
+    if tb in _MANUAL_TRIGGERED_BY:
+        return "manual"
+    return "unknown"
+
+
+# Substring fingerprints used to bucket a raw ``error_message`` into the
+# public ``error.category`` taxonomy. Case-insensitive substring match,
+# first-bucket-wins. The classifier is intentionally crude — its job is
+# to give storefront UI enough signal to pick a CTA (Retry vs Reconnect
+# vs Contact admin) without substring-matching our exception strings
+# themselves. When structured exception capture lands at the failure
+# sites, this fallback shrinks to the small-residue case.
+_ERROR_CATEGORY_FINGERPRINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "auth",
+        (
+            "refresh token",
+            "invalid_grant",
+            "unauthoriz",
+            "permission denied",
+            "insufficient permissions",
+            "403",
+            "401",
+        ),
+    ),
+    (
+        "transient",
+        (
+            "timeout",
+            "timed out",
+            "connection reset",
+            "connection refused",
+            "rate limit",
+            "throttle",
+            "5xx",
+            "503",
+            "502",
+            "500",
+            "temporarily unavailable",
+        ),
+    ),
+)
+
+
+def _classify_error(message: str | None) -> str:
+    """Bucket a raw ``error_message`` into a coarse public category.
+
+    Three values: ``auth`` (operator action: reconnect GAM / rotate keys),
+    ``transient`` (caller action: retry), ``permanent`` (everything else
+    — operator investigation). Receivers shouldn't make load-bearing
+    decisions off this beyond CTA selection.
+    """
+    if not message:
+        return "permanent"
+    lowered = message.lower()
+    for category, fingerprints in _ERROR_CATEGORY_FINGERPRINTS:
+        if any(fp in lowered for fp in fingerprints):
+            return category
+    return "permanent"
 
 
 def _iso(value: Any) -> str | None:
@@ -265,12 +348,18 @@ def _public_error_message(raw: str | None) -> str | None:
 
 
 def _build_payload(snap: dict[str, Any], event_type: str) -> dict[str, Any]:
-    """Construct the ``data`` block for a sync.completed / sync.failed envelope.
+    """Construct the ``data`` block for a sync_run.completed / sync_run.failed envelope.
 
-    The envelope itself (``event_id``, ``event_type``, ``tenant_id``,
-    ``occurred_at``, ``delivery_attempt``) is added downstream by
-    :func:`src.admin.services.webhook_delivery.build_envelope`. This
-    function returns only the inner ``data`` dict.
+    The envelope itself (``event_id``, ``event_type``, ``event_schema_version``,
+    ``tenant_id``, ``occurred_at``, ``delivery_attempt``) is added
+    downstream by :func:`src.admin.services.webhook_delivery.build_envelope`.
+    This function returns only the inner ``data`` dict.
+
+    Contract rule: every known key is always emitted with at least
+    ``null``. Receivers codegen TS/Python types from the OpenAPI spec
+    and benefit from stable key presence — adding a value later (e.g.
+    structured ``error.class`` when failure sites capture exc_info) is
+    then a value change, not a schema change.
     """
     payload: dict[str, Any] = {
         "sync_run_id": snap["sync_run_id"],
@@ -281,18 +370,22 @@ def _build_payload(snap: dict[str, Any], event_type: str) -> dict[str, Any]:
         "completed_at": _iso(snap.get("completed_at")),
     }
 
-    if event_type == "sync.completed":
+    if event_type == "sync_run.completed":
         payload["item_count"] = snap.get("item_count")
         payload["summary"] = snap.get("summary")
         return payload
 
-    # sync.failed — ``error.message`` is scrubbed (first line, length-capped)
-    # so internal stack frames and adapter response payloads don't leak
-    # through the webhook surface. ``class`` and ``category`` are
-    # forward-compatible fields filled in a subsequent contract pass when
-    # structured exception capture lands at the failure sites.
+    # sync_run.failed — ``error.message`` is scrubbed (first line,
+    # length-capped). ``error.class`` is reserved for the future
+    # structured-exception capture work and emitted as ``null`` today
+    # so codegen'd TS types stay stable when it lands. ``error.category``
+    # is bucketed crudely from the error_message so storefront UIs can
+    # pick a CTA without substring-matching our exception strings.
+    public_message = _public_error_message(snap.get("error_message"))
     payload["error"] = {
-        "message": _public_error_message(snap.get("error_message")),
+        "message": public_message,
+        "class": None,
+        "category": _classify_error(snap.get("error_message")),
     }
     return payload
 

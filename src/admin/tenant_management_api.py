@@ -56,6 +56,7 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantRequest,
     ProvisionTenantResponse,
     RecentBuyer,
+    RefreshConflictResponse,
     RefreshResponse,
     RejectWorkflowRequest,
     SpringServeAdapterConfig,
@@ -2318,7 +2319,13 @@ def _create_and_spawn_refresh(
 
 @tenant_management_api.route("/tenants/<tenant_id>/refresh", methods=["POST"])
 @require_tenant_management_api_key
-@spec.validate(resp=Response(HTTP_202=RefreshResponse, HTTP_404=ApiError, HTTP_409=ApiError))
+@spec.validate(
+    resp=Response(
+        HTTP_202=RefreshResponse,
+        HTTP_404=ApiError,
+        HTTP_409=RefreshConflictResponse,
+    )
+)
 def refresh_tenant(tenant_id: str):
     """Fan out a refresh across all sync types — collapses N per-sync
     triggers into one call.
@@ -2329,16 +2336,18 @@ def refresh_tenant(tenant_id: str):
     existing background sync infrastructure.
 
     Returns 202 Accepted with ``sync_run_ids`` mapping sync_type → sync_id.
-    Storefront polls ``GET /status.syncs`` for per-type progress.
+    Storefront reads ``GET /tenants/{tid}/status`` (``syncs`` block) for
+    per-type progress.
 
     Returns 409 ``sync_already_running`` when at least one sync_type has
     a ``running`` row that started *before* the 60s idempotency window
     — i.e. a long-running in-flight sync that the caller's retry would
-    just shadow. The response body still carries ``sync_run_ids`` so
-    the storefront can correlate the conflict to the in-flight run and
-    ``details.running_sync_types`` lists which types are in conflict.
-    Issue #463: a UI "Retry" button needs a clear signal that the click
-    triggered nothing new instead of an indistinguishable 202.
+    just shadow. The 409 body shape mirrors the 202 body
+    (``sync_run_ids`` + ``started_at`` at the top level) plus the
+    ``error``, ``message``, and ``running_sync_types`` fields — so
+    receivers don't need a second parse path. Issue #463: a UI "Retry"
+    button needs a clear signal that the click triggered nothing new
+    instead of an indistinguishable 202.
     """
     # Validate tenant exists before delegating to the helper. Cheap query
     # with the same shape the helper uses internally.
@@ -2355,20 +2364,21 @@ def refresh_tenant(tenant_id: str):
     invalidate_status_cache(tenant_id)
 
     if running_conflicts:
-        # Don't suppress the run-id payload — the caller can read
-        # /status.syncs (or its own UI state) keyed by these ids to show
-        # the in-flight run's progress without re-issuing a refresh.
-        return _api_error(
-            "sync_already_running",
-            f"Sync already running for sync_types: {', '.join(sorted(running_conflicts.keys()))}. "
-            "Existing sync_run_ids returned for correlation.",
-            409,
-            details={
-                "running_sync_types": sorted(running_conflicts.keys()),
-                "sync_run_ids": sync_run_ids,
-                "started_at": started_at.isoformat(),
-            },
+        # Shape mirrors the 202 body (sync_run_ids + started_at at the
+        # top level) so receivers don't need a second parse path. The
+        # in-flight run's id is the correlation handle — the caller
+        # can read GET /tenants/{tid}/status (syncs block) keyed by it
+        # without re-issuing a refresh.
+        conflict = RefreshConflictResponse(
+            message=(
+                f"Sync already running for sync_types: {', '.join(sorted(running_conflicts.keys()))}. "
+                "Existing sync_run_ids returned for correlation."
+            ),
+            sync_run_ids=sync_run_ids,
+            started_at=started_at,
+            running_sync_types=sorted(running_conflicts.keys()),
         )
+        return jsonify(conflict.model_dump(mode="json")), 409
 
     response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=started_at)
     return jsonify(response.model_dump(mode="json")), 202

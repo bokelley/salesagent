@@ -533,8 +533,8 @@ class TestExpandedEventCatalog:
         # Issue #463: inventory-sync visibility events. Catalog plumbing
         # only — the real ``SyncJob``-driven emission path is covered by
         # ``TestSyncTerminalEmission`` below.
-        "sync.completed",
-        "sync.failed",
+        "sync_run.completed",
+        "sync_run.failed",
     )
 
     @pytest.mark.parametrize("event_type", NEW_EVENT_TYPES)
@@ -653,7 +653,7 @@ class TestSyncTerminalEmission:
         return create.get_json()["secret"]
 
     def test_completed_transition_fires_webhook(self, client, auth_headers, tenant, bound_factories, monkeypatch):
-        plaintext_secret = self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        plaintext_secret = self._subscribe(client, auth_headers, tenant.tenant_id, "sync_run.completed")
         receiver = self._install_capture(monkeypatch)
 
         from datetime import UTC, datetime
@@ -699,7 +699,7 @@ class TestSyncTerminalEmission:
             ),
         )
         envelope = json.loads(call["content"])
-        assert envelope["event_type"] == "sync.completed"
+        assert envelope["event_type"] == "sync_run.completed"
         assert envelope["tenant_id"] == tenant.tenant_id
 
         data = envelope["data"]
@@ -713,7 +713,7 @@ class TestSyncTerminalEmission:
         assert data["summary"] == "Synced 12345 ad units"
 
     def test_failed_transition_fires_webhook(self, client, auth_headers, tenant, bound_factories, monkeypatch):
-        plaintext_secret = self._subscribe(client, auth_headers, tenant.tenant_id, "sync.failed")
+        plaintext_secret = self._subscribe(client, auth_headers, tenant.tenant_id, "sync_run.failed")
         receiver = self._install_capture(monkeypatch)
 
         from datetime import UTC, datetime
@@ -741,21 +741,36 @@ class TestSyncTerminalEmission:
 
         assert len(receiver.calls) == 1
         envelope = json.loads(receiver.calls[0]["content"])
-        assert envelope["event_type"] == "sync.failed"
+        assert envelope["event_type"] == "sync_run.failed"
         # /refresh-triggered failures normalize to ``manual`` trigger.
         assert envelope["data"]["trigger"] == "manual"
-        assert envelope["data"]["error"] == {"message": "Refresh token revoked"}
+        # Always-emit-keys contract: message scrubbed, class reserved
+        # for future structured-exception capture, category bucketed
+        # from the message ("refresh token revoked" → auth).
+        assert envelope["data"]["error"] == {
+            "message": "Refresh token revoked",
+            "class": None,
+            "category": "auth",
+        }
         # Failure envelope carries the run identity for receiver correlation.
         assert envelope["data"]["sync_run_id"] == sync_id
+        # Envelope-level schema version pins the wire format so future
+        # breaking changes can be gated by receivers.
+        assert envelope["event_schema_version"] == "1"
         # Plaintext secret was returned at create time and used for signing.
         assert plaintext_secret  # smoke
 
-    def test_provision_trigger_normalizes_to_initial(self, client, auth_headers, tenant, bound_factories, monkeypatch):
+    def test_provision_trigger_normalizes_to_provisioning(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
         """The first-sync side effect of provisioning carries
         ``triggered_by_id=tenant_management_api:provision``. That must
-        surface as ``trigger=initial`` so the storefront can distinguish
-        the inaugural run from later scheduler / manual runs."""
-        self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        surface as ``trigger=provisioning`` so the storefront can
+        distinguish the provision-driven run from later scheduler /
+        manual runs. (Was named ``initial`` pre-review; ``provisioning``
+        is the call-site signal — a re-provision is still
+        ``provisioning``.)"""
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_run.completed")
         receiver = self._install_capture(monkeypatch)
 
         from datetime import UTC, datetime
@@ -781,7 +796,7 @@ class TestSyncTerminalEmission:
             session.commit()
 
         assert len(receiver.calls) == 1
-        assert json.loads(receiver.calls[0]["content"])["data"]["trigger"] == "initial"
+        assert json.loads(receiver.calls[0]["content"])["data"]["trigger"] == "provisioning"
 
     def test_non_status_update_on_terminal_row_does_not_re_fire(
         self, client, auth_headers, tenant, bound_factories, monkeypatch
@@ -789,7 +804,7 @@ class TestSyncTerminalEmission:
         """An UPDATE that touches a column other than status on a row
         already in terminal state must NOT re-emit. Without the
         history-check guard we'd fire on every backfill / annotation."""
-        self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_run.completed")
         receiver = self._install_capture(monkeypatch)
 
         from datetime import UTC, datetime
@@ -828,7 +843,7 @@ class TestSyncTerminalEmission:
     ):
         """A status transition that gets rolled back must not emit. The
         UI would show a state the database doesn't reflect."""
-        self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_run.completed")
         receiver = self._install_capture(monkeypatch)
 
         from datetime import UTC, datetime

@@ -173,7 +173,7 @@ The response does **not** carry sync handles. The first inventory sync kicks off
 
 - Treat 201 as "tenant is ready — redirect the publisher to `admin_url_path`."
 - Do not poll `/status` to gate the post-provision redirect. The publisher can enter the tenant immediately and work on configuration that does not depend on inventory (advertisers, currency limits, policies, signing keys).
-- If you want to surface "first inventory sync still running" on your own dashboard, fetch `/status.syncs` on demand — but do not block the publisher behind it. The salesagent UI shows sync progress and partial completion natively.
+- If you want to surface "first inventory sync still running" on your own dashboard, fetch `GET /tenants/{tid}/status` and read the `syncs` block on demand — but do not block the publisher behind it. The salesagent UI shows sync progress and partial completion natively.
 
 **Inventory-sync-dependent operations inside the salesagent UI** (product creation, custom targeting key/value pickers, GAM ad unit selection) degrade gracefully with "waiting for first inventory sync" affordances. Initial sync staleness is an ongoing operational concern, not a one-time gate — it must remain visible to the publisher after onboarding, which is why it belongs in the salesagent UI rather than the host's provision flow.
 
@@ -274,7 +274,7 @@ The salesagent has automation for this: `POST /create-service-account` (existing
 - Offer a "Sync now" button that calls `POST /api/sync/trigger/<tenant_id>` for users who want fresher data.
 - Not assume real-time freshness without an explicit on-demand sync.
 
-**Sync types** (exposed separately in `GET /status.syncs` per sprint 1.5):
+**Sync types** (exposed in the `syncs` block of `GET /tenants/{tid}/status` per sprint 1.5):
 - `inventory` — ad units + placements
 - `custom_targeting` — keys + values
 - `advertisers` — advertiser entities
@@ -298,26 +298,30 @@ The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/we
 | `principal.created` | A new advertiser/principal is created (both via provision endpoint and standalone admin UI flow) | `{"principal_id": str, "name": str}` |
 | `product.created` | A new product is created in the admin UI | `{"product_id": str, "name": str}` |
 | `product.updated` | An existing product is edited in the admin UI | `{"product_id": str, "name": str}` |
-| `sync.completed` | A `SyncJob` row transitioned `running -> completed` (#463). Fires once per actual DB commit, regardless of which worker / endpoint / cron path drove the transition. | `{"sync_run_id": str, "sync_type": "inventory"\|"custom_targeting"\|"advertisers", "adapter_type": str, "trigger": "initial"\|"scheduled"\|"manual", "started_at": ISO8601, "completed_at": ISO8601, "item_count": int\|null, "summary": str\|null}` |
-| `sync.failed` | A `SyncJob` row transitioned `running -> failed` (#463). | `{"sync_run_id": str, "sync_type": str, "adapter_type": str, "trigger": str, "started_at": ISO8601, "completed_at": ISO8601, "error": {"message": str\|null}}` |
+| `sync_run.completed` | A `SyncJob` row transitioned `running -> completed` (#463). Fires once per actual DB commit, regardless of which worker / endpoint / cron path drove the transition. | `{"sync_run_id": str, "sync_type": "inventory"\|"custom_targeting"\|"advertisers", "adapter_type": str, "trigger": "provisioning"\|"scheduled"\|"manual"\|"unknown", "started_at": ISO8601, "completed_at": ISO8601, "item_count": int\|null, "summary": str\|null}` |
+| `sync_run.failed` | A `SyncJob` row transitioned `running -> failed` (#463). | `{"sync_run_id": str, "sync_type": str, "adapter_type": str, "trigger": str, "started_at": ISO8601, "completed_at": ISO8601, "error": {"message": str\|null, "class": str\|null, "category": "auth"\|"transient"\|"permanent"}}` |
 | `tenant.config_changed` | Tenant configuration was patched | `{"changed": [...]}` |
 
 **Delivery semantics**: fire-and-forget from a Flask request handler. Best-effort — webhook delivery failures are logged but do not roll back the operation that fired the event. The host product is responsible for idempotency on receive (use `event_id` for dedup, since retries reuse the same id).
+
+**Envelope**: every delivery wraps the `data` block in `{event_id, event_type, event_schema_version, tenant_id, occurred_at, delivery_attempt, data}`. `event_id` is stable across retries; `delivery_attempt` increments. `event_schema_version` is a single string ("1" today) that bumps when any event's `data` shape changes in a breaking way — receivers can use this to gate consumption of the wire format.
 
 **Signing**: every delivery carries an HMAC-SHA256 signature in the headers — verify with `adcp.signing.webhook_hmac.verify_webhook_hmac` using the plaintext secret returned at subscription-create time.
 
 ### Sync-event specifics (#463)
 
-The `sync.completed` / `sync.failed` events power the storefront's "syncing… / last synced X min ago / failed — retry" UI. Implementation notes:
+The `sync_run.completed` / `sync_run.failed` events power the storefront's "syncing… / last synced X min ago / failed — retry" UI. Implementation notes:
 
 - **Emission point.** Wired via a SQLAlchemy session listener (`src/admin/services/sync_webhook_emission.py`), not at the 15+ terminal-state call sites in the sync workers. Fires once per actual commit of a status transition into `completed` or `failed` — rolled-back transitions and re-saves of already-terminal rows do not emit.
-- **`trigger` taxonomy.** Normalized from the internal open-ended `triggered_by` labels to a 3-value public Literal:
-  - `initial` — first-sync side effect of `POST /tenants/provision` (driven by `triggered_by_id` containing `:provision`).
+- **`trigger` taxonomy.** Normalized from the internal open-ended `triggered_by` labels to a 4-value public Literal:
+  - `provisioning` — first-sync side effect of `POST /tenants/provision` (driven by `triggered_by_id` containing `:provision`). Named after the call-site, not "this is the first ever sync" — a re-provision still emits `provisioning`.
   - `scheduled` — recurring scheduler runs (`triggered_by` starting with `scheduler`, or equal to `cron`).
-  - `manual` — everything else (admin UI buttons, `POST /tenants/{tid}/refresh`, order-creation cache rebuilds, worker spawns).
-- **Tracebacks.** Off in production. Set `WEBHOOK_INCLUDE_SYNC_TRACEBACK=true` or `ENVIRONMENT=development` to include the rendered traceback in `data.error.traceback`. Structured `error.class` / `error.category` are forward-compatible fields left out of v1 — failure sites store flattened strings today; receivers should treat missing fields as absent.
-- **Manual retry conflicts.** `POST /tenants/{tid}/refresh` returns **409 `sync_already_running`** when a sync_type already has a `status=running` row that started *outside* the 60s idempotency window. The response body's `details.sync_run_ids` still names the in-flight run so the storefront can correlate via `/status` without re-issuing the refresh. Re-POST within 60s stays 202 (idempotent). This is the "Retry button does nothing" signal asked for in #463 (Ask 6).
-- **Reconciliation pattern (v1 limits).** Delivery is best-effort fire-and-forget — no durable retry queue, no replay endpoint, no DLQ. Subscriptions silently suspend on process restart if their plaintext secret isn't in the in-memory cache. The recommended storefront pattern: render from `GET /tenants/{tid}/status` on UI load, listen for `sync.*` to push updates, and refetch `/status` if a `running` row appears stale (older than expected) — webhook delivery may have been lost. Durable delivery + replay are tracked separately and not blocking #463.
+  - `manual` — positive-match against known user-driven labels (admin UI buttons, `POST /tenants/{tid}/refresh`, order-creation cache rebuilds, worker spawns).
+  - `unknown` — fallback when a new internal label lands without a normalizer update. Lets receivers detect drift instead of silently misattributing to a user action.
+- **Always-emit-keys contract.** Every documented key in the `data` block is always present with at least `null`. For `sync_run.failed`, `error.message` is always present (scrubbed to first line, ≤200 chars), `error.class` is always `null` today (reserved for the structured exception-capture follow-up), `error.category` is always one of `auth|transient|permanent` (crude bucketing — pick a CTA, don't make load-bearing decisions off it).
+- **No tracebacks on the wire.** The previously env-gated `traceback` field was removed. The gate was global (one flag forwarded every tenant's frames) and the underlying `error_message` already carried traceback fragments for the spawn-failure path, defeating the opt-in. The full operator-facing string stays on the DB row; only the scrubbed first line ships.
+- **Manual retry conflicts.** `POST /tenants/{tid}/refresh` returns **409 `sync_already_running`** when a sync_type already has a `status=running` row that started *outside* the 60s idempotency window. The 409 body mirrors the 202 body — `sync_run_ids` and `started_at` at the top level — plus `error: "sync_already_running"`, `message`, and `running_sync_types`. Receivers parse one shape for both responses. Re-POST within 60s stays 202 (idempotent). Workers re-stamp `started_at` on `pending -> running` so the 60s window reflects when work actually began (not when /refresh queued the row), avoiding spurious 409s for syncs that just started.
+- **Reconciliation pattern (v1 limits).** Delivery is best-effort fire-and-forget — no durable retry queue, no replay endpoint, no DLQ. Subscriptions silently suspend on process restart if their plaintext secret isn't in the in-memory cache. The recommended storefront pattern: render from `GET /tenants/{tid}/status` on UI load, listen for `sync_run.*` to push updates, and refetch `/status` if a `running` row appears stale (older than expected) — webhook delivery may have been lost. Durable delivery + replay are tracked separately and not blocking #463.
 
 ## Open items for follow-up
 

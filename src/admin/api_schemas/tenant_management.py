@@ -884,17 +884,38 @@ class ListRecentBuyersResponse(BaseModel):
 
 
 class RefreshResponse(BaseModel):
-    """``POST /tenants/{tid}/refresh`` response — fan-out of sync run ids.
+    """``POST /tenants/{tid}/refresh`` response (HTTP 202) — fan-out of sync run ids.
 
-    Storefront polls ``GET /status.syncs`` for progress per sync type.
-    Re-POST within 60 seconds returns the SAME ids (idempotent — avoids
-    hammering GAM when a publisher mashes the button).
+    Storefront reads ``GET /tenants/{tid}/status`` (``syncs`` block) for
+    progress per sync type. Re-POST within 60 seconds returns the SAME
+    ids (idempotent — avoids hammering GAM when a publisher mashes the
+    button).
     """
 
     model_config = _config()
 
     sync_run_ids: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
+
+
+class RefreshConflictResponse(BaseModel):
+    """``POST /tenants/{tid}/refresh`` response (HTTP 409) — sync already running.
+
+    Mirrors the 202 :class:`RefreshResponse` shape (``sync_run_ids`` +
+    ``started_at`` at the top level so receivers don't need a second
+    parse path) plus a structured error block. Issue #463: the
+    storefront's "Retry" UI needs a clear signal that the click
+    triggered nothing new — the indistinguishable 202-with-reused-ids
+    response is the problem this shape fixes.
+    """
+
+    model_config = _config()
+
+    error: str = "sync_already_running"
+    message: str
+    sync_run_ids: dict[str, str] = Field(default_factory=dict)
+    started_at: datetime
+    running_sync_types: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1191,8 +1212,11 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "principal.created",
     "product.created",
     "product.updated",
-    "sync.completed",
-    "sync.failed",
+    # ``sync_run`` (not ``sync``) — the noun is the persistent SyncJob row,
+    # the verb-past pattern is ``<entity>.<verb-past>`` consistent with the
+    # rest of the catalog. The payload's ``data.sync_run_id`` matches.
+    "sync_run.completed",
+    "sync_run.failed",
     "tenant.config_changed",
 )
 
@@ -1206,8 +1230,8 @@ WebhookEventType = Literal[
     "principal.created",
     "product.created",
     "product.updated",
-    "sync.completed",
-    "sync.failed",
+    "sync_run.completed",
+    "sync_run.failed",
     "tenant.config_changed",
 ]
 

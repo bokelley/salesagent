@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from src.admin.services.sync_webhook_emission import (
     _build_payload,
+    _classify_error,
     _dedup_snapshots,
     _iso,
     _normalize_trigger,
@@ -21,17 +22,20 @@ from src.admin.services.sync_webhook_emission import (
 
 
 class TestNormalizeTrigger:
-    """The public ``trigger`` Literal is ``initial|scheduled|manual``. The
-    internal ``triggered_by`` taxonomy is open-ended and grows over time,
-    so the normalizer pins the surface and absorbs the churn."""
+    """The public ``trigger`` Literal is
+    ``provisioning|scheduled|manual|unknown``. The internal
+    ``triggered_by`` taxonomy is open-ended and grows over time, so the
+    normalizer pins the surface and absorbs the churn. ``unknown`` is
+    the default for unmatched labels so receivers can detect drift
+    instead of silently misattributing to a user action."""
 
-    def test_provision_id_maps_to_initial(self):
+    def test_provision_id_maps_to_provisioning(self):
         # Provisioning sets triggered_by_id=tenant_management_api:provision
         # (see _create_and_spawn_refresh).
-        assert _normalize_trigger("api", "tenant_management_api:provision") == "initial"
+        assert _normalize_trigger("api", "tenant_management_api:provision") == "provisioning"
 
     def test_provision_id_wins_even_when_triggered_by_looks_manual(self):
-        assert _normalize_trigger("admin_button", "tenant_management_api:provision") == "initial"
+        assert _normalize_trigger("admin_button", "tenant_management_api:provision") == "provisioning"
 
     def test_scheduler_prefix_maps_to_scheduled(self):
         assert _normalize_trigger("scheduler_reporting", None) == "scheduled"
@@ -54,11 +58,51 @@ class TestNormalizeTrigger:
         # gam_advertisers_sync uses triggered_by="worker"
         assert _normalize_trigger("worker", None) == "manual"
 
-    def test_unknown_triggers_default_to_manual(self):
-        assert _normalize_trigger("something_new_in_2027", None) == "manual"
+    def test_unknown_triggers_default_to_unknown(self):
+        # Drift signal — receivers see ``unknown`` instead of silently
+        # absorbing a new label into ``manual``.
+        assert _normalize_trigger("something_new_in_2027", None) == "unknown"
 
-    def test_none_triggers_default_to_manual(self):
-        assert _normalize_trigger(None, None) == "manual"
+    def test_none_triggers_default_to_unknown(self):
+        assert _normalize_trigger(None, None) == "unknown"
+
+
+class TestClassifyError:
+    """Coarse 3-bucket classification of ``error_message`` so storefront
+    UIs can pick a CTA (Retry / Reconnect / Contact admin) without
+    substring-matching our exception strings."""
+
+    def test_none_message_is_permanent(self):
+        # No error context = no claim of recoverability; surface as
+        # ``permanent`` so the UI defaults to "needs attention".
+        assert _classify_error(None) == "permanent"
+
+    def test_oauth_revoked_is_auth(self):
+        assert _classify_error("Refresh token revoked") == "auth"
+
+    def test_invalid_grant_is_auth(self):
+        assert _classify_error("OAuth error: invalid_grant") == "auth"
+
+    def test_gam_403_is_auth(self):
+        assert _classify_error("GAM 403: insufficient permissions to read") == "auth"
+
+    def test_timeout_is_transient(self):
+        assert _classify_error("Worker spawn failed: TimeoutError: hung") == "transient"
+
+    def test_rate_limit_is_transient(self):
+        assert _classify_error("Rate limit exceeded for advertiser sync") == "transient"
+
+    def test_503_is_transient(self):
+        assert _classify_error("HTTP 503 Service Unavailable") == "transient"
+
+    def test_unknown_string_defaults_permanent(self):
+        # A novel error shape doesn't claim recoverability — receivers
+        # should treat it as needing operator attention until classified.
+        assert _classify_error("AdServerInvariantViolated: bid floor mismatch") == "permanent"
+
+    def test_classifier_is_case_insensitive(self):
+        assert _classify_error("REFRESH TOKEN REVOKED") == "auth"
+        assert _classify_error("TIMEOUT") == "transient"
 
 
 class TestPublicErrorMessage:
@@ -186,7 +230,7 @@ class TestBuildPayload:
 
     def test_completed_payload_shape(self):
         snap = self._snapshot()
-        payload = _build_payload(snap, "sync.completed")
+        payload = _build_payload(snap, "sync_run.completed")
         assert payload == {
             "sync_run_id": "sync_001",
             "sync_type": "inventory",
@@ -200,7 +244,7 @@ class TestBuildPayload:
 
     def test_completed_payload_omits_error_block(self):
         snap = self._snapshot()
-        payload = _build_payload(snap, "sync.completed")
+        payload = _build_payload(snap, "sync_run.completed")
         assert "error" not in payload
 
     def test_failed_payload_shape(self):
@@ -211,15 +255,22 @@ class TestBuildPayload:
             summary=None,
             completed_at=datetime(2026, 5, 17, 18, 24, 0, tzinfo=UTC),
         )
-        payload = _build_payload(snap, "sync.failed")
-        assert payload["error"] == {"message": "Refresh token revoked"}
+        payload = _build_payload(snap, "sync_run.failed")
+        # error.class is always-null today (reserved for structured
+        # exception capture); error.category classifies the message so
+        # storefront UIs can pick a CTA without substring matching.
+        assert payload["error"] == {
+            "message": "Refresh token revoked",
+            "class": None,
+            "category": "auth",
+        }
         # item_count and summary are completed-only fields
         assert "item_count" not in payload
         assert "summary" not in payload
 
     def test_failed_payload_carries_required_envelope_fields(self):
         snap = self._snapshot(_status="failed", error_message="boom")
-        payload = _build_payload(snap, "sync.failed")
+        payload = _build_payload(snap, "sync_run.failed")
         # The data block must always carry the run identity + timing so the
         # receiver can correlate to its own UI state without an extra read.
         for key in ("sync_run_id", "sync_type", "adapter_type", "trigger", "started_at", "completed_at"):
@@ -227,19 +278,23 @@ class TestBuildPayload:
 
     def test_completed_with_no_item_count_emits_none(self):
         snap = self._snapshot(item_count=None)
-        payload = _build_payload(snap, "sync.completed")
+        payload = _build_payload(snap, "sync_run.completed")
         # Receivers should expect the key present with a null value,
         # not omitted — keeps generated TS/Python types happy.
         assert payload["item_count"] is None
 
-    def test_failed_without_error_message_still_emits_error_block(self):
+    def test_failed_without_error_message_still_emits_full_error_block(self):
         # If error_message is None (rare but possible — e.g. a stale-row
         # cleanup that didn't capture an exception), we still emit the
-        # error block with a null message rather than dropping it.
-        # Receivers should never have to special-case missing 'error'.
+        # error block with all known keys present so receivers don't
+        # have to special-case missing 'error' or its sub-fields.
         snap = self._snapshot(_status="failed", error_message=None, item_count=None, summary=None)
-        payload = _build_payload(snap, "sync.failed")
-        assert payload["error"] == {"message": None}
+        payload = _build_payload(snap, "sync_run.failed")
+        assert payload["error"] == {
+            "message": None,
+            "class": None,
+            "category": "permanent",
+        }
 
     def test_failed_payload_scrubs_traceback_from_error_message(self):
         """Stack frames stored in ``SyncJob.error_message`` (e.g. from the
@@ -254,12 +309,14 @@ class TestBuildPayload:
             '  File "/app/src/services/background_sync_service.py", line 50\n'
         )
         snap = self._snapshot(_status="failed", error_message=raw, item_count=None, summary=None)
-        payload = _build_payload(snap, "sync.failed")
+        payload = _build_payload(snap, "sync_run.failed")
         assert payload["error"]["message"] == "Worker spawn failed (inventory): TimeoutError"
         assert "Traceback" not in payload["error"]["message"]
         # The traceback field was removed from the contract — gating by
         # env var was leaky (global flag forwarded all tenants' frames).
         assert "traceback" not in payload["error"]
+        # The traceback-classified TimeoutError surfaces as transient.
+        assert payload["error"]["category"] == "transient"
 
 
 class TestIsoRendering:

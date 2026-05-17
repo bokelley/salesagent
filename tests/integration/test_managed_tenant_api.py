@@ -2237,8 +2237,11 @@ class TestRefresh:
         assert resp.status_code == 409
         body = resp.get_json()
         assert body["error"] == "sync_already_running"
-        assert body["details"]["sync_run_ids"]["inventory"] == old_running_id
-        assert "inventory" in body["details"]["running_sync_types"]
+        # 409 body mirrors the 202 shape: sync_run_ids and started_at
+        # at the top level, no details nesting.
+        assert body["sync_run_ids"]["inventory"] == old_running_id
+        assert "inventory" in body["running_sync_types"]
+        assert "started_at" in body
 
     def test_completed_sync_outside_window_is_not_reused(self, client, auth_headers, tid, bound_factories):
         """A completed SyncJob older than 60s is NOT reused — we want
@@ -2318,10 +2321,11 @@ class TestRefresh:
 
         body = resp.get_json()
         assert body["error"] == "sync_already_running"
-        assert body["details"]["running_sync_types"] == ["inventory"]
-        # The conflict response carries the in-flight run's id so the
-        # caller can read /status by it without re-issuing /refresh.
-        assert body["details"]["sync_run_ids"]["inventory"] == running_sync_id
+        # 409 body mirrors the 202 shape (sync_run_ids + started_at at
+        # the top level) so receivers don't need a second parse path.
+        assert body["running_sync_types"] == ["inventory"]
+        assert body["sync_run_ids"]["inventory"] == running_sync_id
+        assert "started_at" in body
 
     def test_does_not_return_409_within_idempotency_window(self, client, auth_headers, cleanup_tenants, monkeypatch):
         """A running sync that STARTED within the 60s window is still
