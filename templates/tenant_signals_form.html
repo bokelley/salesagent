@@ -3,28 +3,39 @@
 {% block title %}{{ "Edit" if mode == "edit" else "Create" }} Signal - Sales Agent Admin{% endblock %}
 
 {% block content %}
+{# Effective form values:
+   - re-render after validation error: form_data (raw user input)
+   - edit GET: signal row → defaults to Advanced authoring mode since the
+     existing adapter_config may not map cleanly back to a picker source
+   - create GET: empty form, Structured authoring mode #}
 {% set effective = form_data if form_data else (
     {
-        "signal_id": signal.signal_id,
+        "authoring_mode": "advanced",
         "name": signal.name,
         "description": signal.description or "",
+        "targeting_dimension": signal.targeting_dimension or "",
+        "data_provider": signal.data_provider or "",
+        "source_kind": "",
+        "entities": "",
+        "freeform_values": "",
         "value_type": signal.value_type,
         "categories": (signal.categories or []) | join(", "),
         "range_min": signal.range_min if signal.range_min is not none else "",
         "range_max": signal.range_max if signal.range_max is not none else "",
-        "targeting_dimension": signal.targeting_dimension or "",
-        "data_provider": signal.data_provider or "",
         "adapter_config": (signal.adapter_config or {}) | tojson(indent=2),
     } if signal else {
-        "signal_id": "",
+        "authoring_mode": "structured",
         "name": "",
         "description": "",
+        "targeting_dimension": "",
+        "data_provider": "",
+        "source_kind": "",
+        "entities": "",
+        "freeform_values": "",
         "value_type": "binary",
         "categories": "",
         "range_min": "",
         "range_max": "",
-        "targeting_dimension": "",
-        "data_provider": "",
         "adapter_config": "",
     }
 ) %}
@@ -33,44 +44,173 @@
         <div>
             <h2 class="sa-page-header__title">{{ "Edit" if mode == "edit" else "Create" }} Signal</h2>
             <p class="sa-page-header__subtitle">
-                Declare an adapter targeting capability. Storefronts discover it via AdCP <code>get_signals</code>;
-                buyers reference the <code>signal_id</code> in <code>audience_include</code> / <code>audience_exclude</code>.
+                Declare a targeting capability. Storefronts discover it via AdCP <code>get_signals</code>;
+                buyers reference the auto-generated <code>signal_id</code> in
+                <code>audience_include</code> / <code>audience_exclude</code> on <code>create_media_buy</code>.
             </p>
         </div>
     </header>
 
-    <form method="POST">
+    <form method="POST" id="tenant-signal-form">
+        <input type="hidden" name="authoring_mode" id="authoring-mode" value="{{ effective.authoring_mode }}">
+
         <div class="card mb-3">
-            <div class="card-header"><h5 class="mb-0">Identity</h5></div>
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0">Identity</h5>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Authoring mode">
+                    <button type="button" class="btn btn-outline-secondary{% if effective.authoring_mode != 'advanced' %} active{% endif %}" data-mode-toggle="structured">Structured</button>
+                    <button type="button" class="btn btn-outline-secondary{% if effective.authoring_mode == 'advanced' %} active{% endif %}" data-mode-toggle="advanced">Advanced (JSON)</button>
+                </div>
+            </div>
             <div class="card-body">
                 <div class="mb-3">
-                    <label class="form-label">signal_id</label>
-                    {% if mode == "edit" %}
-                    <input type="text" class="form-control" value="{{ effective.signal_id }}" disabled>
-                    <small class="form-text text-muted">Immutable. Delete + recreate to rename.</small>
-                    {% else %}
-                    <input type="text" name="signal_id" class="form-control{% if errors and errors.signal_id %} is-invalid{% endif %}"
-                           value="{{ effective.signal_id }}"
-                           placeholder="e.g. audience_sports_fans, kv_vertical_news, weather_temp_f"
-                           required>
-                    <small class="form-text text-muted">Stable id buyers reference. AdCP regex: <code>^[a-zA-Z0-9_-]+$</code> (no dots).</small>
-                    {% if errors and errors.signal_id %}<div class="invalid-feedback">{{ errors.signal_id }}</div>{% endif %}
-                    {% endif %}
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Name</label>
-                    <input type="text" name="name" class="form-control{% if errors and errors.name %} is-invalid{% endif %}"
-                           value="{{ effective.name }}" required>
+                    <label class="form-label">Name <span class="text-danger">*</span></label>
+                    <input name="name" type="text" required
+                           class="form-control{% if errors and errors.name %} is-invalid{% endif %}"
+                           placeholder="e.g. Sports fans, ages 18–34"
+                           value="{{ effective.name }}">
                     {% if errors and errors.name %}<div class="invalid-feedback">{{ errors.name }}</div>{% endif %}
                 </div>
+
+                {% if mode == "edit" %}
+                <div class="mb-3">
+                    <label class="form-label">signal_id</label>
+                    <input type="text" class="form-control" value="{{ signal.signal_id }}" disabled>
+                    <div class="form-text">Immutable. Buyers reference this id; delete + re-create to rename.</div>
+                </div>
+                {% else %}
+                <div class="mb-3" id="signal-id-preview-row">
+                    <label class="form-label">signal_id preview</label>
+                    <input type="text" class="form-control" id="signal-id-preview" readonly placeholder="auto-generated from name">
+                    <div class="form-text">Auto-generated. Buyers reference this id on <code>create_media_buy</code>.</div>
+                </div>
+                {% endif %}
+
                 <div class="mb-3">
                     <label class="form-label">Description</label>
-                    <textarea name="description" class="form-control" rows="2">{{ effective.description }}</textarea>
+                    <textarea name="description" class="form-control" rows="2"
+                              placeholder="Internal note describing what this signal targets.">{{ effective.description }}</textarea>
                 </div>
             </div>
         </div>
 
-        <div class="card mb-3">
+        {# ============ STRUCTURED AUTHORING ============ #}
+        <div class="card mb-3" id="structured-pane">
+            <div class="card-header"><h5 class="mb-0">What does this signal target?</h5></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Source</label>
+                    <select name="source_kind" id="source-kind"
+                            class="form-select{% if errors and errors.source_kind %} is-invalid{% endif %}">
+                        <option value="">— pick a source —</option>
+                        <optgroup label="Google Ad Manager">
+                            <option value="gam_audience_segment">GAM audience segment(s)</option>
+                            <option value="gam_custom_key_value">GAM custom key+value pair(s)</option>
+                        </optgroup>
+                        <optgroup label="Freewheel">
+                            <option value="fw_viewership_profile">Freewheel viewership profile</option>
+                            <option value="fw_audience_item">Freewheel audience item</option>
+                            <option value="fw_custom_kv">Freewheel custom KV pair(s)</option>
+                        </optgroup>
+                    </select>
+                    {% if errors and errors.source_kind %}<div class="invalid-feedback">{{ errors.source_kind }}</div>{% endif %}
+                </div>
+
+                {# Picker bodies — one per source kind. JS shows the right one. #}
+                <div class="source-picker" data-source="gam_audience_segment" style="display:none">
+                    <div class="form-text mb-2">Multiple segments combine with AND. Live-loaded from your GAM network.</div>
+                    <div class="picked-entities" id="gam-segments-picked"></div>
+                    <div class="d-flex gap-2 mt-2">
+                        <select id="gam-segments-select" class="form-select" style="max-width: 600px">
+                            <option value="">— load segments —</option>
+                        </select>
+                        <button type="button" class="btn btn-outline-secondary" id="gam-segments-load">Load from GAM</button>
+                        <button type="button" class="btn btn-outline-primary" id="gam-segments-add">Add segment</button>
+                    </div>
+                </div>
+
+                <div class="source-picker" data-source="gam_custom_key_value" style="display:none">
+                    <div class="form-text mb-2">
+                        Pick a custom targeting key, then a value. Multiple pairs combine with AND.
+                        FREEFORM keys accept a typed value since GAM has nothing to enumerate.
+                    </div>
+                    <div class="picked-entities" id="gam-kv-picked"></div>
+                    <div class="row g-2 mt-2 align-items-end">
+                        <div class="col">
+                            <label class="form-label form-label-sm">Key</label>
+                            <select id="gam-kv-key-select" class="form-select">
+                                <option value="">— load keys —</option>
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label form-label-sm">Value</label>
+                            <select id="gam-kv-value-select" class="form-select" disabled>
+                                <option value="">pick a key first</option>
+                            </select>
+                            <input type="text" id="gam-kv-value-input" class="form-control" style="display:none" placeholder="type a value (FREEFORM key)">
+                        </div>
+                        <div class="col-auto">
+                            <button type="button" class="btn btn-outline-secondary" id="gam-kv-load-keys">Load keys</button>
+                            <button type="button" class="btn btn-outline-primary" id="gam-kv-add">Add pair</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="source-picker" data-source="fw_viewership_profile" style="display:none">
+                    <div class="form-text mb-2">Freewheel viewership profile (numeric id). No live FW inventory sync yet — paste the id.</div>
+                    <div class="picked-entities" id="fw-vp-picked"></div>
+                    <div class="d-flex gap-2 mt-2">
+                        <input type="number" id="fw-vp-input" class="form-control" placeholder="e.g. 4711">
+                        <button type="button" class="btn btn-outline-primary" id="fw-vp-add">Add profile</button>
+                    </div>
+                </div>
+
+                <div class="source-picker" data-source="fw_audience_item" style="display:none">
+                    <div class="form-text mb-2">Freewheel audience item (numeric id).</div>
+                    <div class="picked-entities" id="fw-ai-picked"></div>
+                    <div class="d-flex gap-2 mt-2">
+                        <input type="number" id="fw-ai-input" class="form-control" placeholder="e.g. 9876">
+                        <button type="button" class="btn btn-outline-primary" id="fw-ai-add">Add item</button>
+                    </div>
+                </div>
+
+                <div class="source-picker" data-source="fw_custom_kv" style="display:none">
+                    <div class="form-text mb-2">Freewheel custom key+value pair(s). Multiple pairs combine with AND.</div>
+                    <div class="picked-entities" id="fw-kv-picked"></div>
+                    <div class="row g-2 mt-2 align-items-end">
+                        <div class="col">
+                            <label class="form-label form-label-sm">Key</label>
+                            <input type="text" id="fw-kv-key-input" class="form-control" placeholder="e.g. genre">
+                        </div>
+                        <div class="col">
+                            <label class="form-label form-label-sm">Value</label>
+                            <input type="text" id="fw-kv-value-input" class="form-control" placeholder="e.g. sports">
+                        </div>
+                        <div class="col-auto">
+                            <button type="button" class="btn btn-outline-primary" id="fw-kv-add">Add pair</button>
+                        </div>
+                    </div>
+                </div>
+
+                {# Hidden field populated by JS — the canonical structured payload. #}
+                <textarea name="entities" id="entities-hidden" class="form-control d-none">{{ effective.entities }}</textarea>
+                {% if errors and errors.entities %}<div class="text-danger small mt-2">{{ errors.entities }}</div>{% endif %}
+
+                <div class="mt-3" id="freeform-values-row" style="display:none">
+                    <label class="form-label">Operator-supplied values (for FREEFORM keys)</label>
+                    <input name="freeform_values" type="text" class="form-control"
+                           placeholder="value_a, value_b, value_c"
+                           value="{{ effective.freeform_values }}">
+                    <div class="form-text">
+                        FREEFORM GAM keys accept any value; declare the ones you want surfaced
+                        to buyers. PREDEFINED keys resolve live — leave this empty.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ============ ADVANCED (JSON) AUTHORING ============ #}
+        <div class="card mb-3" id="advanced-pane" style="display:none">
             <div class="card-header"><h5 class="mb-0">Schema (AdCP <code>Signal</code> shape)</h5></div>
             <div class="card-body">
                 <div class="mb-3">
@@ -80,239 +220,56 @@
                         <option value="{{ vt }}" {% if effective.value_type == vt %}selected{% endif %}>{{ vt }}</option>
                         {% endfor %}
                     </select>
-                    <small class="form-text text-muted">
-                        <strong>binary</strong>: signal applies / doesn't apply.
-                        <strong>categorical</strong>: buyer picks from <em>categories</em> below.
-                        <strong>numeric</strong>: buyer narrows within <em>range</em> below.
-                    </small>
                     {% if errors and errors.value_type %}<div class="invalid-feedback">{{ errors.value_type }}</div>{% endif %}
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">Categories (comma-separated, for categorical)</label>
-                    <input type="text" name="categories" class="form-control" value="{{ effective.categories }}"
-                           placeholder="e.g. sports, news, weather">
+                    <label class="form-label">Categories (CSV, categorical only)</label>
+                    <input name="categories" type="text" class="form-control"
+                           placeholder="e.g. sports, news, weather"
+                           value="{{ effective.categories }}">
                 </div>
-                <div class="row">
+                <div class="row mb-3">
                     <div class="col">
-                        <label class="form-label">Range min (for numeric)</label>
-                        <input type="text" name="range_min" class="form-control" value="{{ effective.range_min }}">
+                        <label class="form-label">Range min (numeric only)</label>
+                        <input name="range_min" type="text" class="form-control"
+                               value="{{ effective.range_min }}">
                     </div>
                     <div class="col">
-                        <label class="form-label">Range max (for numeric)</label>
-                        <input type="text" name="range_max" class="form-control" value="{{ effective.range_max }}">
+                        <label class="form-label">Range max</label>
+                        <input name="range_max" type="text" class="form-control"
+                               value="{{ effective.range_max }}">
                     </div>
                 </div>
-                {% if errors and errors.range %}<div class="text-danger mt-1">{{ errors.range }}</div>{% endif %}
+                <div class="mb-1">
+                    <label class="form-label">adapter_config (JSON)</label>
+                    <p class="text-muted small mb-1">
+                        Pass-through: <code>{"type": "passthrough", "kind": "audience_segment", "segment_id": "98765"}</code>.
+                        Composed: <code>{"type": "composed", "criteria": [...]}</code>.
+                    </p>
+                    <textarea name="adapter_config" rows="8"
+                              class="form-control font-monospace{% if errors and errors.adapter_config %} is-invalid{% endif %}">{{ effective.adapter_config }}</textarea>
+                    {% if errors and errors.adapter_config %}<div class="invalid-feedback">{{ errors.adapter_config }}</div>{% endif %}
+                </div>
             </div>
         </div>
 
         <div class="card mb-3">
-            <div class="card-header"><h5 class="mb-0">Storefront metadata</h5></div>
+            <div class="card-header"><h5 class="mb-0">Storefront metadata <span class="text-muted small">(optional)</span></h5></div>
             <div class="card-body">
                 <div class="mb-3">
                     <label class="form-label">Targeting dimension</label>
-                    <input type="text" name="targeting_dimension" class="form-control"
-                           value="{{ effective.targeting_dimension }}"
-                           placeholder="audience | contextual | weather | geo | demo">
-                    <small class="form-text text-muted">AdCP-standard targeting dimension this signal narrows.</small>
+                    <input name="targeting_dimension" type="text" class="form-control"
+                           placeholder="audience | contextual | weather | geo | demo"
+                           value="{{ effective.targeting_dimension }}">
                 </div>
-                <div class="mb-3">
+                <div class="mb-1">
                     <label class="form-label">Data provider</label>
-                    <input type="text" name="data_provider" class="form-control"
-                           value="{{ effective.data_provider }}"
-                           placeholder="publisher_1p | liveramp | weather.com">
+                    <input name="data_provider" type="text" class="form-control"
+                           placeholder="publisher_1p | liveramp | weather.com"
+                           value="{{ effective.data_provider }}">
                 </div>
             </div>
         </div>
-
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="mb-0">Adapter resolution (operator-only; never surfaced to storefront)</h5>
-            </div>
-            <div class="card-body">
-                <div class="btn-group mb-3" role="group" aria-label="Authoring mode">
-                    <input type="radio" class="btn-check" name="authoring_mode" id="authoring_simple"
-                           value="simple" checked>
-                    <label class="btn btn-outline-secondary" for="authoring_simple">Simple (pass-through)</label>
-                    <input type="radio" class="btn-check" name="authoring_mode" id="authoring_advanced"
-                           value="advanced">
-                    <label class="btn btn-outline-secondary" for="authoring_advanced">Advanced (composed / JSON)</label>
-                </div>
-
-                <!-- Simple form: pick a kind, fill its fields. Hidden field
-                     ``adapter_config`` is rebuilt on submit by inline JS so
-                     server-side parsing stays the same. -->
-                <div id="authoring-simple-pane">
-                    <div class="mb-3">
-                        <label class="form-label">Kind</label>
-                        <select id="simple-kind" class="form-select">
-                            <optgroup label="Google Ad Manager">
-                                <option value="audience_segment">audience_segment — GAM audience segment id</option>
-                                <option value="custom_key_value">custom_key_value — GAM custom KV (key + value)</option>
-                            </optgroup>
-                            <optgroup label="Freewheel">
-                                <option value="freewheel_viewership_profile">freewheel_viewership_profile</option>
-                                <option value="freewheel_audience_item">freewheel_audience_item</option>
-                                <option value="freewheel_custom_kv">freewheel_custom_kv</option>
-                            </optgroup>
-                        </select>
-                    </div>
-
-                    <div class="simple-field" data-kinds="audience_segment">
-                        <label class="form-label">GAM segment id</label>
-                        <input type="text" id="simple-segment-id" class="form-control" placeholder="98765">
-                    </div>
-
-                    <div class="simple-field" data-kinds="custom_key_value freewheel_custom_kv" style="display:none">
-                        <div class="row">
-                            <div class="col">
-                                <label class="form-label">key_id (GAM) / key (Freewheel)</label>
-                                <input type="text" id="simple-key-id" class="form-control" placeholder="11111">
-                            </div>
-                            <div class="col">
-                                <label class="form-label">value_id</label>
-                                <input type="text" id="simple-value-id" class="form-control" placeholder="22222">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="simple-field" data-kinds="freewheel_viewership_profile" style="display:none">
-                        <label class="form-label">Freewheel viewership profile id (int)</label>
-                        <input type="number" id="simple-profile-id" class="form-control" placeholder="4711">
-                    </div>
-
-                    <div class="simple-field" data-kinds="freewheel_audience_item" style="display:none">
-                        <label class="form-label">Freewheel audience item id (int)</label>
-                        <input type="number" id="simple-item-id" class="form-control" placeholder="9876">
-                    </div>
-                </div>
-
-                <!-- Advanced: full JSON for composed (or any custom shape). -->
-                <div id="authoring-advanced-pane" style="display:none">
-                    <p class="text-muted">
-                        JSON object the per-adapter materializer reads. Two shapes:
-                    </p>
-                    <ul class="text-muted small">
-                        <li><strong>Pass-through</strong>: one signal = one primitive.<br>
-                            <code>{"type": "passthrough", "kind": "audience_segment", "segment_id": "98765"}</code></li>
-                        <li><strong>Composed</strong>: AND of criteria. Each criterion has its own <code>mode</code>.<br>
-                            <code>{"type": "composed", "criteria": [{...}, {...}]}</code></li>
-                    </ul>
-                    <textarea id="adapter-config-textarea"
-                              class="form-control font-monospace{% if errors and errors.adapter_config %} is-invalid{% endif %}"
-                              rows="10"
-                              placeholder='{"type": "composed", "criteria": [...]}'>{{ effective.adapter_config }}</textarea>
-                    {% if errors and errors.adapter_config %}<div class="invalid-feedback">{{ errors.adapter_config }}</div>{% endif %}
-                </div>
-
-                <!-- Hidden field that actually submits. Inline JS keeps it
-                     in sync with whichever pane is active. -->
-                <textarea name="adapter_config" id="adapter-config-hidden" style="display:none">{{ effective.adapter_config }}</textarea>
-            </div>
-        </div>
-
-        <script>
-        (function() {
-            // ---- Mode toggle -----------------------------------------------
-            const simplePane = document.getElementById('authoring-simple-pane');
-            const advancedPane = document.getElementById('authoring-advanced-pane');
-            const hidden = document.getElementById('adapter-config-hidden');
-            const textarea = document.getElementById('adapter-config-textarea');
-            const kindSelect = document.getElementById('simple-kind');
-
-            function setMode(mode) {
-                if (mode === 'simple') {
-                    simplePane.style.display = '';
-                    advancedPane.style.display = 'none';
-                    syncFromSimple();
-                } else {
-                    simplePane.style.display = 'none';
-                    advancedPane.style.display = '';
-                    hidden.value = textarea.value;
-                }
-            }
-
-            document.querySelectorAll('input[name="authoring_mode"]').forEach(radio => {
-                radio.addEventListener('change', e => setMode(e.target.value));
-            });
-
-            // ---- Simple-pane kind switcher --------------------------------
-            function refreshSimpleFields() {
-                const kind = kindSelect.value;
-                document.querySelectorAll('.simple-field').forEach(el => {
-                    const kinds = el.dataset.kinds.split(' ');
-                    el.style.display = kinds.includes(kind) ? '' : 'none';
-                });
-                syncFromSimple();
-            }
-            kindSelect.addEventListener('change', refreshSimpleFields);
-            simplePane.addEventListener('input', syncFromSimple);
-
-            function syncFromSimple() {
-                const kind = kindSelect.value;
-                let payload = { type: 'passthrough', kind: kind };
-                if (kind === 'audience_segment') {
-                    payload.segment_id = document.getElementById('simple-segment-id').value.trim();
-                } else if (kind === 'custom_key_value') {
-                    payload.key_id = document.getElementById('simple-key-id').value.trim();
-                    payload.value_id = document.getElementById('simple-value-id').value.trim();
-                } else if (kind === 'freewheel_custom_kv') {
-                    payload.key = document.getElementById('simple-key-id').value.trim();
-                    payload.value_id = document.getElementById('simple-value-id').value.trim();
-                } else if (kind === 'freewheel_viewership_profile') {
-                    const v = document.getElementById('simple-profile-id').value.trim();
-                    if (v) payload.profile_id = parseInt(v, 10);
-                } else if (kind === 'freewheel_audience_item') {
-                    const v = document.getElementById('simple-item-id').value.trim();
-                    if (v) payload.item_id = parseInt(v, 10);
-                }
-                hidden.value = JSON.stringify(payload, null, 2);
-                // Mirror to the advanced textarea so toggling modes is seamless.
-                textarea.value = hidden.value;
-            }
-
-            // ---- Initial state --------------------------------------------
-            // If existing adapter_config doesn't fit a simple pass-through
-            // shape (composed expressions; unknown kinds), default to
-            // Advanced mode so the operator sees what's there.
-            try {
-                const existing = textarea.value ? JSON.parse(textarea.value) : null;
-                const isSimplePassthrough = existing && (
-                    existing.type === 'passthrough'
-                    || (!existing.type && existing.kind && typeof existing.kind === 'string')
-                );
-                if (!isSimplePassthrough && textarea.value.trim()) {
-                    document.getElementById('authoring_advanced').checked = true;
-                    setMode('advanced');
-                } else if (isSimplePassthrough) {
-                    // Hydrate the simple form fields from existing JSON.
-                    const kind = existing.kind;
-                    if (kindSelect.querySelector(`option[value="${kind}"]`)) {
-                        kindSelect.value = kind;
-                    }
-                    if (kind === 'audience_segment') {
-                        document.getElementById('simple-segment-id').value = existing.segment_id || '';
-                    } else if (kind === 'custom_key_value') {
-                        document.getElementById('simple-key-id').value = existing.key_id || '';
-                        document.getElementById('simple-value-id').value = existing.value_id || '';
-                    } else if (kind === 'freewheel_custom_kv') {
-                        document.getElementById('simple-key-id').value = existing.key || '';
-                        document.getElementById('simple-value-id').value = existing.value_id || '';
-                    } else if (kind === 'freewheel_viewership_profile') {
-                        document.getElementById('simple-profile-id').value = existing.profile_id || '';
-                    } else if (kind === 'freewheel_audience_item') {
-                        document.getElementById('simple-item-id').value = existing.item_id || '';
-                    }
-                    refreshSimpleFields();
-                } else {
-                    refreshSimpleFields();
-                }
-            } catch (e) {
-                document.getElementById('authoring_advanced').checked = true;
-                setMode('advanced');
-            }
-        })();
-        </script>
 
         <div class="d-flex gap-2">
             <button type="submit" class="btn btn-primary">{{ "Save changes" if mode == "edit" else "Create signal" }}</button>
@@ -320,4 +277,290 @@
         </div>
     </form>
 </div>
+
+<script>
+(function() {
+    'use strict';
+
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = {{ tenant_id | tojson }};
+    const apiBase = scriptRoot + '/admin/api/tenant/' + tenantId;
+
+    // ---- Mode toggle: structured <-> advanced -----------------------------
+    const modeInput = document.getElementById('authoring-mode');
+    const structuredPane = document.getElementById('structured-pane');
+    const advancedPane = document.getElementById('advanced-pane');
+    function applyMode(mode) {
+        modeInput.value = mode;
+        structuredPane.style.display = mode === 'advanced' ? 'none' : '';
+        advancedPane.style.display = mode === 'advanced' ? '' : 'none';
+        document.querySelectorAll('[data-mode-toggle]').forEach(b => {
+            b.classList.toggle('active', b.dataset.modeToggle === mode);
+        });
+    }
+    document.querySelectorAll('[data-mode-toggle]').forEach(b => {
+        b.addEventListener('click', () => applyMode(b.dataset.modeToggle));
+    });
+    applyMode(modeInput.value || 'structured');
+
+    // ---- signal_id preview (slug from name) -------------------------------
+    const nameInput = document.querySelector('input[name="name"]');
+    const idPreview = document.getElementById('signal-id-preview');
+    function slug(s) {
+        return (s || '').trim().toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^[_-]+|[_-]+$/g, '')
+            .slice(0, 180);
+    }
+    function refreshIdPreview() {
+        if (idPreview) idPreview.value = slug(nameInput.value) || '(empty)';
+    }
+    if (idPreview) {
+        nameInput.addEventListener('input', refreshIdPreview);
+        refreshIdPreview();
+    }
+
+    // ---- Source picker: show right pane, gather entities -----------------
+    const sourceKindSelect = document.getElementById('source-kind');
+    const entitiesHidden = document.getElementById('entities-hidden');
+    const freeformRow = document.getElementById('freeform-values-row');
+
+    // entities: { gam_audience_segment: [{segment_id, segment_name}], gam_custom_key_value: [...], ... }
+    const picked = {};
+
+    function syncHidden() {
+        const kind = sourceKindSelect.value;
+        const arr = picked[kind] || [];
+        entitiesHidden.value = JSON.stringify(arr.map(stripUiFields));
+    }
+    function stripUiFields(e) {
+        // Drop display-only fields (name/label) before submit.
+        const { _display, ...rest } = e;
+        return rest;
+    }
+
+    function showSourcePane(kind) {
+        document.querySelectorAll('.source-picker').forEach(p => {
+            p.style.display = p.dataset.source === kind ? '' : 'none';
+        });
+        // Freeform values only meaningful when at least one entity in
+        // gam_custom_key_value is FREEFORM.
+        refreshFreeformVisibility();
+        syncHidden();
+    }
+    function refreshFreeformVisibility() {
+        const kind = sourceKindSelect.value;
+        const arr = picked[kind] || [];
+        const hasFreeform = kind === 'gam_custom_key_value' && arr.some(e => e.key_type === 'FREEFORM');
+        freeformRow.style.display = hasFreeform ? '' : 'none';
+    }
+    sourceKindSelect.addEventListener('change', () => showSourcePane(sourceKindSelect.value));
+
+    function renderPicked(containerId, items, formatter) {
+        const el = document.getElementById(containerId);
+        if (!el) return;
+        el.innerHTML = '';
+        items.forEach((item, idx) => {
+            const row = document.createElement('div');
+            row.className = 'd-flex align-items-center gap-2 py-1';
+            const label = document.createElement('span');
+            label.className = 'badge text-bg-light';
+            label.textContent = formatter(item);
+            const rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'btn btn-sm btn-link text-danger p-0';
+            rm.textContent = 'remove';
+            rm.addEventListener('click', () => {
+                items.splice(idx, 1);
+                syncHidden();
+                refreshFreeformVisibility();
+                rerenderAll();
+            });
+            row.appendChild(label);
+            row.appendChild(rm);
+            el.appendChild(row);
+        });
+    }
+    function rerenderAll() {
+        renderPicked('gam-segments-picked', picked.gam_audience_segment || [],
+            e => `${e._display || ''} (segment ${e.segment_id})`);
+        renderPicked('gam-kv-picked', picked.gam_custom_key_value || [],
+            e => `${e._display || ''} [${e.key_type || '?'}]`);
+        renderPicked('fw-vp-picked', picked.fw_viewership_profile || [], e => `profile ${e.profile_id}`);
+        renderPicked('fw-ai-picked', picked.fw_audience_item || [], e => `item ${e.item_id}`);
+        renderPicked('fw-kv-picked', picked.fw_custom_kv || [], e => `${e.key}=${e.value_id}`);
+    }
+
+    function addEntity(kind, entity) {
+        if (!picked[kind]) picked[kind] = [];
+        picked[kind].push(entity);
+        syncHidden();
+        refreshFreeformVisibility();
+        rerenderAll();
+    }
+
+    // ---- Targeting data cache (shared by segments + custom-keys pickers)
+    // Both pickers read from /api/tenant/<id>/targeting/all which returns
+    // synced GAMInventory rows (run "Sync targeting data" from Inventory
+    // operations if the picker is empty).
+    let targetingDataPromise = null;
+    function loadTargetingData() {
+        if (targetingDataPromise) return targetingDataPromise;
+        targetingDataPromise = fetch(apiBase + '/targeting/all', { credentials: 'same-origin' })
+            .then(r => r.json())
+            .catch(e => ({ error: e.message }));
+        return targetingDataPromise;
+    }
+
+    // ---- GAM audience segments picker ------------------------------------
+    const segSelect = document.getElementById('gam-segments-select');
+    document.getElementById('gam-segments-load').addEventListener('click', async () => {
+        segSelect.innerHTML = '<option value="">loading…</option>';
+        try {
+            const data = await loadTargetingData();
+            if (data.error) throw new Error(data.error);
+            const audiences = data.audiences || [];
+            if (!audiences.length) {
+                segSelect.innerHTML = '<option value="">no synced segments — run "Sync targeting data" first</option>';
+                return;
+            }
+            segSelect.innerHTML = '<option value="">— pick a segment —</option>';
+            audiences.forEach(s => {
+                const o = document.createElement('option');
+                o.value = JSON.stringify({ segment_id: String(s.id), _display: s.name });
+                o.textContent = `${s.name} (${s.type}, size ${s.size ?? '?'})`;
+                segSelect.appendChild(o);
+            });
+        } catch (e) {
+            segSelect.innerHTML = `<option value="">load failed: ${e.message}</option>`;
+        }
+    });
+    document.getElementById('gam-segments-add').addEventListener('click', () => {
+        if (!segSelect.value) return;
+        addEntity('gam_audience_segment', JSON.parse(segSelect.value));
+    });
+
+    // ---- GAM custom key+value picker -------------------------------------
+    const kvKeySelect = document.getElementById('gam-kv-key-select');
+    const kvValueSelect = document.getElementById('gam-kv-value-select');
+    const kvValueInput = document.getElementById('gam-kv-value-input');
+    let kvKeysCache = {};
+
+    document.getElementById('gam-kv-load-keys').addEventListener('click', async () => {
+        kvKeySelect.innerHTML = '<option value="">loading…</option>';
+        try {
+            const data = await loadTargetingData();
+            if (data.error) throw new Error(data.error);
+            const keys = data.customKeys || [];
+            if (!keys.length) {
+                kvKeySelect.innerHTML = '<option value="">no synced keys — run "Sync targeting data" first</option>';
+                return;
+            }
+            kvKeySelect.innerHTML = '<option value="">— pick a key —</option>';
+            keys.forEach(k => {
+                kvKeysCache[String(k.id)] = k;
+                const o = document.createElement('option');
+                o.value = String(k.id);
+                o.textContent = `${k.name} (${k.type})`;
+                kvKeySelect.appendChild(o);
+            });
+        } catch (e) {
+            kvKeySelect.innerHTML = `<option value="">load failed: ${e.message}</option>`;
+        }
+    });
+
+    kvKeySelect.addEventListener('change', async () => {
+        const keyId = kvKeySelect.value;
+        if (!keyId) return;
+        const key = kvKeysCache[keyId];
+        if (key && key.type === 'FREEFORM') {
+            // FREEFORM: operator types the value.
+            kvValueSelect.style.display = 'none';
+            kvValueInput.style.display = '';
+            kvValueInput.value = '';
+        } else {
+            kvValueInput.style.display = 'none';
+            kvValueSelect.style.display = '';
+            kvValueSelect.disabled = true;
+            kvValueSelect.innerHTML = '<option value="">loading values…</option>';
+            try {
+                const r = await fetch(apiBase + '/targeting/values/' + keyId, { credentials: 'same-origin' });
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                kvValueSelect.innerHTML = '<option value="">— pick a value —</option>';
+                (data.values || []).forEach(v => {
+                    const o = document.createElement('option');
+                    o.value = JSON.stringify({ value_id: String(v.id), _display: v.name });
+                    o.textContent = `${v.name} (${v.id})`;
+                    kvValueSelect.appendChild(o);
+                });
+                kvValueSelect.disabled = false;
+            } catch (e) {
+                kvValueSelect.innerHTML = `<option value="">load failed: ${e.message}</option>`;
+            }
+        }
+    });
+
+    document.getElementById('gam-kv-add').addEventListener('click', () => {
+        const keyId = kvKeySelect.value;
+        const key = kvKeysCache[keyId];
+        if (!keyId || !key) return;
+        let valuePayload;
+        if (key.type === 'FREEFORM') {
+            const raw = kvValueInput.value.trim();
+            if (!raw) return;
+            valuePayload = { value_id: raw, _display: raw };
+        } else {
+            if (!kvValueSelect.value) return;
+            valuePayload = JSON.parse(kvValueSelect.value);
+        }
+        addEntity('gam_custom_key_value', {
+            key_id: keyId,
+            key_type: key.type,
+            ...valuePayload,
+            _display: `${key.name}=${valuePayload._display}`,
+        });
+    });
+
+    // ---- Freewheel pickers (paste-id; no FW inventory sync yet) ---------
+    document.getElementById('fw-vp-add').addEventListener('click', () => {
+        const v = document.getElementById('fw-vp-input').value.trim();
+        if (!v) return;
+        addEntity('fw_viewership_profile', { profile_id: parseInt(v, 10) });
+        document.getElementById('fw-vp-input').value = '';
+    });
+    document.getElementById('fw-ai-add').addEventListener('click', () => {
+        const v = document.getElementById('fw-ai-input').value.trim();
+        if (!v) return;
+        addEntity('fw_audience_item', { item_id: parseInt(v, 10) });
+        document.getElementById('fw-ai-input').value = '';
+    });
+    document.getElementById('fw-kv-add').addEventListener('click', () => {
+        const k = document.getElementById('fw-kv-key-input').value.trim();
+        const v = document.getElementById('fw-kv-value-input').value.trim();
+        if (!k || !v) return;
+        addEntity('fw_custom_kv', { key: k, value_id: v });
+        document.getElementById('fw-kv-key-input').value = '';
+        document.getElementById('fw-kv-value-input').value = '';
+    });
+
+    // ---- Restore picked entities from server re-render of structured form
+    try {
+        const initial = {{ effective.entities | tojson if effective.entities else '""' }};
+        if (initial) {
+            const arr = typeof initial === 'string' ? JSON.parse(initial) : initial;
+            const kind = sourceKindSelect.value;
+            if (kind && Array.isArray(arr)) {
+                picked[kind] = arr.slice();
+            }
+        }
+    } catch (e) {
+        // best-effort; ignore parse errors and let the operator re-pick
+    }
+
+    showSourcePane(sourceKindSelect.value);
+    rerenderAll();
+})();
+</script>
 {% endblock %}
