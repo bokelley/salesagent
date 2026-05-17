@@ -17,8 +17,8 @@ Additive schema for the embedded composition API
 
 Purely additive — no rename, no drop, no behavior change for existing rows.
 
-Revision ID: t2u3v4w5x6y7
-Revises: d0c3c40fdd41
+Revision ID: z8a9b0c1d2e3
+Revises: t2u3v4w5x6y7
 Create Date: 2026-05-15
 
 """
@@ -30,8 +30,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "t2u3v4w5x6y7"
-down_revision: str | Sequence[str] | None = "d0c3c40fdd41"
+revision: str = "z8a9b0c1d2e3"
+down_revision: str | Sequence[str] | None = "t2u3v4w5x6y7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

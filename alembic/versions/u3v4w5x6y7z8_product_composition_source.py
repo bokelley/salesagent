@@ -22,7 +22,7 @@ template-driven signal-variant pipeline keeps working unchanged. A later
 cleanup migration can drop those once callers move to ``composition_source``.
 
 Revision ID: u3v4w5x6y7z8
-Revises: t2u3v4w5x6y7
+Revises: z8a9b0c1d2e3
 Create Date: 2026-05-15
 
 """
@@ -35,7 +35,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "u3v4w5x6y7z8"
-down_revision: str | Sequence[str] | None = "t2u3v4w5x6y7"
+down_revision: str | Sequence[str] | None = "z8a9b0c1d2e3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

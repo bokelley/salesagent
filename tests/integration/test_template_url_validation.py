@@ -206,9 +206,7 @@ class TestTemplateUrlValidation:
                                 test_params["key_id"] = "test_key"
 
                             # Add signal_id for tenant_signals form actions
-                            if "tenant_signals" in endpoint and (
-                                "edit" in endpoint or "delete" in endpoint
-                            ):
+                            if "tenant_signals" in endpoint and ("edit" in endpoint or "delete" in endpoint):
                                 test_params["signal_id"] = "test_signal"
 
                             url_for(endpoint, **test_params)
