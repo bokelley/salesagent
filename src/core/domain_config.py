@@ -41,11 +41,29 @@ def _get_protocol_for_domain(domain: str | None) -> str:
 def get_sales_agent_domain() -> str | None:
     """Get the sales agent domain (e.g., sales-agent.example.com).
 
-    Returns:
-        The configured SALES_AGENT_DOMAIN, or None if not configured.
-        Multi-tenant mode requires this to be set.
+    Priority:
+      1. ``SALES_AGENT_DOMAIN`` env var (explicit override — required in multi-tenant mode).
+      2. In single-tenant mode, the active tenant's ``virtual_host``. This lets
+         self-hosted publishers configure their domain once in the Admin UI
+         without duplicating it into env vars.
+      3. ``None`` if neither is available.
     """
-    return os.getenv("SALES_AGENT_DOMAIN")
+    if env_domain := os.getenv("SALES_AGENT_DOMAIN"):
+        return env_domain
+
+    # Local import to avoid pulling DB-aware code into the module-load graph
+    # (callers from very early startup, tests with mocked DB, etc).
+    try:
+        from src.core.config_loader import get_single_tenant
+
+        tenant = get_single_tenant()
+    except Exception:
+        return None
+
+    if tenant and (virtual_host := tenant.get("virtual_host")):
+        return virtual_host
+
+    return None
 
 
 def get_admin_domain() -> str | None:

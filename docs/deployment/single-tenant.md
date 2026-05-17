@@ -147,10 +147,31 @@ See [SSO Setup Guide](../user-guide/sso-setup.md) for detailed provider-specific
 
 ## Custom Domain Configuration
 
-1. Deploy to your cloud platform (see [walkthroughs](walkthroughs/))
-2. Point your domain's DNS to your deployment
-3. In Admin UI, go to **Settings > General** and set your **Virtual Host**
-4. Update OAuth redirect URI to include your custom domain
+To run on your own domain (e.g. `agent.example.com`), you do **not** need to set
+`SALES_AGENT_DOMAIN` or `GOOGLE_OAUTH_REDIRECT_URI` in single-tenant mode.
+Everything is driven by the tenant's **Virtual Host** value.
+
+1. Deploy to your cloud platform (see [walkthroughs](walkthroughs/)).
+2. Point your domain's DNS to your deployment.
+3. In Admin UI, go to **Settings > General** and set your **Virtual Host** to your
+   public hostname (e.g. `agent.example.com`).
+4. In Admin UI, go to **Users & Access** and configure your SSO provider. The
+   page displays the exact **Redirect URI** to add to your identity provider —
+   it is generated from the Virtual Host you set in step 3.
+
+That's it. The Virtual Host drives:
+- The MCP endpoint URL (`https://agent.example.com/mcp`)
+- The A2A endpoint URL (`https://agent.example.com/a2a`)
+- The Admin UI base URL (`https://agent.example.com/admin/`)
+- The OAuth/OIDC callback URL shown in the SSO setup page
+
+### When to set `SALES_AGENT_DOMAIN` anyway
+
+You only need the env var if:
+- You are running **multi-tenant mode** (`ADCP_MULTI_TENANT=true`), where multiple
+  tenants share one platform domain. See [Multi-Tenant Setup](multi-tenant.md).
+- You want URL generation to work **before** an admin sets the Virtual Host in
+  the Admin UI (e.g. so the initial setup page shows the right URLs).
 
 ## Health Monitoring
 
