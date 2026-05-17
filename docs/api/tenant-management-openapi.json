@@ -2772,6 +2772,13 @@
           "error_code": {
             "anyOf": [
               {
+                "enum": [
+                  "network_not_found",
+                  "permission_denied",
+                  "invalid_credentials",
+                  "invalid_config",
+                  "connection_failed"
+                ],
                 "type": "string"
               },
               {
@@ -4034,7 +4041,7 @@
       },
       "TestConnectionResponse.f44f287": {
         "additionalProperties": false,
-        "description": "Result of an adapter connection probe.\n\n``error_code`` classifies the fault into one of ``network_not_found``,\n``permission_denied``, ``invalid_credentials``, or ``connection_failed``\nso the UI can branch without parsing the human-readable ``error``.\nSee :mod:`src.admin.services.adapter_connection_tester`.",
+        "description": "Result of an adapter connection probe.\n\n``error_code`` classifies the fault into a closed set of typed values\nso the UI can branch without parsing the human-readable ``error``.\nThe same code appears as the suffix of the ``adapter_{code}`` error\nin :class:`ApiError` envelopes from the provision / PUT paths. See\n:mod:`src.admin.services.adapter_connection_tester`.",
         "properties": {
           "details": {
             "anyOf": [
@@ -4064,6 +4071,13 @@
           "error_code": {
             "anyOf": [
               {
+                "enum": [
+                  "network_not_found",
+                  "permission_denied",
+                  "invalid_credentials",
+                  "invalid_config",
+                  "connection_failed"
+                ],
                 "type": "string"
               },
               {

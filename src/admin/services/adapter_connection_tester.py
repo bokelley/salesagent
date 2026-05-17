@@ -11,18 +11,20 @@ Tests can monkeypatch :func:`probe_adapter_connection` or
 Error classification
 --------------------
 
-Probes return one of four ``error_code`` values so callers can render the
-right remediation copy without parsing English error strings:
+Probes return one of these ``error_code`` values so callers can render
+the right remediation copy without parsing English error strings:
 
 - ``network_not_found`` — the configured network/publisher id doesn't exist
   (GAM ``NETWORK_NOT_FOUND``, Broadstreet 404). Almost always a typo.
 - ``permission_denied`` — credentials authenticate but lack access to the
   configured network/publisher (GAM ``NOT_ALLOWED`` /
-  ``NO_NETWORKS_TO_ACCESS``, 401/403 on a scope probe). The propagation case.
+  ``NO_NETWORKS_TO_ACCESS``, 403 on a scope probe). The propagation case.
 - ``invalid_credentials`` — credentials themselves are bad (GAM
   ``AUTHENTICATION_FAILED``, raw 401 before any scope check).
+- ``invalid_config`` — required config field missing (e.g. no
+  ``network_code``). No HTTP call is attempted.
 - ``connection_failed`` — fallback for anything not classified above
-  (transient SOAP fault, network blip, schema-level config errors).
+  (transient SOAP fault, network blip, unknown GAM reason code).
 """
 
 from __future__ import annotations
@@ -30,17 +32,48 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 
-# Error code constants — these are the suffixes the API surfaces as
-# ``adapter_{code}`` (e.g. ``adapter_network_not_found``).
-NETWORK_NOT_FOUND = "network_not_found"
-PERMISSION_DENIED = "permission_denied"
-INVALID_CREDENTIALS = "invalid_credentials"
-CONNECTION_FAILED = "connection_failed"
+# Error code constants — typed sub-codes returned by the probe. The
+# tenant-management API serves these in two shapes:
+#
+# - Inside the :class:`ApiError` envelope (provision / PUT failure paths):
+#   prefixed as ``adapter_{code}`` — e.g. ``adapter_network_not_found`` —
+#   so the envelope's ``error`` field disambiguates adapter-class errors
+#   from tenant-class errors (``tenant_not_found``, ``external_org_id_conflict``).
+# - Inside ``TestConnectionResponse`` and ``PreviewAdapterResponse``:
+#   the bare code — e.g. ``"network_not_found"`` — because the response
+#   shape already scopes the value to an adapter probe.
+#
+# Storefront integrators branch on the bare code in the inner field, and
+# either match ``adapter_{code}`` on the envelope or strip the prefix.
+# The closed set of values for ``ProbeResult.error_code``. Exposed as
+# both a Literal type for static checking + a tuple for runtime iteration
+# (e.g. SDK codegen, schema introspection).
+AdapterErrorCode = Literal[
+    "network_not_found",
+    "permission_denied",
+    "invalid_credentials",
+    "invalid_config",
+    "connection_failed",
+]
+
+NETWORK_NOT_FOUND: AdapterErrorCode = "network_not_found"
+PERMISSION_DENIED: AdapterErrorCode = "permission_denied"
+INVALID_CREDENTIALS: AdapterErrorCode = "invalid_credentials"
+INVALID_CONFIG: AdapterErrorCode = "invalid_config"
+CONNECTION_FAILED: AdapterErrorCode = "connection_failed"
+
+ADAPTER_ERROR_CODES: tuple[AdapterErrorCode, ...] = (
+    NETWORK_NOT_FOUND,
+    PERMISSION_DENIED,
+    INVALID_CREDENTIALS,
+    INVALID_CONFIG,
+    CONNECTION_FAILED,
+)
 
 
 @dataclass
@@ -54,7 +87,7 @@ class ProbeResult:
     """
 
     success: bool
-    error_code: str | None = None
+    error_code: AdapterErrorCode | None = None
     error_message: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -65,7 +98,7 @@ class ProbeResult:
     @classmethod
     def fail(
         cls,
-        error_code: str,
+        error_code: AdapterErrorCode,
         message: str,
         details: dict[str, Any] | None = None,
     ) -> ProbeResult:
@@ -97,7 +130,7 @@ class AdapterPreview:
     time_zone: str | None = None
     inventory_reachable: bool = False
     error: str | None = None
-    error_code: str | None = None
+    error_code: AdapterErrorCode | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -116,7 +149,6 @@ _GAM_FAULT_RE = re.compile(
 # Everything else (or no match) falls back to CONNECTION_FAILED.
 _GAM_REASON_TO_CODE = {
     "NETWORK_NOT_FOUND": NETWORK_NOT_FOUND,
-    "NETWORK_CODE_REQUIRED": NETWORK_NOT_FOUND,
     "NOT_ALLOWED": PERMISSION_DENIED,
     "NO_NETWORKS_TO_ACCESS": PERMISSION_DENIED,
     "AUTHENTICATION_FAILED": INVALID_CREDENTIALS,
@@ -124,34 +156,44 @@ _GAM_REASON_TO_CODE = {
 }
 
 
-def _classify_gam_message(message: str) -> tuple[str, dict[str, Any]]:
+def _build_gam_fault(match: re.Match[str]) -> dict[str, Any]:
+    """Convert a parsed regex match into the structured ``gam_fault`` dict."""
+    fault: dict[str, Any] = {
+        "service": match.group("service"),
+        "reason": match.group("reason"),
+    }
+    field_path = (match.group("field") or "").strip()
+    if field_path:
+        fault["field_path"] = field_path
+    trigger = match.group("trigger")
+    if trigger is not None:
+        fault["trigger"] = trigger
+    return fault
+
+
+def _classify_gam_message(message: str) -> tuple[AdapterErrorCode, dict[str, Any]]:
     """Inspect a GAM error message and produce ``(error_code, gam_fault)``.
 
-    Pulls the first SOAP fault entry out of the message (``[Service.REASON @
-    field; trigger:'value']``) and maps the ``REASON`` to a typed sub-code.
-    If no fault entry is parseable, returns ``CONNECTION_FAILED`` with an
-    empty ``gam_fault`` block.
+    GAM SOAP faults can include multiple error entries — a generic
+    wrapper like ``[ServerError.SOAP_FAULT @ ...]`` often precedes the
+    diagnostic ``[AuthenticationError.NETWORK_NOT_FOUND @ ...]``. We
+    scan all entries and prefer the first one whose ``reason`` maps to
+    a typed sub-code; if none classify, we fall back to the first
+    parseable entry for diagnostics with code ``CONNECTION_FAILED``.
+    If no fault entry is parseable at all, returns
+    ``(CONNECTION_FAILED, {})``.
     """
-    match = _GAM_FAULT_RE.search(message or "")
-    if not match:
+    matches = list(_GAM_FAULT_RE.finditer(message or ""))
+    if not matches:
         return CONNECTION_FAILED, {}
 
-    service = match.group("service")
-    reason = match.group("reason")
-    field_path = match.group("field") or ""
-    trigger = match.group("trigger")
+    for match in matches:
+        reason = match.group("reason")
+        if reason in _GAM_REASON_TO_CODE:
+            return _GAM_REASON_TO_CODE[reason], _build_gam_fault(match)
 
-    gam_fault: dict[str, Any] = {
-        "service": service,
-        "reason": reason,
-    }
-    if field_path.strip():
-        gam_fault["field_path"] = field_path.strip()
-    if trigger is not None:
-        gam_fault["trigger"] = trigger
-
-    code = _GAM_REASON_TO_CODE.get(reason, CONNECTION_FAILED)
-    return code, gam_fault
+    # No classifiable reason — emit fault block for diagnostics anyway.
+    return CONNECTION_FAILED, _build_gam_fault(matches[0])
 
 
 def probe_adapter_connection(adapter_type: str, config: dict[str, Any]) -> ProbeResult:
@@ -194,7 +236,7 @@ def _test_gam(config: dict[str, Any]) -> ProbeResult:
     """Authentication probe for Google Ad Manager."""
     network_code = config.get("network_code")
     if not network_code:
-        return ProbeResult.fail(CONNECTION_FAILED, "GAM network_code is required")
+        return ProbeResult.fail(INVALID_CONFIG, "GAM network_code is required")
 
     try:
         # Local import: keeps googleads off the import path for non-GAM tests.
@@ -244,7 +286,7 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
     api_token = config.get("api_token")
     if not ((username and password) or api_token):
         return ProbeResult.fail(
-            CONNECTION_FAILED,
+            INVALID_CONFIG,
             "FreeWheel config requires either (username + password) or api_token",
         )
 
@@ -336,9 +378,9 @@ def _test_broadstreet(config: dict[str, Any]) -> ProbeResult:
     network_id = config.get("network_id")
     api_key = config.get("api_key")
     if not network_id:
-        return ProbeResult.fail(CONNECTION_FAILED, "Broadstreet network_id is required")
+        return ProbeResult.fail(INVALID_CONFIG, "Broadstreet network_id is required")
     if not api_key:
-        return ProbeResult.fail(CONNECTION_FAILED, "Broadstreet api_key is required")
+        return ProbeResult.fail(INVALID_CONFIG, "Broadstreet api_key is required")
 
     try:
         from src.adapters.broadstreet.client import BroadstreetAPIError, BroadstreetClient
@@ -393,7 +435,7 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
     api_token = config.get("api_token")
     if not ((email and password) or api_token):
         return ProbeResult.fail(
-            CONNECTION_FAILED,
+            INVALID_CONFIG,
             "SpringServe config requires either (email + password) or api_token",
         )
 
@@ -505,7 +547,7 @@ def _preview_gam(config: dict[str, Any]) -> AdapterPreview:
         return AdapterPreview(
             ok=False,
             error="GAM network_code is required",
-            error_code=CONNECTION_FAILED,
+            error_code=INVALID_CONFIG,
         )
 
     try:
@@ -578,7 +620,7 @@ def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
         return AdapterPreview(
             ok=False,
             error="FreeWheel config requires either (username + password) or api_token",
-            error_code=CONNECTION_FAILED,
+            error_code=INVALID_CONFIG,
         )
 
     try:
@@ -665,13 +707,13 @@ def _preview_broadstreet(config: dict[str, Any]) -> AdapterPreview:
         return AdapterPreview(
             ok=False,
             error="Broadstreet network_id is required",
-            error_code=CONNECTION_FAILED,
+            error_code=INVALID_CONFIG,
         )
     if not api_key:
         return AdapterPreview(
             ok=False,
             error="Broadstreet api_key is required",
-            error_code=CONNECTION_FAILED,
+            error_code=INVALID_CONFIG,
         )
 
     try:
@@ -754,7 +796,7 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
         return AdapterPreview(
             ok=False,
             error="SpringServe config requires either (email + password) or api_token",
-            error_code=CONNECTION_FAILED,
+            error_code=INVALID_CONFIG,
         )
 
     try:

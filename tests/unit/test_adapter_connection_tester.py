@@ -9,7 +9,7 @@ tests pin the contract for each adapter type:
 - Wrong network identifier (e.g. typo) → ``error_code="network_not_found"``
 - Transport failure / fallback → ``error_code="connection_failed"``
 - Success → ``ProbeResult(success=True)``
-- Missing required config → fail with ``connection_failed`` and no HTTP call
+- Missing required config → fail with ``invalid_config`` and no HTTP call
 
 The probes themselves call into live adapter clients; tests mock those at
 the call boundary so the behavior under each HTTP outcome is exercised.
@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 from src.admin.services.adapter_connection_tester import (
     CONNECTION_FAILED,
+    INVALID_CONFIG,
     INVALID_CREDENTIALS,
     NETWORK_NOT_FOUND,
     PERMISSION_DENIED,
@@ -74,6 +75,18 @@ class TestGAMFaultClassification:
         assert fault["service"] == "ServerError"
         assert fault["reason"] == "SOAP_FAULT"
 
+    def test_multi_fault_prefers_classifiable_reason(self):
+        """Real GAM responses often prepend a generic ``ServerError`` wrapper
+        in front of the diagnostic ``AuthenticationError`` entry. The
+        classifier must scan past the wrapper to find the typed reason —
+        otherwise the whole point of #467 is silently defeated."""
+        msg = "Server fault: [ServerError.SOAP_FAULT @ ] [AuthenticationError.NETWORK_NOT_FOUND @ ; trigger:'12345']"
+        code, fault = _classify_gam_message(msg)
+        assert code == NETWORK_NOT_FOUND
+        # Picks the classifiable entry, not the first one.
+        assert fault["reason"] == "NETWORK_NOT_FOUND"
+        assert fault["trigger"] == "12345"
+
 
 class TestFreeWheelProbe:
     """FreeWheel probe is two-call: token_info (auth) + list_sites (binding)."""
@@ -83,10 +96,10 @@ class TestFreeWheelProbe:
         base.update(overrides)
         return base
 
-    def test_missing_credentials_fails_without_http(self):
+    def test_missing_credentials_fails_with_invalid_config(self):
         result = probe_adapter_connection("freewheel", {"environment": "production"})
         assert result.success is False
-        assert result.error_code == CONNECTION_FAILED
+        assert result.error_code == INVALID_CONFIG
         assert "username + password" in result.error_message or "api_token" in result.error_message
 
     def test_auth_rejection_classified_as_invalid_credentials(self):
@@ -136,16 +149,16 @@ class TestFreeWheelProbe:
 class TestBroadstreetProbe:
     """Broadstreet probe is one call: get_network() validates auth + binding."""
 
-    def test_missing_network_id_fails_without_http(self):
+    def test_missing_network_id_fails_with_invalid_config(self):
         result = probe_adapter_connection("broadstreet", {"api_key": "k"})
         assert result.success is False
-        assert result.error_code == CONNECTION_FAILED
+        assert result.error_code == INVALID_CONFIG
         assert "network_id" in result.error_message
 
-    def test_missing_api_key_fails_without_http(self):
+    def test_missing_api_key_fails_with_invalid_config(self):
         result = probe_adapter_connection("broadstreet", {"network_id": "123"})
         assert result.success is False
-        assert result.error_code == CONNECTION_FAILED
+        assert result.error_code == INVALID_CONFIG
         assert "api_key" in result.error_message
 
     def test_401_classified_as_invalid_credentials(self):
@@ -201,10 +214,10 @@ class TestSpringServeProbe:
         base.update(overrides)
         return base
 
-    def test_missing_credentials_fails_without_http(self):
+    def test_missing_credentials_fails_with_invalid_config(self):
         result = probe_adapter_connection("springserve", {})
         assert result.success is False
-        assert result.error_code == CONNECTION_FAILED
+        assert result.error_code == INVALID_CONFIG
         assert "email + password" in result.error_message or "api_token" in result.error_message
 
     def test_auth_mint_failure_classified_as_invalid_credentials(self):
@@ -334,7 +347,7 @@ class TestFreeWheelPreview:
     def test_missing_credentials_returns_inline_error(self):
         preview = preview_adapter("freewheel", {"environment": "production"})
         assert preview.ok is False
-        assert preview.error_code == CONNECTION_FAILED
+        assert preview.error_code == INVALID_CONFIG
         assert "username + password" in (preview.error or "") or "api_token" in (preview.error or "")
 
     def test_auth_rejection_surfaces_inline(self):

@@ -1904,7 +1904,13 @@ components:
           title: Error
         error_code:
           anyOf:
-          - type: string
+          - enum:
+            - network_not_found
+            - permission_denied
+            - invalid_credentials
+            - invalid_config
+            - connection_failed
+            type: string
           - type: 'null'
           default: null
           title: Error Code
@@ -2836,13 +2842,15 @@ components:
       description: 'Result of an adapter connection probe.
 
 
-        ``error_code`` classifies the fault into one of ``network_not_found``,
-
-        ``permission_denied``, ``invalid_credentials``, or ``connection_failed``
+        ``error_code`` classifies the fault into a closed set of typed values
 
         so the UI can branch without parsing the human-readable ``error``.
 
-        See :mod:`src.admin.services.adapter_connection_tester`.'
+        The same code appears as the suffix of the ``adapter_{code}`` error
+
+        in :class:`ApiError` envelopes from the provision / PUT paths. See
+
+        :mod:`src.admin.services.adapter_connection_tester`.'
       properties:
         details:
           anyOf:
@@ -2859,7 +2867,13 @@ components:
           title: Error
         error_code:
           anyOf:
-          - type: string
+          - enum:
+            - network_not_found
+            - permission_denied
+            - invalid_credentials
+            - invalid_config
+            - connection_failed
+            type: string
           - type: 'null'
           default: null
           title: Error Code
