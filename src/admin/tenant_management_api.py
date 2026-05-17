@@ -1132,6 +1132,19 @@ def provision_tenant():
         session.refresh(new_tenant)
         created_at = new_tenant.created_at
 
+    # Emit principal.created so the host product can pick up the initial
+    # advertiser without polling. Fires only when an initial_principal was
+    # part of the provision request — open-instance flows that defer
+    # principal creation will fire from the standalone create endpoint.
+    if initial_principal_id and initial_principal_name:
+        from src.admin.services.webhook_publisher import emit_event
+
+        emit_event(
+            tenant_id,
+            "principal.created",
+            {"principal_id": initial_principal_id, "name": initial_principal_name},
+        )
+
     # First inventory sync runs as a side effect of provisioning, not a
     # gate on it. Provision is binary: credentials validated upstream
     # (Step 2b), tenant rows committed, response returns. Inventory sync
@@ -2731,20 +2744,11 @@ def _decide_workflow(
 
     invalidate_status_cache(tenant_id)
 
-    # Sprint 6 — fire ``workflow.decided`` to subscribed webhooks.
-    # Failures are logged but do not block the response — the buyer's
-    # decision is already persisted; webhook delivery is observability,
-    # not a critical-path commit.
-    try:
-        from src.admin.services.webhook_publisher import publish_event
+    # Fire workflow.decided to subscribed webhooks. emit_event is
+    # non-raising — webhook delivery is observability, never critical-path.
+    from src.admin.services.webhook_publisher import emit_event
 
-        publish_event(
-            tenant_id,
-            "workflow.decided",
-            {"workflow": detail.model_dump(mode="json")},
-        )
-    except Exception:  # pragma: no cover — defensive; publisher catches its own errors
-        logger.warning("publish_event(workflow.decided) failed", exc_info=True)
+    emit_event(tenant_id, "workflow.decided", {"workflow": detail.model_dump(mode="json")})
 
     return jsonify(detail.model_dump(mode="json"))
 

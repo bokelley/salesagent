@@ -281,6 +281,30 @@ Each runs as part of `sync_all_tenants.py`; they're separate progress trackers b
 
 **Known caveat:** the current `sync_all_tenants.py` filters to tenants with `gam_refresh_token` set (OAuth-flow tenants). For service-account-flow tenants (the recommended embedded-mode posture), the same script needs to also pick up tenants with `gam_service_account_json` set. **This is an existing gap to verify before sprint 1 ships** — embedded-mode tenants will all be SA-flow, so the cron must include them. Likely a one-line filter change in `sync_all_tenants.py`.
 
+## D.5 — Webhook event catalog
+
+The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/webhooks` with a list of `event_types` (empty list = all events). Every event ships in the same envelope: `event_id`, `event_type`, `tenant_id`, `occurred_at`, `delivery_attempt`, `data`.
+
+| Event | Fires when | `data` payload |
+|---|---|---|
+| `workflow.created` | A pending workflow step is created (e.g., manual-approval gate) | `{"workflow": {...}}` |
+| `workflow.decided` | A workflow step is approved or rejected | `{"workflow": {...}}` |
+| `media_buy.status_changed` | A media buy transitions state (active, paused, completed, etc.) | `{"media_buy_id": str, ...}` |
+| `creative.status_changed` | A creative is approved or rejected by the publisher | `{"creative_id": str, "new_status": str, "rejection_reason"?: str}` |
+| `principal.created` | A new advertiser/principal is created (both via provision endpoint and standalone admin UI flow) | `{"principal_id": str, "name": str}` |
+| `product.created` | A new product is created in the admin UI | `{"product_id": str, "name": str}` |
+| `product.updated` | An existing product is edited in the admin UI | `{"product_id": str, "name": str}` |
+| `sync.completed` | An inventory/targeting/advertisers sync run completed successfully | `{"sync_id": str, "sync_type": str, ...}` |
+| `sync.failed` | A sync run failed | `{"sync_id": str, "sync_type": str, "error": str}` |
+| `tenant.config_changed` | Tenant configuration was patched | `{"changed": [...]}` |
+
+**Not yet emitted** (catalog gaps tracked in follow-up issues):
+- `creative.created` and `media_buy.created` — these fire from the agent-facing `sync_creatives` / `create_media_buy` flows where the `_impl` has multiple return paths. Wiring requires a context-manager pattern that emits on successful exit; scoped separately.
+
+**Delivery semantics**: fire-and-forget from a Flask request handler. Best-effort — webhook delivery failures are logged but do not roll back the operation that fired the event. The host product is responsible for idempotency on receive (use `event_id` for dedup, since retries reuse the same id).
+
+**Signing**: every delivery carries an HMAC-SHA256 signature in the headers — verify with `adcp.signing.webhook_hmac.verify_webhook_hmac` using the plaintext secret returned at subscription-create time.
+
 ## Open items for follow-up
 
 1. ~~**`docker-compose.core.yml` is untracked**~~ — committed in `b54b4e22`; canonical dev stack for embedded-mode testing.

@@ -503,6 +503,94 @@ class TestWorkflowDecidedPublication:
 
 
 # ---------------------------------------------------------------------------
+# Expanded event catalog (#442): creative / principal / product events
+# ---------------------------------------------------------------------------
+
+
+class TestExpandedEventCatalog:
+    """The schema declares the set of events the salesagent publishes.
+    Adding to the catalog requires three things to line up:
+
+    1. Schema accepts the event_type at subscription-create time
+       (the ``WebhookEventType`` Literal is the gate).
+    2. ``publish_event`` routes the event to matching subscribers
+       (no special-casing needed beyond the type string).
+    3. The full delivery path — envelope + HMAC + httpx — does not
+       choke on the new type.
+
+    These tests cover (1) and (3) for every new event in #442. Production
+    callsites that fire each event are covered by their own tests in the
+    blueprints / management API suites.
+    """
+
+    NEW_EVENT_TYPES = (
+        "creative.status_changed",
+        "principal.created",
+        "product.created",
+        "product.updated",
+    )
+
+    @pytest.mark.parametrize("event_type", NEW_EVENT_TYPES)
+    def test_subscribe_to_new_event_type(self, client, auth_headers, tenant, bound_factories, event_type):
+        """Every new event type is accepted at subscription-create time."""
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/webhooks",
+            headers=auth_headers,
+            json={"url": "http://127.0.0.1:9999/hook", "event_types": [event_type]},
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert event_type in body["event_types"]
+
+    @pytest.mark.parametrize("event_type", NEW_EVENT_TYPES)
+    def test_emit_event_delivers_to_subscriber(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch, event_type
+    ):
+        """A subscriber to each new event type receives a delivery when
+        ``emit_event`` fires. Verifies the catalog → publisher → delivery
+        path end-to-end for every new event."""
+        create = client.post(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/webhooks",
+            headers=auth_headers,
+            json={"url": "http://127.0.0.1:9999/hook", "event_types": [event_type]},
+        )
+        assert create.status_code == 201
+        plaintext_secret = create.get_json()["secret"]
+
+        receiver = _MockReceiver()
+        from src.admin.services import webhook_delivery
+        from src.admin.services.webhook_publisher import emit_event
+
+        async def fake_post_signed(url, secret, payload, extra_headers, *, client=None, timeout=10.0):
+            from adcp.webhooks import sign_legacy_webhook
+
+            headers, body = sign_legacy_webhook(secret, payload)
+            headers["Content-Type"] = "application/json"
+            response = await receiver.post(url, content=body, headers=headers)
+            return response.status_code, 5, None
+
+        monkeypatch.setattr(webhook_delivery, "_post_signed", fake_post_signed)
+
+        emit_event(tenant.tenant_id, event_type, {"sample_field": "sample_value"})
+
+        assert len(receiver.calls) == 1
+        call = receiver.calls[0]
+        verify_webhook_hmac(
+            headers=call["headers"],
+            body=call["content"],
+            options=LegacyWebhookHmacOptions(
+                secret=plaintext_secret.encode("utf-8"),
+                sender_identity="salesagent",
+                now=time.time(),
+            ),
+        )
+        envelope = json.loads(call["content"])
+        assert envelope["event_type"] == event_type
+        assert envelope["tenant_id"] == tenant.tenant_id
+        assert envelope["data"] == {"sample_field": "sample_value"}
+
+
+# ---------------------------------------------------------------------------
 # Repository / hashing primitives
 # ---------------------------------------------------------------------------
 

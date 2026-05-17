@@ -874,6 +874,10 @@
                 "workflow.created",
                 "workflow.decided",
                 "media_buy.status_changed",
+                "creative.status_changed",
+                "principal.created",
+                "product.created",
+                "product.updated",
                 "sync.completed",
                 "sync.failed",
                 "tenant.config_changed"

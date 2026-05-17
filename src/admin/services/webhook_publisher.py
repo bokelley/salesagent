@@ -178,6 +178,25 @@ def publish_event(
     return delivered_ids
 
 
+def emit_event(tenant_id: str, event_type: str, data: dict[str, Any]) -> None:
+    """Best-effort wrapper around :func:`publish_event`.
+
+    Webhook delivery is observability, not a critical-path commit. A
+    delivery (or even subscriber-lookup) failure must never propagate
+    back to the caller and roll back the operation that fired the event.
+
+    Every tenant-lifecycle emission point should call ``emit_event``
+    instead of writing its own try/except around :func:`publish_event` —
+    centralizing the swallow keeps the contract uniform and lets us
+    instrument the failure path in one place if/when delivery moves to
+    a real queue.
+    """
+    try:
+        publish_event(tenant_id, event_type, data)
+    except Exception:  # pragma: no cover — defensive; publish_event catches its own errors
+        logger.warning("publish_event(%s) failed", event_type, exc_info=True)
+
+
 def _schedule_delivery(
     snapshot: dict[str, Any],
     envelope: dict[str, Any],

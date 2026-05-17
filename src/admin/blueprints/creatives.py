@@ -699,6 +699,14 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                         f"{creative_id} → buy {assignment.media_buy_id}: {push_err}"
                     )
 
+        from src.admin.services.webhook_publisher import emit_event
+
+        emit_event(
+            tenant_id,
+            "creative.status_changed",
+            {"creative_id": creative_id, "new_status": "approved"},
+        )
+
         return jsonify({"success": True, "status": "approved"})
 
     except Exception as e:
@@ -797,6 +805,18 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             operation="reject_creative",
             tenant_id=tenant_id,
             actor=rejected_by,
+        )
+
+        from src.admin.services.webhook_publisher import emit_event
+
+        emit_event(
+            tenant_id,
+            "creative.status_changed",
+            {
+                "creative_id": creative_id,
+                "new_status": "rejected",
+                "rejection_reason": rejection_reason,
+            },
         )
 
         return jsonify({"success": True, "status": "rejected"})

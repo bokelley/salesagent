@@ -293,6 +293,14 @@ def create_principal(tenant_id):
             db_session.add(principal)
             db_session.commit()
 
+            from src.admin.services.webhook_publisher import emit_event
+
+            emit_event(
+                tenant_id,
+                "principal.created",
+                {"principal_id": principal_id, "name": principal_name},
+            )
+
             flash(f"Advertiser '{principal_name}' created successfully", "success")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 

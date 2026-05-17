@@ -1309,6 +1309,14 @@ def add_product(tenant_id):
 
                 db_session.commit()
 
+                from src.admin.services.webhook_publisher import emit_event
+
+                emit_event(
+                    tenant_id,
+                    "product.created",
+                    {"product_id": product.product_id, "name": product.name},
+                )
+
                 flash(f"Product '{product.name}' created successfully!", "success")
                 # Redirect to products list
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
@@ -1885,6 +1893,14 @@ def edit_product(tenant_id, product_id):
                 # Debug: Verify formats after commit by re-querying
                 db_session.refresh(product)
                 logger.info(f"[DEBUG] After commit - product.format_ids from DB: {product.format_ids}")
+
+                from src.admin.services.webhook_publisher import emit_event
+
+                emit_event(
+                    tenant_id,
+                    "product.updated",
+                    {"product_id": product.product_id, "name": product.name},
+                )
 
                 flash(f"Product '{product.name}' updated successfully", "success")
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
