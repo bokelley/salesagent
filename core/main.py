@@ -62,6 +62,12 @@ from adcp.server.spec_compat import _spec_compat_hooks_impl
 from sqlalchemy import select
 
 # Import for side-effect: registers the SQLAlchemy session listener that
+# fires ``sync.completed`` / ``sync.failed`` webhooks on SyncJob terminal
+# transitions (issue #463). Must run before any session opens so sync
+# workers' terminal commits trigger emission regardless of code path.
+import src.admin.services.sync_webhook_emission  # noqa: F401
+
+# Import for side-effect: registers the SQLAlchemy session listener that
 # evicts the webhook-signing credential cache on commit. Must run before
 # any session opens so rotations observed via the ORM trigger eviction.
 import src.services.webhook_signing  # noqa: F401

@@ -530,6 +530,11 @@ class TestExpandedEventCatalog:
         "principal.created",
         "product.created",
         "product.updated",
+        # Issue #463: inventory-sync visibility events. Catalog plumbing
+        # only — the real ``SyncJob``-driven emission path is covered by
+        # ``TestSyncTerminalEmission`` below.
+        "sync.completed",
+        "sync.failed",
     )
 
     @pytest.mark.parametrize("event_type", NEW_EVENT_TYPES)
@@ -590,6 +595,269 @@ class TestExpandedEventCatalog:
         assert envelope["event_type"] == event_type
         assert envelope["tenant_id"] == tenant.tenant_id
         assert envelope["data"] == {"sample_field": "sample_value"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #463: SyncJob terminal-transition emission (real listener wiring)
+# ---------------------------------------------------------------------------
+
+
+# Side-effect import: register the SQLAlchemy session listener. Production
+# imports it via ``core/main.py``; tests that exercise the listener need to
+# import it explicitly because they don't go through ``core.main.main()``.
+import src.admin.services.sync_webhook_emission  # noqa: E402, F401
+
+
+class TestSyncTerminalEmission:
+    """SyncJob ``running -> completed`` and ``running -> failed`` commits
+    fire ``sync.completed`` / ``sync.failed`` to subscribers — without any
+    new emission lines at the 15+ terminal-state sites scattered across
+    background workers, adapter sync managers, and admin endpoints.
+
+    The contract this class pins:
+
+    * Status transition to terminal fires the event with a payload that
+      carries enough data (sync_run_id, sync_type, adapter_type, trigger,
+      timing) for agentic-api to update the storefront UI without an
+      extra ``/status`` read.
+    * A non-status update on a row already in terminal state does NOT
+      re-fire the event.
+    * A rolled-back terminal transition does NOT fire the event.
+    """
+
+    @staticmethod
+    def _install_capture(monkeypatch, plaintext_secret: str | None = None):
+        """Patch the wire dispatcher to capture deliveries."""
+        receiver = _MockReceiver()
+        from src.admin.services import webhook_delivery
+
+        async def fake_post_signed(url, secret, payload, extra_headers, *, client=None, timeout=10.0):
+            from adcp.webhooks import sign_legacy_webhook
+
+            headers, body = sign_legacy_webhook(secret, payload)
+            headers["Content-Type"] = "application/json"
+            response = await receiver.post(url, content=body, headers=headers)
+            return response.status_code, 5, None
+
+        monkeypatch.setattr(webhook_delivery, "_post_signed", fake_post_signed)
+        return receiver
+
+    @staticmethod
+    def _subscribe(client, auth_headers, tenant_id: str, event_type: str) -> str:
+        create = client.post(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/webhooks",
+            headers=auth_headers,
+            json={"url": "http://127.0.0.1:9999/hook", "event_types": [event_type]},
+        )
+        assert create.status_code == 201, create.get_data(as_text=True)
+        return create.get_json()["secret"]
+
+    def test_completed_transition_fires_webhook(self, client, auth_headers, tenant, bound_factories, monkeypatch):
+        plaintext_secret = self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        receiver = self._install_capture(monkeypatch)
+
+        from datetime import UTC, datetime
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+        from tests.factories import SyncJobFactory
+
+        started_at = datetime(2026, 5, 17, 18, 23, 11, tzinfo=UTC)
+        completed_at = datetime(2026, 5, 17, 18, 24, 33, tzinfo=UTC)
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_test_completed_001",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=started_at,
+            triggered_by="scheduler",
+            progress={"phase": "fetching"},
+        ).sync_id
+
+        # The initial INSERT was in "running" state — no terminal event.
+        assert receiver.calls == [], "running-state insert must not emit"
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "completed"
+            row.completed_at = completed_at
+            row.summary = "Synced 12345 ad units"
+            row.progress = {"item_count": 12345}
+            session.commit()
+
+        assert len(receiver.calls) == 1, "terminal transition must emit exactly once"
+        call = receiver.calls[0]
+        verify_webhook_hmac(
+            headers=call["headers"],
+            body=call["content"],
+            options=LegacyWebhookHmacOptions(
+                secret=plaintext_secret.encode("utf-8"),
+                sender_identity="salesagent",
+                now=time.time(),
+            ),
+        )
+        envelope = json.loads(call["content"])
+        assert envelope["event_type"] == "sync.completed"
+        assert envelope["tenant_id"] == tenant.tenant_id
+
+        data = envelope["data"]
+        assert data["sync_run_id"] == sync_id
+        assert data["sync_type"] == "inventory"
+        assert data["adapter_type"] == "google_ad_manager"
+        assert data["trigger"] == "scheduled"  # "scheduler" -> "scheduled"
+        assert data["started_at"] == started_at.isoformat()
+        assert data["completed_at"] == completed_at.isoformat()
+        assert data["item_count"] == 12345
+        assert data["summary"] == "Synced 12345 ad units"
+
+    def test_failed_transition_fires_webhook(self, client, auth_headers, tenant, bound_factories, monkeypatch):
+        plaintext_secret = self._subscribe(client, auth_headers, tenant.tenant_id, "sync.failed")
+        receiver = self._install_capture(monkeypatch)
+
+        from datetime import UTC, datetime
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+        from tests.factories import SyncJobFactory
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_test_failed_001",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            triggered_by="api",
+            triggered_by_id="tenant_management_api:refresh",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "failed"
+            row.completed_at = datetime.now(UTC)
+            row.error_message = "Refresh token revoked"
+            session.commit()
+
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "sync.failed"
+        # /refresh-triggered failures normalize to ``manual`` trigger.
+        assert envelope["data"]["trigger"] == "manual"
+        assert envelope["data"]["error"] == {"message": "Refresh token revoked"}
+        # Failure envelope carries the run identity for receiver correlation.
+        assert envelope["data"]["sync_run_id"] == sync_id
+        # Plaintext secret was returned at create time and used for signing.
+        assert plaintext_secret  # smoke
+
+    def test_provision_trigger_normalizes_to_initial(self, client, auth_headers, tenant, bound_factories, monkeypatch):
+        """The first-sync side effect of provisioning carries
+        ``triggered_by_id=tenant_management_api:provision``. That must
+        surface as ``trigger=initial`` so the storefront can distinguish
+        the inaugural run from later scheduler / manual runs."""
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        receiver = self._install_capture(monkeypatch)
+
+        from datetime import UTC, datetime
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+        from tests.factories import SyncJobFactory
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_test_initial_001",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            triggered_by="api",
+            triggered_by_id="tenant_management_api:provision",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "completed"
+            row.completed_at = datetime.now(UTC)
+            session.commit()
+
+        assert len(receiver.calls) == 1
+        assert json.loads(receiver.calls[0]["content"])["data"]["trigger"] == "initial"
+
+    def test_non_status_update_on_terminal_row_does_not_re_fire(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """An UPDATE that touches a column other than status on a row
+        already in terminal state must NOT re-emit. Without the
+        history-check guard we'd fire on every backfill / annotation."""
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        receiver = self._install_capture(monkeypatch)
+
+        from datetime import UTC, datetime
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+        from tests.factories import SyncJobFactory
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_test_idempotent_001",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            triggered_by="scheduler",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "completed"
+            row.completed_at = datetime.now(UTC)
+            session.commit()
+
+        assert len(receiver.calls) == 1, "first terminal transition fires once"
+
+        # Touch a non-status column on the already-terminal row.
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.summary = "Late-arriving summary annotation"
+            session.commit()
+
+        assert len(receiver.calls) == 1, "non-status update on terminal row must not re-fire the event"
+
+    def test_rolled_back_terminal_transition_does_not_fire(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """A status transition that gets rolled back must not emit. The
+        UI would show a state the database doesn't reflect."""
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync.completed")
+        receiver = self._install_capture(monkeypatch)
+
+        from datetime import UTC, datetime
+
+        from sqlalchemy.orm import Session as RawSession
+
+        from src.core.database.database_session import get_engine
+        from src.core.database.models import SyncJob
+        from tests.factories import SyncJobFactory
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_test_rollback_001",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            triggered_by="scheduler",
+        ).sync_id
+
+        # Raw Session so we can rollback deterministically without the
+        # context manager's auto-commit behavior.
+        with RawSession(get_engine()) as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "completed"
+            row.completed_at = datetime.now(UTC)
+            session.flush()
+            session.rollback()
+
+        assert receiver.calls == [], "rolled-back terminal transition must not emit"
 
 
 # ---------------------------------------------------------------------------

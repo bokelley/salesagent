@@ -140,6 +140,7 @@ def publish_event(
     data: dict[str, Any],
     *,
     client: httpx.AsyncClient | None = None,
+    session: Any | None = None,
 ) -> list[str]:
     """Fire a tenant lifecycle event to all active subscribers.
 
@@ -153,11 +154,26 @@ def publish_event(
     For the four "in-flight" events (workflow.* / media_buy.* / sync.* /
     tenant.config_changed), :func:`publish_event` is the only correct
     entry point — never POST directly to a subscription URL from elsewhere.
+
+    :param session: Optional caller-supplied SQLAlchemy session for the
+        subscriber lookup. Used by callers that fire from inside a
+        SQLAlchemy event listener (e.g.
+        :mod:`src.admin.services.sync_webhook_emission`) where the
+        thread-scoped session is mid-commit and cannot accept a new
+        transaction. The caller owns the session's lifecycle; this
+        function does not close or commit it. When ``None`` (the normal
+        Flask request-handler path), a fresh session is opened via
+        :func:`get_db_session`.
     """
-    with get_db_session() as session:
+    if session is not None:
         repo = WebhookSubscriptionRepository(session, tenant_id)
         subscribers = repo.list_for_event(event_type)
         snapshots = [_subscription_snapshot(s) for s in subscribers]
+    else:
+        with get_db_session() as fresh_session:
+            repo = WebhookSubscriptionRepository(fresh_session, tenant_id)
+            subscribers = repo.list_for_event(event_type)
+            snapshots = [_subscription_snapshot(s) for s in subscribers]
 
     if not snapshots:
         return []
@@ -178,7 +194,13 @@ def publish_event(
     return delivered_ids
 
 
-def emit_event(tenant_id: str, event_type: str, data: dict[str, Any]) -> None:
+def emit_event(
+    tenant_id: str,
+    event_type: str,
+    data: dict[str, Any],
+    *,
+    session: Any | None = None,
+) -> None:
     """Best-effort wrapper around :func:`publish_event`.
 
     Webhook delivery is observability, not a critical-path commit. A
@@ -190,9 +212,11 @@ def emit_event(tenant_id: str, event_type: str, data: dict[str, Any]) -> None:
     centralizing the swallow keeps the contract uniform and lets us
     instrument the failure path in one place if/when delivery moves to
     a real queue.
+
+    See :func:`publish_event` for the ``session`` parameter.
     """
     try:
-        publish_event(tenant_id, event_type, data)
+        publish_event(tenant_id, event_type, data, session=session)
     except Exception:  # pragma: no cover — defensive; publish_event catches its own errors
         logger.warning("publish_event(%s) failed", event_type, exc_info=True)
 
