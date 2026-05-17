@@ -1,6 +1,6 @@
 """Tests for the synchronous credential probes used at provision time.
 
-``run_probe()`` is the gate that turns "bad credentials" into
+``probe_adapter_connection()`` is the gate that turns "bad credentials" into
 a 400 at provision rather than an eternally-pending inventory sync. These
 tests pin the contract for each adapter type:
 
@@ -18,9 +18,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.admin.services.adapter_connection_tester import (
-    test_adapter_connection as run_probe,
-)
+from src.admin.services.adapter_connection_tester import probe_adapter_connection
 
 
 class TestFreeWheelProbe:
@@ -32,7 +30,7 @@ class TestFreeWheelProbe:
         return base
 
     def test_missing_credentials_fails_without_http(self):
-        ok, err = run_probe("freewheel", {"environment": "production"})
+        ok, err = probe_adapter_connection("freewheel", {"environment": "production"})
         assert ok is False
         assert err is not None
         assert "username + password" in err or "api_token" in err
@@ -43,7 +41,7 @@ class TestFreeWheelProbe:
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
             client = mock_cls.return_value
             client.token_info.side_effect = FreeWheelAuthError("bad token", status_code=401)
-            ok, err = run_probe("freewheel", self._config())
+            ok, err = probe_adapter_connection("freewheel", self._config())
         assert ok is False
         assert "auth rejected" in err
 
@@ -54,7 +52,7 @@ class TestFreeWheelProbe:
             client = mock_cls.return_value
             client.token_info.return_value = {"sub": "user@example.com"}
             client.inventory.list_sites.side_effect = FreeWheelForbiddenError("no inventory scope", status_code=403)
-            ok, err = run_probe("freewheel", self._config())
+            ok, err = probe_adapter_connection("freewheel", self._config())
         assert ok is False
         assert "cannot read inventory" in err
         assert "publisher" in err
@@ -63,7 +61,7 @@ class TestFreeWheelProbe:
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
             client = mock_cls.return_value
             client.token_info.side_effect = ConnectionError("DNS")
-            ok, err = run_probe("freewheel", self._config())
+            ok, err = probe_adapter_connection("freewheel", self._config())
         assert ok is False
         assert "transport failure" in err
 
@@ -72,7 +70,7 @@ class TestFreeWheelProbe:
             client = mock_cls.return_value
             client.token_info.return_value = {"sub": "user@example.com"}
             client.inventory.list_sites.return_value = MagicMock()
-            ok, err = run_probe("freewheel", self._config())
+            ok, err = probe_adapter_connection("freewheel", self._config())
         assert ok is True
         assert err is None
 
@@ -81,12 +79,12 @@ class TestBroadstreetProbe:
     """Broadstreet probe is one call: get_network() validates auth + binding."""
 
     def test_missing_network_id_fails_without_http(self):
-        ok, err = run_probe("broadstreet", {"api_key": "k"})
+        ok, err = probe_adapter_connection("broadstreet", {"api_key": "k"})
         assert ok is False
         assert "network_id" in err
 
     def test_missing_api_key_fails_without_http(self):
-        ok, err = run_probe("broadstreet", {"network_id": "123"})
+        ok, err = probe_adapter_connection("broadstreet", {"network_id": "123"})
         assert ok is False
         assert "api_key" in err
 
@@ -96,7 +94,7 @@ class TestBroadstreetProbe:
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
             client = mock_cls.return_value
             client.get_network.side_effect = BroadstreetAPIError("forbidden", status_code=403)
-            ok, err = run_probe("broadstreet", {"network_id": "123", "api_key": "wrong"})
+            ok, err = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "wrong"})
         assert ok is False
         assert "auth rejected" in err
         assert "403" in err
@@ -107,7 +105,7 @@ class TestBroadstreetProbe:
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
             client = mock_cls.return_value
             client.get_network.side_effect = BroadstreetAPIError("not found", status_code=404)
-            ok, err = run_probe("broadstreet", {"network_id": "999999", "api_key": "k"})
+            ok, err = probe_adapter_connection("broadstreet", {"network_id": "999999", "api_key": "k"})
         assert ok is False
         assert "not found" in err
         assert "999999" in err
@@ -116,7 +114,7 @@ class TestBroadstreetProbe:
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
             client = mock_cls.return_value
             client.get_network.return_value = {"id": 123, "name": "Net"}
-            ok, err = run_probe("broadstreet", {"network_id": "123", "api_key": "k"})
+            ok, err = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "k"})
         assert ok is True
         assert err is None
 
@@ -132,7 +130,7 @@ class TestSpringServeProbe:
         return base
 
     def test_missing_credentials_fails_without_http(self):
-        ok, err = run_probe("springserve", {})
+        ok, err = probe_adapter_connection("springserve", {})
         assert ok is False
         assert "email + password" in err or "api_token" in err
 
@@ -141,16 +139,16 @@ class TestSpringServeProbe:
 
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
-            client._transport.probe.side_effect = SpringServeAuthError("bad creds", status_code=401)
-            ok, err = run_probe("springserve", {"email": "a@b.com", "password": "x"})
+            client.probe.side_effect = SpringServeAuthError("bad creds", status_code=401)
+            ok, err = probe_adapter_connection("springserve", {"email": "a@b.com", "password": "x"})
         assert ok is False
         assert "auth rejected" in err
 
     def test_403_signals_wrong_publisher_binding(self):
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
-            client._transport.probe.return_value = (403, "Forbidden")
-            ok, err = run_probe("springserve", self._config())
+            client.probe.return_value = (403, "Forbidden")
+            ok, err = probe_adapter_connection("springserve", self._config())
         assert ok is False
         assert "cannot read supply inventory" in err
         assert "publisher" in err
@@ -158,30 +156,34 @@ class TestSpringServeProbe:
     def test_happy_path_returns_true(self):
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
-            client._transport.probe.return_value = (200, "[]")
-            ok, err = run_probe("springserve", self._config())
+            client.probe.return_value = (200, "[]")
+            ok, err = probe_adapter_connection("springserve", self._config())
         assert ok is True
         assert err is None
 
 
 class TestRoutingTable:
-    """The dispatch in test_adapter_connection covers every adapter the
+    """The dispatch in probe_adapter_connection covers every adapter the
     discriminated AdapterConfig union accepts. Adding a new adapter to the
     schema without updating this dispatch is a real (and previously latent)
-    bug — this guard catches it."""
+    bug — this guard catches it by deriving the adapter list directly from
+    the schema's discriminated union, so a hardcoded list can't fall out
+    of sync."""
 
     def test_all_adapter_types_are_routed(self):
-        """Mock-grade success path for every adapter type the schema accepts.
-        If a new adapter is added to the union without a probe, this fails."""
-        # Mock adapter has no live calls.
-        assert run_probe("mock", {"dry_run": True}) == (True, None)
+        from typing import get_args
 
-        # The other adapters all branch to their own _test_* function;
-        # we don't run their HTTP paths here (covered above), just verify
-        # the dispatch reaches them rather than falling through to
-        # "Unsupported adapter_type".
-        for adapter_type in ("google_ad_manager", "freewheel", "broadstreet", "springserve"):
-            ok, err = run_probe(adapter_type, {})
+        from src.admin.api_schemas.tenant_management import AdapterConfig
+
+        # AdapterConfig is Annotated[Union[...], Field(discriminator="type")].
+        # Unwrap to get the union, then pull each member's "type" Literal.
+        union = get_args(AdapterConfig)[0]
+        adapter_types = [get_args(m.model_fields["type"].annotation)[0] for m in get_args(union)]
+        assert adapter_types, "Schema introspection returned no adapter types — check AdapterConfig union shape"
+
+        for adapter_type in adapter_types:
+            ok, err = probe_adapter_connection(adapter_type, {})
             assert err is None or "Unsupported adapter_type" not in err, (
-                f"{adapter_type} fell through to the unsupported-type branch — add a _test_{adapter_type}() probe."
+                f"{adapter_type!r} (declared in AdapterConfig union) fell through to the "
+                f"unsupported-type branch in probe_adapter_connection — add a probe for it."
             )

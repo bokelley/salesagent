@@ -184,7 +184,9 @@ The response does **not** carry sync handles. The first inventory sync kicks off
 | Adapter | What we probe | Typical | P95 | Hard timeout |
 |---|---|---|---|---|
 | GAM | `NetworkService.getCurrentNetwork()` | ~500ms–2s | ~5s | googleads SDK default (~10s). Beyond that → 5xx, not 4xx. |
-| FreeWheel | `/auth/token/info` | ~500ms–2s | ~4s | FreeWheel transport timeout 30s (`_transport.DEFAULT_TIMEOUT`). Beyond that → 5xx. |
+| FreeWheel | `/auth/token/info` then `/services/v4/sites?per_page=1` | ~1s–3s | ~6s | FreeWheel transport timeout 30s per call (`_transport.DEFAULT_TIMEOUT`). Beyond that → 5xx. |
+| Broadstreet | `GET /networks/{network_id}` (one call validates auth + binding) | ~300ms–1s | ~2s | requests default. Beyond that → 5xx. |
+| SpringServe | `GET /supply/tags?per_page=1` (token mint + binding in one call) | ~500ms–2s | ~4s | SpringServe transport timeout. Beyond that → 5xx. |
 | Mock | (no live call) | <50ms | <100ms | n/a |
 
 **5xx vs 4xx semantics:**

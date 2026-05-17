@@ -72,7 +72,7 @@ def _stub_adapter_test(monkeypatch):
     not real adapter wiring."""
     import src.admin.tenant_management_api as api_module
 
-    monkeypatch.setattr(api_module, "test_adapter_connection", lambda *_args, **_kwargs: (True, None))
+    monkeypatch.setattr(api_module, "probe_adapter_connection", lambda *_args, **_kwargs: (True, None))
 
 
 @pytest.fixture

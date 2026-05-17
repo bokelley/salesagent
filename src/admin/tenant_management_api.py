@@ -78,7 +78,7 @@ from src.admin.api_schemas.tenant_management import (
     GamAdvertiser as GamAdvertiserSchema,
 )
 from src.admin.auth_helpers import require_api_key_auth
-from src.admin.services.adapter_connection_tester import preview_adapter, test_adapter_connection
+from src.admin.services.adapter_connection_tester import preview_adapter, probe_adapter_connection
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
@@ -1025,7 +1025,7 @@ def provision_tenant():
     # Step 2b: probe the adapter BEFORE writing anything. A failure here means we never
     # touch the DB at all — keeps the table free of half-configured tenants.
     adapter_dict = _adapter_config_to_dict(req.adapter)
-    success, error = test_adapter_connection(adapter_dict["type"], adapter_dict)
+    success, error = probe_adapter_connection(adapter_dict["type"], adapter_dict)
     if not success:
         return _api_error(
             "adapter_connection_failed",
@@ -1371,7 +1371,7 @@ def put_adapter_config(tenant_id: str):
     adapter_schema: AdapterConfigSchema = body.root
     adapter_dict = _adapter_config_to_dict(adapter_schema)
 
-    success, error = test_adapter_connection(adapter_dict["type"], adapter_dict)
+    success, error = probe_adapter_connection(adapter_dict["type"], adapter_dict)
     if not success:
         return _api_error(
             "adapter_connection_failed",
@@ -1426,7 +1426,7 @@ def adapter_test_connection(tenant_id: str):
         elif adapter.adapter_type == "mock":
             config = {"dry_run": bool(adapter.mock_dry_run)}
 
-        success, error = test_adapter_connection(adapter.adapter_type, config)
+        success, error = probe_adapter_connection(adapter.adapter_type, config)
         invalidate_status_cache(tenant_id)
         return jsonify(
             TestConnectionResponse(success=success, error=error, tested_at=datetime.now(UTC)).model_dump(mode="json")

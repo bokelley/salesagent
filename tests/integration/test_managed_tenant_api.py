@@ -79,7 +79,7 @@ def _stub_adapter_test(monkeypatch, request):
 
     import src.admin.tenant_management_api as api_module
 
-    monkeypatch.setattr(api_module, "test_adapter_connection", _stub)
+    monkeypatch.setattr(api_module, "probe_adapter_connection", _stub)
 
 
 @pytest.fixture(autouse=True)
@@ -229,7 +229,7 @@ class TestProvision:
         def _fail(adapter_type, config):
             return False, "auth boom"
 
-        monkeypatch.setattr(api_module, "test_adapter_connection", _fail)
+        monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
 
         payload = _provision_payload(external_org_id="org_provision_fail")
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
@@ -544,7 +544,7 @@ class TestAdapterConfig:
         def _fail(adapter_type, config):
             return False, "credentials rejected"
 
-        monkeypatch.setattr(api_module, "test_adapter_connection", _fail)
+        monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
 
         payload = {
             "type": "google_ad_manager",

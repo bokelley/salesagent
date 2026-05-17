@@ -5,7 +5,7 @@ A narrow wrapper that translates the per-adapter health-check API into the
 permission checks are out of scope here — we just verify that the configured
 credentials authenticate.
 
-Tests can monkeypatch :func:`test_adapter_connection` or
+Tests can monkeypatch :func:`probe_adapter_connection` or
 :func:`preview_adapter` to bypass real API calls.
 """
 
@@ -37,7 +37,7 @@ class AdapterPreview:
     error: str | None = None
 
 
-def test_adapter_connection(adapter_type: str, config: dict[str, Any]) -> tuple[bool, str | None]:
+def probe_adapter_connection(adapter_type: str, config: dict[str, Any]) -> tuple[bool, str | None]:
     """Probe the adapter's authentication path.
 
     Args:
@@ -256,11 +256,11 @@ def _test_springserve(config: dict[str, Any]) -> tuple[bool, str | None]:
 
     # Single call exercises both auth (token mint, if password grant) and
     # scope (a 403 here means the bearer is valid but can't see supply
-    # inventory for the configured account). transport.probe() returns
+    # inventory for the configured account). client.probe() returns
     # (status_code, body) without raising on non-2xx — auth/mint
     # failures still raise, which we surface separately.
     try:
-        status, body = client._transport.probe("GET", "/supply/tags?per_page=1")
+        status, body = client.probe("GET", "/supply/tags?per_page=1")
     except SpringServeAuthError as exc:
         return False, f"SpringServe auth rejected: {exc}"
     except SpringServeForbiddenError as exc:
