@@ -6082,7 +6082,7 @@
     },
     "/api/v1/tenant-management/tenants/{tenant_id}/refresh": {
       "post": {
-        "description": "For each enabled sync type, either reuse the existing SyncJob if one started in the last 60 seconds (or is currently running), or create a new pending SyncJob. The actual sync work is picked up by the existing background sync infrastructure.\n\nReturns 202 Accepted with ``sync_run_ids`` mapping sync_type \u2192 sync_id. Storefront polls ``GET /status.syncs`` for per-type progress.",
+        "description": "For each enabled sync type, either reuse the existing SyncJob if one started in the last 60 seconds (or is currently running), or create a new pending SyncJob. The actual sync work is picked up by the existing background sync infrastructure.\n\nReturns 202 Accepted with ``sync_run_ids`` mapping sync_type \u2192 sync_id. Storefront polls ``GET /status.syncs`` for per-type progress.\n\nReturns 409 ``sync_already_running`` when at least one sync_type has a ``running`` row that started *before* the 60s idempotency window \u2014 i.e. a long-running in-flight sync that the caller's retry would just shadow. The response body still carries ``sync_run_ids`` so the storefront can correlate the conflict to the in-flight run and ``details.running_sync_types`` lists which types are in conflict. Issue #463: a UI \"Retry\" button needs a clear signal that the click triggered nothing new instead of an indistinguishable 202.",
         "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_refresh",
         "parameters": [
           {
@@ -6115,6 +6115,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
