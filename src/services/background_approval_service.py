@@ -242,7 +242,19 @@ def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: 
 
 
 def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str, status: str) -> None:
-    """Send webhook notification for approval completion/failure."""
+    """Emit a ``media_buy.status_changed`` event for the background approval outcome.
+
+    ``status`` is the *workflow step* outcome — ``"completed"`` when GAM
+    approval succeeded, ``"failed"`` otherwise. The emitted payload maps
+    that to the buyer-facing media-buy state (``"approved"`` /
+    ``"rejected"``) so subscribers don't have to know about our internal
+    workflow vocabulary.
+
+    Uses :func:`emit_event` (fire-and-forget, best-effort) per the
+    pattern established in PR #457 — delivery failures must not bubble
+    back to the polling thread.
+    """
+    # Snapshot ORM attrs inside the UoW so we don't lazy-load after exit.
     try:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.media_buys is not None
@@ -252,12 +264,24 @@ def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str,
                 logger.warning(f"No media buy found for order {order_id}, cannot send webhook")
                 return
 
-            # TODO: Implement webhook notification once push_notification_config_id is added to MediaBuy model
-            # and webhook delivery service has the appropriate function
-            logger.info(f"Webhook notification for order {order_id} (status={status}) - not yet implemented")
-
+            media_buy_id = media_buy.media_buy_id
+            buyer_ref = getattr(media_buy, "buyer_ref", None)
     except Exception as e:
-        logger.error(f"Failed to send approval webhook: {e}", exc_info=True)
+        logger.error(f"Failed to load media buy for approval webhook: {e}", exc_info=True)
+        return
+
+    from src.admin.services.webhook_publisher import emit_event
+
+    emit_event(
+        tenant_id,
+        "media_buy.status_changed",
+        {
+            "media_buy_id": media_buy_id,
+            "buyer_ref": buyer_ref,
+            "status": "approved" if status == "completed" else "rejected",
+            "workflow_step_id": workflow_step_id,
+        },
+    )
 
 
 def get_active_approval_tasks() -> list[str]:
