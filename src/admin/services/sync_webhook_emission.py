@@ -9,6 +9,18 @@ renamed the events to ``sync_run.*`` to match the ``<entity>.<verb-past>``
 catalog convention (the entity is the SyncJob row, surfaced as
 ``data.sync_run_id``).
 
+Architecture: ``_capture`` (before_flush) collects snapshots into a thread-safe
+queue. ``_flush`` (after_commit) moves them from the SQLAlchemy session into
+the queue — that's all the work it does in-line. A background dispatcher
+thread polls the queue and does the actual DB lookup + delivery. This is
+critical for CI safety (#76424016996): if the listener did DB work in-line
+under after_commit, a daemon thread racing the integration_db fixture's
+``engine.dispose()`` would raise :class:`OperationalError` through
+``session.commit()``, trip the ``_is_healthy=False`` circuit breaker in
+``get_db_session``, and cascade-fail every subsequent test in the 10s
+breaker window. Deferring to a separate thread completely isolates emission
+from the committing session.
+
 Sync runs reach a terminal state from 15+ call sites (background workers,
 adapter sync managers, admin endpoints, repository helpers). Sprinkling
 ``emit_event(...)`` at each site is the brittle pattern PR #457 explicitly
@@ -35,6 +47,8 @@ The listener is idempotent and registered at module import.
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from typing import Any
 
 from sqlalchemy import event, inspect
@@ -47,6 +61,15 @@ _PENDING_KEY = "_sync_webhook_emission_pending"
 
 _LISTENER_REGISTERED = False
 
+# Process-wide queue of snapshots awaiting emission. ``_flush`` drains
+# from session.info and enqueues here; the dispatcher thread polls and
+# performs the actual subscriber lookup + delivery. Keeping the queue
+# unbounded is fine — emission load is bounded by the SyncJob commit
+# rate, which is small in practice.
+_DISPATCH_QUEUE: queue.Queue[dict[str, Any]] = queue.Queue()
+_DISPATCHER_THREAD: threading.Thread | None = None
+_DISPATCHER_LOCK = threading.Lock()
+
 # Max length of the public-facing ``error.message`` field. The raw
 # ``SyncJob.error_message`` can carry stack frames + adapter internals;
 # webhook subscribers (storefront UIs, third-party ingestion endpoints)
@@ -55,35 +78,33 @@ _LISTENER_REGISTERED = False
 _MAX_PUBLIC_ERROR_LEN = 200
 
 
-def register_sync_webhook_emission() -> None:
-    """Wire SQLAlchemy session events that emit on SyncJob terminal commits.
+def _capture(session: Session, *_args: Any) -> None:
+    """Detect SyncJob terminal transitions and snapshot payload data.
 
-    Idempotent — guards against duplicate registration when the module is
-    reloaded under pytest's import-fixup or during dev reloads.
+    Runs inside ``before_flush`` so attribute history is still
+    readable. Two cases:
+
+    * ``session.dirty`` — UPDATEs. Emit only when the status attribute
+      actually transitioned to a terminal value in this txn. Without
+      the history check we'd re-fire on every save of a row already
+      in terminal state (e.g. backfilling a column on a completed row).
+    * ``session.new`` — INSERTs. Rare for terminal rows
+      (``mark_pending_as_failed`` only operates on existing pending
+      rows), but emit if it happens for completeness.
+
+    Wrapped in a top-level try/except: webhook emission is best-effort
+    observability and MUST NOT raise into the committing session.
+    Any exception here would propagate to the caller's
+    ``session.commit()``, hit the ``OperationalError`` handler in
+    :func:`get_db_session`, trip the ``_is_healthy=False`` circuit
+    breaker, and cascade-fail every subsequent test (CI #76422772268).
     """
-    global _LISTENER_REGISTERED
-    if _LISTENER_REGISTERED:
-        return
+    try:
+        # Local import: this module is in the admin layer; importing
+        # SyncJob at module scope would tangle the import graph during
+        # tests that mock the model.
+        from src.core.database.models import SyncJob
 
-    # Local import: this module is in the admin layer; importing SyncJob
-    # at module scope at the top would tangle the import graph during
-    # tests that mock the model.
-    from src.core.database.models import SyncJob
-
-    def _capture(session: Session, *_args: Any) -> None:
-        """Detect SyncJob terminal transitions and snapshot payload data.
-
-        Runs inside ``before_flush`` so attribute history is still
-        readable. Two cases:
-
-        * ``session.dirty`` — UPDATEs. Emit only when the status attribute
-          actually transitioned to a terminal value in this txn. Without
-          the history check we'd re-fire on every save of a row already
-          in terminal state (e.g. backfilling a column on a completed row).
-        * ``session.new`` — INSERTs. Rare for terminal rows
-          (``mark_pending_as_failed`` only operates on existing pending
-          rows), but emit if it happens for completeness.
-        """
         pending: list[dict[str, Any]] = session.info.setdefault(_PENDING_KEY, [])
 
         for obj in session.dirty:
@@ -106,62 +127,155 @@ def register_sync_webhook_emission() -> None:
             if obj.status not in _TERMINAL_STATUSES:
                 continue
             pending.append(_snapshot(obj))
+    except Exception:  # pragma: no cover - defensive, must not raise
+        logger.warning("sync webhook emission _capture failed", exc_info=True)
 
-    def _flush(session: Session) -> None:
-        """Drain the snapshot stash after commit and emit events.
 
-        Local imports keep the layering clean: this module knows about
-        the publisher, not the other way round.
+def _flush(session: Session) -> None:
+    """Move snapshots from session.info to the process-wide dispatch queue.
 
-        The committing session (``session`` arg here) is thread-scoped
-        and mid-commit at this point — it cannot accept a new
-        transaction. So we open *one* short-lived session bound to the
-        engine directly, just for the subscriber lookups, and reuse it
-        across every snapshot in this batch. N terminal commits in one
-        txn would otherwise mean N DB round-trips and N pool checkouts
-        — the security review flagged this as wasteful under bulk
-        failure paths like ``mark_pending_as_failed``. Dispatch (signing
-        + HTTP POST) doesn't touch DB at all.
+    Runs in ``after_commit``. Does ZERO DB work in-line — the listener
+    must not touch the engine here, because the committing session is
+    mid-commit and any exception we raise propagates through
+    ``session.commit()`` into :func:`get_db_session`'s ``OperationalError``
+    handler, trips ``_is_healthy=False``, and cascade-fails every
+    subsequent test in the 10s circuit-breaker window (CI #76424016996).
 
-        Snapshots are deduplicated by ``(tenant_id, sync_run_id,
-        _status)`` before emission. ``before_flush`` can fire multiple
-        times within a single transaction (manual ``session.flush()``
-        loops, large transactions). If a row is dirty during two
-        flushes with status history still showing the transition, we'd
-        otherwise snapshot — and then emit — twice for the same event.
-        """
+    The dispatcher thread does the actual subscriber lookup + delivery,
+    fully isolated from the committing session's lifecycle. Wrapped in
+    try/except as a final belt-and-suspenders — even ``queue.put`` or
+    ``session.info.pop`` should not bring down a committing session.
+
+    Snapshots are deduplicated by ``(tenant_id, sync_run_id, _status)``
+    before enqueueing. ``before_flush`` can fire multiple times within
+    a single transaction (manual ``session.flush()`` loops, large
+    transactions). If a row is dirty during two flushes with status
+    history still showing the transition, we'd otherwise enqueue — and
+    then emit — twice for the same event.
+    """
+    try:
         snapshots: list[dict[str, Any]] | None = session.info.pop(_PENDING_KEY, None)
         if not snapshots:
             return
 
-        snapshots = _dedup_snapshots(snapshots)
+        for snap in _dedup_snapshots(snapshots):
+            _DISPATCH_QUEUE.put_nowait(snap)
 
-        from sqlalchemy.orm import Session as RawSession
+        # Lazy-start the dispatcher on first enqueue. Module-import time
+        # is too early — the database engine isn't yet configured during
+        # some import paths (Alembic migrations, schema introspection).
+        _ensure_dispatcher_running()
+    except Exception:  # pragma: no cover - defensive, must not raise
+        logger.warning("sync webhook emission _flush failed", exc_info=True)
 
-        from src.admin.services.webhook_publisher import emit_event
-        from src.core.database.database_session import get_engine
 
-        engine = get_engine()
-        with RawSession(engine) as fresh:
-            for snap in snapshots:
-                event_type = "sync_run.completed" if snap["_status"] == "completed" else "sync_run.failed"
-                try:
-                    emit_event(
-                        snap["tenant_id"],
-                        event_type,
-                        _build_payload(snap, event_type),
-                        session=fresh,
-                    )
-                except Exception:  # pragma: no cover - emit_event already swallows
-                    logger.warning(
-                        "sync webhook emission failed for tenant_id=%s sync_run_id=%s",
-                        snap.get("tenant_id"),
-                        snap.get("sync_run_id"),
-                        exc_info=True,
-                    )
+def _ensure_dispatcher_running() -> None:
+    """Start the dispatcher thread if it isn't already running.
 
-    def _drop(session: Session) -> None:
+    Idempotent under thread contention via ``_DISPATCHER_LOCK``. The
+    thread is a daemon so process shutdown doesn't block on draining
+    the queue — the v1 best-effort contract accepts dropped events at
+    shutdown.
+    """
+    global _DISPATCHER_THREAD
+    if _DISPATCHER_THREAD is not None and _DISPATCHER_THREAD.is_alive():
+        return
+    with _DISPATCHER_LOCK:
+        if _DISPATCHER_THREAD is not None and _DISPATCHER_THREAD.is_alive():
+            return
+        _DISPATCHER_THREAD = threading.Thread(
+            target=_dispatcher_loop,
+            name="sync-webhook-dispatcher",
+            daemon=True,
+        )
+        _DISPATCHER_THREAD.start()
+
+
+def _dispatcher_loop() -> None:
+    """Drain the dispatch queue and emit events.
+
+    Blocks on ``queue.get`` so the thread sleeps when idle. Each
+    snapshot is processed in its own try/except — a single failed
+    emission doesn't take down the dispatcher.
+    """
+    while True:
+        try:
+            snap = _DISPATCH_QUEUE.get()
+        except Exception:  # pragma: no cover - queue should not raise
+            logger.debug("sync webhook dispatcher queue.get raised", exc_info=True)
+            continue
+        try:
+            _dispatch_one(snap)
+        except Exception:  # pragma: no cover - defensive
+            logger.warning(
+                "sync webhook dispatcher failed for tenant_id=%s sync_run_id=%s",
+                snap.get("tenant_id"),
+                snap.get("sync_run_id"),
+                exc_info=True,
+            )
+        finally:
+            try:
+                _DISPATCH_QUEUE.task_done()
+            except Exception:
+                logger.debug("sync webhook dispatcher task_done raised", exc_info=True)
+
+
+def _dispatch_one(snap: dict[str, Any]) -> None:
+    """Build payload and emit one event. Uses the project-wide
+    ``get_db_session()`` rather than a raw ``Session(engine)`` because
+    we're in our own thread now — the post-commit race is gone."""
+    from src.admin.services.webhook_publisher import emit_event
+
+    event_type = "sync_run.completed" if snap["_status"] == "completed" else "sync_run.failed"
+    emit_event(
+        snap["tenant_id"],
+        event_type,
+        _build_payload(snap, event_type),
+    )
+
+
+def wait_for_dispatch(timeout: float = 5.0) -> None:
+    """Block until the dispatch queue is fully drained.
+
+    Test helper — production callers don't need to know about queue
+    timing. Integration tests that assert "the receiver got the event"
+    must call this after the committing ``session.commit()`` so the
+    daemon dispatcher has time to look up subscribers and post.
+
+    Raises :class:`TimeoutError` if the queue isn't drained within
+    ``timeout`` seconds; this surfaces a stuck dispatcher in tests
+    rather than letting them hang.
+    """
+    # Snapshot the unfinished count; queue.join() doesn't accept a
+    # timeout, so poll on the internal counter.
+    import time
+
+    deadline = time.monotonic() + timeout
+    while _DISPATCH_QUEUE.unfinished_tasks > 0:
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"sync webhook dispatch queue still has "
+                f"{_DISPATCH_QUEUE.unfinished_tasks} unprocessed snapshots after {timeout}s"
+            )
+        time.sleep(0.01)
+
+
+def _drop(session: Session) -> None:
+    try:
         session.info.pop(_PENDING_KEY, None)
+    except Exception:  # pragma: no cover - defensive, must not raise
+        logger.warning("sync webhook emission _drop failed", exc_info=True)
+
+
+def register_sync_webhook_emission() -> None:
+    """Wire SQLAlchemy session events that emit on SyncJob terminal commits.
+
+    Idempotent — guards against duplicate registration when the module is
+    reloaded under pytest's import-fixup or during dev reloads.
+    """
+    global _LISTENER_REGISTERED
+    if _LISTENER_REGISTERED:
+        return
 
     event.listen(Session, "before_flush", _capture)
     event.listen(Session, "after_commit", _flush)

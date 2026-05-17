@@ -27,6 +27,7 @@ from adcp.signing.webhook_hmac import LegacyWebhookHmacOptions, verify_webhook_h
 from flask import Flask
 
 from src.admin.services import webhook_publisher
+from src.admin.services.sync_webhook_emission import wait_for_dispatch
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.repositories.webhook_subscription import hash_secret
 from tests.factories import (
@@ -687,6 +688,11 @@ class TestSyncTerminalEmission:
             row.progress = {"item_count": 12345}
             session.commit()
 
+        # Emission is deferred to a daemon dispatcher thread (#76424016996).
+        # Wait for it to drain before asserting on the receiver.
+
+        wait_for_dispatch()
+
         assert len(receiver.calls) == 1, "terminal transition must emit exactly once"
         call = receiver.calls[0]
         verify_webhook_hmac(
@@ -738,6 +744,8 @@ class TestSyncTerminalEmission:
             row.completed_at = datetime.now(UTC)
             row.error_message = "Refresh token revoked"
             session.commit()
+
+        wait_for_dispatch()
 
         assert len(receiver.calls) == 1
         envelope = json.loads(receiver.calls[0]["content"])
@@ -795,6 +803,8 @@ class TestSyncTerminalEmission:
             row.completed_at = datetime.now(UTC)
             session.commit()
 
+        wait_for_dispatch()
+
         assert len(receiver.calls) == 1
         assert json.loads(receiver.calls[0]["content"])["data"]["trigger"] == "provisioning"
 
@@ -828,6 +838,7 @@ class TestSyncTerminalEmission:
             row.completed_at = datetime.now(UTC)
             session.commit()
 
+        wait_for_dispatch()
         assert len(receiver.calls) == 1, "first terminal transition fires once"
 
         # Touch a non-status column on the already-terminal row.
@@ -836,6 +847,7 @@ class TestSyncTerminalEmission:
             row.summary = "Late-arriving summary annotation"
             session.commit()
 
+        wait_for_dispatch()
         assert len(receiver.calls) == 1, "non-status update on terminal row must not re-fire the event"
 
     def test_rolled_back_terminal_transition_does_not_fire(
@@ -872,7 +884,37 @@ class TestSyncTerminalEmission:
             session.flush()
             session.rollback()
 
+        # No event should have been enqueued; if any sneaked in, the
+        # dispatcher would have processed and the receiver would have
+        # a call. Wait briefly to give the dispatcher a chance, then
+        # assert.
+        wait_for_dispatch()
         assert receiver.calls == [], "rolled-back terminal transition must not emit"
+
+    def test_flush_does_no_db_work_in_after_commit(self):
+        """The listener's ``_flush`` must do ZERO DB work in-line — it
+        only moves snapshots from ``session.info`` to the process-wide
+        dispatch queue. A daemon dispatcher thread does the actual
+        subscriber lookup + delivery.
+
+        Regression for CI #76424016996: when the listener did DB work
+        in ``after_commit``, a daemon worker thread committing a terminal
+        SyncJob racing the integration_db fixture's ``engine.dispose()``
+        raised :class:`OperationalError` through ``session.commit()``
+        into :func:`get_db_session`'s handler, tripping
+        ``_is_healthy=False`` and cascade-failing every subsequent test.
+
+        Call ``_flush`` directly with a stand-in session carrying one
+        snapshot; assert it drains the snapshot and enqueues without
+        touching the engine.
+        """
+        from tests.helpers.sync_webhook_emission import (
+            FakeListenerSession,
+            assert_flush_enqueues_without_db_work,
+        )
+
+        fake = FakeListenerSession()
+        assert_flush_enqueues_without_db_work(fake)
 
 
 # ---------------------------------------------------------------------------

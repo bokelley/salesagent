@@ -149,22 +149,11 @@ class TestDedupSnapshots:
     collapses by (tenant_id, sync_run_id, _status)."""
 
     def _snap(self, **overrides):
-        base = {
-            "_status": "completed",
-            "tenant_id": "tnt_a",
-            "sync_run_id": "sync_1",
-            "sync_type": "inventory",
-            "adapter_type": "google_ad_manager",
-            "started_at": None,
-            "completed_at": None,
-            "summary": None,
-            "error_message": None,
-            "triggered_by": None,
-            "triggered_by_id": None,
-            "item_count": None,
-        }
-        base.update(overrides)
-        return base
+        from tests.helpers.sync_webhook_emission import make_snapshot
+
+        defaults = {"tenant_id": "tnt_a", "sync_run_id": "sync_1"}
+        defaults.update(overrides)
+        return make_snapshot(**defaults)
 
     def test_empty_list_returns_empty(self):
         assert _dedup_snapshots([]) == []
@@ -211,22 +200,19 @@ class TestBuildPayload:
     from our OpenAPI."""
 
     def _snapshot(self, **overrides):
-        base = {
-            "_status": "completed",
+        from tests.helpers.sync_webhook_emission import make_snapshot
+
+        defaults = {
             "tenant_id": "tnt_acme",
             "sync_run_id": "sync_001",
-            "sync_type": "inventory",
-            "adapter_type": "google_ad_manager",
             "started_at": datetime(2026, 5, 17, 18, 23, 11, tzinfo=UTC),
             "completed_at": datetime(2026, 5, 17, 18, 24, 33, tzinfo=UTC),
             "summary": "Synced 12345 ad units",
-            "error_message": None,
             "triggered_by": "scheduler",
-            "triggered_by_id": None,
             "item_count": 12345,
         }
-        base.update(overrides)
-        return base
+        defaults.update(overrides)
+        return make_snapshot(**defaults)
 
     def test_completed_payload_shape(self):
         snap = self._snapshot()
