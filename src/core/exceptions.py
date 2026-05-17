@@ -88,9 +88,18 @@ class AdCPNotFoundError(AdCPError):
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
-    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
+    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND).
+
+    Recovery is ``terminal``: a buyer who references a non-existent
+    account cannot self-recover by retrying with a different payload —
+    the publisher must provision the account first. This overrides the
+    ``correctable`` default inherited from ``AdCPNotFoundError`` (which
+    fits MEDIA_BUY_NOT_FOUND / PRODUCT_NOT_FOUND, where the buyer can
+    re-discover and retry).
+    """
 
     error_code = "ACCOUNT_NOT_FOUND"
+    recovery: RecoveryHint = "terminal"
 
 
 class AdCPMediaBuyNotFoundError(AdCPNotFoundError):

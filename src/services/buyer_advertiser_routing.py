@@ -45,7 +45,7 @@ from src.core.database.models import (
     Principal,
     Tenant,
 )
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPError, RecoveryHint
 from src.core.helpers.account_provisioning import (
     _account_advertiser_id,
     _set_account_advertiser_mapping,
@@ -66,9 +66,20 @@ class AdCPTenantNotActivated(AdCPError):
     ``POST /activate`` — the buyer-protocol error path IS the
     tenant-activated check. Storefront's homepage checklist drives
     off ``Tenant.default_gam_advertiser_id`` being non-null.
+
+    Recovery is ``terminal``: the buyer cannot self-recover —
+    the publisher must finish onboarding (set a default advertiser
+    or add a routing rule) before any buy on this tenant can succeed.
     """
 
-    code = "TENANT_NOT_ACTIVATED"
+    error_code = "TENANT_NOT_ACTIVATED"
+    recovery: RecoveryHint = "terminal"
+
+    # Back-compat: legacy callers read ``exc.code``; surface the same
+    # value as ``error_code`` so existing code paths keep working.
+    @property
+    def code(self) -> str:
+        return self.error_code
 
 
 # ---------------------------------------------------------------------------
