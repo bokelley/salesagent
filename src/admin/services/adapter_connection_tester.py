@@ -41,12 +41,14 @@ def test_adapter_connection(adapter_type: str, config: dict[str, Any]) -> tuple[
     """Probe the adapter's authentication path.
 
     Args:
-        adapter_type: One of ``"google_ad_manager"``, ``"freewheel"``, or
-            ``"mock"``.
+        adapter_type: One of ``"google_ad_manager"``, ``"freewheel"``,
+            ``"broadstreet"``, ``"springserve"``, or ``"mock"``.
         config: Adapter-specific configuration. For GAM this includes
             ``network_code`` and one of ``service_account_json`` /
             ``refresh_token``. For FreeWheel this includes
             ``environment`` and one of (``username``, ``password``) /
+            ``api_token``. For Broadstreet, ``network_id`` + ``api_key``.
+            For SpringServe, one of (``email``, ``password``) /
             ``api_token``.
 
     Returns:
@@ -61,6 +63,12 @@ def test_adapter_connection(adapter_type: str, config: dict[str, Any]) -> tuple[
 
     if adapter_type == "freewheel":
         return _test_freewheel(config)
+
+    if adapter_type == "broadstreet":
+        return _test_broadstreet(config)
+
+    if adapter_type == "springserve":
+        return _test_springserve(config)
 
     return False, f"Unsupported adapter_type: {adapter_type!r}"
 
@@ -92,13 +100,19 @@ def _test_gam(config: dict[str, Any]) -> tuple[bool, str | None]:
 
 
 def _test_freewheel(config: dict[str, Any]) -> tuple[bool, str | None]:
-    """Authentication probe for FreeWheel Publisher API.
+    """Authentication + publisher-binding probe for FreeWheel Publisher API.
 
-    Hits ``/auth/token/info`` — a 200 proves the bearer (or password
-    grant) is recognised by FreeWheel's gateway. Same probe FreeWheel's
-    own ``check_permissions()`` matrix uses for the required
-    ``auth_token_info`` scope, so success here means everything else in
-    that matrix has a real chance.
+    Two calls, sequentially:
+
+    1. ``/auth/token/info`` — proves the bearer is recognised by
+       FreeWheel's gateway. Surfaces 401 (revoked/expired) and 403 (no
+       entitlements) cleanly.
+    2. ``GET /services/v4/sites?per_page=1`` — proves the bearer is
+       scoped to a publisher account with inventory. Without this, a
+       valid-but-wrong-publisher token would provision successfully and
+       only fail at first inventory sync — the asymmetry GAM avoids via
+       ``getCurrentNetwork()``. A 403 here is the diagnostic signal that
+       the token works but the publisher binding is wrong.
     """
     username = config.get("username")
     password = config.get("password")
@@ -128,25 +142,143 @@ def _test_freewheel(config: dict[str, Any]) -> tuple[bool, str | None]:
             password=password,
             base_url=base_url,
         )
+    except Exception as exc:  # pragma: no cover - construction-time auth failures are rare
+        logger.warning("FreeWheel client construction failed: %s", exc)
+        return False, f"FreeWheel client construction failed: {type(exc).__name__}: {exc}"
+
+    # Step 1: bearer validity.
+    try:
         client.token_info()
     except FreeWheelAuthError as exc:
         return False, f"FreeWheel auth rejected: {exc}"
     except FreeWheelForbiddenError as exc:
-        # Bearer is valid but lacks the entitlements to introspect itself.
-        # Treat as a credential problem — the configured key isn't usable.
         return False, f"FreeWheel bearer lacks entitlements: {exc}"
     except FreeWheelError as exc:
-        # Other FreeWheel-side error (4xx validation, 5xx server). Surface
-        # the status code so the host product can distinguish transient
-        # infra failures from bad credentials.
-        return False, f"FreeWheel API error (status={exc.status_code}): {exc}"
+        return False, f"FreeWheel API error on token_info (status={exc.status_code}): {exc}"
     except Exception as exc:
-        # Network / transport failure (DNS, TLS, timeout, JSON decode).
-        # Not a credentials problem; the host product may want to retry.
         logger.warning("FreeWheel token_info() transport failure: %s", exc)
         return False, f"FreeWheel transport failure: {type(exc).__name__}: {exc}"
 
+    # Step 2: publisher binding — does the bearer see inventory?
+    try:
+        client.inventory.list_sites(per_page=1)
+    except FreeWheelForbiddenError as exc:
+        # Bearer is valid (step 1 passed) but the publisher account it
+        # represents can't read inventory. Either the token is for the
+        # wrong publisher or the inventory scope wasn't granted.
+        return False, (
+            f"FreeWheel bearer cannot read inventory for the configured publisher "
+            f"(403): {exc}. Verify the token is for the intended publisher account."
+        )
+    except FreeWheelError as exc:
+        return False, f"FreeWheel API error on list_sites (status={exc.status_code}): {exc}"
+    except Exception as exc:
+        logger.warning("FreeWheel list_sites() transport failure: %s", exc)
+        return False, f"FreeWheel transport failure: {type(exc).__name__}: {exc}"
+
     return True, None
+
+
+def _test_broadstreet(config: dict[str, Any]) -> tuple[bool, str | None]:
+    """Authentication + network-binding probe for Broadstreet.
+
+    Calls ``GET /networks/{network_id}`` via :meth:`BroadstreetClient.get_network`.
+    A single call validates both that the API key is recognised AND that
+    it has access to the configured network — Broadstreet's natural
+    analog of GAM's ``getCurrentNetwork()``.
+    """
+    network_id = config.get("network_id")
+    api_key = config.get("api_key")
+    if not network_id:
+        return False, "Broadstreet network_id is required"
+    if not api_key:
+        return False, "Broadstreet api_key is required"
+
+    try:
+        from src.adapters.broadstreet.client import BroadstreetAPIError, BroadstreetClient
+    except Exception as exc:  # pragma: no cover - environmental
+        logger.exception("Broadstreet imports failed")
+        return False, f"Broadstreet client unavailable: {exc}"
+
+    try:
+        client = BroadstreetClient(access_token=str(api_key), network_id=str(network_id))
+        client.get_network()
+    except BroadstreetAPIError as exc:
+        # 401/403 → bad key or no access to this network. 404 → wrong network_id.
+        status = exc.status_code
+        if status in (401, 403):
+            return False, f"Broadstreet auth rejected (status={status}): {exc}"
+        if status == 404:
+            return False, f"Broadstreet network {network_id!r} not found (status=404)"
+        return False, f"Broadstreet API error (status={status}): {exc}"
+    except Exception as exc:
+        logger.warning("Broadstreet get_network() transport failure: %s", exc)
+        return False, f"Broadstreet transport failure: {type(exc).__name__}: {exc}"
+
+    return True, None
+
+
+def _test_springserve(config: dict[str, Any]) -> tuple[bool, str | None]:
+    """Authentication + scope probe for SpringServe.
+
+    Two-step probe mirroring the FreeWheel pattern:
+
+    1. ``GET /auth/check`` via the transport's token cache — the first
+       authenticated call mints (or validates) the bearer. Email-grant
+       credentials hit ``POST /auth`` here; bad password surfaces as
+       :class:`SpringServeAuthError`.
+    2. ``GET /supply/tags?per_page=1`` — proves the bearer is scoped to
+       a publisher account with supply inventory. Analogous to FreeWheel's
+       ``list_sites`` probe and GAM's ``getCurrentNetwork``.
+    """
+    email = config.get("email")
+    password = config.get("password")
+    api_token = config.get("api_token")
+    if not ((email and password) or api_token):
+        return False, "SpringServe config requires either (email + password) or api_token"
+
+    try:
+        from src.adapters.springserve._transport import (
+            SpringServeAuthError,
+            SpringServeError,
+            SpringServeForbiddenError,
+        )
+        from src.adapters.springserve.client import SpringServeClient
+    except Exception as exc:  # pragma: no cover - environmental
+        logger.exception("SpringServe imports failed")
+        return False, f"SpringServe client unavailable: {exc}"
+
+    try:
+        client = SpringServeClient(api_token=api_token, email=email, password=password)
+    except Exception as exc:  # pragma: no cover - construction-time failures are rare
+        logger.warning("SpringServe client construction failed: %s", exc)
+        return False, f"SpringServe client construction failed: {type(exc).__name__}: {exc}"
+
+    # Single call exercises both auth (token mint, if password grant) and
+    # scope (a 403 here means the bearer is valid but can't see supply
+    # inventory for the configured account). transport.probe() returns
+    # (status_code, body) without raising on non-2xx — auth/mint
+    # failures still raise, which we surface separately.
+    try:
+        status, body = client._transport.probe("GET", "/supply/tags?per_page=1")
+    except SpringServeAuthError as exc:
+        return False, f"SpringServe auth rejected: {exc}"
+    except SpringServeForbiddenError as exc:
+        return False, f"SpringServe bearer lacks entitlements: {exc}"
+    except SpringServeError as exc:
+        return False, f"SpringServe API error on auth (status={exc.status_code}): {exc}"
+    except Exception as exc:
+        logger.warning("SpringServe probe transport failure: %s", exc)
+        return False, f"SpringServe transport failure: {type(exc).__name__}: {exc}"
+
+    if status == 200:
+        return True, None
+    if status in (401, 403):
+        return False, (
+            f"SpringServe bearer cannot read supply inventory (status={status}). "
+            f"Verify the token is for the intended publisher account."
+        )
+    return False, f"SpringServe supply probe returned status={status}: {body[:200]}"
 
 
 def preview_adapter(adapter_type: str, config: dict[str, Any]) -> AdapterPreview:
