@@ -61,3 +61,28 @@ class TestGetSalesAgentDomain:
         ):
             mock_engine.side_effect = RuntimeError("db not ready")
             assert get_sales_agent_domain() is None
+
+
+class TestNormalizeHost:
+    """_normalize_host() strips scheme prefixes and whitespace from raw DB values."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("agent.example.com", "agent.example.com"),
+            ("  agent.example.com  ", "agent.example.com"),
+            ("https://agent.example.com", "agent.example.com"),
+            ("http://agent.example.com", "agent.example.com"),
+            ("HTTPS://agent.example.com", "agent.example.com"),
+            ("  https://agent.example.com  ", "agent.example.com"),
+            # Port kept (legitimate config for non-standard deployments)
+            ("agent.example.com:8443", "agent.example.com:8443"),
+            (None, None),
+            ("", None),
+            ("   ", None),
+        ],
+    )
+    def test_normalize(self, raw, expected):
+        from src.core.domain_config import _normalize_host
+
+        assert _normalize_host(raw) == expected

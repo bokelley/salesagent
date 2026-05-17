@@ -9,7 +9,28 @@ no subdomain routing. In multi-tenant mode, you must set SALES_AGENT_DOMAIN.
 """
 
 import functools
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_host(value: str | None) -> str | None:
+    """Strip whitespace and any accidental scheme prefix from a host string.
+
+    Defense-in-depth: the Admin UI already rejects scheme-prefixed input, but
+    direct DB edits or migrations from legacy data could still surface
+    ``"https://agent.example.com"`` or ``"  agent.example.com  "``. Without
+    normalization the URL builders would emit ``https://https://agent.example.com``.
+    """
+    if not value:
+        return None
+    cleaned = value.strip()
+    for scheme in ("https://", "http://"):
+        if cleaned.lower().startswith(scheme):
+            cleaned = cleaned[len(scheme) :]
+            break
+    return cleaned or None
 
 
 def _is_localhost(domain: str | None) -> bool:
@@ -66,8 +87,12 @@ def _resolve_single_tenant_virtual_host() -> str | None:
         # column to build URLs), not domain data access.
         with get_engine().connect() as conn:
             row = conn.execute(text("SELECT virtual_host FROM tenants WHERE is_active = TRUE LIMIT 1")).first()
-            return row[0] if row and row[0] else None
-    except Exception:
+            return _normalize_host(row[0]) if row else None
+    except Exception as exc:
+        # Early-startup (DB not migrated yet) and disconnected-during-build
+        # callers both want None back, not an exception. Log at debug so
+        # operators can still diagnose "all my URLs are None" without spam.
+        logger.debug("virtual_host lookup failed; returning None", exc_info=exc)
         return None
 
 

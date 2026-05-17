@@ -392,6 +392,13 @@ def update_general(tenant_id):
             tenant.updated_at = datetime.now(UTC)
             db_session.commit()
 
+            # Invalidate the cached virtual_host lookup so the next URL
+            # build (MCP/A2A URL, landing page, OAuth callback) sees the
+            # change without waiting for a process restart.
+            from src.core.domain_config import _resolve_single_tenant_virtual_host
+
+            _resolve_single_tenant_virtual_host.cache_clear()
+
             flash("General settings updated successfully", "success")
 
     except Exception as e:
