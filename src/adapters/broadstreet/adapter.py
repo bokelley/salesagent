@@ -67,7 +67,13 @@ class BroadstreetAdapter(AdServerAdapter):
     connection_config_class = BroadstreetConnectionConfig
     product_config_class = BroadstreetProductConfig
     capabilities = AdapterCapabilities(
-        supports_inventory_sync=True,
+        # Broadstreet has an in-memory zone manager (BroadstreetInventoryManager)
+        # but no persistence layer wiring run_inventory_sync. Flagging this
+        # capability False until the persistence work lands (#448) keeps the
+        # refresh path honest — a True flag without an implementation crashes
+        # the worker with NotImplementedError and shows a permanent "failed"
+        # sync row on the publisher's dashboard.
+        supports_inventory_sync=False,
         supports_inventory_profiles=True,
         inventory_entity_label="Zones",
         supports_custom_targeting=False,
