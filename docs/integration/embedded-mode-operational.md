@@ -177,7 +177,32 @@ The response does **not** carry sync handles. The first inventory sync kicks off
 
 **Inventory-sync-dependent operations inside the salesagent UI** (product creation, custom targeting key/value pickers, GAM ad unit selection) degrade gracefully with "waiting for first inventory sync" affordances. Initial sync staleness is an ongoing operational concern, not a one-time gate — it must remain visible to the publisher after onboarding, which is why it belongs in the salesagent UI rather than the host's provision flow.
 
-**Failure visibility after provision.** A worker spawn failure (e.g., infrastructure error during sync kickoff) transitions the corresponding `SyncJob` row to `status="failed"` with an error message, surfaced in the salesagent UI dashboard. Rows never sit `pending` indefinitely.
+**Failure visibility after provision.** A worker spawn failure (e.g., infrastructure error during sync kickoff) transitions the corresponding `SyncJob` row to `status="failed"` with a structured error message — exception class, message, spawn label, and a brief traceback — surfaced in the salesagent UI dashboard. Rows never sit `pending` indefinitely.
+
+**Latency expectations.** The provisioning call blocks on a live adapter probe, so it is not free. Plan UX accordingly:
+
+| Adapter | What we probe | Typical | P95 | Hard timeout |
+|---|---|---|---|---|
+| GAM | `NetworkService.getCurrentNetwork()` | ~500ms–2s | ~5s | googleads SDK default (~10s). Beyond that → 5xx, not 4xx. |
+| FreeWheel | `/auth/token/info` then `/services/v4/sites?per_page=1` | ~500ms–3s | ~6s | requests default (~10s per call). Beyond that → 5xx. |
+| Mock | (no live call) | <50ms | <100ms | n/a |
+
+**5xx vs 4xx semantics:**
+- **4xx** (`adapter_connection_failed`, `external_org_id_conflict`, `public_agent_url_mismatch`) — credentials are bad or input is malformed. The publisher needs to fix something on their side before retry. Surface inline and prompt them.
+- **5xx** (`internal_error`) — salesagent or its upstream (GAM/FreeWheel) is slow or unreachable. Retry is appropriate. Use exponential backoff.
+
+**Spinner UX guidance.** Plan for up to ~6 seconds of perceived wait under normal conditions. Show a clear loading state with a "validating credentials with <adapter>" hint so the publisher knows what's happening. If your storefront has an SLA, set the client timeout at 30s — that gives slow-GAM-day headroom over the SDK's own ~10s without inviting indefinite hang.
+
+**Retry contract** (publisher granted access after a 400):
+
+The same endpoint with the same `external_org_id` is **not** idempotent — the duplicate-`external_org_id` check returns 409 if a tenant was previously committed for that org. But a 4xx that *failed before commit* leaves no row, so the same `external_org_id` is reusable. To distinguish:
+
+- **400 `adapter_connection_failed`** — nothing was written. Same `external_org_id`, retry the same `POST /tenants/provision` after the publisher fixes their credentials. Idempotent from the host's perspective.
+- **409 `external_org_id_conflict`** — a tenant already exists for that org. To retry from a clean slate, either: (a) reuse the existing tenant (recommended — call `PATCH /tenants/{tid}/adapter-config` to fix the bad config), or (b) `DELETE /tenants/{tid}` then re-provision.
+- **422 `public_agent_url_mismatch`** — host-side configuration issue (wrong public agent URL); fix on the host, retry.
+- **5xx** — retry with backoff. No host-side state change needed.
+
+The recommended flow for "publisher just granted GAM access and now we want to retry": same endpoint, same `external_org_id`, same body. You get 201 on success or a fresh 4xx telling you what's still wrong.
 
 ### Known dev caveats
 

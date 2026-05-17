@@ -376,7 +376,14 @@ class TestProvision:
 
         assert jobs["inventory"].status == "failed"
         assert jobs["custom_targeting"].status == "failed"
-        assert "simulated spawn failure" in (jobs["inventory"].error_message or "")
+        # Error message captures the exception class, message, spawn label,
+        # and a brief traceback — enough for the publisher to self-diagnose
+        # common issues without escalating to an engineer.
+        inventory_err = jobs["inventory"].error_message or ""
+        assert "simulated spawn failure" in inventory_err
+        assert "RuntimeError" in inventory_err
+        assert "inventory" in inventory_err  # spawn_label
+        assert "Traceback" in inventory_err
         assert "simulated spawn failure" in (jobs["custom_targeting"].error_message or "")
         assert jobs["inventory"].completed_at is not None
 

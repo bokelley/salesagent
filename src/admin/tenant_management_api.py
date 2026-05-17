@@ -2035,22 +2035,44 @@ _REFRESH_SYNC_TYPES: tuple[str, ...] = ("inventory", "custom_targeting", "advert
 _REFRESH_IDEMPOTENCY_SECONDS = 60
 
 
-def _mark_sync_failed_on_spawn(tenant_id: str, sync_ids: list[str], error_message: str) -> None:
+def _mark_sync_failed_on_spawn(
+    tenant_id: str,
+    sync_ids: list[str],
+    exc: BaseException,
+    *,
+    spawn_label: str,
+) -> None:
     """Transition pending SyncJob rows to ``failed`` when worker spawn raised.
 
     Without this, a spawn-time exception leaves rows in ``pending`` forever
     — the publisher's dashboard shows "never run" with no error surfaced.
     Marking the row ``failed`` makes the failure visible in the salesagent
     UI and lets the next /refresh tick re-attempt cleanly.
+
+    Captures structured error context (class, message, brief traceback) on
+    the row so a publisher can self-diagnose common issues (e.g., a missing
+    GAM scope shows up as a recognizable exception name) without escalating
+    to an engineer for routine failures.
     """
     if not sync_ids:
         return
+    import traceback
+
     from src.core.database.repositories import SyncJobRepository
+
+    # Three frames is usually enough to identify the spawn site without
+    # ballooning the Text column. Real traceback lives in the logger.exception
+    # call at the catch site for full engineer debugging.
+    tb_lines = traceback.format_tb(exc.__traceback__, limit=3) if exc.__traceback__ else []
+    tb_summary = "".join(tb_lines).strip()
+    error_message = f"Worker spawn failed ({spawn_label}): {type(exc).__name__}: {exc}"
+    if tb_summary:
+        error_message = f"{error_message}\n\nTraceback (most recent calls):\n{tb_summary}"
 
     try:
         with get_db_session() as session:
             repo = SyncJobRepository(session, tenant_id)
-            transitioned = repo.mark_pending_as_failed(sync_ids, f"Worker spawn failed: {error_message}")
+            transitioned = repo.mark_pending_as_failed(sync_ids, error_message)
             session.commit()
             if transitioned == 0:
                 # The rows we tried to mark failed weren't in 'pending' —
@@ -2122,7 +2144,7 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
             failed_ids = [inventory_id]
             if targeting_id and targeting_id in pending_ids:
                 failed_ids.append(targeting_id)
-            _mark_sync_failed_on_spawn(tenant_id, failed_ids, f"{type(exc).__name__}: {exc}")
+            _mark_sync_failed_on_spawn(tenant_id, failed_ids, exc, spawn_label="inventory")
     elif targeting_id and targeting_id in pending_ids:
         # Edge case: inventory row was reused (running) but targeting is
         # fresh-pending. Mark targeting as bundled with the live inventory
@@ -2174,7 +2196,7 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
                 tenant_id,
                 advertisers_id,
             )
-            _mark_sync_failed_on_spawn(tenant_id, [advertisers_id], f"{type(exc).__name__}: {exc}")
+            _mark_sync_failed_on_spawn(tenant_id, [advertisers_id], exc, spawn_label="advertisers")
 
 
 def _create_and_spawn_refresh(
