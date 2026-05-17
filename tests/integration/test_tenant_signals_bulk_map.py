@@ -119,7 +119,13 @@ class TestCompositeValidator:
             }
         }
         _, errors, parsed = _validate_composite_form(
-            MultiDict({"name": "Premium sports", "targeting_data": json.dumps(payload)})
+            MultiDict(
+                {
+                    "name": "Premium sports",
+                    "composite_source": "custom_keys",
+                    "targeting_data": json.dumps(payload),
+                }
+            )
         )
         assert errors == {}
         assert parsed["name"] == "Premium sports"
@@ -146,7 +152,13 @@ class TestCompositeValidator:
         from src.admin.blueprints.tenant_signals import _validate_composite_form
 
         _, errors, _ = _validate_composite_form(
-            MultiDict({"name": "Empty", "targeting_data": json.dumps({"key_value_pairs": {"groups": []}})})
+            MultiDict(
+                {
+                    "name": "Empty",
+                    "composite_source": "custom_keys",
+                    "targeting_data": json.dumps({"key_value_pairs": {"groups": []}}),
+                }
+            )
         )
         assert "targeting_data" in errors
 
@@ -158,8 +170,82 @@ class TestCompositeValidator:
         from src.admin.blueprints.tenant_signals import _validate_composite_form
 
         payload = {"key_value_pairs": {"groups": [{"criteria": [{"keyId": "X", "values": []}]}]}}
-        _, errors, _ = _validate_composite_form(MultiDict({"name": "Bad", "targeting_data": json.dumps(payload)}))
+        _, errors, _ = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Bad",
+                    "composite_source": "custom_keys",
+                    "targeting_data": json.dumps(payload),
+                }
+            )
+        )
         assert "targeting_data" in errors
+
+
+class TestCompositeAudienceValidator:
+    """The new audience-segment composition path on /signals/composite.
+    Emits ``type=composed`` with audience_segment criteria (matching #439's
+    materializer shape). Single pick collapses to a pass-through."""
+
+    def test_single_segment_pick_is_passthrough(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        picks = [{"segment_id": "98765", "mode": "include"}]
+        _, errors, parsed = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Sports only",
+                    "composite_source": "audience",
+                    "audience_picks": json.dumps(picks),
+                }
+            )
+        )
+        assert errors == {}
+        assert parsed["adapter_config"] == {
+            "type": "passthrough",
+            "kind": "audience_segment",
+            "segment_id": "98765",
+            "mode": "include",
+        }
+
+    def test_multiple_picks_compose_to_and(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        picks = [
+            {"segment_id": "111", "mode": "include"},
+            {"segment_id": "222", "mode": "exclude"},
+        ]
+        _, errors, parsed = _validate_composite_form(
+            MultiDict(
+                {
+                    "name": "Sports AND not junk",
+                    "composite_source": "audience",
+                    "audience_picks": json.dumps(picks),
+                }
+            )
+        )
+        assert errors == {}
+        assert parsed["adapter_config"]["type"] == "composed"
+        assert len(parsed["adapter_config"]["criteria"]) == 2
+        assert parsed["adapter_config"]["criteria"][1]["mode"] == "exclude"
+
+    def test_empty_audience_picks_rejected(self):
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        _, errors, _ = _validate_composite_form(
+            MultiDict({"name": "Empty", "composite_source": "audience", "audience_picks": "[]"})
+        )
+        assert "audience_picks" in errors
 
 
 class TestMappingSummary:

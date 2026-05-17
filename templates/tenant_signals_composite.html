@@ -4,22 +4,25 @@
 
 {% block content %}
 {% set effective = form_data if form_data else {
+    "composite_source": "audience",
     "name": "",
     "description": "",
+    "audience_picks": "",
     "targeting_data": "",
 } %}
 <style>
     /* admin.css has a legacy ``.tab-content { display: none }`` rule; the
        embedded TargetingWidget uses tab-content internally so scope-override. */
     .targeting-widget .tab-content { display: block; }
+    #composite-card .tab-content { display: block; }
 </style>
 <div class="container">
     <header class="sa-page-header">
         <div>
             <h2 class="sa-page-header__title">Build composite signal</h2>
             <p class="sa-page-header__subtitle">
-                For targeting that's too complex for the bulk-mapper: multi-key AND, OR groups,
-                multi-value criteria, exclude. <strong>Exclusive at buy time</strong> — a composite
+                For targeting too complex for the bulk-mapper. Pick your source — audience segments
+                or custom keys — then compose. <strong>Exclusive at buy time</strong> — a composite
                 signal can't be combined with other signals in the same media buy's
                 <code>audience_include</code> / <code>audience_exclude</code> list.
             </p>
@@ -27,6 +30,8 @@
     </header>
 
     <form method="POST" id="composite-form">
+        <input type="hidden" name="composite_source" id="composite-source-input" value="{{ effective.composite_source }}">
+
         <div class="card mb-3">
             <div class="card-header"><h5 class="mb-0">Identity</h5></div>
             <div class="card-body">
@@ -38,8 +43,7 @@
                            value="{{ effective.name }}">
                     {% if errors and errors.name %}<div class="invalid-feedback">{{ errors.name }}</div>{% endif %}
                     <div class="form-text">
-                        Surfaces to buyers via <code>get_signals</code>. Composite signals can't
-                        auto-derive a name from a boolean expression — you choose one.
+                        Composite signals can't auto-derive a name from a boolean expression — you choose one.
                     </div>
                 </div>
                 <div class="mb-1">
@@ -50,16 +54,92 @@
             </div>
         </div>
 
-        <div class="card mb-3">
-            <div class="card-header"><h5 class="mb-0">Targeting</h5></div>
-            <div class="card-body">
-                {% if errors and errors.targeting_data %}
-                <div class="alert alert-danger">{{ errors.targeting_data }}</div>
-                {% endif %}
-                {# The widget writes its groups payload into ``#targeting-data``; we
-                   pass it through to the server as ``targeting_data``. #}
-                <input type="hidden" id="targeting-data" name="targeting_data" value="{{ effective.targeting_data }}">
-                {% include "components/targeting_selector_widget.html" %}
+        <div class="card mb-3" id="composite-card">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0">Targeting</h5>
+                <ul class="nav nav-pills nav-sm" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link {% if effective.composite_source != 'custom_keys' %}active{% endif %}"
+                                data-bs-toggle="tab" data-bs-target="#audience-pane" type="button" role="tab"
+                                data-source="audience">
+                            Audience segments
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link {% if effective.composite_source == 'custom_keys' %}active{% endif %}"
+                                data-bs-toggle="tab" data-bs-target="#keys-pane" type="button" role="tab"
+                                data-source="custom_keys">
+                            Custom keys
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            <div class="card-body p-0">
+                <div class="tab-content">
+                    {# ========= Audience segments composition ========= #}
+                    <div class="tab-pane show {% if effective.composite_source != 'custom_keys' %}active{% endif %}" id="audience-pane" role="tabpanel">
+                        {% if errors and errors.audience_picks %}
+                        <div class="alert alert-danger m-3">{{ errors.audience_picks }}</div>
+                        {% endif %}
+                        {% if segments %}
+                        <p class="text-muted small px-3 pt-3 mb-2">
+                            Pick one or more synced GAM audience segments. Multiple picks combine
+                            with AND. Set per-row include / exclude to invert.
+                        </p>
+                        <table class="table table-sm table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width:36px"></th>
+                                    <th>Segment</th>
+                                    <th>Type</th>
+                                    <th>Reach (people)</th>
+                                    <th>Mode</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in segments %}
+                                <tr>
+                                    <td>
+                                        <input type="checkbox" class="form-check-input audience-pick"
+                                               data-segment-id="{{ s.id }}"
+                                               data-segment-name="{{ s.name }}">
+                                    </td>
+                                    <td>{{ s.name }}</td>
+                                    <td><span class="badge bg-light text-dark">{{ s.type or "—" }}</span></td>
+                                    <td class="text-end">{{ "{:,}".format(s.size) if s.size else "—" }}</td>
+                                    <td>
+                                        <select class="form-select form-select-sm audience-mode" disabled
+                                                data-segment-id="{{ s.id }}" style="width:auto">
+                                            <option value="include" selected>include</option>
+                                            <option value="exclude">exclude</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        <input type="hidden" id="audience-picks-input" name="audience_picks" value="{{ effective.audience_picks }}">
+                        {% else %}
+                        <div class="p-4 text-center text-muted">
+                            No synced audience segments. Run inventory sync first, then come back here.
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    {# ========= Custom keys composition (TargetingWidget) ========= #}
+                    <div class="tab-pane {% if effective.composite_source == 'custom_keys' %}show active{% endif %}" id="keys-pane" role="tabpanel">
+                        {% if errors and errors.targeting_data %}
+                        <div class="alert alert-danger m-3">{{ errors.targeting_data }}</div>
+                        {% endif %}
+                        <div class="p-3">
+                            <input type="hidden" id="targeting-data" name="targeting_data" value="{{ effective.targeting_data }}">
+                            {% include "components/targeting_selector_widget.html" %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <span class="text-muted small" id="composite-footer-hint">Pick a source above and add criteria.</span>
             </div>
         </div>
 
@@ -69,4 +149,79 @@
         </div>
     </form>
 </div>
+
+<script>
+(function() {
+    'use strict';
+
+    const sourceInput = document.getElementById('composite-source-input');
+    const picksInput = document.getElementById('audience-picks-input');
+    const hint = document.getElementById('composite-footer-hint');
+
+    // Track which tab the operator is composing in so the form submits
+    // the right source.
+    document.querySelectorAll('[data-source]').forEach(b => {
+        b.addEventListener('shown.bs.tab', () => {
+            sourceInput.value = b.dataset.source;
+            refreshHint();
+        });
+        // Also listen for click — Bootstrap tabs fire shown.bs.tab async.
+        b.addEventListener('click', () => {
+            sourceInput.value = b.dataset.source;
+            refreshHint();
+        });
+    });
+
+    // ---- Audience picks: gather ticked rows + their include/exclude mode ----
+    function gatherPicks() {
+        const picks = [];
+        document.querySelectorAll('.audience-pick:checked').forEach(cb => {
+            const segmentId = cb.dataset.segmentId;
+            const modeSel = document.querySelector(`.audience-mode[data-segment-id="${segmentId}"]`);
+            picks.push({
+                segment_id: segmentId,
+                mode: modeSel ? modeSel.value : 'include',
+            });
+        });
+        return picks;
+    }
+
+    function syncPicks() {
+        if (!picksInput) return;
+        const picks = gatherPicks();
+        picksInput.value = JSON.stringify(picks);
+        refreshHint();
+    }
+
+    document.querySelectorAll('.audience-pick').forEach(cb => {
+        cb.addEventListener('change', () => {
+            // Enable mode dropdown when ticked.
+            const modeSel = document.querySelector(`.audience-mode[data-segment-id="${cb.dataset.segmentId}"]`);
+            if (modeSel) modeSel.disabled = !cb.checked;
+            syncPicks();
+        });
+    });
+    document.querySelectorAll('.audience-mode').forEach(sel => {
+        sel.addEventListener('change', syncPicks);
+    });
+
+    function refreshHint() {
+        if (!hint) return;
+        const source = sourceInput.value;
+        if (source === 'audience') {
+            const picks = gatherPicks();
+            if (picks.length === 0) {
+                hint.textContent = 'Tick segments to AND together. Set mode per-segment to invert.';
+            } else {
+                const inc = picks.filter(p => p.mode === 'include').length;
+                const exc = picks.filter(p => p.mode === 'exclude').length;
+                hint.textContent = `${inc} include · ${exc} exclude — AND'd together`;
+            }
+        } else {
+            hint.textContent = 'Build groups in the targeting widget. Groups OR’d; criteria AND’d.';
+        }
+    }
+    refreshHint();
+})();
+</script>
 {% endblock %}

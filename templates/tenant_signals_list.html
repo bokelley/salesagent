@@ -60,7 +60,7 @@
         </div>
         <div class="card-body p-0">
             <div class="tab-content">
-                {# ----- Segments tab ----- #}
+                {# ----- Segments tab — shows UN-mapped only ----- #}
                 <div class="tab-pane show active" id="segments-tab" role="tabpanel">
                     {% if segments %}
                     <table class="table table-sm table-hover mb-0">
@@ -75,26 +75,14 @@
                         </thead>
                         <tbody>
                             {% for s in segments %}
-                            <tr {% if s.mapped_signal_id %}class="table-active text-muted"{% endif %}>
+                            <tr>
                                 <td>
-                                    {% if s.mapped_signal_id %}
-                                    <input type="checkbox" class="form-check-input" disabled checked>
-                                    {% else %}
                                     <input type="checkbox" class="form-check-input bulk-map-row"
                                            data-kind="audience_segment"
                                            data-segment-id="{{ s.id }}"
                                            data-segment-name="{{ s.name }}">
-                                    {% endif %}
                                 </td>
-                                <td>
-                                    {{ s.name }}
-                                    {% if s.mapped_signal_id %}
-                                    <a class="badge bg-success text-decoration-none ms-2"
-                                       href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped_signal_id) }}">
-                                        Mapped — {{ s.mapped_signal_name }}
-                                    </a>
-                                    {% endif %}
-                                </td>
+                                <td>{{ s.name }}</td>
                                 <td><span class="badge bg-light text-dark">{{ s.type or "—" }}</span></td>
                                 <td class="text-end">{{ "{:,}".format(s.size) if s.size else "—" }}</td>
                                 <td class="text-muted small font-monospace">{{ s.id }}</td>
@@ -102,8 +90,19 @@
                             {% endfor %}
                         </tbody>
                     </table>
+                    {% if mapped_segments_count %}
+                    <div class="p-2 text-center small text-muted bg-light border-top">
+                        {{ mapped_segments_count }} segment(s) already mapped — see the <strong>Existing signals</strong> list below to manage them.
+                    </div>
+                    {% endif %}
                     {% else %}
-                    <div class="p-4 text-center text-muted">No audience segments synced. Run inventory sync to load them.</div>
+                    <div class="p-4 text-center text-muted">
+                        {% if mapped_segments_count %}
+                        All {{ mapped_segments_count }} synced segments are mapped. Manage them in <strong>Existing signals</strong> below.
+                        {% else %}
+                        No audience segments synced. Run inventory sync to load them.
+                        {% endif %}
+                    </div>
                     {% endif %}
                 </div>
 
@@ -146,9 +145,9 @@
         </div>
         <div class="card-footer d-flex justify-content-between align-items-center">
             <div class="text-muted small" id="bulk-footer-hint">Pick rows to map — they'll become signals on save.</div>
-            <div class="d-flex align-items-center gap-3">
-                <a href="{{ url_for('tenant_signals.composite_signal', tenant_id=tenant_id) }}" class="small text-muted">
-                    Need multi-key / OR / exclude? <strong>Build a composite signal →</strong>
+            <div class="d-flex align-items-center gap-2">
+                <a href="{{ url_for('tenant_signals.composite_signal', tenant_id=tenant_id) }}" class="btn btn-outline-secondary">
+                    Build composite signal
                 </a>
                 <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
                     Create <span id="bulk-selection-count" class="d-none"></span> signals

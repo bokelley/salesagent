@@ -135,12 +135,19 @@ def list_signals(tenant_id: str):
         ]
 
     has_inventory = bool(segments or keys)
+    # Bulk-map shows UN-mapped rows only — the mapped ones already appear
+    # in the Existing-signals library below. Surface a count so operators
+    # know how many have already been mapped (and can flip back via the
+    # signals library's edit page).
+    unmapped_segments = [s for s in segments if not s["mapped_signal_id"]]
+    mapped_segments_count = len(segments) - len(unmapped_segments)
     return render_template(
         "tenant_signals_list.html",
         tenant_id=tenant_id,
         tenant_name=tenant.name,
         signals=signals,
-        segments=segments,
+        segments=unmapped_segments,
+        mapped_segments_count=mapped_segments_count,
         keys=keys,
         kv_index_size=len(kv_index),
         has_inventory=has_inventory,
@@ -274,10 +281,24 @@ def composite_signal(tenant_id: str):
     surfaces it as a callout so operators understand the bound before
     they author.
     """
+    with get_db_session() as session:
+        gam_repo = GAMSyncRepository(session, tenant_id)
+        segments_rows = gam_repo.list_inventory("audience_segment")
+        segments = [
+            {
+                "id": row.inventory_id,
+                "name": row.name,
+                "type": (row.inventory_metadata or {}).get("type"),
+                "size": (row.inventory_metadata or {}).get("size"),
+            }
+            for row in segments_rows
+        ]
+
     if request.method == "GET":
         return render_template(
             "tenant_signals_composite.html",
             tenant_id=tenant_id,
+            segments=segments,
             form_data=None,
             errors=None,
         )
@@ -299,17 +320,27 @@ def composite_signal(tenant_id: str):
     return render_template(
         "tenant_signals_composite.html",
         tenant_id=tenant_id,
+        segments=segments,
         form_data=form_data,
         errors=errors,
     )
 
 
 def _validate_composite_form(form) -> tuple[dict, dict, dict]:
-    """Composite form is small: required name, required groups payload
-    from the widget, optional description."""
+    """Two composition modes:
+
+    - ``source="audience"`` — operator ticked N audience segments + chose
+      include/exclude per row. Emits an AND of audience_segment criteria
+      (existing ``type="composed"`` shape from #439).
+    - ``source="custom_keys"`` — TargetingWidget groups payload, wraps
+      into ``kind="gam_targeting_groups"`` (the #462 shape).
+    """
+    source = (form.get("composite_source") or "audience").strip()
     form_data = {
+        "composite_source": source,
         "name": (form.get("name") or "").strip(),
         "description": (form.get("description") or "").strip(),
+        "audience_picks": form.get("audience_picks") or "",
         "targeting_data": form.get("targeting_data") or "",
     }
     errors: dict[str, str] = {}
@@ -321,51 +352,102 @@ def _validate_composite_form(form) -> tuple[dict, dict, dict]:
         parsed["name"] = form_data["name"]
     parsed["description"] = form_data["description"] or None
 
-    if not form_data["targeting_data"].strip():
-        errors["targeting_data"] = "Build at least one criterion in the targeting builder."
+    if source == "audience":
+        _parse_audience_composition(form_data, errors, parsed)
+    elif source == "custom_keys":
+        _parse_custom_keys_composition(form_data, errors, parsed)
+    else:
+        errors["composite_source"] = f"Unknown composite source {source!r}."
+
+    if errors:
         return form_data, errors, parsed
 
+    parsed["value_type"] = "binary"
+    parsed["categories"] = []
+    parsed["range_min"] = None
+    parsed["range_max"] = None
+    parsed["data_provider"] = "publisher"
+    return form_data, errors, parsed
+
+
+def _parse_audience_composition(form_data: dict, errors: dict, parsed: dict) -> None:
+    """Audience-segment AND builder: list of ``{segment_id, mode}`` picks.
+    Two or more picks compose to AND; a single pick is a passthrough."""
+    raw = form_data["audience_picks"].strip()
+    if not raw:
+        errors["audience_picks"] = "Pick at least one audience segment."
+        return
     try:
-        payload = json.loads(form_data["targeting_data"])
+        picks = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        errors["audience_picks"] = f"audience_picks must be JSON: {exc}"
+        return
+    if not isinstance(picks, list) or not picks:
+        errors["audience_picks"] = "Pick at least one audience segment."
+        return
+
+    criteria: list[dict] = []
+    for pick in picks:
+        if not isinstance(pick, dict):
+            errors["audience_picks"] = "Each pick must be an object."
+            return
+        segment_id = str(pick.get("segment_id") or "")
+        mode = pick.get("mode", "include")
+        if not segment_id:
+            errors["audience_picks"] = "Each pick needs a segment_id."
+            return
+        if mode not in ("include", "exclude"):
+            errors["audience_picks"] = f"mode must be include or exclude (got {mode!r})."
+            return
+        criteria.append({"kind": "audience_segment", "segment_id": segment_id, "mode": mode})
+
+    if len(criteria) == 1:
+        parsed["adapter_config"] = {"type": "passthrough", **criteria[0]}
+    else:
+        parsed["adapter_config"] = {"type": "composed", "criteria": criteria}
+
+
+def _parse_custom_keys_composition(form_data: dict, errors: dict, parsed: dict) -> None:
+    """TargetingWidget groups payload → ``gam_targeting_groups`` adapter
+    config. (Existing #462 shape — unchanged.)"""
+    raw = form_data["targeting_data"].strip()
+    if not raw:
+        errors["targeting_data"] = "Build at least one criterion in the targeting builder."
+        return
+
+    try:
+        payload = json.loads(raw)
     except (ValueError, json.JSONDecodeError) as exc:
         errors["targeting_data"] = f"Targeting builder payload must be JSON: {exc}"
-        return form_data, errors, parsed
+        return
 
     if not isinstance(payload, dict):
         errors["targeting_data"] = "Targeting builder payload must be a JSON object."
-        return form_data, errors, parsed
+        return
 
     groups = (payload.get("key_value_pairs") or {}).get("groups") or []
     if not groups:
         errors["targeting_data"] = "Add at least one criterion in the targeting builder."
-        return form_data, errors, parsed
+        return
 
-    # Light validation — each criterion needs a key and at least one value.
     for group_idx, group in enumerate(groups):
         criteria = group.get("criteria") or []
         if not criteria:
             errors["targeting_data"] = f"Group {group_idx + 1} has no criteria."
-            return form_data, errors, parsed
+            return
         for crit_idx, criterion in enumerate(criteria):
             if not criterion.get("keyId"):
                 errors["targeting_data"] = f"Group {group_idx + 1} criterion {crit_idx + 1} is missing a key."
-                return form_data, errors, parsed
+                return
             if not criterion.get("values"):
                 errors["targeting_data"] = f"Group {group_idx + 1} criterion {crit_idx + 1} has no values."
-                return form_data, errors, parsed
+                return
 
     parsed["adapter_config"] = {
         "type": "passthrough",
         "kind": "gam_targeting_groups",
         "groups": groups,
     }
-    parsed["value_type"] = "binary"
-    parsed["categories"] = []
-    parsed["range_min"] = None
-    parsed["range_max"] = None
-    parsed["data_provider"] = "publisher"
-
-    return form_data, errors, parsed
 
 
 @tenant_signals_bp.route("/<signal_id>/edit", methods=["GET", "POST"])
