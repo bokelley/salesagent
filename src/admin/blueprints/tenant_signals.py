@@ -388,10 +388,14 @@ def edit_signal(tenant_id: str, signal_id: str):
             return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
 
         if request.method == "GET":
+            mapping_summary = _summarize_adapter_config(
+                signal.adapter_config or {}, GAMSyncRepository(session, tenant_id)
+            )
             return render_template(
                 "tenant_signals_edit.html",
                 tenant_id=tenant_id,
                 signal=signal,
+                mapping_summary=mapping_summary,
                 form_data=None,
                 errors=None,
                 value_types=_VALID_VALUE_TYPES,
@@ -488,3 +492,128 @@ def _validate_edit_form(form) -> tuple[dict, dict, dict]:
             errors["adapter_config"] = f"Invalid JSON: {exc}"
 
     return form_data, errors, parsed
+
+
+# ---------------------------------------------------------------------------
+# Mapping summary — humanize adapter_config for the edit page
+# ---------------------------------------------------------------------------
+
+
+def _summarize_adapter_config(adapter_config: dict, gam_repo: GAMSyncRepository) -> dict:
+    """Render an adapter_config as a human-readable summary.
+
+    Operators editing a signal need to see what it actually maps to in
+    GAM without cracking open the JSON. Returns a dict with:
+
+    - ``label``: short summary string (e.g. "GAM audience segment")
+    - ``rows``: list of ``{"label": "...", "value": "..."}`` for the
+      template to render as a key-value list
+    - ``raw_kind``: the underlying ``kind`` (or ``"composed"``) for
+      operator-facing badging
+
+    Falls back to ``{"label": "Unknown shape", "rows": []}`` on adapter
+    configs we don't recognize — the Advanced JSON section is still
+    available as the source of truth.
+    """
+    config_type = adapter_config.get("type")
+    if config_type == "composed":
+        criteria = adapter_config.get("criteria") or []
+        rows = [
+            {"label": f"Criterion {i + 1}", "value": _summarize_criterion(c, gam_repo)} for i, c in enumerate(criteria)
+        ]
+        return {
+            "label": f"Composed AND of {len(criteria)} criteria",
+            "rows": rows,
+            "raw_kind": "composed",
+        }
+
+    kind = adapter_config.get("kind")
+    if kind == "gam_targeting_groups":
+        groups = adapter_config.get("groups") or []
+        crit_count = sum(len(g.get("criteria") or []) for g in groups)
+        return {
+            "label": f"Composite GAM targeting — {len(groups)} group(s), {crit_count} criterion(a)",
+            "rows": _summarize_groups(groups, gam_repo),
+            "raw_kind": "gam_targeting_groups",
+        }
+
+    # Pass-through (legacy + explicit)
+    if kind == "audience_segment":
+        segment_id = str(adapter_config.get("segment_id") or "")
+        seg_name = _lookup_inventory_name(gam_repo, "audience_segment", segment_id)
+        return {
+            "label": "GAM audience segment",
+            "rows": [
+                {"label": "Segment", "value": f"{seg_name or '(unsynced)'} — id {segment_id}"},
+            ],
+            "raw_kind": kind,
+        }
+    if kind == "custom_key_value":
+        key_id = str(adapter_config.get("key_id") or "")
+        value_id = str(adapter_config.get("value_id") or "")
+        key_name = _lookup_inventory_name(gam_repo, "custom_targeting_key", key_id)
+        return {
+            "label": "GAM custom key + value",
+            "rows": [
+                {"label": "Key", "value": f"{key_name or '(unsynced)'} — id {key_id}"},
+                {"label": "Value id", "value": value_id},
+            ],
+            "raw_kind": kind,
+        }
+    if kind in ("freewheel_viewership_profile", "freewheel_audience_item", "freewheel_custom_kv"):
+        return {
+            "label": f"Freewheel {kind.replace('freewheel_', '').replace('_', ' ')}",
+            "rows": [
+                {"label": "Config", "value": ", ".join(f"{k}={v}" for k, v in adapter_config.items() if k != "type")}
+            ],
+            "raw_kind": kind,
+        }
+
+    return {"label": "Unknown adapter shape — edit JSON directly to update", "rows": [], "raw_kind": kind or "unknown"}
+
+
+def _summarize_criterion(criterion: dict, gam_repo: GAMSyncRepository) -> str:
+    """One-line summary of one composed-criterion dict."""
+    kind = criterion.get("kind")
+    mode = criterion.get("mode", "include")
+    mode_prefix = "EXCLUDE " if mode == "exclude" else ""
+    if kind == "audience_segment":
+        segment_id = str(criterion.get("segment_id") or "")
+        seg_name = _lookup_inventory_name(gam_repo, "audience_segment", segment_id)
+        return f"{mode_prefix}audience segment {seg_name or segment_id}"
+    if kind == "custom_key_value":
+        key_id = str(criterion.get("key_id") or "")
+        value_id = str(criterion.get("value_id") or "")
+        key_name = _lookup_inventory_name(gam_repo, "custom_targeting_key", key_id) or key_id
+        return f"{mode_prefix}{key_name}={value_id}"
+    return f"{mode_prefix}{kind}"
+
+
+def _summarize_groups(groups: list[dict], gam_repo: GAMSyncRepository) -> list[dict]:
+    """Render the TargetingWidget groups payload as a list of rows."""
+    rows: list[dict] = []
+    for g_idx, group in enumerate(groups):
+        criteria = group.get("criteria") or []
+        parts = []
+        for crit in criteria:
+            key_id = str(crit.get("keyId") or "")
+            values = crit.get("values") or []
+            exclude = crit.get("exclude")
+            key_name = _lookup_inventory_name(gam_repo, "custom_targeting_key", key_id) or key_id
+            op = "NOT IN" if exclude else "IN"
+            parts.append(f"{key_name} {op} [{', '.join(str(v) for v in values)}]")
+        rows.append({"label": f"Group {g_idx + 1}", "value": " AND ".join(parts) or "(empty)"})
+    return rows
+
+
+def _lookup_inventory_name(gam_repo: GAMSyncRepository, inventory_type: str, inventory_id: str) -> str | None:
+    """Look up the human display name for a GAM inventory row.
+    Returns ``None`` when the row isn't in synced inventory (operator hasn't
+    synced yet, or the row has been removed in GAM).
+    """
+    if not inventory_id:
+        return None
+    for row in gam_repo.list_inventory(inventory_type):
+        if row.inventory_id == inventory_id:
+            return row.name
+    return None

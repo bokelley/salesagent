@@ -162,6 +162,101 @@ class TestCompositeValidator:
         assert "targeting_data" in errors
 
 
+class TestMappingSummary:
+    """``_summarize_adapter_config`` decodes the adapter_config shape into
+    operator-readable text on the edit page so operators don't crack
+    open the JSON to understand what a signal targets."""
+
+    def test_audience_segment_resolves_to_synced_name(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import GAMInventoryFactory, TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            tenant = TenantFactory(tenant_id="map_t1", ad_server="google_ad_manager")
+            GAMInventoryFactory(
+                tenant=tenant,
+                inventory_type="audience_segment",
+                inventory_id="98765",
+                name="Sports Enthusiasts",
+                inventory_metadata={"type": "FIRST_PARTY"},
+            )
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {"type": "passthrough", "kind": "audience_segment", "segment_id": "98765"},
+                GAMSyncRepository(session, "map_t1"),
+            )
+        assert summary["label"] == "GAM audience segment"
+        assert summary["raw_kind"] == "audience_segment"
+        # The name is interpolated from synced inventory.
+        assert "Sports Enthusiasts" in summary["rows"][0]["value"]
+
+    def test_unsynced_segment_falls_back_to_id(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            TenantFactory(tenant_id="map_t2", ad_server="google_ad_manager")
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {"kind": "audience_segment", "segment_id": "11111"},
+                GAMSyncRepository(session, "map_t2"),
+            )
+        assert "(unsynced)" in summary["rows"][0]["value"]
+        assert "11111" in summary["rows"][0]["value"]
+
+    def test_composed_signal_lists_criteria(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            TenantFactory(tenant_id="map_t3", ad_server="google_ad_manager")
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {
+                    "type": "composed",
+                    "criteria": [
+                        {"kind": "audience_segment", "segment_id": "111", "mode": "include"},
+                        {"kind": "audience_segment", "segment_id": "222", "mode": "exclude"},
+                    ],
+                },
+                GAMSyncRepository(session, "map_t3"),
+            )
+        assert summary["raw_kind"] == "composed"
+        assert len(summary["rows"]) == 2
+        assert "EXCLUDE" in summary["rows"][1]["value"]
+
+    def test_composite_groups_summary(self, integration_db):
+        from src.admin.blueprints.tenant_signals import _summarize_adapter_config
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import TenantFactory
+
+        with _SignalBulkMapEnv() as env:
+            TenantFactory(tenant_id="map_t4", ad_server="google_ad_manager")
+            session = env.get_session()
+            summary = _summarize_adapter_config(
+                {
+                    "type": "passthrough",
+                    "kind": "gam_targeting_groups",
+                    "groups": [
+                        {
+                            "criteria": [
+                                {"keyId": "11111", "values": ["22222", "33333"]},
+                                {"keyId": "44444", "values": ["55555"], "exclude": True},
+                            ]
+                        },
+                    ],
+                },
+                GAMSyncRepository(session, "map_t4"),
+            )
+        assert summary["raw_kind"] == "gam_targeting_groups"
+        # 1 group, 2 criteria
+        assert "1 group(s), 2 criterion(a)" in summary["label"]
+        assert "NOT IN" in summary["rows"][0]["value"]
+
+
 class TestBulkCreate:
     """End-to-end exercise of the repository + factory pattern. The HTTP
     boundary lives in the blueprint; this tests the data-shaping logic

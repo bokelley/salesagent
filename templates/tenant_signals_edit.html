@@ -47,6 +47,33 @@
             </div>
         </div>
 
+        {% if mapping_summary %}
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Maps to</h5></div>
+            <div class="card-body">
+                <p class="mb-3"><strong>{{ mapping_summary.label }}</strong></p>
+                {% if mapping_summary.rows %}
+                <dl class="row mb-0">
+                    {% for r in mapping_summary.rows %}
+                    <dt class="col-sm-3 text-muted small">{{ r.label }}</dt>
+                    <dd class="col-sm-9 font-monospace small">{{ r.value }}</dd>
+                    {% endfor %}
+                </dl>
+                {% else %}
+                <p class="text-muted small mb-0">
+                    Adapter shape isn't recognized by the summarizer. Open Advanced below to see the
+                    raw <code>adapter_config</code>.
+                </p>
+                {% endif %}
+                <p class="text-muted small mt-3 mb-0">
+                    To change <em>what</em> this signal targets, delete it and recreate from the
+                    <a href="{{ url_for('tenant_signals.list_signals', tenant_id=tenant_id) }}">signals library</a>.
+                    Rename / description edits don't change the underlying targeting.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+
         <details class="card mb-3">
             <summary class="card-header py-2 px-3" style="cursor:pointer">
                 <span class="small text-muted">Advanced: adapter_config / schema</span>
