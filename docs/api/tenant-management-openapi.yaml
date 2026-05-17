@@ -1879,7 +1879,9 @@ components:
       description: "Adapter preview with network metadata for the Storefront UX.\n\
         \n``ok=False`` (bad creds) is returned with HTTP 200 \u2014 Storefront renders\n\
         this inline. Hard errors (malformed body, missing API key) still surface\n\
-        via the normal 4xx path."
+        via the normal 4xx path.\n\n``error_code`` carries the same typed classification\
+        \ as\n:class:`TestConnectionResponse` so the UI can branch on machine-readable\n\
+        fault categories rather than parsing ``error``."
       properties:
         currency_code:
           anyOf:
@@ -1887,12 +1889,25 @@ components:
           - type: 'null'
           default: null
           title: Currency Code
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Details
         error:
           anyOf:
           - type: string
           - type: 'null'
           default: null
           title: Error
+        error_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error Code
         inventory_reachable:
           default: false
           title: Inventory Reachable
@@ -2818,14 +2833,36 @@ components:
       type: object
     TestConnectionResponse.f44f287:
       additionalProperties: false
-      description: Result of an adapter connection probe.
+      description: 'Result of an adapter connection probe.
+
+
+        ``error_code`` classifies the fault into one of ``network_not_found``,
+
+        ``permission_denied``, ``invalid_credentials``, or ``connection_failed``
+
+        so the UI can branch without parsing the human-readable ``error``.
+
+        See :mod:`src.admin.services.adapter_connection_tester`.'
       properties:
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Details
         error:
           anyOf:
           - type: string
           - type: 'null'
           default: null
           title: Error
+        error_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error Code
         success:
           title: Success
           type: boolean

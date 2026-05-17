@@ -476,12 +476,20 @@ class AdapterConfigResponse(BaseModel):
 
 
 class TestConnectionResponse(BaseModel):
-    """Result of an adapter connection probe."""
+    """Result of an adapter connection probe.
+
+    ``error_code`` classifies the fault into one of ``network_not_found``,
+    ``permission_denied``, ``invalid_credentials``, or ``connection_failed``
+    so the UI can branch without parsing the human-readable ``error``.
+    See :mod:`src.admin.services.adapter_connection_tester`.
+    """
 
     model_config = _config()
 
     success: bool
     error: str | None = None
+    error_code: str | None = None
+    details: dict[str, Any] | None = None
     tested_at: datetime
 
 
@@ -504,6 +512,10 @@ class PreviewAdapterResponse(BaseModel):
     ``ok=False`` (bad creds) is returned with HTTP 200 — Storefront renders
     this inline. Hard errors (malformed body, missing API key) still surface
     via the normal 4xx path.
+
+    ``error_code`` carries the same typed classification as
+    :class:`TestConnectionResponse` so the UI can branch on machine-readable
+    fault categories rather than parsing ``error``.
     """
 
     model_config = _config()
@@ -515,6 +527,8 @@ class PreviewAdapterResponse(BaseModel):
     time_zone: str | None = None
     inventory_reachable: bool = False
     error: str | None = None
+    error_code: str | None = None
+    details: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

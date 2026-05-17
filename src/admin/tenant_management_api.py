@@ -13,6 +13,7 @@ import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
@@ -78,7 +79,11 @@ from src.admin.api_schemas.tenant_management import (
     GamAdvertiser as GamAdvertiserSchema,
 )
 from src.admin.auth_helpers import require_api_key_auth
-from src.admin.services.adapter_connection_tester import preview_adapter, probe_adapter_connection
+from src.admin.services.adapter_connection_tester import (
+    ProbeResult,
+    preview_adapter,
+    probe_adapter_connection,
+)
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
@@ -127,6 +132,31 @@ def _api_error(code: str, message: str, status: int, details: dict | None = None
     """Build a (jsonified, status) tuple matching the :class:`ApiError` schema."""
     body = ApiError(error=code, message=message, details=details).model_dump(exclude_none=True)
     return jsonify(body), status
+
+
+def _adapter_probe_error(adapter_type: str, probe: ProbeResult):
+    """Map a failed adapter probe into the appropriate ``ApiError`` response.
+
+    Translates the typed sub-code from :class:`ProbeResult` into the
+    ``adapter_{code}`` family of API error codes. Forwards the structured
+    ``details`` block (e.g. ``gam_fault``) so downstream consumers can
+    branch on machine-readable fields rather than parsing the human
+    message. See :mod:`src.admin.services.adapter_connection_tester` for
+    the classification.
+    """
+    code = probe.error_code or "connection_failed"
+    details: dict[str, Any] = {
+        "adapter_type": adapter_type,
+        "error": probe.error_message,
+    }
+    if probe.details:
+        details.update(probe.details)
+    return _api_error(
+        f"adapter_{code}",
+        f"Adapter {adapter_type!r} connection probe failed: {probe.error_message}",
+        400,
+        details=details,
+    )
 
 
 def _tenant_to_summary(tenant: Tenant, adapter_configured: bool) -> dict:
@@ -1025,14 +1055,9 @@ def provision_tenant():
     # Step 2b: probe the adapter BEFORE writing anything. A failure here means we never
     # touch the DB at all — keeps the table free of half-configured tenants.
     adapter_dict = _adapter_config_to_dict(req.adapter)
-    success, error = probe_adapter_connection(adapter_dict["type"], adapter_dict)
-    if not success:
-        return _api_error(
-            "adapter_connection_failed",
-            f"Adapter {adapter_dict['type']!r} connection probe failed: {error}",
-            400,
-            details={"adapter_type": adapter_dict["type"], "error": error},
-        )
+    probe = probe_adapter_connection(adapter_dict["type"], adapter_dict)
+    if not probe.success:
+        return _adapter_probe_error(adapter_dict["type"], probe)
 
     # Step 3: open a transaction; create everything in one commit.
     tenant_id = f"tenant_{uuid.uuid4().hex[:8]}"
@@ -1216,6 +1241,8 @@ def preview_adapter_endpoint():
         time_zone=preview.time_zone,
         inventory_reachable=preview.inventory_reachable,
         error=preview.error,
+        error_code=preview.error_code,
+        details=preview.details or None,
     )
     return jsonify(response.model_dump(mode="json"))
 
@@ -1371,14 +1398,9 @@ def put_adapter_config(tenant_id: str):
     adapter_schema: AdapterConfigSchema = body.root
     adapter_dict = _adapter_config_to_dict(adapter_schema)
 
-    success, error = probe_adapter_connection(adapter_dict["type"], adapter_dict)
-    if not success:
-        return _api_error(
-            "adapter_connection_failed",
-            f"Adapter {adapter_dict['type']!r} connection probe failed: {error}",
-            400,
-            details={"adapter_type": adapter_dict["type"], "error": error},
-        )
+    probe = probe_adapter_connection(adapter_dict["type"], adapter_dict)
+    if not probe.success:
+        return _adapter_probe_error(adapter_dict["type"], probe)
 
     with get_db_session() as session:
         session.info["management_api_caller"] = True
@@ -1426,10 +1448,16 @@ def adapter_test_connection(tenant_id: str):
         elif adapter.adapter_type == "mock":
             config = {"dry_run": bool(adapter.mock_dry_run)}
 
-        success, error = probe_adapter_connection(adapter.adapter_type, config)
+        probe = probe_adapter_connection(adapter.adapter_type, config)
         invalidate_status_cache(tenant_id)
         return jsonify(
-            TestConnectionResponse(success=success, error=error, tested_at=datetime.now(UTC)).model_dump(mode="json")
+            TestConnectionResponse(
+                success=probe.success,
+                error=probe.error_message,
+                error_code=probe.error_code,
+                details=probe.details or None,
+                tested_at=datetime.now(UTC),
+            ).model_dump(mode="json")
         )
 
 

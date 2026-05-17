@@ -74,8 +74,10 @@ def _stub_adapter_test(monkeypatch, request):
     if "real_adapter_test" in request.keywords:
         return
 
+    from src.admin.services.adapter_connection_tester import ProbeResult
+
     def _stub(adapter_type, config):
-        return True, None
+        return ProbeResult.ok()
 
     import src.admin.tenant_management_api as api_module
 
@@ -225,9 +227,10 @@ class TestProvision:
 
     def test_provision_rolls_back_on_adapter_failure(self, client, auth_headers, monkeypatch):
         import src.admin.tenant_management_api as api_module
+        from src.admin.services.adapter_connection_tester import CONNECTION_FAILED, ProbeResult
 
         def _fail(adapter_type, config):
-            return False, "auth boom"
+            return ProbeResult.fail(CONNECTION_FAILED, "auth boom")
 
         monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
 
@@ -540,9 +543,10 @@ class TestAdapterConfig:
 
     def test_put_adapter_config_tests_connection_before_commit(self, client, auth_headers, managed_tenant, monkeypatch):
         import src.admin.tenant_management_api as api_module
+        from src.admin.services.adapter_connection_tester import INVALID_CREDENTIALS, ProbeResult
 
         def _fail(adapter_type, config):
-            return False, "credentials rejected"
+            return ProbeResult.fail(INVALID_CREDENTIALS, "credentials rejected")
 
         monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
 
@@ -558,7 +562,7 @@ class TestAdapterConfig:
             json=payload,
         )
         assert resp.status_code == 400
-        assert resp.get_json()["error"] == "adapter_connection_failed"
+        assert resp.get_json()["error"] == "adapter_invalid_credentials"
 
         # Existing adapter config unchanged.
         with get_db_session() as session:

@@ -4,11 +4,12 @@
 a 400 at provision rather than an eternally-pending inventory sync. These
 tests pin the contract for each adapter type:
 
-- Auth rejection → ``(False, <auth-flavored error>)``
-- Wrong-publisher binding (valid token, wrong account) → ``(False, ...)``
-- Transport failure → ``(False, <transport-flavored error>)``
-- Success → ``(True, None)``
-- Missing required config → ``(False, <which-field>)`` with no HTTP call
+- Auth rejection → ``ProbeResult(success=False, error_code="invalid_credentials")``
+- Permission denied (valid creds, wrong account) → ``error_code="permission_denied"``
+- Wrong network identifier (e.g. typo) → ``error_code="network_not_found"``
+- Transport failure / fallback → ``error_code="connection_failed"``
+- Success → ``ProbeResult(success=True)``
+- Missing required config → fail with ``connection_failed`` and no HTTP call
 
 The probes themselves call into live adapter clients; tests mock those at
 the call boundary so the behavior under each HTTP outcome is exercised.
@@ -18,7 +19,60 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.admin.services.adapter_connection_tester import preview_adapter, probe_adapter_connection
+from src.admin.services.adapter_connection_tester import (
+    CONNECTION_FAILED,
+    INVALID_CREDENTIALS,
+    NETWORK_NOT_FOUND,
+    PERMISSION_DENIED,
+    _classify_gam_message,
+    preview_adapter,
+    probe_adapter_connection,
+)
+
+
+class TestGAMFaultClassification:
+    """``_classify_gam_message`` is the heart of #467: it turns a GAM SOAP
+    fault string into a typed sub-code + structured fault block so callers
+    don't have to grep English error text."""
+
+    def test_network_not_found_classified_as_typo(self):
+        msg = "Authentication failed: [AuthenticationError.NETWORK_NOT_FOUND @ ; trigger:'3312659540']"
+        code, fault = _classify_gam_message(msg)
+        assert code == NETWORK_NOT_FOUND
+        assert fault["service"] == "AuthenticationError"
+        assert fault["reason"] == "NETWORK_NOT_FOUND"
+        assert fault["trigger"] == "3312659540"
+
+    def test_not_allowed_classified_as_permission_denied(self):
+        msg = "Authentication failed: [AuthenticationError.NOT_ALLOWED @ network]"
+        code, fault = _classify_gam_message(msg)
+        assert code == PERMISSION_DENIED
+        assert fault["reason"] == "NOT_ALLOWED"
+
+    def test_no_networks_to_access_classified_as_permission_denied(self):
+        msg = "[AuthenticationError.NO_NETWORKS_TO_ACCESS @ ]"
+        code, fault = _classify_gam_message(msg)
+        assert code == PERMISSION_DENIED
+        assert fault["reason"] == "NO_NETWORKS_TO_ACCESS"
+
+    def test_authentication_failed_classified_as_invalid_credentials(self):
+        msg = "[AuthenticationError.AUTHENTICATION_FAILED @ ]"
+        code, fault = _classify_gam_message(msg)
+        assert code == INVALID_CREDENTIALS
+        assert fault["reason"] == "AUTHENTICATION_FAILED"
+
+    def test_unparseable_message_falls_back_to_connection_failed(self):
+        code, fault = _classify_gam_message("DNS lookup failed for adsapi.google.com")
+        assert code == CONNECTION_FAILED
+        assert fault == {}
+
+    def test_unknown_reason_falls_back_to_connection_failed(self):
+        msg = "[ServerError.SOAP_FAULT @ ; trigger:'something']"
+        code, fault = _classify_gam_message(msg)
+        assert code == CONNECTION_FAILED
+        # Fault block is still populated for diagnostics.
+        assert fault["service"] == "ServerError"
+        assert fault["reason"] == "SOAP_FAULT"
 
 
 class TestFreeWheelProbe:
@@ -30,93 +84,111 @@ class TestFreeWheelProbe:
         return base
 
     def test_missing_credentials_fails_without_http(self):
-        ok, err = probe_adapter_connection("freewheel", {"environment": "production"})
-        assert ok is False
-        assert err is not None
-        assert "username + password" in err or "api_token" in err
+        result = probe_adapter_connection("freewheel", {"environment": "production"})
+        assert result.success is False
+        assert result.error_code == CONNECTION_FAILED
+        assert "username + password" in result.error_message or "api_token" in result.error_message
 
-    def test_auth_rejection_returns_clear_error(self):
+    def test_auth_rejection_classified_as_invalid_credentials(self):
         from src.adapters.freewheel._transport import FreeWheelAuthError
 
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
             client = mock_cls.return_value
             client.token_info.side_effect = FreeWheelAuthError("bad token", status_code=401)
-            ok, err = probe_adapter_connection("freewheel", self._config())
-        assert ok is False
-        assert "auth rejected" in err
+            result = probe_adapter_connection("freewheel", self._config())
+        assert result.success is False
+        assert result.error_code == INVALID_CREDENTIALS
+        assert "auth rejected" in result.error_message
 
-    def test_inventory_403_signals_wrong_publisher_binding(self):
+    def test_inventory_403_classified_as_permission_denied(self):
         from src.adapters.freewheel._transport import FreeWheelForbiddenError
 
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
             client = mock_cls.return_value
             client.token_info.return_value = {"sub": "user@example.com"}
             client.inventory.list_sites.side_effect = FreeWheelForbiddenError("no inventory scope", status_code=403)
-            ok, err = probe_adapter_connection("freewheel", self._config())
-        assert ok is False
-        assert "cannot read inventory" in err
-        assert "publisher" in err
+            result = probe_adapter_connection("freewheel", self._config())
+        assert result.success is False
+        assert result.error_code == PERMISSION_DENIED
+        assert "cannot read inventory" in result.error_message
+        assert "publisher" in result.error_message
 
-    def test_transport_failure_returns_transport_error(self):
+    def test_transport_failure_classified_as_connection_failed(self):
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
             client = mock_cls.return_value
             client.token_info.side_effect = ConnectionError("DNS")
-            ok, err = probe_adapter_connection("freewheel", self._config())
-        assert ok is False
-        assert "transport failure" in err
+            result = probe_adapter_connection("freewheel", self._config())
+        assert result.success is False
+        assert result.error_code == CONNECTION_FAILED
+        assert "transport failure" in result.error_message
 
-    def test_happy_path_returns_true(self):
+    def test_happy_path_returns_success(self):
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
             client = mock_cls.return_value
             client.token_info.return_value = {"sub": "user@example.com"}
             client.inventory.list_sites.return_value = MagicMock()
-            ok, err = probe_adapter_connection("freewheel", self._config())
-        assert ok is True
-        assert err is None
+            result = probe_adapter_connection("freewheel", self._config())
+        assert result.success is True
+        assert result.error_code is None
+        assert result.error_message is None
 
 
 class TestBroadstreetProbe:
     """Broadstreet probe is one call: get_network() validates auth + binding."""
 
     def test_missing_network_id_fails_without_http(self):
-        ok, err = probe_adapter_connection("broadstreet", {"api_key": "k"})
-        assert ok is False
-        assert "network_id" in err
+        result = probe_adapter_connection("broadstreet", {"api_key": "k"})
+        assert result.success is False
+        assert result.error_code == CONNECTION_FAILED
+        assert "network_id" in result.error_message
 
     def test_missing_api_key_fails_without_http(self):
-        ok, err = probe_adapter_connection("broadstreet", {"network_id": "123"})
-        assert ok is False
-        assert "api_key" in err
+        result = probe_adapter_connection("broadstreet", {"network_id": "123"})
+        assert result.success is False
+        assert result.error_code == CONNECTION_FAILED
+        assert "api_key" in result.error_message
 
-    def test_auth_failure_returns_clear_error(self):
+    def test_401_classified_as_invalid_credentials(self):
+        from src.adapters.broadstreet.client import BroadstreetAPIError
+
+        with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
+            client = mock_cls.return_value
+            client.get_network.side_effect = BroadstreetAPIError("unauthorized", status_code=401)
+            result = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "wrong"})
+        assert result.success is False
+        assert result.error_code == INVALID_CREDENTIALS
+        assert "auth rejected" in result.error_message
+
+    def test_403_classified_as_permission_denied(self):
         from src.adapters.broadstreet.client import BroadstreetAPIError
 
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
             client = mock_cls.return_value
             client.get_network.side_effect = BroadstreetAPIError("forbidden", status_code=403)
-            ok, err = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "wrong"})
-        assert ok is False
-        assert "auth rejected" in err
-        assert "403" in err
+            result = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "wrong"})
+        assert result.success is False
+        assert result.error_code == PERMISSION_DENIED
+        assert "network access denied" in result.error_message
 
-    def test_wrong_network_id_returns_not_found(self):
+    def test_wrong_network_id_classified_as_network_not_found(self):
         from src.adapters.broadstreet.client import BroadstreetAPIError
 
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
             client = mock_cls.return_value
             client.get_network.side_effect = BroadstreetAPIError("not found", status_code=404)
-            ok, err = probe_adapter_connection("broadstreet", {"network_id": "999999", "api_key": "k"})
-        assert ok is False
-        assert "not found" in err
-        assert "999999" in err
+            result = probe_adapter_connection("broadstreet", {"network_id": "999999", "api_key": "k"})
+        assert result.success is False
+        assert result.error_code == NETWORK_NOT_FOUND
+        assert "not found" in result.error_message
+        assert "999999" in result.error_message
 
-    def test_happy_path_returns_true(self):
+    def test_happy_path_returns_success(self):
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
             client = mock_cls.return_value
             client.get_network.return_value = {"id": 123, "name": "Net"}
-            ok, err = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "k"})
-        assert ok is True
-        assert err is None
+            result = probe_adapter_connection("broadstreet", {"network_id": "123", "api_key": "k"})
+        assert result.success is True
+        assert result.error_code is None
 
 
 class TestSpringServeProbe:
@@ -130,36 +202,39 @@ class TestSpringServeProbe:
         return base
 
     def test_missing_credentials_fails_without_http(self):
-        ok, err = probe_adapter_connection("springserve", {})
-        assert ok is False
-        assert "email + password" in err or "api_token" in err
+        result = probe_adapter_connection("springserve", {})
+        assert result.success is False
+        assert result.error_code == CONNECTION_FAILED
+        assert "email + password" in result.error_message or "api_token" in result.error_message
 
-    def test_auth_mint_failure_returns_clear_error(self):
+    def test_auth_mint_failure_classified_as_invalid_credentials(self):
         from src.adapters.springserve._transport import SpringServeAuthError
 
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
             client.probe.side_effect = SpringServeAuthError("bad creds", status_code=401)
-            ok, err = probe_adapter_connection("springserve", {"email": "a@b.com", "password": "x"})
-        assert ok is False
-        assert "auth rejected" in err
+            result = probe_adapter_connection("springserve", {"email": "a@b.com", "password": "x"})
+        assert result.success is False
+        assert result.error_code == INVALID_CREDENTIALS
+        assert "auth rejected" in result.error_message
 
-    def test_403_signals_wrong_publisher_binding(self):
+    def test_403_classified_as_permission_denied(self):
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
             client.probe.return_value = (403, "Forbidden")
-            ok, err = probe_adapter_connection("springserve", self._config())
-        assert ok is False
-        assert "cannot read supply inventory" in err
-        assert "publisher" in err
+            result = probe_adapter_connection("springserve", self._config())
+        assert result.success is False
+        assert result.error_code == PERMISSION_DENIED
+        assert "cannot read supply inventory" in result.error_message
+        assert "publisher" in result.error_message
 
-    def test_happy_path_returns_true(self):
+    def test_happy_path_returns_success(self):
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
             client = mock_cls.return_value
             client.probe.return_value = (200, "[]")
-            ok, err = probe_adapter_connection("springserve", self._config())
-        assert ok is True
-        assert err is None
+            result = probe_adapter_connection("springserve", self._config())
+        assert result.success is True
+        assert result.error_code is None
 
 
 class TestRoutingTable:
@@ -182,8 +257,9 @@ class TestRoutingTable:
         assert adapter_types, "Schema introspection returned no adapter types — check AdapterConfig union shape"
 
         for adapter_type in adapter_types:
-            ok, err = probe_adapter_connection(adapter_type, {})
-            assert err is None or "Unsupported adapter_type" not in err, (
+            result = probe_adapter_connection(adapter_type, {})
+            err = result.error_message or ""
+            assert "Unsupported adapter_type" not in err, (
                 f"{adapter_type!r} (declared in AdapterConfig union) fell through to the "
                 f"unsupported-type branch in probe_adapter_connection — add a probe for it."
             )
@@ -209,10 +285,56 @@ class TestRoutingTable:
             )
 
 
+class TestGAMProbeClassification:
+    """End-to-end: a GAM-flavored exception bubbles up through ``_test_gam``
+    and gets classified into the right ``error_code``. This is the
+    user-visible contract from #467."""
+
+    def _gam_config(self):
+        return {"network_code": "12345", "service_account_json": "{}"}
+
+    def test_network_not_found_surface_through_probe(self):
+        with patch("src.adapters.gam.client.GAMClientManager") as mock_mgr:
+            mock_mgr.return_value.test_connection.side_effect = Exception(
+                "[AuthenticationError.NETWORK_NOT_FOUND @ ; trigger:'12345']"
+            )
+            result = probe_adapter_connection("google_ad_manager", self._gam_config())
+        assert result.success is False
+        assert result.error_code == NETWORK_NOT_FOUND
+        assert result.details["gam_fault"]["reason"] == "NETWORK_NOT_FOUND"
+        assert result.details["gam_fault"]["trigger"] == "12345"
+
+    def test_not_allowed_surface_through_probe(self):
+        with patch("src.adapters.gam.client.GAMClientManager") as mock_mgr:
+            mock_mgr.return_value.test_connection.side_effect = Exception("[AuthenticationError.NOT_ALLOWED @ network]")
+            result = probe_adapter_connection("google_ad_manager", self._gam_config())
+        assert result.success is False
+        assert result.error_code == PERMISSION_DENIED
+        assert result.details["gam_fault"]["reason"] == "NOT_ALLOWED"
+
+    def test_unhealthy_status_surfaces_through_probe(self):
+        """When ``test_connection`` returns UNHEALTHY (rather than raising),
+        the message is still classified."""
+        from src.adapters.gam.utils.health_check import HealthCheckResult, HealthStatus
+
+        with patch("src.adapters.gam.client.GAMClientManager") as mock_mgr:
+            mock_mgr.return_value.test_connection.return_value = HealthCheckResult(
+                status=HealthStatus.UNHEALTHY,
+                check_name="authentication",
+                message="Authentication failed: [AuthenticationError.NETWORK_NOT_FOUND @ ; trigger:'X']",
+                details={},
+                duration_ms=0,
+            )
+            result = probe_adapter_connection("google_ad_manager", self._gam_config())
+        assert result.success is False
+        assert result.error_code == NETWORK_NOT_FOUND
+
+
 class TestFreeWheelPreview:
     def test_missing_credentials_returns_inline_error(self):
         preview = preview_adapter("freewheel", {"environment": "production"})
         assert preview.ok is False
+        assert preview.error_code == CONNECTION_FAILED
         assert "username + password" in (preview.error or "") or "api_token" in (preview.error or "")
 
     def test_auth_rejection_surfaces_inline(self):
@@ -223,6 +345,7 @@ class TestFreeWheelPreview:
             client.token_info.side_effect = FreeWheelAuthError("bad", status_code=401)
             preview = preview_adapter("freewheel", {"api_token": "tok"})
         assert preview.ok is False
+        assert preview.error_code == INVALID_CREDENTIALS
         assert "auth rejected" in preview.error
 
     def test_happy_path_surfaces_user_name_as_network_name(self):
@@ -258,7 +381,7 @@ class TestBroadstreetPreview:
         assert preview.network_name == "Acme Publishers"
         assert preview.network_code == "nw1"
 
-    def test_wrong_network_returns_inline_404(self):
+    def test_wrong_network_classified_as_network_not_found(self):
         from src.adapters.broadstreet.client import BroadstreetAPIError
 
         with patch("src.adapters.broadstreet.client.BroadstreetClient") as mock_cls:
@@ -266,6 +389,7 @@ class TestBroadstreetPreview:
             client.get_network.side_effect = BroadstreetAPIError("not found", status_code=404)
             preview = preview_adapter("broadstreet", {"network_id": "nw1", "api_key": "k"})
         assert preview.ok is False
+        assert preview.error_code == NETWORK_NOT_FOUND
         assert "not found" in preview.error
 
 
@@ -287,4 +411,5 @@ class TestSpringServePreview:
             client.probe.side_effect = SpringServeAuthError("bad", status_code=401)
             preview = preview_adapter("springserve", {"api_token": "tok"})
         assert preview.ok is False
+        assert preview.error_code == INVALID_CREDENTIALS
         assert "auth rejected" in preview.error

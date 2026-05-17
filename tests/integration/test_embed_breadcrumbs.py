@@ -71,8 +71,9 @@ def _stub_adapter_test(monkeypatch):
     """Default adapter probe to success — these tests exercise schema/storage,
     not real adapter wiring."""
     import src.admin.tenant_management_api as api_module
+    from src.admin.services.adapter_connection_tester import ProbeResult
 
-    monkeypatch.setattr(api_module, "probe_adapter_connection", lambda *_args, **_kwargs: (True, None))
+    monkeypatch.setattr(api_module, "probe_adapter_connection", lambda *_args, **_kwargs: ProbeResult.ok())
 
 
 @pytest.fixture
