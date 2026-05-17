@@ -2166,6 +2166,10 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
             targeting_row = session.scalars(select(SyncJob).filter_by(sync_id=targeting_id)).first()
             if targeting_row is not None:
                 targeting_row.status = "running"
+                # Restamp so /refresh's 60s idempotency window reflects
+                # when the bundled targeting work actually started, not
+                # when the row was queued at provision/refresh time.
+                targeting_row.started_at = datetime.now(UTC)
                 targeting_row.progress = {"phase": "Bundled with concurrent inventory sync"}
                 session.commit()
 

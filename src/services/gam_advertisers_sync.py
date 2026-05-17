@@ -236,6 +236,9 @@ def sync_advertisers(
             if job is None:
                 raise ValueError(f"SyncJob {sync_id!r} not found")
             job.status = "running"
+            # Restamp so /refresh's 60s idempotency window reflects when
+            # the worker picked up the row, not when /refresh queued it.
+            job.started_at = datetime.now(UTC)
         session.commit()
 
     try:

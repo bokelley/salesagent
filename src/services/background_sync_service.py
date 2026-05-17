@@ -141,6 +141,14 @@ def start_inventory_sync_background(
                 )
             sync_id = pending_row.sync_id
             pending_row.status = "running"
+            # Restamp ``started_at`` so the value reflects when the worker
+            # actually picked up the row, not when /refresh queued it.
+            # The 60s idempotency window in ``_create_and_spawn_refresh``
+            # compares against ``started_at`` — without restamping, a row
+            # that sat pending for >60s and just transitioned to running
+            # would falsely look like a stale in-flight conflict on the
+            # next /refresh.
+            pending_row.started_at = datetime.now(UTC)
             pending_row.progress = {
                 "phase": "Starting",
                 "sync_types": sync_types,
@@ -174,6 +182,10 @@ def start_inventory_sync_background(
             targeting_row = db.scalars(select(SyncJob).filter_by(sync_id=targeting_sync_id)).first()
             if targeting_row is not None:
                 targeting_row.status = "running"
+                # Restamp so the worker-pickup time is what ``/refresh``
+                # idempotency compares against (see comment on
+                # ``pending_row.started_at`` above).
+                targeting_row.started_at = datetime.now(UTC)
 
         db.commit()
 

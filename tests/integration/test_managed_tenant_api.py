@@ -2350,3 +2350,77 @@ class TestRefresh:
 
         resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
         assert resp.status_code == 202, resp.get_data(as_text=True)
+
+    def test_worker_pickup_restamps_started_at(self, client, auth_headers, cleanup_tenants, monkeypatch):
+        """Regression for the race the code reviewer flagged: a row that
+        sat ``pending`` longer than 60s and just transitioned to
+        ``running`` must not look like a stale in-flight conflict on the
+        next /refresh. The worker pickup re-stamps ``started_at`` so the
+        60s window reflects when work actually began.
+
+        This pins the contract from the worker side. The complementary
+        test ``test_does_not_return_409_within_idempotency_window``
+        pins the same outcome from the API side."""
+        import src.admin.tenant_management_api as api_mod
+
+        monkeypatch.setattr(api_mod, "_spawn_refresh_workers", lambda **kw: None)
+
+        payload = _provision_payload(external_org_id="org_worker_pickup_restamp")
+        prov = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert prov.status_code == 201
+        tid = prov.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+        from src.services.background_sync_service import start_inventory_sync_background
+
+        # Backdate the inventory row so it looks like it's been pending
+        # for 5 minutes — outside the 60s window.
+        with get_db_session() as session:
+            inv_row = session.scalars(select(SyncJob).filter_by(tenant_id=tid, sync_type="inventory")).first()
+            inv_row.started_at = datetime.now(UTC) - timedelta(minutes=5)
+            pending_sync_id = inv_row.sync_id
+            session.commit()
+
+        # Stub the actual sync thread so the test stays fast — we only
+        # care that the worker-pickup status + started_at transition
+        # happens before the thread spawns.
+        import src.services.background_sync_service as bg_mod
+
+        original_thread = bg_mod.threading.Thread
+        spawned = []
+
+        class _NoopThread:
+            def __init__(self, *args, **kwargs):
+                spawned.append(kwargs)
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(bg_mod.threading, "Thread", _NoopThread)
+        try:
+            start_inventory_sync_background(
+                tenant_id=tid,
+                pending_sync_id=pending_sync_id,
+                sync_mode="full",
+                sync_types=["ad_units"],
+            )
+        finally:
+            monkeypatch.setattr(bg_mod.threading, "Thread", original_thread)
+
+        with get_db_session() as session:
+            inv_row = session.scalars(select(SyncJob).filter_by(sync_id=pending_sync_id)).first()
+            assert inv_row.status == "running"
+            # The pre-pickup started_at was 5 min ago; post-pickup must
+            # be within the last few seconds (well under 60s).
+            assert (datetime.now(UTC) - inv_row.started_at) < timedelta(seconds=10)
+
+        # And the consequence for /refresh: 202 (idempotent reuse), not 409.
+        resp = client.post(f"/api/v1/tenant-management/tenants/{tid}/refresh", headers=auth_headers)
+        assert resp.status_code == 202, resp.get_data(as_text=True)
+        # Same sync_run_id is reused — caller's repeat refresh doesn't
+        # double-spawn the work that just started.
+        assert resp.get_json()["sync_run_ids"]["inventory"] == pending_sync_id

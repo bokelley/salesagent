@@ -1,7 +1,7 @@
 """Unit tests for the sync webhook emission helpers.
 
 Pure functions only — the SQLAlchemy listener wiring is exercised by the
-integration tests at ``tests/integration/test_sync_webhook_emission.py``
+integration tests at ``tests/integration/test_managed_tenant_api_sprint6.py``
 where a real session commit drives the before_flush / after_commit hooks.
 
 Issue #463.
@@ -13,9 +13,10 @@ from datetime import UTC, datetime
 
 from src.admin.services.sync_webhook_emission import (
     _build_payload,
-    _include_traceback,
+    _dedup_snapshots,
     _iso,
     _normalize_trigger,
+    _public_error_message,
 )
 
 
@@ -58,6 +59,106 @@ class TestNormalizeTrigger:
 
     def test_none_triggers_default_to_manual(self):
         assert _normalize_trigger(None, None) == "manual"
+
+
+class TestPublicErrorMessage:
+    """The webhook subscriber may be a third-party endpoint (Slack
+    channel, generic ingestion, etc.) that shouldn't see internal stack
+    frames or adapter response details. The scrubber turns operator-
+    facing strings into a single short line."""
+
+    def test_none_passes_through(self):
+        assert _public_error_message(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert _public_error_message("") is None
+
+    def test_keeps_short_single_line_intact(self):
+        assert _public_error_message("Refresh token revoked") == "Refresh token revoked"
+
+    def test_strips_traceback_to_first_line(self):
+        raw = (
+            "Worker spawn failed (inventory): TimeoutError: GAM request hung\n\n"
+            "Traceback (most recent calls):\n"
+            '  File "src/services/background_sync_service.py", line 50, in start\n'
+            "    self._run()\n"
+        )
+        scrubbed = _public_error_message(raw)
+        assert scrubbed == "Worker spawn failed (inventory): TimeoutError: GAM request hung"
+        assert "Traceback" not in scrubbed
+        assert "File " not in scrubbed
+
+    def test_caps_long_single_line(self):
+        raw = "x" * 1000
+        scrubbed = _public_error_message(raw)
+        # Public cap is 200 chars per _MAX_PUBLIC_ERROR_LEN.
+        assert scrubbed is not None
+        assert len(scrubbed) == 200
+
+    def test_strips_surrounding_whitespace(self):
+        assert _public_error_message("   boom   \n   next   ") == "boom"
+
+
+class TestDedupSnapshots:
+    """Multiple ``before_flush`` invocations on one transaction can
+    capture the same terminal transition twice. The drain step
+    collapses by (tenant_id, sync_run_id, _status)."""
+
+    def _snap(self, **overrides):
+        base = {
+            "_status": "completed",
+            "tenant_id": "tnt_a",
+            "sync_run_id": "sync_1",
+            "sync_type": "inventory",
+            "adapter_type": "google_ad_manager",
+            "started_at": None,
+            "completed_at": None,
+            "summary": None,
+            "error_message": None,
+            "triggered_by": None,
+            "triggered_by_id": None,
+            "item_count": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_empty_list_returns_empty(self):
+        assert _dedup_snapshots([]) == []
+
+    def test_distinct_keys_pass_through(self):
+        snaps = [
+            self._snap(sync_run_id="sync_1"),
+            self._snap(sync_run_id="sync_2"),
+        ]
+        assert _dedup_snapshots(snaps) == snaps
+
+    def test_identical_keys_collapse_to_first(self):
+        first = self._snap(sync_run_id="sync_1", summary="first capture")
+        second = self._snap(sync_run_id="sync_1", summary="second capture")
+        out = _dedup_snapshots([first, second])
+        # First occurrence wins so later flushes of the same row don't
+        # multiply emissions.
+        assert len(out) == 1
+        assert out[0]["summary"] == "first capture"
+
+    def test_same_run_different_status_does_not_collapse(self):
+        # Edge case — a single txn that pushes a row through more than
+        # one terminal state would emit each. Not a real flow today
+        # but the dedup key correctly preserves it.
+        snaps = [
+            self._snap(_status="completed"),
+            self._snap(_status="failed"),
+        ]
+        out = _dedup_snapshots(snaps)
+        assert len(out) == 2
+
+    def test_cross_tenant_does_not_collapse(self):
+        snaps = [
+            self._snap(tenant_id="tnt_a", sync_run_id="sync_1"),
+            self._snap(tenant_id="tnt_b", sync_run_id="sync_1"),
+        ]
+        out = _dedup_snapshots(snaps)
+        assert len(out) == 2
 
 
 class TestBuildPayload:
@@ -140,27 +241,25 @@ class TestBuildPayload:
         payload = _build_payload(snap, "sync.failed")
         assert payload["error"] == {"message": None}
 
-    def test_traceback_omitted_by_default(self, monkeypatch):
-        # Production publishers don't want stack frames leaking through
-        # the webhook surface.
-        monkeypatch.delenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", raising=False)
-        monkeypatch.delenv("ENVIRONMENT", raising=False)
-        snap = self._snapshot(_status="failed", error_message="boom\n  at frame")
+    def test_failed_payload_scrubs_traceback_from_error_message(self):
+        """Stack frames stored in ``SyncJob.error_message`` (e.g. from the
+        spawn-failure path that packs a traceback into the field) MUST
+        NOT cross the webhook boundary — internal frames could carry
+        file paths, advertiser IDs, or adapter response detail that the
+        subscriber's endpoint shouldn't receive. The scrubber keeps the
+        first line only."""
+        raw = (
+            "Worker spawn failed (inventory): TimeoutError\n\n"
+            "Traceback (most recent calls):\n"
+            '  File "/app/src/services/background_sync_service.py", line 50\n'
+        )
+        snap = self._snapshot(_status="failed", error_message=raw, item_count=None, summary=None)
         payload = _build_payload(snap, "sync.failed")
+        assert payload["error"]["message"] == "Worker spawn failed (inventory): TimeoutError"
+        assert "Traceback" not in payload["error"]["message"]
+        # The traceback field was removed from the contract — gating by
+        # env var was leaky (global flag forwarded all tenants' frames).
         assert "traceback" not in payload["error"]
-
-    def test_traceback_included_when_dev_flag_set(self, monkeypatch):
-        monkeypatch.setenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", "true")
-        snap = self._snapshot(_status="failed", error_message="boom\n  at frame")
-        payload = _build_payload(snap, "sync.failed")
-        assert payload["error"]["traceback"] == "boom\n  at frame"
-
-    def test_traceback_included_in_development_environment(self, monkeypatch):
-        monkeypatch.delenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", raising=False)
-        monkeypatch.setenv("ENVIRONMENT", "development")
-        snap = self._snapshot(_status="failed", error_message="boom")
-        payload = _build_payload(snap, "sync.failed")
-        assert "traceback" in payload["error"]
 
 
 class TestIsoRendering:
@@ -174,27 +273,3 @@ class TestIsoRendering:
 
     def test_none_passes_through(self):
         assert _iso(None) is None
-
-
-class TestIncludeTraceback:
-    """The flag governs whether failure tracebacks travel on the webhook
-    wire — off by default in production."""
-
-    def test_default_off(self, monkeypatch):
-        monkeypatch.delenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", raising=False)
-        monkeypatch.delenv("ENVIRONMENT", raising=False)
-        assert _include_traceback() is False
-
-    def test_explicit_flag_on(self, monkeypatch):
-        monkeypatch.setenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", "true")
-        assert _include_traceback() is True
-
-    def test_development_environment_on(self, monkeypatch):
-        monkeypatch.delenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", raising=False)
-        monkeypatch.setenv("ENVIRONMENT", "development")
-        assert _include_traceback() is True
-
-    def test_production_environment_off(self, monkeypatch):
-        monkeypatch.delenv("WEBHOOK_INCLUDE_SYNC_TRACEBACK", raising=False)
-        monkeypatch.setenv("ENVIRONMENT", "production")
-        assert _include_traceback() is False
