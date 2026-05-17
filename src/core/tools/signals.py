@@ -254,6 +254,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     tenant_agent_url = (
         tenant.get("public_agent_url") if isinstance(tenant, dict) else getattr(tenant, "public_agent_url", None)
     )
+    assert identity.tenant_id is not None  # resolved by transport wrapper
     sample_signals.extend(
         _load_tenant_signals(
             identity.tenant_id,
@@ -363,6 +364,7 @@ async def _activate_signal_impl(
         # ``create_media_buy``. For these signals, the
         # decisioning_platform_segment_id is the signal_id itself: stable
         # across calls, no synthetic UUID drift.
+        assert identity.tenant_id is not None  # resolved by transport wrapper
         with TenantSignalUoW(identity.tenant_id) as uow:
             assert uow.tenant_signals is not None
             tenant_signal = uow.tenant_signals.get_by_id(signal_agent_segment_id)
