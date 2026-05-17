@@ -160,6 +160,25 @@ header is set, so any origin can embed it. For production:
    doesn't hit the `SameSite=Lax`/`SameSite=None` snag that breaks
    classic OAuth in iframes.
 
+### Provisioning contract
+
+Provisioning is **synchronous and binary**. `POST /api/v1/tenant-management/tenants/provision` either:
+
+- **201** — credentials validated against the adapter (GAM: `NetworkService.getCurrentNetwork()`; FreeWheel: `/auth/token/info`), tenant + adapter config + first principal committed, response carries `tenant_id` + surface URLs (`mcp_url`, `a2a_url`, `admin_url_path`). The publisher can sign in immediately.
+- **4xx** — bad credentials, mismatched network, or duplicate `external_org_id`. **Nothing is written.** The host product surfaces the error and the publisher retries.
+
+The response does **not** carry sync handles. The first inventory sync kicks off as a side effect of a successful provision, but it is not part of the provisioning contract — its progress and freshness live in the salesagent UI from that point on, not the host product's onboarding flow.
+
+**For the host product:**
+
+- Treat 201 as "tenant is ready — redirect the publisher to `admin_url_path`."
+- Do not poll `/status` to gate the post-provision redirect. The publisher can enter the tenant immediately and work on configuration that does not depend on inventory (advertisers, currency limits, policies, signing keys).
+- If you want to surface "first inventory sync still running" on your own dashboard, fetch `/status.syncs` on demand — but do not block the publisher behind it. The salesagent UI shows sync progress and partial completion natively.
+
+**Inventory-sync-dependent operations inside the salesagent UI** (product creation, custom targeting key/value pickers, GAM ad unit selection) degrade gracefully with "waiting for first inventory sync" affordances. Initial sync staleness is an ongoing operational concern, not a one-time gate — it must remain visible to the publisher after onboarding, which is why it belongs in the salesagent UI rather than the host's provision flow.
+
+**Failure visibility after provision.** A worker spawn failure (e.g., infrastructure error during sync kickoff) transitions the corresponding `SyncJob` row to `status="failed"` with an error message, surfaced in the salesagent UI dashboard. Rows never sit `pending` indefinitely.
+
 ### Known dev caveats
 
 - **Subdomain routing**: the legacy stack uses `default.localhost` and similar. For embedded-mode dev, this is irrelevant — tenant comes from URL path + `external_org_id` claim. The core compose already disables this complexity.
