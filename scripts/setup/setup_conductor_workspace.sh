@@ -175,7 +175,9 @@ if [ -f "./run_all_tests.sh" ]; then
 
     if [ $TEST_RESULT -ne 0 ]; then
         echo ""
-        echo "❌ Tests failed! Push aborted."
+        echo "❌ Pre-push check failed (exit $TEST_RESULT)."
+        echo "   The script prints a FAILED:<reason> line above (tox / security)."
+        echo "   Tests passing but security audit failing also blocks the push."
         echo ""
         echo "To run full test suite:"
         echo "  ./run_all_tests.sh"
@@ -185,7 +187,7 @@ if [ -f "./run_all_tests.sh" ]; then
         echo ""
         exit 1
     else
-        echo "✅ All tests passed! Proceeding with push..."
+        echo "✅ Pre-push check passed! Proceeding with push..."
     fi
 else
     echo "⚠️  Test runner not found at: $WORK_DIR/run_all_tests.sh"

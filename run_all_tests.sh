@@ -22,8 +22,12 @@ PYTEST_ARGS="${@:3}"
 RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
-# Keep only the last 10 result directories
-ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
+# Keep only the last 10 result directories.
+# `|| true` shields against the pipefail+set-e abort when the glob has no
+# matches (fresh worktree, first run) — `ls` exits non-zero then, propagates
+# through the pipe, and would otherwise abort the entire script before any
+# test runs.
+{ ls -dt "$(pwd)/test-results"/*/ 2>/dev/null || true; } | tail -n +11 | xargs rm -rf 2>/dev/null || true
 
 echo "Mode: $MODE | Reports: $RESULTS_DIR/"
 
@@ -62,7 +66,7 @@ if [ "$MODE" = "quick" ]; then
     TOX_RC=$?
     set -e
     collect_reports
-    [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+    if [ "$TOX_RC" -ne 0 ]; then FAILURES="tox"; fi
 
 # --- CI mode (Docker + all suites) ---
 elif [ "$MODE" = "ci" ]; then
@@ -86,7 +90,7 @@ elif [ "$MODE" = "ci" ]; then
             -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
         TOX_RC=$?
         set -e
-        [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
+        if [ "$TOX_RC" -ne 0 ]; then FAILURES="targeted"; fi
     else
         echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
         set +e
@@ -94,7 +98,7 @@ elif [ "$MODE" = "ci" ]; then
         TOX_RC=$?
         set -e
         collect_reports
-        [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+        if [ "$TOX_RC" -ne 0 ]; then FAILURES="tox"; fi
 
         # Coverage combine runs separately — tox -p hangs when the coverage
         # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
@@ -123,6 +127,14 @@ fi
 FAILURES="${FAILURES:-}"
 echo "================================================================"
 echo "Reports: $RESULTS_DIR/"
-ls "$RESULTS_DIR"/*.json 2>/dev/null | while read f; do echo "  $(basename $f)"; done
-[ -z "$FAILURES" ] && echo -e "${GREEN}ALL PASSED${NC}" && exit 0
-echo -e "${RED}FAILED:$FAILURES${NC}" && exit 1
+# Wrap the report listing in a group + `|| true`: with `set -eo pipefail`, an
+# `ls` glob with no matches exits non-zero, propagates through the pipe, and
+# would otherwise abort the script before the final summary line — making a
+# clean run look like a failure to the pre-push hook (#432).
+{ ls "$RESULTS_DIR"/*.json 2>/dev/null || true; } | while read f; do echo "  $(basename $f)"; done
+if [ -z "$FAILURES" ]; then
+    echo -e "${GREEN}ALL PASSED${NC}"
+    exit 0
+fi
+echo -e "${RED}FAILED: $FAILURES${NC}"
+exit 1
