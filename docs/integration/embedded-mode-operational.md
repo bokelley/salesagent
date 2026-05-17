@@ -298,13 +298,26 @@ The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/we
 | `principal.created` | A new advertiser/principal is created (both via provision endpoint and standalone admin UI flow) | `{"principal_id": str, "name": str}` |
 | `product.created` | A new product is created in the admin UI | `{"product_id": str, "name": str}` |
 | `product.updated` | An existing product is edited in the admin UI | `{"product_id": str, "name": str}` |
-| `sync.completed` | An inventory/targeting/advertisers sync run completed successfully | `{"sync_id": str, "sync_type": str, ...}` |
-| `sync.failed` | A sync run failed | `{"sync_id": str, "sync_type": str, "error": str}` |
+| `sync.completed` | A `SyncJob` row transitioned `running -> completed` (#463). Fires once per actual DB commit, regardless of which worker / endpoint / cron path drove the transition. | `{"sync_run_id": str, "sync_type": "inventory"\|"custom_targeting"\|"advertisers", "adapter_type": str, "trigger": "initial"\|"scheduled"\|"manual", "started_at": ISO8601, "completed_at": ISO8601, "item_count": int\|null, "summary": str\|null}` |
+| `sync.failed` | A `SyncJob` row transitioned `running -> failed` (#463). | `{"sync_run_id": str, "sync_type": str, "adapter_type": str, "trigger": str, "started_at": ISO8601, "completed_at": ISO8601, "error": {"message": str\|null}}` |
 | `tenant.config_changed` | Tenant configuration was patched | `{"changed": [...]}` |
 
 **Delivery semantics**: fire-and-forget from a Flask request handler. Best-effort — webhook delivery failures are logged but do not roll back the operation that fired the event. The host product is responsible for idempotency on receive (use `event_id` for dedup, since retries reuse the same id).
 
 **Signing**: every delivery carries an HMAC-SHA256 signature in the headers — verify with `adcp.signing.webhook_hmac.verify_webhook_hmac` using the plaintext secret returned at subscription-create time.
+
+### Sync-event specifics (#463)
+
+The `sync.completed` / `sync.failed` events power the storefront's "syncing… / last synced X min ago / failed — retry" UI. Implementation notes:
+
+- **Emission point.** Wired via a SQLAlchemy session listener (`src/admin/services/sync_webhook_emission.py`), not at the 15+ terminal-state call sites in the sync workers. Fires once per actual commit of a status transition into `completed` or `failed` — rolled-back transitions and re-saves of already-terminal rows do not emit.
+- **`trigger` taxonomy.** Normalized from the internal open-ended `triggered_by` labels to a 3-value public Literal:
+  - `initial` — first-sync side effect of `POST /tenants/provision` (driven by `triggered_by_id` containing `:provision`).
+  - `scheduled` — recurring scheduler runs (`triggered_by` starting with `scheduler`, or equal to `cron`).
+  - `manual` — everything else (admin UI buttons, `POST /tenants/{tid}/refresh`, order-creation cache rebuilds, worker spawns).
+- **Tracebacks.** Off in production. Set `WEBHOOK_INCLUDE_SYNC_TRACEBACK=true` or `ENVIRONMENT=development` to include the rendered traceback in `data.error.traceback`. Structured `error.class` / `error.category` are forward-compatible fields left out of v1 — failure sites store flattened strings today; receivers should treat missing fields as absent.
+- **Manual retry conflicts.** `POST /tenants/{tid}/refresh` returns **409 `sync_already_running`** when a sync_type already has a `status=running` row that started *outside* the 60s idempotency window. The response body's `details.sync_run_ids` still names the in-flight run so the storefront can correlate via `/status` without re-issuing the refresh. Re-POST within 60s stays 202 (idempotent). This is the "Retry button does nothing" signal asked for in #463 (Ask 6).
+- **Reconciliation pattern (v1 limits).** Delivery is best-effort fire-and-forget — no durable retry queue, no replay endpoint, no DLQ. Subscriptions silently suspend on process restart if their plaintext secret isn't in the in-memory cache. The recommended storefront pattern: render from `GET /tenants/{tid}/status` on UI load, listen for `sync.*` to push updates, and refetch `/status` if a `running` row appears stale (older than expected) — webhook delivery may have been lost. Durable delivery + replay are tracked separately and not blocking #463.
 
 ## Open items for follow-up
 
