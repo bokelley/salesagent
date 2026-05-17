@@ -141,6 +141,97 @@ class TestStructuredFreewheel:
         assert parsed["adapter_config"]["key"] == "genre"
 
 
+class TestGamComplexTargeting:
+    """The TargetingWidget hands a groups payload to the form; the
+    validator passes it through as ``adapter_config`` with kind
+    ``gam_targeting_groups`` (consumed by the GAM materializer)."""
+
+    def test_single_group_single_criterion(self):
+        payload = {
+            "key_value_pairs": {
+                "groups": [
+                    {"criteria": [{"keyId": "11111", "values": ["22222"]}]},
+                ]
+            }
+        }
+        _, errors, parsed = _validate_form(
+            _form(
+                name="Complex KV",
+                source_kind="gam_complex_targeting",
+                entities=json.dumps(payload),
+            ),
+            mode="add",
+        )
+        assert errors == {}
+        assert parsed["adapter_config"] == {
+            "type": "passthrough",
+            "kind": "gam_targeting_groups",
+            "groups": payload["key_value_pairs"]["groups"],
+        }
+        assert parsed["value_type"] == "binary"
+
+    def test_multi_group_with_multi_value_and_exclude(self):
+        payload = {
+            "key_value_pairs": {
+                "groups": [
+                    {
+                        "criteria": [
+                            {"keyId": "11111", "values": ["22222", "33333"]},
+                            {"keyId": "44444", "values": ["55555"], "exclude": True},
+                        ]
+                    },
+                    {"criteria": [{"keyId": "66666", "values": ["77777"]}]},
+                ]
+            }
+        }
+        _, errors, parsed = _validate_form(
+            _form(
+                name="Complex multi-group",
+                source_kind="gam_complex_targeting",
+                entities=json.dumps(payload),
+            ),
+            mode="add",
+        )
+        assert errors == {}
+        assert parsed["adapter_config"]["kind"] == "gam_targeting_groups"
+        assert len(parsed["adapter_config"]["groups"]) == 2
+
+    def test_empty_groups_rejected(self):
+        _, errors, _ = _validate_form(
+            _form(
+                name="Empty",
+                source_kind="gam_complex_targeting",
+                entities=json.dumps({"key_value_pairs": {"groups": []}}),
+            ),
+            mode="add",
+        )
+        assert "entities" in errors
+
+    def test_criterion_missing_values_rejected(self):
+        _, errors, _ = _validate_form(
+            _form(
+                name="No values",
+                source_kind="gam_complex_targeting",
+                entities=json.dumps(
+                    {"key_value_pairs": {"groups": [{"criteria": [{"keyId": "11111", "values": []}]}]}}
+                ),
+            ),
+            mode="add",
+        )
+        assert "entities" in errors
+
+    def test_criterion_missing_key_rejected(self):
+        _, errors, _ = _validate_form(
+            _form(
+                name="No key",
+                source_kind="gam_complex_targeting",
+                entities=json.dumps({"key_value_pairs": {"groups": [{"criteria": [{"values": ["X"]}]}]}}),
+            ),
+            mode="add",
+        )
+        assert "entities" in errors
+
+
 class TestValidationErrors:
     def test_missing_source_kind(self):
         _, errors, _ = _validate_form(

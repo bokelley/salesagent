@@ -106,6 +106,7 @@
                         <optgroup label="Google Ad Manager">
                             <option value="gam_audience_segment">GAM audience segment(s)</option>
                             <option value="gam_custom_key_value">GAM custom key+value pair(s)</option>
+                            <option value="gam_complex_targeting">GAM complex targeting (groups · OR · multi-value · exclude)</option>
                         </optgroup>
                         <optgroup label="Freewheel">
                             <option value="fw_viewership_profile">Freewheel viewership profile</option>
@@ -154,6 +155,19 @@
                             <button type="button" class="btn btn-outline-primary" id="gam-kv-add">Add pair</button>
                         </div>
                     </div>
+                </div>
+
+                <div class="source-picker" data-source="gam_complex_targeting" style="display:none">
+                    <div class="form-text mb-2">
+                        Full GAM-style targeting builder: groups OR'd, criteria within a group AND'd,
+                        multi-value criteria OR'd, optional exclude per criterion. <strong>Exclusive</strong> —
+                        a complex signal can't be combined with other signals in the same media buy's
+                        <code>audience_include</code> / <code>audience_exclude</code> list.
+                    </div>
+                    {# Hidden field the widget writes its groups payload into. On form submit
+                       we mirror this value into the form-submitted ``entities`` field below. #}
+                    <input type="hidden" id="targeting-data" value="">
+                    {% include "components/targeting_selector_widget.html" %}
                 </div>
 
                 <div class="source-picker" data-source="fw_viewership_profile" style="display:none">
@@ -331,9 +345,26 @@
 
     function syncHidden() {
         const kind = sourceKindSelect.value;
+        if (kind === 'gam_complex_targeting') {
+            // TargetingWidget writes its groups payload to #targeting-data;
+            // forward it verbatim as the structured ``entities`` field.
+            const td = document.getElementById('targeting-data');
+            entitiesHidden.value = (td && td.value) ? td.value : '';
+            return;
+        }
         const arr = picked[kind] || [];
         entitiesHidden.value = JSON.stringify(arr.map(stripUiFields));
     }
+
+    // Mirror the widget's #targeting-data into our submit field on every
+    // input event. The widget itself updates #targeting-data after each
+    // criterion edit; we just shadow it.
+    document.getElementById('tenant-signal-form').addEventListener('submit', () => {
+        if (sourceKindSelect.value === 'gam_complex_targeting') {
+            const td = document.getElementById('targeting-data');
+            if (td) entitiesHidden.value = td.value || '';
+        }
+    });
     function stripUiFields(e) {
         // Drop display-only fields (name/label) before submit.
         const { _display, ...rest } = e;

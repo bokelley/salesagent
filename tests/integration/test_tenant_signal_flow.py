@@ -236,6 +236,133 @@ class TestGamPassthroughSignals:
             assert ct_exclude == {"NOT_11111": "22222"}
 
 
+class TestGamTargetingGroupsSignals:
+    """gam_targeting_groups signals carry the TargetingWidget groups
+    payload verbatim. They flow through the per-signal accumulator as a
+    single ``{"groups": [...]}`` value that the downstream GAM
+    customTargeting builder already understands."""
+
+    _GROUPS = [
+        {
+            "criteria": [
+                {"keyId": "11111", "values": ["22222", "33333"]},
+                {"keyId": "44444", "values": ["55555"], "exclude": True},
+            ]
+        },
+        {"criteria": [{"keyId": "66666", "values": ["77777"]}]},
+    ]
+
+    def test_groups_signal_alone_populates_accumulator(self, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_tg_t1", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="complex_premium",
+                adapter_config={
+                    "type": "passthrough",
+                    "kind": "gam_targeting_groups",
+                    "groups": self._GROUPS,
+                },
+            )
+            env.get_session()
+            custom_targeting: dict = {}
+            _gam_tm("gam_tg_t1")._resolve_audience_signals(
+                TargetingOverlay(audience_include=["complex_premium"]),
+                custom_targeting,
+            )
+        assert "groups" in custom_targeting
+        assert custom_targeting["groups"] == self._GROUPS
+
+    def test_groups_signal_in_exclude_flips_exclude_flags(self, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_tg_t2", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="complex_premium",
+                adapter_config={
+                    "type": "passthrough",
+                    "kind": "gam_targeting_groups",
+                    "groups": self._GROUPS,
+                },
+            )
+            env.get_session()
+            custom_targeting: dict = {}
+            _gam_tm("gam_tg_t2")._resolve_audience_signals(
+                TargetingOverlay(audience_exclude=["complex_premium"]),
+                custom_targeting,
+            )
+        flipped = custom_targeting["groups"]
+        # First criterion of group 0 had no exclude → now exclude=True.
+        assert flipped[0]["criteria"][0]["exclude"] is True
+        # Second criterion of group 0 had exclude=True → now exclude=False.
+        assert flipped[0]["criteria"][1]["exclude"] is False
+        # Group 1 criterion 0 had no exclude → now exclude=True.
+        assert flipped[1]["criteria"][0]["exclude"] is True
+
+    def test_groups_signal_rejects_mixing_with_custom_kv_signal(self, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_tg_t3", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="complex_premium",
+                adapter_config={
+                    "type": "passthrough",
+                    "kind": "gam_targeting_groups",
+                    "groups": self._GROUPS,
+                },
+            )
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="simple_section",
+                adapter_config={
+                    "type": "passthrough",
+                    "kind": "custom_key_value",
+                    "key_id": "99999",
+                    "value_id": "88888",
+                },
+            )
+            env.get_session()
+            with pytest.raises(ValueError, match="exclusive|combine"):
+                _gam_tm("gam_tg_t3")._resolve_audience_signals(
+                    TargetingOverlay(audience_include=["complex_premium", "simple_section"]),
+                    {},
+                )
+
+    def test_groups_signal_rejects_mixing_with_audience_segment_signal(self, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalFlowEnv() as env:
+            tenant = TenantFactory(tenant_id="gam_tg_t4", ad_server="google_ad_manager")
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="complex_premium",
+                adapter_config={
+                    "type": "passthrough",
+                    "kind": "gam_targeting_groups",
+                    "groups": self._GROUPS,
+                },
+            )
+            TenantSignalFactory(
+                tenant=tenant,
+                signal_id="audience_sports",
+                adapter_config={"kind": "audience_segment", "segment_id": "98765"},
+            )
+            env.get_session()
+            with pytest.raises(ValueError, match="exclusive"):
+                _gam_tm("gam_tg_t4")._resolve_audience_signals(
+                    # Order matters: audience first populates segment_include,
+                    # then groups signal sees it and rejects.
+                    TargetingOverlay(audience_include=["audience_sports", "complex_premium"]),
+                    {},
+                )
+
+
 class TestGamComposedSignals:
     """Composed signals (AND of criteria, mixed kinds, per-criterion mode).
 

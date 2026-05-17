@@ -51,6 +51,13 @@ _VALID_VALUE_TYPES = ("binary", "categorical", "numeric")
 _SOURCE_KINDS = {
     "gam_audience_segment",  # one or more GAM audience segments (AND)
     "gam_custom_key_value",  # one or more (key, value) pairs (AND)
+    # "Complex GAM targeting" — full TargetingWidget output (groups OR'd,
+    # criteria within group AND'd, multi-value criteria OR'd, exclude
+    # supported). Buy-time materialization rejects mixing this with any
+    # other signal in the same audience_include / audience_exclude list
+    # because the per-signal accumulator can't merge groups-format with
+    # flat key=value entries. See `_apply_signal` in GAM targeting.py.
+    "gam_complex_targeting",
     "fw_viewership_profile",
     "fw_audience_item",
     "fw_custom_kv",
@@ -292,6 +299,13 @@ def _parse_structured_fields(form_data: dict, errors: dict, parsed: dict) -> Non
         errors["source_kind"] = f"Unknown source kind {source_kind!r}."
         return
 
+    # Complex GAM targeting takes the TargetingWidget's groups payload
+    # verbatim into adapter_config. It has different shape from the
+    # entity-list sources, so handle it before the entities parse.
+    if source_kind == "gam_complex_targeting":
+        _parse_gam_complex_targeting(form_data, errors, parsed)
+        return
+
     try:
         entities = _parse_json(form_data["entities"], default=[])
     except (ValueError, json.JSONDecodeError) as exc:
@@ -369,6 +383,61 @@ def _entity_to_criterion(source_kind: str, entity: dict) -> dict:
         return {"kind": "freewheel_custom_kv", "key": str(key), "value_id": str(value_id), "mode": mode}
 
     raise ValueError(f"Unsupported source_kind {source_kind!r}.")
+
+
+def _parse_gam_complex_targeting(form_data: dict, errors: dict, parsed: dict) -> None:
+    """Translate a TargetingWidget groups payload into adapter_config.
+
+    The widget writes ``{"key_value_pairs": {"groups": [{"criteria":
+    [{"keyId": ..., "values": [...], "exclude": ...}]}]}}`` to a hidden
+    field that the form copies into ``entities`` on submit. We pass the
+    groups dict straight into adapter_config — the GAM targeting layer
+    already understands the groups format via
+    ``_build_groups_custom_targeting_structure``.
+
+    Buy-time materialization rejects mixing this signal with any other
+    signal in the same audience_include / audience_exclude list because
+    the per-signal accumulator can't merge groups-format with flat
+    key=value entries from sibling signals.
+    """
+    try:
+        payload = _parse_json(form_data["entities"], default={})
+    except (ValueError, json.JSONDecodeError) as exc:
+        errors["entities"] = f"Targeting builder payload must be JSON: {exc}"
+        return
+    if not isinstance(payload, dict):
+        errors["entities"] = "Targeting builder payload must be a JSON object."
+        return
+
+    kvp = payload.get("key_value_pairs") or {}
+    groups = kvp.get("groups") or []
+    if not groups:
+        errors["entities"] = "Add at least one criterion in the targeting builder."
+        return
+
+    # Light validation — each criterion needs a key and at least one value.
+    for group_idx, group in enumerate(groups):
+        criteria = group.get("criteria") or []
+        if not criteria:
+            errors["entities"] = f"Group {group_idx + 1} has no criteria."
+            return
+        for crit_idx, criterion in enumerate(criteria):
+            if not criterion.get("keyId"):
+                errors["entities"] = f"Group {group_idx + 1} criterion {crit_idx + 1} is missing a key."
+                return
+            if not criterion.get("values"):
+                errors["entities"] = f"Group {group_idx + 1} criterion {crit_idx + 1} has no values."
+                return
+
+    parsed["adapter_config"] = {
+        "type": "passthrough",
+        "kind": "gam_targeting_groups",
+        "groups": groups,
+    }
+    parsed["value_type"] = "binary"
+    parsed["categories"] = []
+    parsed["range_min"] = None
+    parsed["range_max"] = None
 
 
 def _parse_advanced_fields(form_data: dict, errors: dict, parsed: dict) -> None:

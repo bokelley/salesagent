@@ -791,6 +791,16 @@ class GAMTargetingManager:
         kind = cfg.get("kind")
         if kind in ("audience_segment", "custom_key_value"):
             return [self._validate_criterion(signal, {**cfg, "mode": cfg.get("mode", "include")})]
+        # Complex GAM targeting (TargetingWidget groups format). Returns a
+        # single synthetic criterion that ``_apply_signal`` recognizes and
+        # routes through the existing groups-aware downstream materializer.
+        if kind == "gam_targeting_groups":
+            groups = cfg.get("groups")
+            if not isinstance(groups, list) or not groups:
+                raise ValueError(
+                    f"Signal {signal.signal_id!r} kind='gam_targeting_groups' requires a non-empty groups list."
+                )
+            return [{"kind": "gam_targeting_groups", "mode": cfg.get("mode", "include"), "groups": groups}]
 
         raise ValueError(
             f"Signal {signal.signal_id!r} adapter_config must declare type='passthrough' "
@@ -820,12 +830,18 @@ class GAMTargetingManager:
         self,
         signal,
         outer_mode: str,
-        custom_targeting: dict[str, str],
+        custom_targeting: dict[str, Any],
         segment_include: list[str],
         segment_exclude: list[str],
     ) -> None:
         """Walk one ``TenantSignal``'s criteria and contribute to the right
         GAM targeting accumulators. Outer mode XORs with criterion mode.
+
+        ``gam_targeting_groups`` signals are exclusive — they can't share
+        accumulators with sibling signals because the per-key ``{key:
+        value}`` shape can't merge with the groups-of-criteria shape.
+        Reject mixing here so the buyer gets a clear error instead of a
+        silently-mis-targeted line item.
         """
         for criterion in self._signal_criteria(signal):
             effective_mode = criterion["mode"] if outer_mode == "include" else self._flip_mode(criterion["mode"])
@@ -834,6 +850,12 @@ class GAMTargetingManager:
                 target = segment_include if effective_mode == "include" else segment_exclude
                 target.append(str(criterion["segment_id"]))
             elif kind == "custom_key_value":
+                if "groups" in custom_targeting:
+                    raise ValueError(
+                        f"Signal {signal.signal_id!r} (kind=custom_key_value) can't combine with a "
+                        f"gam_targeting_groups signal in the same audience_include / audience_exclude list. "
+                        f"Use the complex signal alone, or split into separate buys."
+                    )
                 key_id = criterion["key_id"]
                 # value_id falls back to the signal_id when the operator
                 # hasn't mapped a specific value (rare; usually a binary
@@ -841,8 +863,42 @@ class GAMTargetingManager:
                 value_id = criterion.get("value_id") or signal.signal_id
                 target_key = f"NOT_{key_id}" if effective_mode == "exclude" else str(key_id)
                 custom_targeting[target_key] = str(value_id)
+            elif kind == "gam_targeting_groups":
+                # Exclusive accumulator — refuse to merge with prior signal
+                # contributions and prevent later signals from adding more.
+                # ``effective_mode == "exclude"`` flips include/exclude on
+                # every criterion in every group via the existing widget
+                # ``exclude`` flag.
+                existing_keys = [k for k in custom_targeting if k != "groups"]
+                if existing_keys or "groups" in custom_targeting or segment_include or segment_exclude:
+                    raise ValueError(
+                        f"Signal {signal.signal_id!r} (kind=gam_targeting_groups) is exclusive — it can't "
+                        f"share an audience_include / audience_exclude list with other signals. Use it alone, "
+                        f"or fold the other signals into the targeting builder."
+                    )
+                groups = criterion["groups"]
+                if effective_mode == "exclude":
+                    groups = self._flip_groups_exclude(groups)
+                custom_targeting["groups"] = groups
             else:  # pragma: no cover — _validate_criterion already rejects unknown kinds
                 raise ValueError(f"Signal {signal.signal_id!r} criterion has unsupported kind: {kind!r}")
+
+    @staticmethod
+    def _flip_groups_exclude(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Toggle every criterion's ``exclude`` flag — used when the buyer
+        puts a gam_targeting_groups signal in ``audience_exclude``. This is
+        the structural inversion that mirrors the XOR-of-modes pattern the
+        simple kinds use.
+        """
+        flipped: list[dict[str, Any]] = []
+        for group in groups:
+            flipped_criteria = []
+            for crit in group.get("criteria", []):
+                c = dict(crit)
+                c["exclude"] = not c.get("exclude", False)
+                flipped_criteria.append(c)
+            flipped.append({**group, "criteria": flipped_criteria})
+        return flipped
 
     def build_targeting(self, targeting_overlay) -> dict[str, Any]:
         """Build GAM targeting criteria from AdCP targeting.
