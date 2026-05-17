@@ -43,14 +43,17 @@
         <div class="card-header d-flex align-items-center justify-content-between">
             <h5 class="mb-0">Map targeting to signals</h5>
             <ul class="nav nav-pills nav-sm" role="tablist">
+                {% set seg_unmapped = segments | rejectattr('mapped_signal_id') | list | length %}
                 <li class="nav-item" role="presentation">
                     <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#segments-tab" type="button" role="tab">
-                        Audience segments ({{ segments | length }})
+                        Audience segments
+                        {% if seg_unmapped %}<span class="badge bg-primary ms-1">{{ seg_unmapped }} unmapped</span>{% endif %}
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#keys-tab" type="button" role="tab">
-                        Custom keys ({{ keys | length }})
+                        Custom keys
+                        <span class="text-muted small">({{ keys | length }})</span>
                     </button>
                 </li>
             </ul>
@@ -143,9 +146,14 @@
         </div>
         <div class="card-footer d-flex justify-content-between align-items-center">
             <div class="text-muted small" id="bulk-footer-hint">Pick rows to map — they'll become signals on save.</div>
-            <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
-                Create <span id="bulk-selection-count" class="d-none"></span> signals
-            </button>
+            <div class="d-flex align-items-center gap-3">
+                <a href="{{ url_for('tenant_signals.composite_signal', tenant_id=tenant_id) }}" class="small text-muted">
+                    Need multi-key / OR / exclude? <strong>Build a composite signal →</strong>
+                </a>
+                <button type="button" class="btn btn-primary" id="bulk-create-btn" disabled>
+                    Create <span id="bulk-selection-count" class="d-none"></span> signals
+                </button>
+            </div>
         </div>
     </div>
     {% endif %}
@@ -166,8 +174,6 @@
                     <tr>
                         <th>Name</th>
                         <th class="signal-id-col d-none">signal_id</th>
-                        <th>Kind</th>
-                        <th>Type</th>
                         <th>Updated</th>
                         <th></th>
                     </tr>
@@ -175,14 +181,15 @@
                 <tbody>
                     {% for s in signals %}
                     <tr>
-                        <td>{{ s.name }}</td>
-                        <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
                         <td>
-                            <span class="badge bg-light text-dark">
-                            {% if s.is_complex %}complex{% elif s.is_composed %}composed{% else %}{{ s.adapter_kind or "—" }}{% endif %}
-                            </span>
+                            {{ s.name }}
+                            {% if s.is_complex %}
+                            <span class="badge bg-light text-dark ms-1">composite</span>
+                            {% elif s.is_composed %}
+                            <span class="badge bg-light text-dark ms-1">composed</span>
+                            {% endif %}
                         </td>
-                        <td>{{ s.value_type }}</td>
+                        <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
                         <td class="small text-muted">{{ s.updated_at.strftime("%Y-%m-%d") if s.updated_at else "—" }}</td>
                         <td class="text-end">
                             <a class="btn btn-sm btn-outline-secondary"

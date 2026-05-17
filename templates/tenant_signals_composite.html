@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Build composite signal — Sales Agent Admin{% endblock %}
+
+{% block content %}
+{% set effective = form_data if form_data else {
+    "name": "",
+    "description": "",
+    "targeting_data": "",
+} %}
+<style>
+    /* admin.css has a legacy ``.tab-content { display: none }`` rule; the
+       embedded TargetingWidget uses tab-content internally so scope-override. */
+    .targeting-widget .tab-content { display: block; }
+</style>
+<div class="container">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Build composite signal</h2>
+            <p class="sa-page-header__subtitle">
+                For targeting that's too complex for the bulk-mapper: multi-key AND, OR groups,
+                multi-value criteria, exclude. <strong>Exclusive at buy time</strong> — a composite
+                signal can't be combined with other signals in the same media buy's
+                <code>audience_include</code> / <code>audience_exclude</code> list.
+            </p>
+        </div>
+    </header>
+
+    <form method="POST" id="composite-form">
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Identity</h5></div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Name <span class="text-danger">*</span></label>
+                    <input name="name" type="text" required
+                           class="form-control{% if errors and errors.name %} is-invalid{% endif %}"
+                           placeholder="e.g. Premium sports inventory, high-CPM finance"
+                           value="{{ effective.name }}">
+                    {% if errors and errors.name %}<div class="invalid-feedback">{{ errors.name }}</div>{% endif %}
+                    <div class="form-text">
+                        Surfaces to buyers via <code>get_signals</code>. Composite signals can't
+                        auto-derive a name from a boolean expression — you choose one.
+                    </div>
+                </div>
+                <div class="mb-1">
+                    <label class="form-label">Description</label>
+                    <textarea name="description" class="form-control" rows="2"
+                              placeholder="Internal note describing what this composite signal targets.">{{ effective.description }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><h5 class="mb-0">Targeting</h5></div>
+            <div class="card-body">
+                {% if errors and errors.targeting_data %}
+                <div class="alert alert-danger">{{ errors.targeting_data }}</div>
+                {% endif %}
+                {# The widget writes its groups payload into ``#targeting-data``; we
+                   pass it through to the server as ``targeting_data``. #}
+                <input type="hidden" id="targeting-data" name="targeting_data" value="{{ effective.targeting_data }}">
+                {% include "components/targeting_selector_widget.html" %}
+            </div>
+        </div>
+
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">Create composite signal</button>
+            <a href="{{ url_for('tenant_signals.list_signals', tenant_id=tenant_id) }}" class="btn btn-link">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

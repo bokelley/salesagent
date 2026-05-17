@@ -94,6 +94,74 @@ class TestMappedIndex:
         assert kv_idx == {}
 
 
+class TestCompositeValidator:
+    """The composite-builder form validator wraps the TargetingWidget's
+    groups payload into a ``kind="gam_targeting_groups"`` adapter_config.
+    """
+
+    def test_groups_payload_translated_to_adapter_config(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        payload = {
+            "key_value_pairs": {
+                "groups": [
+                    {
+                        "criteria": [
+                            {"keyId": "11111", "values": ["22222", "33333"]},
+                            {"keyId": "44444", "values": ["55555"], "exclude": True},
+                        ]
+                    }
+                ]
+            }
+        }
+        _, errors, parsed = _validate_composite_form(
+            MultiDict({"name": "Premium sports", "targeting_data": json.dumps(payload)})
+        )
+        assert errors == {}
+        assert parsed["name"] == "Premium sports"
+        assert parsed["adapter_config"]["kind"] == "gam_targeting_groups"
+        assert parsed["adapter_config"]["groups"] == payload["key_value_pairs"]["groups"]
+        assert parsed["value_type"] == "binary"
+
+    def test_missing_name_rejected(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        payload = {"key_value_pairs": {"groups": [{"criteria": [{"keyId": "X", "values": ["Y"]}]}]}}
+        _, errors, _ = _validate_composite_form(MultiDict({"targeting_data": json.dumps(payload)}))
+        assert "name" in errors
+
+    def test_empty_groups_rejected(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        _, errors, _ = _validate_composite_form(
+            MultiDict({"name": "Empty", "targeting_data": json.dumps({"key_value_pairs": {"groups": []}})})
+        )
+        assert "targeting_data" in errors
+
+    def test_criterion_missing_values_rejected(self):
+        import json
+
+        from werkzeug.datastructures import MultiDict
+
+        from src.admin.blueprints.tenant_signals import _validate_composite_form
+
+        payload = {"key_value_pairs": {"groups": [{"criteria": [{"keyId": "X", "values": []}]}]}}
+        _, errors, _ = _validate_composite_form(MultiDict({"name": "Bad", "targeting_data": json.dumps(payload)}))
+        assert "targeting_data" in errors
+
+
 class TestBulkCreate:
     """End-to-end exercise of the repository + factory pattern. The HTTP
     boundary lives in the blueprint; this tests the data-shaping logic

@@ -251,6 +251,123 @@ def bulk_create(tenant_id: str):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Composite builder — rare path for multi-key / OR-groups / exclude signals
+# ---------------------------------------------------------------------------
+
+
+@tenant_signals_bp.route("/composite", methods=["GET", "POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("create_composite_tenant_signal")
+def composite_signal(tenant_id: str):
+    """Author a signal whose targeting is too complex for the bulk-mapper.
+
+    Embeds the same ``TargetingWidget`` product authoring uses. The
+    widget emits a ``key_value_pairs.groups`` payload that we wrap into
+    a ``kind="gam_targeting_groups"`` ``adapter_config`` — the GAM
+    materializer (#462) routes that shape directly into
+    ``_build_groups_custom_targeting_structure``.
+
+    Composite signals are exclusive at buy time — they can't share an
+    ``audience_include`` / ``audience_exclude`` list with other signals
+    in the same media buy. That's enforced in the materializer; the form
+    surfaces it as a callout so operators understand the bound before
+    they author.
+    """
+    if request.method == "GET":
+        return render_template(
+            "tenant_signals_composite.html",
+            tenant_id=tenant_id,
+            form_data=None,
+            errors=None,
+        )
+
+    form_data, errors, parsed = _validate_composite_form(request.form)
+    if not errors:
+        with get_db_session() as session:
+            if session.get(Tenant, tenant_id) is None:
+                flash("Tenant not found.", "error")
+                return redirect(url_for("core.index"))
+            repo = TenantSignalRepository(session, tenant_id)
+            parsed["signal_id"] = unique_signal_id(parsed["name"], exists=lambda sid: repo.get_by_id(sid) is not None)
+            signal = TenantSignal(tenant_id=tenant_id, **parsed)
+            repo.add(signal)
+            session.commit()
+        flash(f"Composite signal {parsed['signal_id']!r} created.", "success")
+        return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
+
+    return render_template(
+        "tenant_signals_composite.html",
+        tenant_id=tenant_id,
+        form_data=form_data,
+        errors=errors,
+    )
+
+
+def _validate_composite_form(form) -> tuple[dict, dict, dict]:
+    """Composite form is small: required name, required groups payload
+    from the widget, optional description."""
+    form_data = {
+        "name": (form.get("name") or "").strip(),
+        "description": (form.get("description") or "").strip(),
+        "targeting_data": form.get("targeting_data") or "",
+    }
+    errors: dict[str, str] = {}
+    parsed: dict = {}
+
+    if not form_data["name"]:
+        errors["name"] = "Name is required (composite signals can't auto-derive a name)."
+    else:
+        parsed["name"] = form_data["name"]
+    parsed["description"] = form_data["description"] or None
+
+    if not form_data["targeting_data"].strip():
+        errors["targeting_data"] = "Build at least one criterion in the targeting builder."
+        return form_data, errors, parsed
+
+    try:
+        payload = json.loads(form_data["targeting_data"])
+    except (ValueError, json.JSONDecodeError) as exc:
+        errors["targeting_data"] = f"Targeting builder payload must be JSON: {exc}"
+        return form_data, errors, parsed
+
+    if not isinstance(payload, dict):
+        errors["targeting_data"] = "Targeting builder payload must be a JSON object."
+        return form_data, errors, parsed
+
+    groups = (payload.get("key_value_pairs") or {}).get("groups") or []
+    if not groups:
+        errors["targeting_data"] = "Add at least one criterion in the targeting builder."
+        return form_data, errors, parsed
+
+    # Light validation — each criterion needs a key and at least one value.
+    for group_idx, group in enumerate(groups):
+        criteria = group.get("criteria") or []
+        if not criteria:
+            errors["targeting_data"] = f"Group {group_idx + 1} has no criteria."
+            return form_data, errors, parsed
+        for crit_idx, criterion in enumerate(criteria):
+            if not criterion.get("keyId"):
+                errors["targeting_data"] = f"Group {group_idx + 1} criterion {crit_idx + 1} is missing a key."
+                return form_data, errors, parsed
+            if not criterion.get("values"):
+                errors["targeting_data"] = f"Group {group_idx + 1} criterion {crit_idx + 1} has no values."
+                return form_data, errors, parsed
+
+    parsed["adapter_config"] = {
+        "type": "passthrough",
+        "kind": "gam_targeting_groups",
+        "groups": groups,
+    }
+    parsed["value_type"] = "binary"
+    parsed["categories"] = []
+    parsed["range_min"] = None
+    parsed["range_max"] = None
+    parsed["data_provider"] = "publisher"
+
+    return form_data, errors, parsed
+
+
 @tenant_signals_bp.route("/<signal_id>/edit", methods=["GET", "POST"])
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 @log_admin_action("update_tenant_signal")
