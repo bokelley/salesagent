@@ -73,16 +73,24 @@ class TestRunAllTestsSafePipes:
             + "\n\nWrap in `{ ls … || true; } | while …` to survive empty globs."
         )
 
-    def test_no_failure_assignment_via_short_circuit(self):
-        """`[ … ] && FAILURES=…` collapses the test command's exit code into
-        the assignment chain, making it harder to reason about `set -e`
-        behavior. Use explicit `if [ … ]; then FAILURES=…; fi` instead."""
+    def test_no_test_command_short_circuit_to_state_mutation(self):
+        """`[ … ] && X` chains where X is a state mutation (assignment, cp,
+        mv, rm) collapse the test command's exit code into the action, which
+        under `set -e` on older bash can disguise the actual reason for
+        script failure. Use explicit `if [ … ]; then X; fi` instead.
+
+        Covers both the FAILURES= short-circuits and the `[ -f ] && cp`
+        pattern inside `collect_reports` that surfaced in PR #454 review."""
         body = _strip_comments(SCRIPT.read_text())
-        offenders = re.findall(r"^\s*\[[^\n]+\]\s*&&\s*FAILURES=", body, re.MULTILINE)
+        offenders = re.findall(
+            r"^\s*\[[^\n]+\]\s*&&\s*(?:FAILURES=|cp\s|mv\s|rm\s)",
+            body,
+            re.MULTILINE,
+        )
         assert not offenders, (
-            "Short-circuit `[ … ] && FAILURES=…` found in run_all_tests.sh:\n"
+            "Short-circuit `[ … ] && (FAILURES=|cp|mv|rm) …` found in run_all_tests.sh:\n"
             + "\n".join(f"  {o}" for o in offenders)
-            + "\n\nUse explicit `if [ … ]; then FAILURES=…; fi`."
+            + "\n\nUse explicit `if [ … ]; then …; fi`."
         )
 
     def test_no_summary_short_circuit(self):

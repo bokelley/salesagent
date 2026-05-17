@@ -45,14 +45,13 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 }
 
 collect_reports() {
-    # Copy JSON reports from .tox/ to results dir
+    # Copy JSON reports from .tox/ to results dir. Use explicit `if` so the
+    # loop's last iteration can't return 1 (which `set -e` would propagate to
+    # the caller). See #432.
     mkdir -p "$RESULTS_DIR"
     for name in unit integration e2e admin bdd ui; do
-        [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
+        if [ -f ".tox/${name}.json" ]; then cp ".tox/${name}.json" "$RESULTS_DIR/"; fi
     done
-    # Guard against the [ -f ] && cp pattern returning 1 when the last file is missing —
-    # under `set -e` that would abort the caller after a successful test run.
-    return 0
 }
 
 # --- Quick mode (no Docker) ---
