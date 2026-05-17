@@ -97,13 +97,19 @@
                tenant_id) to the host's storefront via the Referer header. #}
             <a class="sa-nav-action sa-nav-action--host" href="{{ embed_breadcrumb_root.url }}" target="_top" rel="noopener noreferrer">{{ embed_breadcrumb_root.label }}</a>
             {% endif %}
+            {# Products / Inventory / Signals are the three operator-authored
+               building blocks: Products = Inventory + Signals + price. Promoted
+               to top nav per #451 — these are the operator's ongoing work,
+               not one-time setup. #}
             {% set _navlinks = [
-                ('Dashboard',  '',                  ''),
-                ('Media Buys', '/media-buys',       '/media-buy'),
-                ('Products',   '/products/',        '/products'),
-                ('Creatives',  '/creatives/review', '/creatives'),
-                ('Workflows',  '/workflows',        '/workflows'),
-                ('Reports',    '/reporting',        '/reporting'),
+                ('Dashboard',  '',                     ''),
+                ('Media Buys', '/media-buys',          '/media-buy'),
+                ('Products',   '/products/',           '/products'),
+                ('Inventory',  '/inventory-profiles/', '/inventory-profiles'),
+                ('Signals',    '/signals/',            '/signals'),
+                ('Creatives',  '/creatives/review',    '/creatives'),
+                ('Workflows',  '/workflows',           '/workflows'),
+                ('Reports',    '/reporting',           '/reporting'),
             ] %}
             {% for label, href, active_prefix in _navlinks %}
                 {% set _href = _tprefix + href %}
@@ -123,6 +129,8 @@
                 or _path == _tprefix + '/'
                 or _path.startswith(_tprefix + '/media-buy')
                 or _path.startswith(_tprefix + '/products')
+                or _path.startswith(_tprefix + '/inventory-profiles')
+                or _path.startswith(_tprefix + '/signals')
                 or _path.startswith(_tprefix + '/creatives')
                 or _path.startswith(_tprefix + '/workflows')
                 or _path.startswith(_tprefix + '/reporting')
@@ -134,9 +142,12 @@
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
                 <div class="sa-menu__panel" role="menu">
-                    <div class="sa-menu__group-label">Inventory</div>
+                    {# Inventory Profiles + Signals moved to top nav (#451).
+                       What remains here is operational: browsing the raw
+                       ad-server inventory tree and the targeting-criteria
+                       directory the profiles draw from. #}
+                    <div class="sa-menu__group-label">Inventory operations</div>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory/browse">Browse inventory</a>
-                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory-profiles/">Inventory profiles</a>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/targeting">Targeting criteria</a>
                     {% if not embedded_view %}
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory">Sync inventory</a>
