@@ -1,0 +1,4743 @@
+components:
+  schemas:
+    AccountDetail.f44f287:
+      additionalProperties: false
+      description: Full account view returned from POST/GET-by-id.
+      properties:
+        account_id:
+          title: Account Id
+          type: string
+        advertiser_mapped:
+          title: Advertiser Mapped
+          type: boolean
+        billing:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Billing
+        brand:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Brand
+        buyer_agent_principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Buyer Agent Principal Id
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        gam_advertiser_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Id
+        gam_advertiser_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Name
+        name:
+          title: Name
+          type: string
+        operator:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Operator
+        payment_terms:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Payment Terms
+        rate_card:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Rate Card
+        sandbox:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          title: Sandbox
+        status:
+          title: Status
+          type: string
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+      required:
+      - account_id
+      - name
+      - status
+      - advertiser_mapped
+      - created_at
+      - updated_at
+      title: AccountDetail
+      type: object
+    AdapterConfigEnvelope.61b280c:
+      discriminator:
+        mapping:
+          broadstreet: '#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig'
+          freewheel: '#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig'
+          google_ad_manager: '#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig'
+          mock: '#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig'
+          springserve: '#/components/schemas/AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig'
+        propertyName: type
+      oneOf:
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.GAMAdapterConfig'
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.MockAdapterConfig'
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig'
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig'
+      - $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig'
+      title: AdapterConfigEnvelope
+    AdapterConfigEnvelope.61b280c.BroadstreetAdapterConfig:
+      additionalProperties: false
+      description: Broadstreet adapter configuration.
+      properties:
+        api_key:
+          format: password
+          title: Api Key
+          type: string
+          writeOnly: true
+        default_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Advertiser Id
+        network_id:
+          maxLength: 64
+          minLength: 1
+          title: Network Id
+          type: string
+        type:
+          const: broadstreet
+          default: broadstreet
+          title: Type
+          type: string
+      required:
+      - network_id
+      - api_key
+      title: BroadstreetAdapterConfig
+      type: object
+    AdapterConfigEnvelope.61b280c.FreeWheelAdapterConfig:
+      additionalProperties: false
+      description: "FreeWheel Publisher API adapter configuration.\n\nExactly one\
+        \ auth path is required: ``username`` + ``password`` (OAuth2\npassword grant\
+        \ \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted\
+        \ bearer, escape hatch for partner-provisioned tokens)."
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Advertiser Id
+        environment:
+          default: production
+          enum:
+          - production
+          - staging
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: freewheel
+          default: freewheel
+          title: Type
+          type: string
+        username:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Username
+      title: FreeWheelAdapterConfig
+      type: object
+    AdapterConfigEnvelope.61b280c.GAMAdapterConfig:
+      additionalProperties: false
+      description: Google Ad Manager adapter configuration.
+      properties:
+        network_code:
+          maxLength: 32
+          minLength: 1
+          title: Network Code
+          type: string
+        refresh_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          maxLength: 255
+          minLength: 3
+          title: Service Account Email
+          type: string
+        service_account_key_json:
+          format: password
+          title: Service Account Key Json
+          type: string
+          writeOnly: true
+        type:
+          const: google_ad_manager
+          default: google_ad_manager
+          title: Type
+          type: string
+      required:
+      - network_code
+      - service_account_email
+      - service_account_key_json
+      title: GAMAdapterConfig
+      type: object
+    AdapterConfigEnvelope.61b280c.MockAdapterConfig:
+      additionalProperties: false
+      description: Mock adapter configuration (no real backend).
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        type:
+          const: mock
+          default: mock
+          title: Type
+          type: string
+      title: MockAdapterConfig
+      type: object
+    AdapterConfigEnvelope.61b280c.SpringServeAdapterConfig:
+      additionalProperties: false
+      description: 'SpringServe (Magnite) ad-server adapter configuration.
+
+
+        Exactly one auth path is required: ``email`` + ``password`` (the
+
+        canonical path -- the SpringServe API mints a 2-hour token from
+
+        these credentials and the adapter caches + refreshes) or
+
+        ``api_token`` (a pre-minted token, escape hatch for partner-
+
+        provisioned tokens; no auto-refresh).'
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_demand_partner_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Default Demand Partner Id
+        email:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Email
+        environment:
+          const: production
+          default: production
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: springserve
+          default: springserve
+          title: Type
+          type: string
+      title: SpringServeAdapterConfig
+      type: object
+    AdapterConfigResponse.f44f287:
+      additionalProperties: false
+      description: Adapter config view returned with secrets redacted.
+      properties:
+        configured:
+          title: Configured
+          type: boolean
+        network_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network Code
+        refresh_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Service Account Email
+        service_account_key_json:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Service Account Key Json
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - configured
+      title: AdapterConfigResponse
+      type: object
+    ApiError.f44f287:
+      additionalProperties: false
+      description: Standard problem-detail shape used by every Tenant Management endpoint.
+      properties:
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Details
+        error:
+          title: Error
+          type: string
+        message:
+          title: Message
+          type: string
+      required:
+      - error
+      - message
+      title: ApiError
+      type: object
+    ApproveWorkflowRequest.f44f287:
+      additionalProperties: false
+      description: '``POST /workflows/{wid}/approve`` body. Notes are optional on
+        approve.'
+      properties:
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Notes
+      title: ApproveWorkflowRequest
+      type: object
+    BuyerAdvertiserMapping.f44f287:
+      additionalProperties: false
+      description: "Routing rule on the wire \u2014 the public face of an\n``AdvertiserRoutingRule``\
+        \ ORM row.\n\nVocabulary alignment with Scope3 Storefront UI: external surface\
+        \ uses\n\"buyer-advertiser-mapping\"; internal storage table is named\n``advertiser_routing_rules``\
+        \ because the impl IS a precedence-ordered\nrouting chain. One-line mapping\
+        \ at the API boundary."
+      properties:
+        brand_house:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        gam_advertiser_id:
+          title: Gam Advertiser Id
+          type: string
+        id:
+          title: Id
+          type: string
+        operator_domain:
+          title: Operator Domain
+          type: string
+        principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+      required:
+      - id
+      - operator_domain
+      - gam_advertiser_id
+      - created_at
+      - updated_at
+      title: BuyerAdvertiserMapping
+      type: object
+    CreateAccountRequest.f44f287:
+      additionalProperties: false
+      description: "Pre-map a GAM advertiser to a billing key.\n\nUpserts by the same\
+        \ natural key ``_sync_accounts_impl`` uses so the\nnext ``sync_accounts``\
+        \ call from a buyer agent finds the row already\nwired and skips ``pending_provision``\
+        \ entirely.\n\nValidation:\n- ``billing=agent`` requires ``buyer_agent_principal_id``.\n\
+        - ``sandbox=True`` rejects ``gam_advertiser_id`` \u2014 sandbox routes to\n\
+        \  the per-tenant sandbox advertiser, not a caller-specified one."
+      properties:
+        billing:
+          enum:
+          - operator
+          - agent
+          title: Billing
+          type: string
+        brand:
+          $ref: '#/components/schemas/CreateAccountRequest.f44f287.BrandRef'
+        buyer_agent_principal_id:
+          anyOf:
+          - maxLength: 100
+            type: string
+          - type: 'null'
+          default: null
+          title: Buyer Agent Principal Id
+        gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Id
+        gam_advertiser_name:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Name
+        name:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        operator:
+          maxLength: 255
+          minLength: 1
+          title: Operator
+          type: string
+        payment_terms:
+          anyOf:
+          - enum:
+            - net_15
+            - net_30
+            - net_45
+            - net_60
+            - net_90
+            - prepay
+            type: string
+          - type: 'null'
+          default: null
+          title: Payment Terms
+        rate_card:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Rate Card
+        sandbox:
+          default: false
+          title: Sandbox
+          type: boolean
+      required:
+      - operator
+      - brand
+      - billing
+      title: CreateAccountRequest
+      type: object
+    CreateAccountRequest.f44f287.BrandRef:
+      additionalProperties: false
+      description: "Compact brand reference. Mirrors AdCP ``BrandReference`` minimally\
+        \ \u2014\n``domain`` is the natural-key field; ``brand_id`` is an optional\n\
+        publisher-side stable id when one brand owns multiple domains."
+      properties:
+        brand_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        domain:
+          maxLength: 255
+          minLength: 1
+          title: Domain
+          type: string
+      required:
+      - domain
+      title: BrandRef
+      type: object
+    CreateBuyerAdvertiserMappingRequest.f44f287:
+      additionalProperties: false
+      description: '``POST /tenants/{tid}/buyer-advertiser-mappings`` body.'
+      properties:
+        brand_house:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        gam_advertiser_id:
+          maxLength: 64
+          minLength: 1
+          title: Gam Advertiser Id
+          type: string
+        operator_domain:
+          maxLength: 255
+          minLength: 1
+          title: Operator Domain
+          type: string
+        principal_id:
+          anyOf:
+          - maxLength: 50
+            type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+      required:
+      - operator_domain
+      - gam_advertiser_id
+      title: CreateBuyerAdvertiserMappingRequest
+      type: object
+    CreateWebhookSubscriptionRequest.f44f287:
+      additionalProperties: false
+      description: '``POST /tenants/{tid}/webhooks`` body.
+
+
+        ``event_types``: subset of :data:`WEBHOOK_EVENT_TYPES`; empty list means
+
+        "all events". ``secret`` may be omitted, in which case the server
+
+        generates one and returns it in the create response (exactly once).'
+      properties:
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        event_types:
+          items:
+            enum:
+            - workflow.created
+            - workflow.decided
+            - media_buy.status_changed
+            - sync.completed
+            - sync.failed
+            - tenant.config_changed
+            type: string
+          title: Event Types
+          type: array
+        extra_headers:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          default: null
+          title: Extra Headers
+        secret:
+          anyOf:
+          - minLength: 32
+            type: string
+          - type: 'null'
+          default: null
+          title: Secret
+        url:
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - url
+      title: CreateWebhookSubscriptionRequest
+      type: object
+    ListAccountsManagedResponse.f44f287:
+      additionalProperties: false
+      description: Response body for ``GET /tenants/{tid}/accounts``.
+      properties:
+        accounts:
+          items:
+            $ref: '#/components/schemas/ListAccountsManagedResponse.f44f287.AccountSummary'
+          title: Accounts
+          type: array
+        count:
+          title: Count
+          type: integer
+      required:
+      - accounts
+      - count
+      title: ListAccountsManagedResponse
+      type: object
+    ListAccountsManagedResponse.f44f287.AccountSummary:
+      additionalProperties: false
+      description: Compact account view used by list endpoints.
+      properties:
+        account_id:
+          title: Account Id
+          type: string
+        advertiser_mapped:
+          title: Advertiser Mapped
+          type: boolean
+        billing:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Billing
+        brand:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Brand
+        buyer_agent_principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Buyer Agent Principal Id
+        gam_advertiser_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Id
+        gam_advertiser_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Name
+        name:
+          title: Name
+          type: string
+        operator:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Operator
+        sandbox:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          title: Sandbox
+        status:
+          title: Status
+          type: string
+      required:
+      - account_id
+      - name
+      - status
+      - advertiser_mapped
+      title: AccountSummary
+      type: object
+    ListAdaptersResponse.f44f287:
+      additionalProperties: false
+      description: "Response from ``GET /adapters`` \u2014 full catalog of supported\
+        \ adapter types."
+      properties:
+        adapters:
+          items:
+            $ref: '#/components/schemas/ListAdaptersResponse.f44f287.AdapterCatalogEntry'
+          title: Adapters
+          type: array
+        count:
+          title: Count
+          type: integer
+      required:
+      - adapters
+      - count
+      title: ListAdaptersResponse
+      type: object
+    ListAdaptersResponse.f44f287.AdapterCapabilitiesSummary:
+      additionalProperties: false
+      description: 'Operational capabilities flags surfaced on the discovery endpoint.
+
+
+        Mirrors ``src.adapters.base.AdapterCapabilities`` (the class-level
+
+        static on each adapter). Each adapter declares its caps; the discovery
+
+        endpoint just surfaces them to embedder clients so they can decide
+
+        which adapter to surface and which UI sections to render.'
+      properties:
+        inventory_entity_label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Inventory Entity Label
+        supported_pricing_models:
+          items:
+            type: string
+          title: Supported Pricing Models
+          type: array
+        supports_custom_targeting:
+          default: false
+          title: Supports Custom Targeting
+          type: boolean
+        supports_dynamic_products:
+          default: false
+          title: Supports Dynamic Products
+          type: boolean
+        supports_geo_targeting:
+          default: false
+          title: Supports Geo Targeting
+          type: boolean
+        supports_inventory_profiles:
+          default: false
+          title: Supports Inventory Profiles
+          type: boolean
+        supports_inventory_sync:
+          default: false
+          title: Supports Inventory Sync
+          type: boolean
+        supports_realtime_reporting:
+          default: false
+          title: Supports Realtime Reporting
+          type: boolean
+        supports_webhooks:
+          default: false
+          title: Supports Webhooks
+          type: boolean
+      title: AdapterCapabilitiesSummary
+      type: object
+    ListAdaptersResponse.f44f287.AdapterCatalogEntry:
+      additionalProperties: false
+      description: One supported adapter type returned by the discovery endpoint.
+      properties:
+        capabilities:
+          $ref: '#/components/schemas/ListAdaptersResponse.f44f287.AdapterCapabilitiesSummary'
+        connection_schema:
+          additionalProperties: true
+          description: JSON Schema for this adapter's typed connection config (the
+            discriminated union member).
+          title: Connection Schema
+          type: object
+        default_channels:
+          items:
+            type: string
+          title: Default Channels
+          type: array
+        description:
+          description: Short description of what this adapter does.
+          title: Description
+          type: string
+        name:
+          description: Human-readable adapter name.
+          title: Name
+          type: string
+        tier:
+          default: live
+          description: "Whether this adapter is meant for production use. ``live``\
+            \ = real ad-server integration intended for production pickers. ``test``\
+            \ = simulated/dev-only adapter (Mock) \u2014 embedders should filter these\
+            \ out of production UI by default."
+          enum:
+          - live
+          - test
+          title: Tier
+          type: string
+        type:
+          description: Adapter type identifier (use as AdapterConfig.type).
+          title: Type
+          type: string
+      required:
+      - type
+      - name
+      - description
+      - capabilities
+      - connection_schema
+      title: AdapterCatalogEntry
+      type: object
+    ListAuditLogResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/audit-log`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        entries:
+          items:
+            $ref: '#/components/schemas/ListAuditLogResponse.f44f287.AuditLogEntry'
+          title: Entries
+          type: array
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+      required:
+      - entries
+      - count
+      title: ListAuditLogResponse
+      type: object
+    ListAuditLogResponse.f44f287.AuditLogEntry:
+      additionalProperties: false
+      description: One audit-log entry on the wire.
+      properties:
+        action:
+          title: Action
+          type: string
+        actor_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Actor Email
+        actor_type:
+          enum:
+          - user
+          - system
+          - management_api
+          - super_admin
+          - buyer_agent
+          title: Actor Type
+          type: string
+        audit_log_id:
+          title: Audit Log Id
+          type: string
+        details:
+          additionalProperties: true
+          title: Details
+          type: object
+        external_org_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Org Id
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Source
+        external_user_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External User Email
+        external_user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External User Id
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        subject_id:
+          title: Subject Id
+          type: string
+        subject_type:
+          title: Subject Type
+          type: string
+      required:
+      - audit_log_id
+      - occurred_at
+      - action
+      - subject_type
+      - subject_id
+      - actor_type
+      title: AuditLogEntry
+      type: object
+    ListBuyerAdvertiserMappingsResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/buyer-advertiser-mappings`` response.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        mappings:
+          items:
+            $ref: '#/components/schemas/ListBuyerAdvertiserMappingsResponse.f44f287.BuyerAdvertiserMapping'
+          title: Mappings
+          type: array
+      required:
+      - mappings
+      - count
+      title: ListBuyerAdvertiserMappingsResponse
+      type: object
+    ListBuyerAdvertiserMappingsResponse.f44f287.BuyerAdvertiserMapping:
+      additionalProperties: false
+      description: "Routing rule on the wire \u2014 the public face of an\n``AdvertiserRoutingRule``\
+        \ ORM row.\n\nVocabulary alignment with Scope3 Storefront UI: external surface\
+        \ uses\n\"buyer-advertiser-mapping\"; internal storage table is named\n``advertiser_routing_rules``\
+        \ because the impl IS a precedence-ordered\nrouting chain. One-line mapping\
+        \ at the API boundary."
+      properties:
+        brand_house:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        gam_advertiser_id:
+          title: Gam Advertiser Id
+          type: string
+        id:
+          title: Id
+          type: string
+        operator_domain:
+          title: Operator Domain
+          type: string
+        principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+      required:
+      - id
+      - operator_domain
+      - gam_advertiser_id
+      - created_at
+      - updated_at
+      title: BuyerAdvertiserMapping
+      type: object
+    ListGamAdvertisersResponse.f44f287:
+      additionalProperties: false
+      description: "``GET /tenants/{tid}/gam/advertisers`` response.\n\nCursor pagination\
+        \ with opaque base64-encoded offset (same shape as\nother list endpoints \u2014\
+        \ Storefront treats it as a sealed token).\n\n``synced_at`` reports the most-recent\
+        \ ``gam_advertisers.synced_at``\nfor the tenant so the picker can show \"\
+        Last synced 5 minutes ago\".\nNULL when no advertisers have ever synced."
+      properties:
+        advertisers:
+          items:
+            $ref: '#/components/schemas/ListGamAdvertisersResponse.f44f287.GamAdvertiser'
+          title: Advertisers
+          type: array
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        synced_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Synced At
+      required:
+      - advertisers
+      title: ListGamAdvertisersResponse
+      type: object
+    ListGamAdvertisersResponse.f44f287.GamAdvertiser:
+      additionalProperties: false
+      description: 'One row from the synced ``gam_advertisers`` cache, on the wire.
+
+
+        Source of truth is GAM''s ``CompanyService.getCompaniesByStatement
+
+        WHERE type = ''ADVERTISER''``; this projection is what the Buyer
+
+        Routing UI''s picker renders.'
+      properties:
+        currency_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Currency Code
+        id:
+          title: Id
+          type: string
+        name:
+          title: Name
+          type: string
+        status:
+          title: Status
+          type: string
+      required:
+      - id
+      - name
+      - status
+      title: GamAdvertiser
+      type: object
+    ListMediaBuysResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/media-buys`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        media_buys:
+          items:
+            $ref: '#/components/schemas/ListMediaBuysResponse.f44f287.MediaBuySummary'
+          title: Media Buys
+          type: array
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+      required:
+      - media_buys
+      - count
+      title: ListMediaBuysResponse
+      type: object
+    ListMediaBuysResponse.f44f287.MediaBuySummary:
+      additionalProperties: false
+      description: "Compact media-buy entry for ``GET /media-buys`` listings.\n\n\
+        ``pacing`` is computed (delivered \xF7 expected-by-now); ``None`` when the\n\
+        buy hasn't started yet or delivery data is unavailable."
+      properties:
+        buyer_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Buyer Ref
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        currency:
+          title: Currency
+          type: string
+        delivered_impressions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Delivered Impressions
+        delivered_spend:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Delivered Spend
+        flight_end_date:
+          format: date
+          title: Flight End Date
+          type: string
+        flight_start_date:
+          format: date
+          title: Flight Start Date
+          type: string
+        media_buy_id:
+          title: Media Buy Id
+          type: string
+        pacing:
+          anyOf:
+          - enum:
+            - on_pace
+            - underpacing
+            - overpacing
+            type: string
+          - type: 'null'
+          default: null
+          title: Pacing
+        principal_id:
+          title: Principal Id
+          type: string
+        principal_name:
+          title: Principal Name
+          type: string
+        status:
+          title: Status
+          type: string
+        total_budget:
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Total Budget
+          type: string
+      required:
+      - media_buy_id
+      - principal_id
+      - principal_name
+      - status
+      - flight_start_date
+      - flight_end_date
+      - total_budget
+      - currency
+      - created_at
+      title: MediaBuySummary
+      type: object
+    ListRecentBuyersResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/recent-buyers`` response.'
+      properties:
+        buyers:
+          items:
+            $ref: '#/components/schemas/ListRecentBuyersResponse.f44f287.RecentBuyer'
+          title: Buyers
+          type: array
+      required:
+      - buyers
+      title: ListRecentBuyersResponse
+      type: object
+    ListRecentBuyersResponse.f44f287.RecentBuyer:
+      additionalProperties: false
+      description: "One distinct ``(operator, brand_house, brand_id)`` triple seen\
+        \ in\nrecent traffic, with the GAM advertiser it resolved to and how.\n\n\
+        Powers Storefront's \"buyer routing\" widget \u2014 publishers can see at\
+        \ a\nglance which buyers are landing on the default advertiser\n(``resolved_via=default``)\
+        \ and might want their own bucket, vs.\nwhich already match a specific routing\
+        \ rule."
+      properties:
+        brand_house:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        last_seen_at:
+          format: date-time
+          title: Last Seen At
+          type: string
+        operator_domain:
+          title: Operator Domain
+          type: string
+        request_count:
+          title: Request Count
+          type: integer
+        resolved_gam_advertiser_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Resolved Gam Advertiser Id
+        resolved_via:
+          title: Resolved Via
+          type: string
+      required:
+      - operator_domain
+      - last_seen_at
+      - request_count
+      - resolved_via
+      title: RecentBuyer
+      type: object
+    ListSyncHistoryResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/sync-history`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        runs:
+          items:
+            $ref: '#/components/schemas/ListSyncHistoryResponse.f44f287.SyncRunInfo'
+          title: Runs
+          type: array
+      required:
+      - runs
+      - count
+      title: ListSyncHistoryResponse
+      type: object
+    ListSyncHistoryResponse.f44f287.SyncRunInfo:
+      additionalProperties: false
+      description: One sync-run entry in the historical timeline.
+      properties:
+        completed_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Completed At
+        duration_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Duration Seconds
+        error_summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error Summary
+        items_failed:
+          default: 0
+          title: Items Failed
+          type: integer
+        items_processed:
+          default: 0
+          title: Items Processed
+          type: integer
+        started_at:
+          format: date-time
+          title: Started At
+          type: string
+        status:
+          title: Status
+          type: string
+        sync_id:
+          title: Sync Id
+          type: string
+        sync_type:
+          title: Sync Type
+          type: string
+      required:
+      - sync_id
+      - sync_type
+      - started_at
+      - status
+      title: SyncRunInfo
+      type: object
+    ListTenantsResponse.f44f287:
+      additionalProperties: false
+      properties:
+        count:
+          title: Count
+          type: integer
+        tenants:
+          items:
+            $ref: '#/components/schemas/ListTenantsResponse.f44f287.TenantSummary'
+          title: Tenants
+          type: array
+      required:
+      - tenants
+      - count
+      title: ListTenantsResponse
+      type: object
+    ListTenantsResponse.f44f287.TenantSummary:
+      additionalProperties: false
+      description: Compact tenant entry for ``GET /tenants`` listings.
+      properties:
+        ad_server:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Ad Server
+        adapter_configured:
+          title: Adapter Configured
+          type: boolean
+        billing_plan:
+          title: Billing Plan
+          type: string
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        external_org_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Org Id
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Source
+        is_active:
+          title: Is Active
+          type: boolean
+        is_embedded:
+          title: Is Embedded
+          type: boolean
+        managed_externally:
+          title: Managed Externally
+          type: boolean
+        name:
+          title: Name
+          type: string
+        subdomain:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Subdomain
+        tenant_id:
+          title: Tenant Id
+          type: string
+      required:
+      - tenant_id
+      - name
+      - is_embedded
+      - managed_externally
+      - is_active
+      - billing_plan
+      - adapter_configured
+      - created_at
+      title: TenantSummary
+      type: object
+    ListWebhooksResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/webhooks`` response.
+
+
+        Subscriptions are returned without secrets (use the create response if
+
+        you still have it; otherwise re-register).'
+      properties:
+        count:
+          title: Count
+          type: integer
+        webhooks:
+          items:
+            $ref: '#/components/schemas/ListWebhooksResponse.f44f287.WebhookSubscriptionSummary'
+          title: Webhooks
+          type: array
+      required:
+      - webhooks
+      - count
+      title: ListWebhooksResponse
+      type: object
+    ListWebhooksResponse.f44f287.WebhookSubscriptionSummary:
+      additionalProperties: false
+      description: Subscription record without the secret. Used for list + get + delete
+        responses.
+      properties:
+        consecutive_failures:
+          default: 0
+          title: Consecutive Failures
+          type: integer
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        event_types:
+          items:
+            type: string
+          title: Event Types
+          type: array
+        extra_headers:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          default: null
+          title: Extra Headers
+        is_active:
+          title: Is Active
+          type: boolean
+        last_delivery_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Delivery At
+        last_delivery_status:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Last Delivery Status
+        url:
+          title: Url
+          type: string
+        webhook_id:
+          title: Webhook Id
+          type: string
+      required:
+      - webhook_id
+      - url
+      - event_types
+      - is_active
+      - created_at
+      title: WebhookSubscriptionSummary
+      type: object
+    ListWorkflowsResponse.f44f287:
+      additionalProperties: false
+      description: '``GET /tenants/{tid}/workflows`` response with cursor pagination.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+        workflows:
+          items:
+            $ref: '#/components/schemas/ListWorkflowsResponse.f44f287.WorkflowSummary'
+          title: Workflows
+          type: array
+      required:
+      - workflows
+      - count
+      title: ListWorkflowsResponse
+      type: object
+    ListWorkflowsResponse.f44f287.WorkflowSummary:
+      additionalProperties: false
+      description: "Compact workflow entry for ``GET /workflows`` listings.\n\n``subject_type``/``subject_id``\
+        \ are the object the workflow is gating\n(e.g. ``media_buy``/``mb_1234``).\
+        \ ``workflow_type`` is the human-readable\nkind (``media_buy_approval``, ``creative_approval``,\
+        \ etc.) \u2014 sourced from\nthe WorkflowStep's ``tool_name`` falling back\
+        \ to ``step_type``."
+      properties:
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        expires_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Expires At
+        requested_by_principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Id
+        requested_by_principal_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Name
+        status:
+          enum:
+          - pending
+          - approved
+          - rejected
+          - cancelled
+          - expired
+          title: Status
+          type: string
+        subject_id:
+          title: Subject Id
+          type: string
+        subject_type:
+          title: Subject Type
+          type: string
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        workflow_id:
+          title: Workflow Id
+          type: string
+        workflow_type:
+          title: Workflow Type
+          type: string
+      required:
+      - workflow_id
+      - workflow_type
+      - status
+      - subject_type
+      - subject_id
+      - created_at
+      - updated_at
+      title: WorkflowSummary
+      type: object
+    MediaBuyDetail.f44f287:
+      additionalProperties: false
+      description: 'Full media-buy detail including products, targeting, creatives,
+        and
+
+        status history.'
+      properties:
+        buyer_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Buyer Ref
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        creatives:
+          items:
+            type: string
+          title: Creatives
+          type: array
+        currency:
+          title: Currency
+          type: string
+        delivered_impressions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Delivered Impressions
+        delivered_spend:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Delivered Spend
+        flight_end_date:
+          format: date
+          title: Flight End Date
+          type: string
+        flight_start_date:
+          format: date
+          title: Flight Start Date
+          type: string
+        media_buy_id:
+          title: Media Buy Id
+          type: string
+        pacing:
+          anyOf:
+          - enum:
+            - on_pace
+            - underpacing
+            - overpacing
+            type: string
+          - type: 'null'
+          default: null
+          title: Pacing
+        principal_id:
+          title: Principal Id
+          type: string
+        principal_name:
+          title: Principal Name
+          type: string
+        products:
+          items:
+            type: string
+          title: Products
+          type: array
+        status:
+          title: Status
+          type: string
+        status_history:
+          items:
+            $ref: '#/components/schemas/MediaBuyDetail.f44f287.StatusEvent'
+          title: Status History
+          type: array
+        targeting:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Targeting
+        total_budget:
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Total Budget
+          type: string
+      required:
+      - media_buy_id
+      - principal_id
+      - principal_name
+      - status
+      - flight_start_date
+      - flight_end_date
+      - total_budget
+      - currency
+      - created_at
+      title: MediaBuyDetail
+      type: object
+    MediaBuyDetail.f44f287.StatusEvent:
+      additionalProperties: false
+      description: One status-change entry in a media buy's history.
+      properties:
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Note
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        status:
+          title: Status
+          type: string
+      required:
+      - occurred_at
+      - status
+      title: StatusEvent
+      type: object
+    PreviewAdapterRequest.f44f287:
+      additionalProperties: false
+      description: "Pre-provision adapter probe \u2014 same union as :class:`ProvisionTenantRequest`."
+      properties:
+        adapter:
+          discriminator:
+            mapping:
+              broadstreet: '#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig'
+              freewheel: '#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig'
+              google_ad_manager: '#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig'
+              mock: '#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig'
+              springserve: '#/components/schemas/PreviewAdapterRequest.f44f287.SpringServeAdapterConfig'
+            propertyName: type
+          oneOf:
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.GAMAdapterConfig'
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.MockAdapterConfig'
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig'
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig'
+          - $ref: '#/components/schemas/PreviewAdapterRequest.f44f287.SpringServeAdapterConfig'
+          title: Adapter
+      required:
+      - adapter
+      title: PreviewAdapterRequest
+      type: object
+    PreviewAdapterRequest.f44f287.BroadstreetAdapterConfig:
+      additionalProperties: false
+      description: Broadstreet adapter configuration.
+      properties:
+        api_key:
+          format: password
+          title: Api Key
+          type: string
+          writeOnly: true
+        default_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Advertiser Id
+        network_id:
+          maxLength: 64
+          minLength: 1
+          title: Network Id
+          type: string
+        type:
+          const: broadstreet
+          default: broadstreet
+          title: Type
+          type: string
+      required:
+      - network_id
+      - api_key
+      title: BroadstreetAdapterConfig
+      type: object
+    PreviewAdapterRequest.f44f287.FreeWheelAdapterConfig:
+      additionalProperties: false
+      description: "FreeWheel Publisher API adapter configuration.\n\nExactly one\
+        \ auth path is required: ``username`` + ``password`` (OAuth2\npassword grant\
+        \ \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted\
+        \ bearer, escape hatch for partner-provisioned tokens)."
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Advertiser Id
+        environment:
+          default: production
+          enum:
+          - production
+          - staging
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: freewheel
+          default: freewheel
+          title: Type
+          type: string
+        username:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Username
+      title: FreeWheelAdapterConfig
+      type: object
+    PreviewAdapterRequest.f44f287.GAMAdapterConfig:
+      additionalProperties: false
+      description: Google Ad Manager adapter configuration.
+      properties:
+        network_code:
+          maxLength: 32
+          minLength: 1
+          title: Network Code
+          type: string
+        refresh_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          maxLength: 255
+          minLength: 3
+          title: Service Account Email
+          type: string
+        service_account_key_json:
+          format: password
+          title: Service Account Key Json
+          type: string
+          writeOnly: true
+        type:
+          const: google_ad_manager
+          default: google_ad_manager
+          title: Type
+          type: string
+      required:
+      - network_code
+      - service_account_email
+      - service_account_key_json
+      title: GAMAdapterConfig
+      type: object
+    PreviewAdapterRequest.f44f287.MockAdapterConfig:
+      additionalProperties: false
+      description: Mock adapter configuration (no real backend).
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        type:
+          const: mock
+          default: mock
+          title: Type
+          type: string
+      title: MockAdapterConfig
+      type: object
+    PreviewAdapterRequest.f44f287.SpringServeAdapterConfig:
+      additionalProperties: false
+      description: 'SpringServe (Magnite) ad-server adapter configuration.
+
+
+        Exactly one auth path is required: ``email`` + ``password`` (the
+
+        canonical path -- the SpringServe API mints a 2-hour token from
+
+        these credentials and the adapter caches + refreshes) or
+
+        ``api_token`` (a pre-minted token, escape hatch for partner-
+
+        provisioned tokens; no auto-refresh).'
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_demand_partner_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Default Demand Partner Id
+        email:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Email
+        environment:
+          const: production
+          default: production
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: springserve
+          default: springserve
+          title: Type
+          type: string
+      title: SpringServeAdapterConfig
+      type: object
+    PreviewAdapterResponse.f44f287:
+      additionalProperties: false
+      description: "Adapter preview with network metadata for the Storefront UX.\n\
+        \n``ok=False`` (bad creds) is returned with HTTP 200 \u2014 Storefront renders\n\
+        this inline. Hard errors (malformed body, missing API key) still surface\n\
+        via the normal 4xx path."
+      properties:
+        currency_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Currency Code
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        inventory_reachable:
+          default: false
+          title: Inventory Reachable
+          type: boolean
+        network_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network Code
+        network_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network Name
+        ok:
+          title: Ok
+          type: boolean
+        time_zone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Time Zone
+      required:
+      - ok
+      title: PreviewAdapterResponse
+      type: object
+    ProvisionTenantRequest.f44f287:
+      additionalProperties: false
+      description: Request body for ``POST /tenants/provision``.
+      properties:
+        adapter:
+          discriminator:
+            mapping:
+              broadstreet: '#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig'
+              freewheel: '#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig'
+              google_ad_manager: '#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig'
+              mock: '#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig'
+              springserve: '#/components/schemas/ProvisionTenantRequest.f44f287.SpringServeAdapterConfig'
+            propertyName: type
+          oneOf:
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.GAMAdapterConfig'
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.MockAdapterConfig'
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig'
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig'
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.SpringServeAdapterConfig'
+          title: Adapter
+        billing_plan:
+          default: standard
+          maxLength: 64
+          title: Billing Plan
+          type: string
+        contact_email:
+          format: email
+          title: Contact Email
+          type: string
+        default_currency:
+          default: USD
+          maxLength: 3
+          minLength: 3
+          title: Default Currency
+          type: string
+        default_gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Gam Advertiser Id
+        embed_breadcrumb_root:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.EmbedBreadcrumbRoot'
+          - type: 'null'
+          default: null
+        external_org_id:
+          maxLength: 255
+          minLength: 1
+          title: External Org Id
+          type: string
+        external_source:
+          maxLength: 64
+          minLength: 1
+          title: External Source
+          type: string
+        initial_principal:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.InitialPrincipalRequest'
+          - type: 'null'
+          default: null
+        name:
+          maxLength: 255
+          minLength: 1
+          title: Name
+          type: string
+        public_agent_url:
+          default: https://interchange.io
+          maxLength: 500
+          minLength: 1
+          title: Public Agent Url
+          type: string
+      required:
+      - name
+      - external_org_id
+      - external_source
+      - contact_email
+      - adapter
+      title: ProvisionTenantRequest
+      type: object
+    ProvisionTenantRequest.f44f287.BroadstreetAdapterConfig:
+      additionalProperties: false
+      description: Broadstreet adapter configuration.
+      properties:
+        api_key:
+          format: password
+          title: Api Key
+          type: string
+          writeOnly: true
+        default_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Advertiser Id
+        network_id:
+          maxLength: 64
+          minLength: 1
+          title: Network Id
+          type: string
+        type:
+          const: broadstreet
+          default: broadstreet
+          title: Type
+          type: string
+      required:
+      - network_id
+      - api_key
+      title: BroadstreetAdapterConfig
+      type: object
+    ProvisionTenantRequest.f44f287.EmbedBreadcrumbRoot:
+      additionalProperties: false
+      description: 'First-crumb override for embedded-mode admin pages.
+
+
+        When the upstream host renders the salesagent admin UI inside its own
+
+        chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+
+        point back to the host''s storefront homepage rather than the
+
+        salesagent''s tenant dashboard. ``label`` is the visible link text;
+
+        ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+
+        Validated at schema boundary so bad input never reaches the rendered
+
+        template; the same model also gates the per-request
+
+        ``X-Embed-Breadcrumb-Root`` header value (see
+
+        :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).'
+      properties:
+        label:
+          maxLength: 120
+          minLength: 1
+          title: Label
+          type: string
+        url:
+          maxLength: 500
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - label
+      - url
+      title: EmbedBreadcrumbRoot
+      type: object
+    ProvisionTenantRequest.f44f287.FreeWheelAdapterConfig:
+      additionalProperties: false
+      description: "FreeWheel Publisher API adapter configuration.\n\nExactly one\
+        \ auth path is required: ``username`` + ``password`` (OAuth2\npassword grant\
+        \ \u2014 the canonical path, auto-refreshing) or ``api_token``\n(pre-minted\
+        \ bearer, escape hatch for partner-provisioned tokens)."
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Advertiser Id
+        environment:
+          default: production
+          enum:
+          - production
+          - staging
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: freewheel
+          default: freewheel
+          title: Type
+          type: string
+        username:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Username
+      title: FreeWheelAdapterConfig
+      type: object
+    ProvisionTenantRequest.f44f287.GAMAdapterConfig:
+      additionalProperties: false
+      description: Google Ad Manager adapter configuration.
+      properties:
+        network_code:
+          maxLength: 32
+          minLength: 1
+          title: Network Code
+          type: string
+        refresh_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Refresh Token
+        service_account_email:
+          maxLength: 255
+          minLength: 3
+          title: Service Account Email
+          type: string
+        service_account_key_json:
+          format: password
+          title: Service Account Key Json
+          type: string
+          writeOnly: true
+        type:
+          const: google_ad_manager
+          default: google_ad_manager
+          title: Type
+          type: string
+      required:
+      - network_code
+      - service_account_email
+      - service_account_key_json
+      title: GAMAdapterConfig
+      type: object
+    ProvisionTenantRequest.f44f287.InitialPrincipalRequest:
+      additionalProperties: false
+      description: Optional initial advertiser created at provision time.
+      properties:
+        external_advertiser_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: External Advertiser Id
+        name:
+          maxLength: 255
+          minLength: 1
+          title: Name
+          type: string
+      required:
+      - name
+      title: InitialPrincipalRequest
+      type: object
+    ProvisionTenantRequest.f44f287.MockAdapterConfig:
+      additionalProperties: false
+      description: Mock adapter configuration (no real backend).
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        type:
+          const: mock
+          default: mock
+          title: Type
+          type: string
+      title: MockAdapterConfig
+      type: object
+    ProvisionTenantRequest.f44f287.SpringServeAdapterConfig:
+      additionalProperties: false
+      description: 'SpringServe (Magnite) ad-server adapter configuration.
+
+
+        Exactly one auth path is required: ``email`` + ``password`` (the
+
+        canonical path -- the SpringServe API mints a 2-hour token from
+
+        these credentials and the adapter caches + refreshes) or
+
+        ``api_token`` (a pre-minted token, escape hatch for partner-
+
+        provisioned tokens; no auto-refresh).'
+      properties:
+        api_token:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Api Token
+        default_demand_partner_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Default Demand Partner Id
+        email:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Email
+        environment:
+          const: production
+          default: production
+          title: Environment
+          type: string
+        password:
+          anyOf:
+          - format: password
+            type: string
+            writeOnly: true
+          - type: 'null'
+          default: null
+          title: Password
+        type:
+          const: springserve
+          default: springserve
+          title: Type
+          type: string
+      title: SpringServeAdapterConfig
+      type: object
+    ProvisionTenantResponse.f44f287:
+      additionalProperties: false
+      description: Response body for ``POST /tenants/provision``.
+      properties:
+        a2a_url:
+          title: A2A Url
+          type: string
+        adapter:
+          $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.AdapterStatusResponse'
+        admin_url_path:
+          title: Admin Url Path
+          type: string
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        external_org_id:
+          title: External Org Id
+          type: string
+        external_source:
+          title: External Source
+          type: string
+        initial_principal:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse'
+          - type: 'null'
+          default: null
+        initial_sync:
+          anyOf:
+          - $ref: '#/components/schemas/ProvisionTenantResponse.f44f287.InitialSyncBlock'
+          - type: 'null'
+          default: null
+        is_embedded:
+          const: true
+          default: true
+          title: Is Embedded
+          type: boolean
+        managed_externally:
+          const: true
+          default: true
+          title: Managed Externally
+          type: boolean
+        mcp_url:
+          title: Mcp Url
+          type: string
+        name:
+          title: Name
+          type: string
+        tenant_id:
+          title: Tenant Id
+          type: string
+      required:
+      - tenant_id
+      - name
+      - external_org_id
+      - external_source
+      - created_at
+      - mcp_url
+      - a2a_url
+      - admin_url_path
+      - adapter
+      title: ProvisionTenantResponse
+      type: object
+    ProvisionTenantResponse.f44f287.AdapterStatusResponse:
+      additionalProperties: false
+      description: Compact adapter status block returned in provision responses.
+      properties:
+        configured:
+          title: Configured
+          type: boolean
+        connection_test_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Connection Test Error
+        connection_test_passed:
+          title: Connection Test Passed
+          type: boolean
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - configured
+      - connection_test_passed
+      title: AdapterStatusResponse
+      type: object
+    ProvisionTenantResponse.f44f287.InitialSyncBlock:
+      additionalProperties: false
+      description: 'Sync run ids spawned at provision time.
+
+
+        Storefront polls ``/status.syncs`` for progress per sync_type. Same
+
+        shape as ``RefreshResponse.sync_run_ids`` so callers can reuse the
+
+        refresh-poller path on first provision.'
+      properties:
+        sync_run_ids:
+          additionalProperties:
+            type: string
+          title: Sync Run Ids
+          type: object
+      title: InitialSyncBlock
+      type: object
+    ProvisionTenantResponse.f44f287.ProvisionedPrincipalResponse:
+      additionalProperties: false
+      description: "Initial principal returned from provision.\n\nNote: embedded-mode\
+        \ buyer-protocol auth flows through the identity-propagation\ncontract, not\
+        \ per-principal tokens (see sprint 2 \xA7 Auth boundary). No\n``api_token``\
+        \ field is emitted here."
+      properties:
+        name:
+          title: Name
+          type: string
+        principal_id:
+          title: Principal Id
+          type: string
+      required:
+      - principal_id
+      - name
+      title: ProvisionedPrincipalResponse
+      type: object
+    RefreshResponse.f44f287:
+      additionalProperties: false
+      description: "``POST /tenants/{tid}/refresh`` response \u2014 fan-out of sync\
+        \ run ids.\n\nStorefront polls ``GET /status.syncs`` for progress per sync\
+        \ type.\nRe-POST within 60 seconds returns the SAME ids (idempotent \u2014\
+        \ avoids\nhammering GAM when a publisher mashes the button)."
+      properties:
+        started_at:
+          format: date-time
+          title: Started At
+          type: string
+        sync_run_ids:
+          additionalProperties:
+            type: string
+          title: Sync Run Ids
+          type: object
+      required:
+      - started_at
+      title: RefreshResponse
+      type: object
+    RejectWorkflowRequest.f44f287:
+      additionalProperties: false
+      description: "``POST /workflows/{wid}/reject`` body. Notes are required on reject\
+        \ \u2014\nevery rejection has to carry a reason for the audit trail."
+      properties:
+        notes:
+          minLength: 1
+          title: Notes
+          type: string
+      required:
+      - notes
+      title: RejectWorkflowRequest
+      type: object
+    TenantDetail.f44f287:
+      additionalProperties: false
+      description: Full tenant detail returned from ``GET /tenants/{id}`` and lifecycle
+        responses.
+      properties:
+        ad_server:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Ad Server
+        adapter_configured:
+          title: Adapter Configured
+          type: boolean
+        billing_plan:
+          title: Billing Plan
+          type: string
+        contact_email:
+          anyOf:
+          - format: email
+            type: string
+          - type: 'null'
+          default: null
+          title: Contact Email
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        default_currency:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Default Currency
+        default_gam_advertiser_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Default Gam Advertiser Id
+        embed_breadcrumb_root:
+          anyOf:
+          - $ref: '#/components/schemas/TenantDetail.f44f287.EmbedBreadcrumbRoot'
+          - type: 'null'
+          default: null
+        external_org_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Org Id
+        external_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: External Source
+        is_active:
+          title: Is Active
+          type: boolean
+        is_embedded:
+          title: Is Embedded
+          type: boolean
+        managed_externally:
+          title: Managed Externally
+          type: boolean
+        name:
+          title: Name
+          type: string
+        public_agent_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Public Agent Url
+        subdomain:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Subdomain
+        tenant_id:
+          title: Tenant Id
+          type: string
+      required:
+      - tenant_id
+      - name
+      - is_embedded
+      - managed_externally
+      - is_active
+      - billing_plan
+      - adapter_configured
+      - created_at
+      title: TenantDetail
+      type: object
+    TenantDetail.f44f287.EmbedBreadcrumbRoot:
+      additionalProperties: false
+      description: 'First-crumb override for embedded-mode admin pages.
+
+
+        When the upstream host renders the salesagent admin UI inside its own
+
+        chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+
+        point back to the host''s storefront homepage rather than the
+
+        salesagent''s tenant dashboard. ``label`` is the visible link text;
+
+        ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+
+        Validated at schema boundary so bad input never reaches the rendered
+
+        template; the same model also gates the per-request
+
+        ``X-Embed-Breadcrumb-Root`` header value (see
+
+        :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).'
+      properties:
+        label:
+          maxLength: 120
+          minLength: 1
+          title: Label
+          type: string
+        url:
+          maxLength: 500
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - label
+      - url
+      title: EmbedBreadcrumbRoot
+      type: object
+    TenantStatusResponse.f44f287:
+      additionalProperties: false
+      description: "``GET /tenants/{tid}/status`` \u2014 one round-trip operational\
+        \ snapshot."
+      properties:
+        adapter:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusAdapterBlock'
+        creatives:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusCreativesBlock'
+        fetched_at:
+          format: date-time
+          title: Fetched At
+          type: string
+        media_buys:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusMediaBuysBlock'
+        packages:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusPackagesBlock'
+        products:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusProductsBlock'
+        setup_tasks:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.SetupTasksBlock'
+        syncs:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncsBlock'
+        webhooks:
+          anyOf:
+          - $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusWebhooksBlock'
+          - type: 'null'
+          default: null
+        workflows:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusWorkflowsBlock'
+      required:
+      - adapter
+      - fetched_at
+      title: TenantStatusResponse
+      type: object
+    TenantStatusResponse.f44f287.SetupTaskItem:
+      additionalProperties: false
+      description: "One configuration-completeness item in the status setup_tasks\
+        \ block.\n\nSeverity drives Storefront UI urgency; scope drives routing \u2014\
+        \ Scope3\nescalates ``platform`` items internally (it's the host's job to\n\
+        finish provisioning), while ``publisher`` items deep-link into the\niframe\
+        \ at the matching Settings tab."
+      properties:
+        configure_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Configure Path
+        description:
+          title: Description
+          type: string
+        id:
+          title: Id
+          type: string
+        is_complete:
+          title: Is Complete
+          type: boolean
+        name:
+          title: Name
+          type: string
+        scope:
+          enum:
+          - platform
+          - publisher
+          title: Scope
+          type: string
+        severity:
+          enum:
+          - blocker
+          - warning
+          - info
+          title: Severity
+          type: string
+      required:
+      - id
+      - name
+      - severity
+      - scope
+      - description
+      - is_complete
+      title: SetupTaskItem
+      type: object
+    TenantStatusResponse.f44f287.SetupTasksBlock:
+      additionalProperties: false
+      description: "Configuration-completeness rollup for ``GET /tenants/{tid}/status``.\n\
+        \nReplaces the separate ``setup_checklist`` round-trip \u2014 Storefront\n\
+        renders the homepage checklist directly off this block."
+      properties:
+        blocker_count:
+          default: 0
+          title: Blocker Count
+          type: integer
+        items:
+          items:
+            $ref: '#/components/schemas/TenantStatusResponse.f44f287.SetupTaskItem'
+          title: Items
+          type: array
+        warning_count:
+          default: 0
+          title: Warning Count
+          type: integer
+      title: SetupTasksBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusAdapterBlock:
+      additionalProperties: false
+      description: Adapter block of the tenant status snapshot.
+      properties:
+        connected:
+          title: Connected
+          type: boolean
+        last_test_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Last Test Error
+        last_tested_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Tested At
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - connected
+      title: StatusAdapterBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusCreativesBlock:
+      additionalProperties: false
+      description: Creative-level counters.
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        pending_review_count:
+          default: 0
+          title: Pending Review Count
+          type: integer
+        rejected_last_24h_count:
+          default: 0
+          title: Rejected Last 24H Count
+          type: integer
+      title: StatusCreativesBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusMediaBuysBlock:
+      additionalProperties: false
+      description: Top-level media-buy counters (a buy contains 1+ packages).
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        pending_approval_count:
+          default: 0
+          title: Pending Approval Count
+          type: integer
+      title: StatusMediaBuysBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusPackagesBlock:
+      additionalProperties: false
+      description: "Package-level counters (line items inside media buys).\n\n``last_24h_impressions``\
+        \ is set to 0 until delivery aggregation is wired\nup \u2014 see :mod:`docs/design/embedded-mode-sprint-1.5.md`\
+        \ Open Q #3."
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        last_24h_impressions:
+          default: 0
+          title: Last 24H Impressions
+          type: integer
+        paused_count:
+          default: 0
+          title: Paused Count
+          type: integer
+      title: StatusPackagesBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusProductsBlock:
+      additionalProperties: false
+      description: "Product-level counters.\n\nDistinct from :class:`StatusPackagesBlock`\
+        \ \u2014 one product can have\nmultiple priced packages, so package counts\
+        \ don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces\
+        \ ``active_count``\non its homepage as the primary \"what's the publisher\
+        \ doing\" signal.\n\nNote: the Product model doesn't carry an explicit ``status``\
+        \ field\ntoday. ``archived_at IS NULL`` rows count as active; non-null rows\n\
+        count as archived. ``draft_count`` is 0 until a draft state lands\n(forward-compatible\
+        \ field \u2014 Storefront can render a \"Drafts\" badge\nwithout an API shape\
+        \ change when it does)."
+      properties:
+        active_count:
+          default: 0
+          title: Active Count
+          type: integer
+        archived_count:
+          default: 0
+          title: Archived Count
+          type: integer
+        draft_count:
+          default: 0
+          title: Draft Count
+          type: integer
+      title: StatusProductsBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusSyncRunBlock:
+      additionalProperties: false
+      description: One sync-run summary inside :class:`StatusSyncsBlock`.
+      properties:
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        item_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Item Count
+        last_run_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Run At
+        status:
+          default: never_run
+          enum:
+          - success
+          - failed
+          - running
+          - never_run
+          title: Status
+          type: string
+      title: StatusSyncRunBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusSyncsBlock:
+      additionalProperties: false
+      description: Recent state of each sync category for a tenant.
+      properties:
+        advertisers:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock'
+        custom_targeting:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock'
+        inventory:
+          $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock'
+      title: StatusSyncsBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusWebhooksBlock:
+      additionalProperties: false
+      description: Outbound-webhook summary. ``None`` until sprint 6 lands the table.
+      properties:
+        last_24h:
+          additionalProperties: true
+          title: Last 24H
+          type: object
+        last_failure_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Failure At
+      title: StatusWebhooksBlock
+      type: object
+    TenantStatusResponse.f44f287.StatusWorkflowsBlock:
+      additionalProperties: false
+      description: Open-workflow summary.
+      properties:
+        by_kind:
+          additionalProperties:
+            type: integer
+          title: By Kind
+          type: object
+        oldest_opened_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Oldest Opened At
+        open_count:
+          default: 0
+          title: Open Count
+          type: integer
+      title: StatusWorkflowsBlock
+      type: object
+    TestConnectionResponse.f44f287:
+      additionalProperties: false
+      description: Result of an adapter connection probe.
+      properties:
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        success:
+          title: Success
+          type: boolean
+        tested_at:
+          format: date-time
+          title: Tested At
+          type: string
+      required:
+      - success
+      - tested_at
+      title: TestConnectionResponse
+      type: object
+    UpdateBuyerAdvertiserMappingRequest.f44f287:
+      additionalProperties: false
+      description: "``PATCH /tenants/{tid}/buyer-advertiser-mappings/{mid}`` body.\n\
+        \n``operator_domain`` is intentionally absent \u2014 changing it requires\n\
+        DELETE + POST so the natural-key uniqueness constraint can't be\nsilently\
+        \ violated by a partial-update flow."
+      properties:
+        brand_house:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand House
+        brand_id:
+          anyOf:
+          - maxLength: 255
+            type: string
+          - type: 'null'
+          default: null
+          title: Brand Id
+        gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Gam Advertiser Id
+        principal_id:
+          anyOf:
+          - maxLength: 50
+            type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+      title: UpdateBuyerAdvertiserMappingRequest
+      type: object
+    UpdateTenantRequest.f44f287:
+      additionalProperties: false
+      description: "PATCH body \u2014 only platform-managed fields are exposed.\n\n\
+        ``external_org_id`` and ``external_source`` are NOT modifiable post-creation;\n\
+        they identify the tenant's relationship with the upstream platform.\n``is_active``\
+        \ is changed via the deactivate/reactivate endpoints, not PATCH."
+      properties:
+        billing_plan:
+          anyOf:
+          - maxLength: 64
+            type: string
+          - type: 'null'
+          default: null
+          title: Billing Plan
+        contact_email:
+          anyOf:
+          - format: email
+            type: string
+          - type: 'null'
+          default: null
+          title: Contact Email
+        default_gam_advertiser_id:
+          anyOf:
+          - maxLength: 64
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Default Gam Advertiser Id
+        embed_breadcrumb_root:
+          anyOf:
+          - $ref: '#/components/schemas/UpdateTenantRequest.f44f287.EmbedBreadcrumbRoot'
+          - type: 'null'
+          default: null
+        name:
+          anyOf:
+          - maxLength: 255
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        public_agent_url:
+          anyOf:
+          - maxLength: 500
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Public Agent Url
+      title: UpdateTenantRequest
+      type: object
+    UpdateTenantRequest.f44f287.EmbedBreadcrumbRoot:
+      additionalProperties: false
+      description: 'First-crumb override for embedded-mode admin pages.
+
+
+        When the upstream host renders the salesagent admin UI inside its own
+
+        chrome (``tenant.is_embedded=True``), the first breadcrumb crumb should
+
+        point back to the host''s storefront homepage rather than the
+
+        salesagent''s tenant dashboard. ``label`` is the visible link text;
+
+        ``url`` is the absolute HTTPS link the host wants the user dropped at.
+
+
+        Validated at schema boundary so bad input never reaches the rendered
+
+        template; the same model also gates the per-request
+
+        ``X-Embed-Breadcrumb-Root`` header value (see
+
+        :func:`src.admin.utils.breadcrumbs.resolve_embed_breadcrumb_root`).'
+      properties:
+        label:
+          maxLength: 120
+          minLength: 1
+          title: Label
+          type: string
+        url:
+          maxLength: 500
+          minLength: 1
+          title: Url
+          type: string
+      required:
+      - label
+      - url
+      title: EmbedBreadcrumbRoot
+      type: object
+    ValidationError.6a07bef:
+      description: Model of a validation error response.
+      items:
+        $ref: '#/components/schemas/ValidationError.6a07bef.ValidationErrorElement'
+      title: ValidationError
+      type: array
+    ValidationError.6a07bef.ValidationErrorElement:
+      description: Model of a validation error response element.
+      properties:
+        ctx:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Error context
+        loc:
+          items:
+            type: string
+          title: Missing field name
+          type: array
+        msg:
+          title: Error message
+          type: string
+        type:
+          title: Error type
+          type: string
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationErrorElement
+      type: object
+    WebhookSubscriptionCreatedResponse.f44f287:
+      additionalProperties: false
+      description: 'Create-only response carrying the plaintext secret.
+
+
+        The ``secret`` field is returned exactly once at create time; subsequent
+
+        GETs omit it. Loss of the plaintext requires re-registering the webhook.'
+      properties:
+        consecutive_failures:
+          default: 0
+          title: Consecutive Failures
+          type: integer
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        event_types:
+          items:
+            type: string
+          title: Event Types
+          type: array
+        extra_headers:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          default: null
+          title: Extra Headers
+        is_active:
+          title: Is Active
+          type: boolean
+        last_delivery_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Delivery At
+        last_delivery_status:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Last Delivery Status
+        secret:
+          format: password
+          title: Secret
+          type: string
+          writeOnly: true
+        url:
+          title: Url
+          type: string
+        webhook_id:
+          title: Webhook Id
+          type: string
+      required:
+      - webhook_id
+      - url
+      - event_types
+      - is_active
+      - created_at
+      - secret
+      title: WebhookSubscriptionCreatedResponse
+      type: object
+    WebhookSubscriptionSummary.f44f287:
+      additionalProperties: false
+      description: Subscription record without the secret. Used for list + get + delete
+        responses.
+      properties:
+        consecutive_failures:
+          default: 0
+          title: Consecutive Failures
+          type: integer
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        event_types:
+          items:
+            type: string
+          title: Event Types
+          type: array
+        extra_headers:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          default: null
+          title: Extra Headers
+        is_active:
+          title: Is Active
+          type: boolean
+        last_delivery_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Delivery At
+        last_delivery_status:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Last Delivery Status
+        url:
+          title: Url
+          type: string
+        webhook_id:
+          title: Webhook Id
+          type: string
+      required:
+      - webhook_id
+      - url
+      - event_types
+      - is_active
+      - created_at
+      title: WebhookSubscriptionSummary
+      type: object
+    WebhookTestResponse.f44f287:
+      additionalProperties: false
+      description: '``POST /tenants/{tid}/webhooks/{wid}/test`` response.
+
+
+        Returns synthetic delivery results (one per registered event type) so
+
+        operators can verify the receiver works for every event they subscribe to.'
+      properties:
+        delivered:
+          title: Delivered
+          type: boolean
+        results:
+          items:
+            $ref: '#/components/schemas/WebhookTestResponse.f44f287.WebhookTestDeliveryResult'
+          title: Results
+          type: array
+      required:
+      - delivered
+      - results
+      title: WebhookTestResponse
+      type: object
+    WebhookTestResponse.f44f287.WebhookTestDeliveryResult:
+      additionalProperties: false
+      description: One synthetic event delivery result included in :class:`WebhookTestResponse`.
+      properties:
+        delivered:
+          title: Delivered
+          type: boolean
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Error
+        event_id:
+          title: Event Id
+          type: string
+        event_type:
+          title: Event Type
+          type: string
+        latency_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Latency Ms
+        response_status:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Response Status
+      required:
+      - event_type
+      - event_id
+      - delivered
+      title: WebhookTestDeliveryResult
+      type: object
+    WorkflowDetail.f44f287:
+      additionalProperties: false
+      description: 'Full workflow detail. Adds description, full request context,
+        and
+
+        the decisions audit trail.'
+      properties:
+        context:
+          additionalProperties: true
+          title: Context
+          type: object
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        decisions:
+          items:
+            $ref: '#/components/schemas/WorkflowDetail.f44f287.WorkflowDecision'
+          title: Decisions
+          type: array
+        description:
+          default: ''
+          title: Description
+          type: string
+        expires_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Expires At
+        requested_by_principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Id
+        requested_by_principal_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Requested By Principal Name
+        status:
+          enum:
+          - pending
+          - approved
+          - rejected
+          - cancelled
+          - expired
+          title: Status
+          type: string
+        subject_id:
+          title: Subject Id
+          type: string
+        subject_type:
+          title: Subject Type
+          type: string
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        workflow_id:
+          title: Workflow Id
+          type: string
+        workflow_type:
+          title: Workflow Type
+          type: string
+      required:
+      - workflow_id
+      - workflow_type
+      - status
+      - subject_type
+      - subject_id
+      - created_at
+      - updated_at
+      title: WorkflowDetail
+      type: object
+    WorkflowDetail.f44f287.WorkflowDecision:
+      additionalProperties: false
+      description: One approve/reject event recorded against a workflow.
+      properties:
+        decided_at:
+          format: date-time
+          title: Decided At
+          type: string
+        decided_by_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Decided By Email
+        decided_by_source:
+          title: Decided By Source
+          type: string
+        decision:
+          enum:
+          - approve
+          - reject
+          title: Decision
+          type: string
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Notes
+      required:
+      - decided_at
+      - decision
+      - decided_by_source
+      title: WorkflowDecision
+      type: object
+info:
+  title: "Sales Agent \u2014 Tenant Management API"
+  version: v1
+openapi: 3.1.0
+paths:
+  /api/v1/tenant-management/adapters:
+    get:
+      description: "Embedder clients (Scope3 storefront, etc.) call this to discover\
+        \ what adapters this Sales Agent instance supports. Returns one entry per\
+        \ adapter type that has a typed AdapterConfig member \u2014 covering the full\
+        \ set surfaced to operators in the tenant settings UI.\n\nEach entry carries:\
+        \   - ``type`` \u2014 the value that goes into ``AdapterConfig.type``   -\
+        \ ``name`` / ``description`` \u2014 human-readable display strings   - ``tier``\
+        \ \u2014 ``\"live\"`` for production adapters, ``\"test\"`` for     simulated/dev-only\
+        \ adapters (Mock). Embedders should filter     ``tier=\"test\"`` out of production\
+        \ pickers.   - ``default_channels`` \u2014 channels this adapter is primarily\
+        \ used for   - ``capabilities`` \u2014 static AdapterCapabilities flags  \
+        \ - ``connection_schema`` \u2014 JSON Schema for the typed connection payload\n\
+        \nOptional query params:   - ``tier=live`` to return only production-grade\
+        \ adapters (omit     Mock). Useful for production storefronts that should\
+        \ never offer     a simulated picker option."
+      operationId: get__api_v1_tenant-management_adapters
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAdaptersResponse.f44f287'
+          description: OK
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: Return the full catalog of supported ad-server adapter types.
+      tags: []
+  /api/v1/tenant-management/health:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_health
+      parameters: []
+      responses: {}
+      summary: Health check endpoint for the tenant management API.
+      tags: []
+  /api/v1/tenant-management/tenants:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTenantsResponse.f44f287'
+          description: OK
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: 'List tenants. Optional query params: ``is_embedded`` (or deprecated
+        ``managed_externally``), ``is_active``, ``external_source``.'
+      tags: []
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants
+      parameters: []
+      responses: {}
+      summary: Create a new tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/preview-adapter:
+    post:
+      description: "Lets the Storefront UI confirm an adapter grant + auto-fill currency\
+        \ and timezone before committing to a tenant. Bad creds return 200 with ``ok=false``\
+        \ (renders inline) \u2014 only malformed bodies / missing API key surface\
+        \ as 4xx via the normal middleware path."
+      operationId: post__api_v1_tenant-management_tenants_preview-adapter
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviewAdapterRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewAdapterResponse.f44f287'
+          description: OK
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: "Probe an adapter and return network metadata \u2014 no persistence."
+      tags: []
+  /api/v1/tenant-management/tenants/provision:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_provision
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProvisionTenantRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisionTenantResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Internal Server Error
+      summary: Provision a managed tenant (one-shot create + adapter + currency +
+        property tag + optional principal).
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}:
+    delete:
+      description: Returns 409 ``tenant_has_active_resources`` if the tenant has any
+        active media buys.
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: 'Soft-delete a tenant by default. Hard-delete requires ``?hard=true``
+        and ``X-Confirm-Delete: yes``.'
+      tags: []
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return :class:`TenantDetail` for a tenant. 404 if the tenant doesn't
+        exist.
+      tags: []
+    patch:
+      description: ''
+      operationId: patch__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: "Update platform-managed fields on a tenant (PATCH semantics \u2014\
+        \ only listed fields are touched)."
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses: {}
+      summary: Update a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/accounts:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_accounts
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAccountsManagedResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: 'List Accounts for a tenant. Filters: ``operator``, ``billing``, ``status``,
+        ``sandbox``, ``advertiser_mapped``.'
+      tags: []
+    post:
+      description: Upserts by the same natural key ``_sync_accounts_impl`` uses so
+        a later ``sync_accounts`` call from a buyer agent finds the row already wired
+        and skips the ``pending_provision`` round trip. Returns 201 on create, 200
+        on update.
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_accounts
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDetail.f44f287'
+          description: OK
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDetail.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Pre-map a GAM advertiser to a billing key.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/adapter-config:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_adapter-config
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterConfigResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return the tenant's adapter config with secrets redacted.
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}_adapter-config
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterConfigEnvelope.61b280c'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterConfigResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Replace the tenant's adapter config. Tests the connection before commit.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/adapter-config/test-connection:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_adapter-config_test-connection
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestConnectionResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Probe the saved adapter config without modifying state.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/audit-log:
+    get:
+      description: 'Query params: ``action_prefix``, ``subject_type``, ``subject_id``,
+        ``actor_type``, ``external_source``, ``from_date``, ``to_date``, ``limit``,
+        ``cursor``. Default sort: ``occurred_at desc``.'
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_audit-log
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAuditLogResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List audit log entries for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/buyer-advertiser-mappings:
+    get:
+      description: "Filters: ``operator_domain`` (exact match) \u2014 the per-operator\
+        \ detail pane uses this to scope the rules grid without re-pulling the full\
+        \ set."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBuyerAdvertiserMappingsResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List routing rules for a tenant. Ordered by ``created_at`` ASC so the
+        UI renders them in the same order they were authored.
+      tags: []
+    post:
+      description: "Validation: - ``brand_id`` cannot be set without ``brand_house``\
+        \ (sprint 1.8 doc \xA72:   a brand-level rule must be scoped to a parent house).\
+        \ - 409 on duplicate ``(operator_domain, brand_house, brand_id)`` tuple  \
+        \ (NULLs participate in uniqueness via COALESCE in the unique index).\n\n\
+        Validation: ``gam_advertiser_id`` must reference a row in this tenant's synced\
+        \ ``gam_advertisers`` cache (Sprint 5 piece D \u2014 the deferred Sprint 1.8\
+        \ validator finally lands here).\n\nGraceful degradation: if the cache is\
+        \ empty (sync hasn't run yet \u2014 new tenant, GAM not connected, etc.) we\
+        \ skip the check and accept the id. This avoids breaking the rule-creation\
+        \ flow during onboarding before the first sync completes."
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBuyerAdvertiserMappingRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuyerAdvertiserMapping.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Create a routing rule.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/buyer-advertiser-mappings/{mapping_id}:
+    delete:
+      description: "Idempotency: DELETE on an already-deleted id returns 404 (not\
+        \ 204) \u2014 the caller asked us to delete a specific row by id, and a 404\
+        \ is the truthful answer that the row isn't there. Callers driving a UI delete\
+        \ button should treat 404 as a benign race (someone else deleted it)."
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings_{mapping_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: mapping_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Delete a routing rule. 204 on success, 404 if not found.
+      tags: []
+    patch:
+      description: "``operator_domain`` is intentionally not patchable (see schema\
+        \ docstring \u2014 natural-key changes go DELETE+POST so collisions surface\
+        \ explicitly). Patching ``brand_house`` / ``brand_id`` can collide with another\
+        \ rule; 409 on natural-key conflict, same shape as POST."
+      operationId: patch__api_v1_tenant-management_tenants_{tenant_id}_buyer-advertiser-mappings_{mapping_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: mapping_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBuyerAdvertiserMappingRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuyerAdvertiserMapping.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: PATCH a routing rule.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/deactivate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_deactivate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Idempotently deactivate a tenant. Calling on an already-inactive tenant
+        is a no-op.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:
+    get:
+      description: "Reads from the local cache, never from live GAM (10k+ advertiser\
+        \ networks make per-keystroke round trips prohibitive). Sync is triggered\
+        \ separately via ``POST /refresh`` or the cron worker.\n\nQuery params: -\
+        \ ``q`` (str, optional) \u2014 case-insensitive substring on ``name`` OR \
+        \  exact match on ``id`` if numeric. ``q`` < 2 chars returns the   first page\
+        \ unfiltered (avoids expensive scan from typing first   character). - ``limit``\
+        \ (int, default 50, max 500) \u2014 page size. - ``cursor`` (opaque base64,\
+        \ optional) \u2014 page bookmark.\n\n``synced_at`` reports the most-recent\
+        \ ``gam_advertisers.synced_at`` for the tenant so the picker can show \"Last\
+        \ synced 5 minutes ago\"."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_gam_advertisers
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGamAdvertisersResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Searchable, paginated read over the synced ``gam_advertisers`` cache.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/media-buys:
+    get:
+      description: 'Query params: ``status``, ``principal_id``, ``from_date``, ``to_date``,
+        ``limit``, ``cursor``. Date filters apply to ``flight_start_date``.'
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_media-buys
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMediaBuysResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List media buys for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/media-buys/{media_buy_id}:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_media-buys_{media_buy_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: media_buy_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaBuyDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return :class:`MediaBuyDetail` for one media buy.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/reactivate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_reactivate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Idempotently reactivate a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/recent-buyers:
+    get:
+      description: "Source data: ``Account`` rows joined to ``MediaBuy`` for activity\
+        \ counts. Each Account already carries its (operator, brand) natural key +\
+        \ the resolved ``platform_mappings.google_ad_manager.advertiser_id`` + ``resolved_via``\
+        \ (sprint 1.8 stamp).\n\nQuery params: - ``days`` (int, default 30, max 365)\
+        \ \u2014 window for last_seen_at filter - ``limit`` (int, default 100, max\
+        \ 1000) \u2014 paginate by ordered last_seen_at desc\n\nReturns ``{\"buyers\"\
+        : [...]}``. Empty buyers list is the \"no recent activity\" case \u2014 never\
+        \ 404 unless the tenant itself doesn't exist."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_recent-buyers
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListRecentBuyersResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Distinct (operator, brand_house, brand_id) triples seen recently.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/refresh:
+    post:
+      description: "For each enabled sync type, either reuse the existing SyncJob\
+        \ if one started in the last 60 seconds (or is currently running), or create\
+        \ a new pending SyncJob. The actual sync work is picked up by the existing\
+        \ background sync infrastructure.\n\nReturns 202 Accepted with ``sync_run_ids``\
+        \ mapping sync_type \u2192 sync_id. Storefront polls ``GET /status.syncs``\
+        \ for per-type progress."
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_refresh
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse.f44f287'
+          description: Accepted
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: "Fan out a refresh across all sync types \u2014 collapses N per-sync\
+        \ triggers into one call."
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/status:
+    get:
+      description: "One round-trip, one cache lifetime \u2014 covers adapter health,\
+        \ sync runs, open workflows, media-buy/package counters, and creative state.\
+        \ The response is computed (not stored) and cached in-memory for ~5s."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_status
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantStatusResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Consolidated operational snapshot for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/sync-history:
+    get:
+      description: "Query params: ``sync_type`` (``inventory`` / ``custom_targeting``\
+        \ / ``advertisers``), ``status``, ``limit`` (default 20, max 500), ``cursor``.\
+        \ Default sort: ``started_at desc``.\n\nCurrent sync state is in ``GET /tenants/{tid}/status``\
+        \ \u2014 this endpoint is the timeline drill-down."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_sync-history
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSyncHistoryResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List historical sync runs for a tenant.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/webhooks:
+    get:
+      description: "Secrets are NEVER returned \u2014 they were surfaced exactly once\
+        \ at create time. To rotate, delete the subscription and create a new one."
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_webhooks
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWebhooksResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List active webhook subscriptions for a tenant.
+      tags: []
+    post:
+      description: "Returns the plaintext ``secret`` exactly once (in this response).\
+        \ It is not retrievable later \u2014 the caller MUST persist it. Lost secrets\
+        \ require re-registering. Receivers verify HMAC-SHA256 signatures using the\
+        \ secret."
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_webhooks
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookSubscriptionRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionCreatedResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Register a new outbound webhook subscription.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/webhooks/{webhook_id}:
+    delete:
+      description: Sets ``is_active=false`` so the row stays around for audit-log
+        references but the publisher stops dispatching. The plaintext secret is dropped
+        from the in-process cache so future re-registrations don't accidentally reuse
+        it.
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}_webhooks_{webhook_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: webhook_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Soft-delete a subscription.
+      tags: []
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_webhooks_{webhook_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: webhook_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscriptionSummary.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return a single subscription record. Secret is omitted.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/webhooks/{webhook_id}/test:
+    post:
+      description: "Returns one delivery result per registered event type. ``delivered``\
+        \ on the response is the AND of all per-event ``delivered`` flags. Used by\
+        \ host products to verify the receiver is wired up correctly.\n\nFailures\
+        \ here do NOT auto-disable the subscription \u2014 the consecutive- failures\
+        \ counter is incremented just like a real delivery, so flapping test runs\
+        \ eventually trip the disablement threshold."
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_webhooks_{webhook_id}_test
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: webhook_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTestResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Synchronously fire a synthetic event of every registered type.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows:
+    get:
+      description: 'Query params: - ``status`` (repeatable): filter by wire-side status.
+        Multiple values   OR together. Defaults to all statuses. - ``workflow_type``:
+        exact match against ``tool_name`` or ``step_type``. - ``limit`` (int, default
+        50, max 500) - ``cursor`` (opaque base64): bookmark from a previous response.'
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_workflows
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowsResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List workflow steps for a tenant, sorted with pending first.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows/{workflow_id}:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_workflows_{workflow_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: workflow_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return :class:`WorkflowDetail` for one workflow.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows/{workflow_id}/approve:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_workflows_{workflow_id}_approve
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: workflow_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveWorkflowRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: 'Approve a workflow. Idempotent: re-approving returns 200 with the
+        existing state. Conflicting re-decide (approve after reject) returns 409.
+        Expired workflows can''t be approved.'
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/workflows/{workflow_id}/reject:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_workflows_{workflow_id}_reject
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: workflow_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectWorkflowRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Reject a workflow. Notes are required. Idempotent re-rejection returns
+        200 with existing state; conflicting decision returns 409.
+      tags: []
+security: []
+tags: []

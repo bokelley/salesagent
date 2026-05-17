@@ -28,6 +28,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "export_openapi.py"
 JSON_PATH = REPO_ROOT / "docs" / "api" / "tenant-management-openapi.json"
 YAML_PATH = REPO_ROOT / "docs" / "api" / "tenant-management-openapi.yaml"
+ROOT_JSON_PATH = REPO_ROOT / "openapi.json"
+ROOT_YAML_PATH = REPO_ROOT / "openapi.yaml"
 
 
 def _live_spec() -> dict:
@@ -77,6 +79,26 @@ def test_committed_openapi_yaml_matches_json():
         f"{JSON_PATH.relative_to(REPO_ROOT)} are out of sync — run "
         "`make openapi` to regenerate both atomically."
     )
+
+
+def test_root_copies_match_docs_api_copies():
+    """The repo-root ``openapi.{json,yaml}`` files exist for discoverability
+    (Stripe/Twilio convention — SDK generators and humans look at the root)
+    and must be byte-identical to the canonical artifacts in ``docs/api/``."""
+    for root_path, canonical_path in (
+        (ROOT_JSON_PATH, JSON_PATH),
+        (ROOT_YAML_PATH, YAML_PATH),
+    ):
+        assert root_path.exists(), (
+            f"{root_path.relative_to(REPO_ROOT)} missing — run `make openapi`. "
+            "Repo-root copies exist for SDK generators and Swagger UI loaders "
+            "that expect openapi.{json,yaml} at the repository root."
+        )
+        assert root_path.read_text(encoding="utf-8") == canonical_path.read_text(encoding="utf-8"), (
+            f"{root_path.relative_to(REPO_ROOT)} drifted from "
+            f"{canonical_path.relative_to(REPO_ROOT)} — run `make openapi` "
+            "to regenerate both atomically."
+        )
 
 
 def test_export_script_is_idempotent():

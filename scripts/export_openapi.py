@@ -42,6 +42,13 @@ OUT_DIR = REPO_ROOT / "docs" / "api"
 JSON_PATH = OUT_DIR / "tenant-management-openapi.json"
 YAML_PATH = OUT_DIR / "tenant-management-openapi.yaml"
 
+# Repo-root copies follow the Stripe/Twilio convention so SDK generators,
+# Swagger UI loaders, and humans browsing the repo find the spec where
+# they expect. Both copies are written atomically here; the drift guard
+# in tests/unit/test_openapi_export_in_sync.py keeps them in sync.
+ROOT_JSON_PATH = REPO_ROOT / "openapi.json"
+ROOT_YAML_PATH = REPO_ROOT / "openapi.yaml"
+
 
 def build_spec() -> dict:
     """Build the OpenAPI dict from the live blueprint registration.
@@ -71,17 +78,16 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     spec_dict = build_spec()
 
-    JSON_PATH.write_text(
-        json.dumps(spec_dict, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    YAML_PATH.write_text(
-        yaml.safe_dump(spec_dict, sort_keys=True, default_flow_style=False),
-        encoding="utf-8",
-    )
+    json_text = json.dumps(spec_dict, indent=2, sort_keys=True) + "\n"
+    yaml_text = yaml.safe_dump(spec_dict, sort_keys=True, default_flow_style=False)
 
-    print(f"✅ wrote {JSON_PATH.relative_to(REPO_ROOT)}")
-    print(f"✅ wrote {YAML_PATH.relative_to(REPO_ROOT)}")
+    for path in (JSON_PATH, ROOT_JSON_PATH):
+        path.write_text(json_text, encoding="utf-8")
+    for path in (YAML_PATH, ROOT_YAML_PATH):
+        path.write_text(yaml_text, encoding="utf-8")
+
+    for path in (JSON_PATH, YAML_PATH, ROOT_JSON_PATH, ROOT_YAML_PATH):
+        print(f"wrote {path.relative_to(REPO_ROOT)}")
     return 0
 
 
