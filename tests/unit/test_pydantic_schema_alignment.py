@@ -62,7 +62,17 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 # `<Model>.model_fields` against the live schema, then capture the gap here with the
 # library version and a tracking link. Empty by default — when this dict is empty,
 # the test surfaces every real divergence.
-KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {}
+KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
+    # AdCP 5.x added these to ``GetMediaBuyDeliveryRequest`` but the installed
+    # ``adcp`` Python library (5.5.0) does not yet expose them on
+    # ``LibraryGetMediaBuyDeliveryRequest``. Surfaces in CI because the test
+    # downloads the live spec JSON; locally with a stale cache it passes.
+    # Remove this entry when the library catches up. Tracked: salesagent-9f3.
+    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
+        "time_granularity",
+        "include_window_breakdown",
+    },
+}
 
 
 def _schema_ref_to_cache_path(schema_ref: str) -> Path:
