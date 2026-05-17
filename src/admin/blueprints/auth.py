@@ -840,12 +840,12 @@ def test_auth():
         os.environ.get("TEST_TENANT_ADMIN_EMAIL", "test_tenant_admin@example.com"): {
             "password": os.environ.get("TEST_TENANT_ADMIN_PASSWORD", "test123"),
             "name": "Test Tenant Admin",
-            "role": "tenant_admin",
+            "role": "admin",
         },
         os.environ.get("TEST_TENANT_USER_EMAIL", "test_tenant_user@example.com"): {
             "password": os.environ.get("TEST_TENANT_USER_PASSWORD", "test123"),
             "name": "Test Tenant User",
-            "role": "tenant_user",
+            "role": "member",
         },
     }
 
