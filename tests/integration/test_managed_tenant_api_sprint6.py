@@ -524,7 +524,9 @@ class TestExpandedEventCatalog:
     """
 
     NEW_EVENT_TYPES = (
+        "creative.created",
         "creative.status_changed",
+        "media_buy.created",
         "principal.created",
         "product.created",
         "product.updated",

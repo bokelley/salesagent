@@ -291,7 +291,9 @@ The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/we
 |---|---|---|
 | `workflow.created` | A pending workflow step is created (e.g., manual-approval gate) | `{"workflow": {...}}` |
 | `workflow.decided` | A workflow step is approved or rejected | `{"workflow": {...}}` |
+| `media_buy.created` | A media buy is successfully created (NOT fired on submitted-pending-approval — only when an actual buy lands in the ad server) | `{"media_buy_id": str, "buyer_ref": str | null, "status": str}` |
 | `media_buy.status_changed` | A media buy transitions state (active, paused, completed, etc.) | `{"media_buy_id": str, ...}` |
+| `creative.created` | A new creative is registered via `sync_creatives` (fires once per `action="created"` row in the bulk response; never on dry_run) | `{"creative_id": str, "platform_id": str | null, "status": str}` |
 | `creative.status_changed` | A creative is approved or rejected by the publisher | `{"creative_id": str, "new_status": str, "rejection_reason"?: str}` |
 | `principal.created` | A new advertiser/principal is created (both via provision endpoint and standalone admin UI flow) | `{"principal_id": str, "name": str}` |
 | `product.created` | A new product is created in the admin UI | `{"product_id": str, "name": str}` |
@@ -299,9 +301,6 @@ The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/we
 | `sync.completed` | An inventory/targeting/advertisers sync run completed successfully | `{"sync_id": str, "sync_type": str, ...}` |
 | `sync.failed` | A sync run failed | `{"sync_id": str, "sync_type": str, "error": str}` |
 | `tenant.config_changed` | Tenant configuration was patched | `{"changed": [...]}` |
-
-**Not yet emitted** (catalog gaps tracked in follow-up issues):
-- `creative.created` and `media_buy.created` — these fire from the agent-facing `sync_creatives` / `create_media_buy` flows where the `_impl` has multiple return paths. Wiring requires a context-manager pattern that emits on successful exit; scoped separately.
 
 **Delivery semantics**: fire-and-forget from a Flask request handler. Best-effort — webhook delivery failures are logged but do not roll back the operation that fired the event. The host product is responsible for idempotency on receive (use `event_id` for dedup, since retries reuse the same id).
 

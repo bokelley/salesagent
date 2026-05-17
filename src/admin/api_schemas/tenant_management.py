@@ -1184,7 +1184,9 @@ class ListSyncHistoryResponse(BaseModel):
 WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "workflow.created",
     "workflow.decided",
+    "media_buy.created",
     "media_buy.status_changed",
+    "creative.created",
     "creative.status_changed",
     "principal.created",
     "product.created",
@@ -1197,7 +1199,9 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
 WebhookEventType = Literal[
     "workflow.created",
     "workflow.decided",
+    "media_buy.created",
     "media_buy.status_changed",
+    "creative.created",
     "creative.status_changed",
     "principal.created",
     "product.created",

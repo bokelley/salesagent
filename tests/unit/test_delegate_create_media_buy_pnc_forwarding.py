@@ -63,7 +63,7 @@ async def test_delegate_forwards_push_notification_config_to_impl() -> None:
         patch("core.platforms._delegate._create_media_buy_impl", impl_mock),
         patch(
             "core.platforms._delegate._build_identity",
-            return_value=type("FakeIdent", (), {})(),
+            return_value=type("FakeIdent", (), {"tenant_id": "t1", "principal_id": "p1"})(),
         ),
     ):
         await _delegate_create_media_buy(req_body, fake_ctx)
@@ -95,7 +95,7 @@ async def test_delegate_passes_none_when_request_omits_pnc() -> None:
         patch("core.platforms._delegate._create_media_buy_impl", impl_mock),
         patch(
             "core.platforms._delegate._build_identity",
-            return_value=type("FakeIdent", (), {})(),
+            return_value=type("FakeIdent", (), {"tenant_id": "t1", "principal_id": "p1"})(),
         ),
     ):
         await _delegate_create_media_buy(req_body, fake_ctx)

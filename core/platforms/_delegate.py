@@ -488,7 +488,45 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     else:
         pnc_dict = dict(pnc)
     response = await _create_media_buy_impl(req_model, push_notification_config=pnc_dict, identity=identity)
+    _emit_media_buy_created_if_success(identity.tenant_id, response)
     return _to_wire(response)
+
+
+def _emit_media_buy_created_if_success(tenant_id: str, result: Any) -> None:
+    """Fire ``media_buy.created`` when a buy was actually committed.
+
+    The wrapper sits at the framework/_impl boundary (not inside _impl)
+    so it can import the admin-layer publisher without violating the
+    transport-agnostic _impl guard. ``CreateMediaBuyResult.response`` is
+    a discriminated union — only the ``CreateMediaBuySuccess`` variant
+    means a real ad-server row was created. ``CreateMediaBuySubmitted``
+    is pending-approval (no media_buy yet) and ``CreateMediaBuyError``
+    is failure — neither fires the event.
+
+    Best-effort: webhook delivery failures don't propagate back to the
+    buyer (the buy itself succeeded; the event is observability).
+    """
+    from src.core.schemas import CreateMediaBuySuccess
+
+    inner = getattr(result, "response", None)
+    if not isinstance(inner, CreateMediaBuySuccess):
+        return
+
+    media_buy_id = getattr(inner, "media_buy_id", None)
+    if not media_buy_id:
+        return
+
+    from src.admin.services.webhook_publisher import emit_event
+
+    emit_event(
+        tenant_id,
+        "media_buy.created",
+        {
+            "media_buy_id": media_buy_id,
+            "buyer_ref": getattr(inner, "buyer_ref", None),
+            "status": getattr(inner, "status", None),
+        },
+    )
 
 
 @translate_adcp_errors
@@ -569,7 +607,49 @@ async def _delegate_sync_creatives(req: Any, ctx: RequestContext[Any]) -> dict[s
         context=body.get("context"),
         identity=identity,
     )
+    _emit_creative_created_for_new_creatives(identity.tenant_id, response, dry_run=bool(body.get("dry_run", False)))
     return _to_wire(response)
+
+
+def _emit_creative_created_for_new_creatives(tenant_id: str, result: Any, *, dry_run: bool) -> None:
+    """Fire ``creative.created`` per newly-created creative.
+
+    sync_creatives is a bulk op: some creatives are created, some
+    updated, some failed. Only the ``action="created"`` rows correspond
+    to a new database row, so only those fire the event. Updates fire
+    ``creative.status_changed`` from the admin approve/reject path
+    (PR #446), not from here.
+
+    Skipped for dry_run since no row is actually created. Best-effort
+    delivery; failures don't propagate back to the buyer.
+    """
+    if dry_run:
+        return
+
+    creatives = getattr(result, "creatives", None)
+    if not creatives:
+        return
+
+    from src.admin.services.webhook_publisher import emit_event
+
+    for creative in creatives:
+        action = getattr(creative, "action", None)
+        # action is a CreativeAction enum; both enum and string forms are
+        # safe to compare against the literal value.
+        if getattr(action, "value", action) != "created":
+            continue
+        creative_id = getattr(creative, "creative_id", None)
+        if not creative_id:
+            continue
+        emit_event(
+            tenant_id,
+            "creative.created",
+            {
+                "creative_id": creative_id,
+                "platform_id": getattr(creative, "platform_id", None),
+                "status": getattr(creative, "status", None),
+            },
+        )
 
 
 @translate_adcp_errors

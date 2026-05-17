@@ -873,7 +873,9 @@
               "enum": [
                 "workflow.created",
                 "workflow.decided",
+                "media_buy.created",
                 "media_buy.status_changed",
+                "creative.created",
                 "creative.status_changed",
                 "principal.created",
                 "product.created",
