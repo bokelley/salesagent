@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import sys
 
 from sqlalchemy import text
@@ -156,6 +157,21 @@ def _seed(session) -> None:
             """
         ),
         {"tid": DEFAULT_TENANT_ID},
+    )
+
+    # 8) Tenant management API key (superadmin_config). Without this row the
+    # tenant-management API returns 503 on a fresh stack. ON CONFLICT DO NOTHING
+    # preserves a key already issued via the admin UI or
+    # ``scripts/initialize_tenant_mgmt_api_key.py``.
+    session.execute(
+        text(
+            """
+            INSERT INTO superadmin_config (config_key, config_value, description, updated_by)
+            VALUES ('api_key', :api_key, 'Tenant management API key for programmatic access', 'seed_demo_data')
+            ON CONFLICT (config_key) DO NOTHING
+            """
+        ),
+        {"api_key": f"sk_{secrets.token_urlsafe(32)}"},
     )
 
 
