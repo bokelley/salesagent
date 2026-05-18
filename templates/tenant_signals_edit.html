@@ -55,8 +55,12 @@
                 {% if mapping_summary.rows %}
                 <dl class="row mb-0">
                     {% for r in mapping_summary.rows %}
+                    {% if r.label %}
                     <dt class="col-sm-3 text-muted small">{{ r.label }}</dt>
                     <dd class="col-sm-9 font-monospace small">{{ r.value }}</dd>
+                    {% else %}
+                    <dd class="col-12 font-monospace small mb-1">{{ r.value }}</dd>
+                    {% endif %}
                     {% endfor %}
                 </dl>
                 {% else %}
@@ -72,6 +76,22 @@
                 </p>
             </div>
         </div>
+        {% endif %}
+
+        {% if buyer_preview %}
+        <details class="card mb-3">
+            <summary class="card-header py-2 px-3" style="cursor:pointer">
+                <span class="small text-muted">Preview as buyer — what <code>get_signals</code> returns</span>
+            </summary>
+            <div class="card-body">
+                <p class="text-muted small mb-2">
+                    AdCP <code>Signal</code> projection — what storefronts see when they call
+                    <code>get_signals</code> on this tenant. <code>adapter_config</code> is intentionally
+                    elided; only the public schema fields surface.
+                </p>
+                <pre class="bg-light p-2 mb-0 small" style="max-height:320px; overflow:auto">{{ buyer_preview | tojson(indent=2) }}</pre>
+            </div>
+        </details>
         {% endif %}
 
         <details class="card mb-3">

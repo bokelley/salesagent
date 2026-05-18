@@ -161,9 +161,14 @@
     <div class="card">
         <div class="card-header d-flex align-items-center justify-content-between">
             <h5 class="mb-0">Existing signals ({{ signals | length }})</h5>
-            <div class="form-check form-switch">
-                <input type="checkbox" class="form-check-input" id="show-ids-toggle">
-                <label class="form-check-label small text-muted" for="show-ids-toggle">Show IDs</label>
+            <div class="d-flex align-items-center gap-3">
+                <input type="search" id="signals-search" class="form-control form-control-sm"
+                       placeholder="Filter by name…" style="max-width:240px"
+                       autocomplete="off">
+                <div class="form-check form-switch mb-0">
+                    <input type="checkbox" class="form-check-input" id="show-ids-toggle">
+                    <label class="form-check-label small text-muted" for="show-ids-toggle">Show IDs</label>
+                </div>
             </div>
         </div>
         <div class="card-body p-0">
@@ -196,7 +201,7 @@
                             <form method="POST"
                                   action="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
                                   class="d-inline"
-                                  onsubmit="return confirm('Delete signal {{ s.name }}?')">
+                                  onsubmit="return confirm('Delete signal &quot;{{ s.name }}&quot;?\n\nActive media buys referencing this signal_id ({{ s.signal_id }}) in audience_include / audience_exclude will fail at next materialization. Confirm only if no live campaigns use it.')">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
                             </form>
                         </td>
@@ -228,6 +233,19 @@
         idsToggle.addEventListener('change', () => {
             document.querySelectorAll('.signal-id-col').forEach(c => {
                 c.classList.toggle('d-none', !idsToggle.checked);
+            });
+        });
+    }
+
+    // ---- Filter Existing Signals by name ----
+    const searchInput = document.getElementById('signals-search');
+    if (searchInput) {
+        const existingRows = document.querySelectorAll('.card:has(h5):not(#bulk-map-card) tbody tr');
+        searchInput.addEventListener('input', () => {
+            const q = searchInput.value.trim().toLowerCase();
+            existingRows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = !q || text.includes(q) ? '' : 'none';
             });
         });
     }

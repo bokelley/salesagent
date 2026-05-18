@@ -461,7 +461,8 @@ def edit_signal(tenant_id: str, signal_id: str):
     one place it's legitimately needed for debugging integrations.
     """
     with get_db_session() as session:
-        if session.get(Tenant, tenant_id) is None:
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
             flash("Tenant not found.", "error")
             return redirect(url_for("core.index"))
         signal = TenantSignalRepository(session, tenant_id).get_by_id(signal_id)
@@ -473,11 +474,21 @@ def edit_signal(tenant_id: str, signal_id: str):
             mapping_summary = _summarize_adapter_config(
                 signal.adapter_config or {}, GAMSyncRepository(session, tenant_id)
             )
+            # Project the signal to its buyer-visible ``get_signals`` wire
+            # shape — operators want to see what a buyer would discover.
+            from src.core.tools.signals import _tenant_signal_to_adcp
+
+            buyer_preview = _tenant_signal_to_adcp(
+                signal,
+                ad_server=tenant.ad_server,
+                agent_url=tenant.public_agent_url,
+            ).model_dump(mode="json")
             return render_template(
                 "tenant_signals_edit.html",
                 tenant_id=tenant_id,
                 signal=signal,
                 mapping_summary=mapping_summary,
+                buyer_preview=buyer_preview,
                 form_data=None,
                 errors=None,
                 value_types=_VALID_VALUE_TYPES,
@@ -619,35 +630,30 @@ def _summarize_adapter_config(adapter_config: dict, gam_repo: GAMSyncRepository)
             "raw_kind": "gam_targeting_groups",
         }
 
-    # Pass-through (legacy + explicit)
+    # Pass-through (legacy + explicit). The header already names the kind,
+    # so rows just carry the human-readable value with no redundant ``dt``.
     if kind == "audience_segment":
         segment_id = str(adapter_config.get("segment_id") or "")
         seg_name = _lookup_inventory_name(gam_repo, "audience_segment", segment_id)
         return {
             "label": "GAM audience segment",
-            "rows": [
-                {"label": "Segment", "value": f"{seg_name or '(unsynced)'} — id {segment_id}"},
-            ],
+            "rows": [{"label": "", "value": f"{seg_name or '(unsynced)'} — id {segment_id}"}],
             "raw_kind": kind,
         }
     if kind == "custom_key_value":
         key_id = str(adapter_config.get("key_id") or "")
         value_id = str(adapter_config.get("value_id") or "")
-        key_name = _lookup_inventory_name(gam_repo, "custom_targeting_key", key_id)
+        key_name = _lookup_inventory_name(gam_repo, "custom_targeting_key", key_id) or key_id
         return {
             "label": "GAM custom key + value",
-            "rows": [
-                {"label": "Key", "value": f"{key_name or '(unsynced)'} — id {key_id}"},
-                {"label": "Value id", "value": value_id},
-            ],
+            "rows": [{"label": "", "value": f"{key_name} = {value_id}"}],
             "raw_kind": kind,
         }
     if kind in ("freewheel_viewership_profile", "freewheel_audience_item", "freewheel_custom_kv"):
+        cfg_str = ", ".join(f"{k}={v}" for k, v in adapter_config.items() if k not in ("type", "kind", "mode"))
         return {
             "label": f"Freewheel {kind.replace('freewheel_', '').replace('_', ' ')}",
-            "rows": [
-                {"label": "Config", "value": ", ".join(f"{k}={v}" for k, v in adapter_config.items() if k != "type")}
-            ],
+            "rows": [{"label": "", "value": cfg_str}],
             "raw_kind": kind,
         }
 
