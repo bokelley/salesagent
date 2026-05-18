@@ -1,7 +1,12 @@
 """Tests for the SpringServe Reporting API client.
 
-Covers JobSpec → request body, sync POST, async submit + poll, and the
+Covers JobSpec -> request body, sync POST, async submit + poll, and the
 ColumnMap-driven row parsing.
+
+Wire format verified live (May 2026): see ``_reporting.py`` module
+docstring for the full request/response contract. The ``LIVE_ROW``
+fixture is a verbatim row from a real response so the parser is
+exercised against the real shape, not a stub.
 """
 
 from __future__ import annotations
@@ -19,6 +24,26 @@ from src.adapters.springserve._reporting import (
     parse_row,
 )
 
+# Verbatim row from a live POST /report response (interval=day, single
+# demand_tag_id filter). Trimmed to the columns the parser touches plus
+# a few neighbors so the test still validates ignore-extra behavior.
+LIVE_ROW = {
+    "date": "2026-02-10 00:00:00.0",
+    "demand_requests": 8887,
+    "bids": 8887,
+    "wins": 8887,
+    "impressions": 1108,
+    "starts": 1108,
+    "cost": 35.65928,
+    "cpm": 32.18347,
+    "clicks": 15,
+    "first_quartile": 930,
+    "second_quartile": 839,
+    "third_quartile": 757,
+    "fourth_quartile": 716,
+    "click_through_rate": 0.01354,
+}
+
 
 @pytest.fixture
 def transport():
@@ -31,76 +56,87 @@ def reporting(transport):
 
 
 class TestJobSpec:
-    def test_minimal_body_shape(self):
+    def test_minimal_body_uses_live_field_names(self):
+        """Live API uses ``start_date``/``end_date`` (not ``date_start``)."""
         spec = JobSpec(start_date=date(2026, 5, 14), end_date=date(2026, 5, 14))
         body = spec.to_body()
-        assert body["date_start"] == "2026-05-14"
-        assert body["date_end"] == "2026-05-14"
-        assert "filters" not in body  # absent when no demand_tag_ids
-        assert "async" not in body  # absent when sync
+        assert body["start_date"] == "2026-05-14"
+        assert body["end_date"] == "2026-05-14"
+        assert body["interval"] == "day"
+        # Never send dimensions/metrics -- they silently zero the response.
+        assert "dimensions" not in body
+        assert "metrics" not in body
+        assert "demand_tag_ids" not in body
+        assert "async" not in body
 
-    def test_filters_include_demand_tag_ids_as_ints(self):
+    def test_single_demand_tag_id_in_top_level_array(self):
+        """Filter goes to top-level ``demand_tag_ids`` (plural), as int."""
         spec = JobSpec(
             start_date=date(2026, 5, 14),
             end_date=date(2026, 5, 14),
-            demand_tag_ids=["2149077", "2149080"],
+            demand_tag_id="2149077",
         )
         body = spec.to_body()
-        assert body["filters"] == {"demand_tag_id": [2149077, 2149080]}
+        assert body["demand_tag_ids"] == [2149077]
+        # Never send the nested ``filters`` shape -- API silently ignores it.
+        assert "filters" not in body
 
     def test_async_flag_in_body(self):
         spec = JobSpec(start_date=date(2026, 5, 14), end_date=date(2026, 5, 14), use_async=True)
         assert spec.to_body()["async"] is True
 
+    def test_interval_can_be_dropped(self):
+        spec = JobSpec(start_date=date(2026, 5, 14), end_date=date(2026, 5, 14), interval=None)
+        assert "interval" not in spec.to_body()
+
 
 class TestSyncSubmit:
-    def test_submit_sync_parses_rows(self, reporting, transport):
-        transport.post_json.return_value = {
-            "data": [
-                {
-                    "demand_tag_id": 2149077,
-                    "campaign_id": 120669,
-                    "impressions": 12345,
-                    "completions": 8000,
-                    "clicks": 30,
-                    "spend": 27.50,
-                    "currency": "EUR",
-                },
-            ]
-        }
-        spec = JobSpec(start_date=date(2026, 5, 14), end_date=date(2026, 5, 14))
+    def test_submit_sync_parses_live_row_shape(self, reporting, transport):
+        """Live response is a top-level array of rows, no envelope."""
+        transport.post_json.return_value = [LIVE_ROW]
+        spec = JobSpec(start_date=date(2026, 2, 10), end_date=date(2026, 2, 10), demand_tag_id="2149081")
+
         rows = reporting.submit_sync(spec)
 
-        # Sync POST should be made exactly once with our spec body.
         transport.post_json.assert_called_once_with(
             "/report",
             {
-                "date_start": "2026-05-14",
-                "date_end": "2026-05-14",
-                "dimensions": ["campaign_id", "demand_tag_id"],
-                "metrics": ["impressions", "spend", "completions", "clicks"],
+                "start_date": "2026-02-10",
+                "end_date": "2026-02-10",
+                "interval": "day",
+                "demand_tag_ids": [2149081],
             },
         )
         assert len(rows) == 1
-        assert rows[0].demand_tag_id == "2149077"
-        assert rows[0].campaign_id == "120669"
-        assert rows[0].impressions == 12345
-        assert rows[0].completed_views == 8000
-        assert rows[0].clicks == 30
-        # Spend converted from EUR major units to micros (27.50 EUR -> 27_500_000)
-        assert rows[0].spend_micros == 27_500_000
-        assert rows[0].currency == "EUR"
+        row = rows[0]
+        # demand_tag_id is injected from the JobSpec -- API doesn't echo it.
+        assert row.demand_tag_id == "2149081"
+        assert row.impressions == 1108
+        # fourth_quartile is the completes-equivalent column on this API.
+        assert row.completed_views == 716
+        assert row.clicks == 15
+        # 35.65928 EUR -> 35_659_280 micros (rounded).
+        assert row.spend_micros == 35_659_280
+        assert row.report_date == "2026-02-10 00:00:00.0"
 
-    def test_submit_sync_handles_empty_data(self, reporting, transport):
-        transport.post_json.return_value = {"data": []}
+    def test_submit_sync_handles_empty_array(self, reporting, transport):
+        transport.post_json.return_value = []
         rows = reporting.submit_sync(JobSpec(start_date=date(2026, 5, 14), end_date=date(2026, 5, 14)))
         assert rows == []
 
-    def test_submit_sync_handles_missing_data_wrapper(self, reporting, transport):
+    def test_submit_sync_handles_unexpected_shape(self, reporting, transport):
         """Bad response shape doesn't crash -- log + return zero rows."""
         transport.post_json.return_value = {"unexpected": "shape"}
         rows = reporting.submit_sync(JobSpec(start_date=date(2026, 5, 14), end_date=date(2026, 5, 14)))
         assert rows == []
+
+    def test_submit_sync_tolerates_data_wrapper(self, reporting, transport):
+        """Async DONE envelope may wrap rows in ``data`` -- accept both shapes."""
+        transport.post_json.return_value = {"data": [LIVE_ROW]}
+        spec = JobSpec(start_date=date(2026, 2, 10), end_date=date(2026, 2, 10), demand_tag_id="2149081")
+        rows = reporting.submit_sync(spec)
+        assert len(rows) == 1
+        assert rows[0].impressions == 1108
 
 
 class TestAsyncSubmit:
@@ -133,7 +169,6 @@ class TestPollStatus:
             {"status": "RUNNING"},
             {"status": "DONE"},
         ]
-        # Zero-second interval so the test runs fast
         reporting.poll_until_done("rpt-1", interval_seconds=0, max_attempts=10)
         assert transport.get_json.call_count == 3
 
@@ -149,28 +184,26 @@ class TestPollStatus:
 
 
 class TestParseRow:
-    def test_string_demand_tag_id_preserved(self):
-        row = parse_row({"demand_tag_id": "2149077", "impressions": 100, "spend": 1.0})
-        assert row is not None
-        assert row.demand_tag_id == "2149077"
-
-    def test_missing_demand_tag_id_returns_none(self):
-        assert parse_row({"impressions": 100}) is None
+    def test_demand_tag_id_injected_from_caller(self):
+        row = parse_row(LIVE_ROW, demand_tag_id="2149081")
+        assert row.demand_tag_id == "2149081"
+        assert row.impressions == 1108
 
     def test_null_clicks_preserved(self):
-        row = parse_row({"demand_tag_id": "1", "impressions": 100, "clicks": None, "spend": 0})
-        assert row is not None
+        row = parse_row({"impressions": 100, "clicks": None, "cost": 0}, demand_tag_id="1")
         assert row.clicks is None
 
     def test_custom_column_map(self):
-        """ColumnMap lets the day-of-scope wiring fix happen without code edits."""
+        """ColumnMap lets a SpringServe schema change get patched without code edits."""
         cm = ColumnMap(impressions="imp", spend="cost_eur")
-        row = parse_row({"demand_tag_id": "1", "imp": 999, "cost_eur": 1.50}, column_map=cm)
-        assert row is not None
+        row = parse_row({"imp": 999, "cost_eur": 1.50}, demand_tag_id="1", column_map=cm)
         assert row.impressions == 999
         assert row.spend_micros == 1_500_000
 
     def test_spend_zero_when_missing(self):
-        row = parse_row({"demand_tag_id": "1", "impressions": 100})
-        assert row is not None
+        row = parse_row({"impressions": 100}, demand_tag_id="1")
         assert row.spend_micros == 0
+
+    def test_missing_date_yields_none(self):
+        row = parse_row({"impressions": 1}, demand_tag_id="1")
+        assert row.report_date is None
