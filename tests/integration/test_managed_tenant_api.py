@@ -1044,7 +1044,7 @@ class TestTenantStatus:
         assert body["media_buys"]["active_count"] == 0
         assert body["media_buys"]["pending_approval_count"] == 0
         assert body["packages"]["active_count"] == 0
-        assert body["packages"]["last_24h_impressions"] == 0
+        assert body["packages"]["paused_count"] == 0
         assert body["creatives"]["active_count"] == 0
         assert body["creatives"]["pending_review_count"] == 0
         assert body["webhooks"] is None

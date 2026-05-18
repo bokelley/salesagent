@@ -213,11 +213,7 @@ def _media_buys_block(session: Session, tenant_id: str) -> StatusMediaBuysBlock:
 
 
 def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
-    """Package counters joined to the parent media buy for tenant scoping.
-
-    ``last_24h_impressions`` is 0 until delivery aggregation is wired in
-    (sprint-1.5 known gap — see design Open Q #3).
-    """
+    """Package counters joined to the parent media buy for tenant scoping."""
     active = session.scalar(
         select(func.count())
         .select_from(MediaPackage)
@@ -233,7 +229,6 @@ def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
     return StatusPackagesBlock(
         active_count=int(active or 0),
         paused_count=int(paused or 0),
-        last_24h_impressions=0,
     )
 
 

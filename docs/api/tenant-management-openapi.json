@@ -3903,16 +3903,11 @@
       },
       "TenantStatusResponse.f44f287.StatusPackagesBlock": {
         "additionalProperties": false,
-        "description": "Package-level counters (line items inside media buys).\n\n``last_24h_impressions`` is set to 0 until delivery aggregation is wired\nup.",
+        "description": "Package-level counters (line items inside media buys).",
         "properties": {
           "active_count": {
             "default": 0,
             "title": "Active Count",
-            "type": "integer"
-          },
-          "last_24h_impressions": {
-            "default": 0,
-            "title": "Last 24H Impressions",
             "type": "integer"
           },
           "paused_count": {

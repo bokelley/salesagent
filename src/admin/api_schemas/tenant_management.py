@@ -593,17 +593,12 @@ class StatusMediaBuysBlock(BaseModel):
 
 
 class StatusPackagesBlock(BaseModel):
-    """Package-level counters (line items inside media buys).
-
-    ``last_24h_impressions`` is set to 0 until delivery aggregation is wired
-    up.
-    """
+    """Package-level counters (line items inside media buys)."""
 
     model_config = _config()
 
     active_count: int = 0
     paused_count: int = 0
-    last_24h_impressions: int = 0
 
 
 class StatusCreativesBlock(BaseModel):
