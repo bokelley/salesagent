@@ -140,16 +140,18 @@ def _adapter_probe_error(adapter_type: str, probe: ProbeResult):
 
     Translates the typed sub-code from :class:`ProbeResult` into the
     ``adapter_{code}`` family of API error codes. Forwards the structured
-    ``details`` block (e.g. ``gam_fault``) so downstream consumers can
-    branch on machine-readable fields rather than parsing the human
-    message. See :mod:`src.admin.services.adapter_connection_tester` for
-    the classification.
+    ``details`` block (``vendor_fault``) and the ``remediation`` hint so
+    downstream consumers can branch on machine-readable fields rather than
+    parsing the human message. See :mod:`src.admin.services.adapter_connection_tester`
+    for the classification.
     """
     code = probe.error_code or "connection_failed"
     details: dict[str, Any] = {
         "adapter_type": adapter_type,
         "error": probe.error_message,
     }
+    if probe.remediation:
+        details["remediation"] = probe.remediation
     if probe.details:
         details.update(probe.details)
     return _api_error(
@@ -1243,6 +1245,7 @@ def preview_adapter_endpoint():
         inventory_reachable=preview.inventory_reachable,
         error=preview.error,
         error_code=preview.error_code,
+        remediation=preview.remediation,
         details=preview.details or None,
     )
     return jsonify(response.model_dump(mode="json"))
@@ -1456,6 +1459,7 @@ def adapter_test_connection(tenant_id: str):
                 success=probe.success,
                 error=probe.error_message,
                 error_code=probe.error_code,
+                remediation=probe.remediation,
                 details=probe.details or None,
                 tested_at=datetime.now(UTC),
             ).model_dump(mode="json")

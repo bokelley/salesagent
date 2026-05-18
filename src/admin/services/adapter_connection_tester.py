@@ -18,13 +18,39 @@ the right remediation copy without parsing English error strings:
   (GAM ``NETWORK_NOT_FOUND``, Broadstreet 404). Almost always a typo.
 - ``permission_denied`` — credentials authenticate but lack access to the
   configured network/publisher (GAM ``NOT_ALLOWED`` /
-  ``NO_NETWORKS_TO_ACCESS``, 403 on a scope probe). The propagation case.
+  ``NO_NETWORKS_TO_ACCESS``, 403 on a scope probe, SpringServe/FreeWheel
+  inventory 404). The propagation case.
 - ``invalid_credentials`` — credentials themselves are bad (GAM
   ``AUTHENTICATION_FAILED``, raw 401 before any scope check).
 - ``invalid_config`` — required config field missing (e.g. no
   ``network_code``). No HTTP call is attempted.
+- ``upstream_unavailable`` — we reached the vendor but it returned 5xx /
+  timed out. Retry-eligible — distinct from ``connection_failed``, which
+  means we couldn't reach the vendor at all.
 - ``connection_failed`` — fallback for anything not classified above
-  (transient SOAP fault, network blip, unknown GAM reason code).
+  (DNS/TLS/network blip, unparseable GAM SOAP fault, unknown reason code).
+
+A ``permission_denied`` (and sometimes ``invalid_credentials``) result also
+carries a ``remediation`` hint so UIs can branch on who can fix the problem
+without grepping the human-readable message — see :data:`RemediationHint`.
+
+Vendor diagnostics
+------------------
+
+The ``details.vendor_fault`` block (when present) carries a unified shape
+across adapters::
+
+    {
+        "vendor": "gam" | "springserve" | "freewheel" | "broadstreet",
+        "phase": str,              # what probe step failed
+        "endpoint": str,           # what was called
+        "vendor_status": int?,     # HTTP status (REST) / null (SOAP)
+        "vendor_message": str?,    # trimmed raw response/exception text
+        "<vendor>": dict?,         # vendor-specific extras (e.g. GAM SOAP)
+    }
+
+The discriminator lets consumers branch on ``vendor`` and then inspect the
+optional nested ``<vendor>`` block for vendor-shaped diagnostics.
 """
 
 from __future__ import annotations
@@ -58,6 +84,7 @@ AdapterErrorCode = Literal[
     "permission_denied",
     "invalid_credentials",
     "invalid_config",
+    "upstream_unavailable",
     "connection_failed",
 ]
 
@@ -65,6 +92,7 @@ NETWORK_NOT_FOUND: AdapterErrorCode = "network_not_found"
 PERMISSION_DENIED: AdapterErrorCode = "permission_denied"
 INVALID_CREDENTIALS: AdapterErrorCode = "invalid_credentials"
 INVALID_CONFIG: AdapterErrorCode = "invalid_config"
+UPSTREAM_UNAVAILABLE: AdapterErrorCode = "upstream_unavailable"
 CONNECTION_FAILED: AdapterErrorCode = "connection_failed"
 
 ADAPTER_ERROR_CODES: tuple[AdapterErrorCode, ...] = (
@@ -72,8 +100,36 @@ ADAPTER_ERROR_CODES: tuple[AdapterErrorCode, ...] = (
     PERMISSION_DENIED,
     INVALID_CREDENTIALS,
     INVALID_CONFIG,
+    UPSTREAM_UNAVAILABLE,
     CONNECTION_FAILED,
 )
+
+
+# Hints to UI rendering about WHO can fix the problem. Populated only when
+# the assignment is unambiguous; missing means "follow the error_code's
+# default guidance". Independent of ``error_code`` — a ``permission_denied``
+# can remediate via the vendor (role gap) or the customer (wrong account
+# binding); an ``invalid_credentials`` always remediates via token rotation
+# but callers may still want the explicit hint.
+RemediationHint = Literal[
+    "vendor_enables_role",
+    "customer_rebinds_account",
+    "customer_rotates_token",
+]
+
+VENDOR_ENABLES_ROLE: RemediationHint = "vendor_enables_role"
+CUSTOMER_REBINDS_ACCOUNT: RemediationHint = "customer_rebinds_account"
+CUSTOMER_ROTATES_TOKEN: RemediationHint = "customer_rotates_token"
+
+REMEDIATION_HINTS: tuple[RemediationHint, ...] = (
+    VENDOR_ENABLES_ROLE,
+    CUSTOMER_REBINDS_ACCOUNT,
+    CUSTOMER_ROTATES_TOKEN,
+)
+
+
+# Discriminator for ``vendor_fault.vendor``.
+Vendor = Literal["gam", "springserve", "freewheel", "broadstreet"]
 
 
 @dataclass
@@ -81,14 +137,16 @@ class ProbeResult:
     """Outcome of an adapter authentication probe.
 
     Successful probes carry ``success=True`` and no error fields. Failures
-    classify the fault into ``error_code`` (see module docstring) and
-    optionally attach structured ``details`` so callers can render typed
-    diagnostics without parsing the human-readable ``error_message``.
+    classify the fault into ``error_code`` (see module docstring), optionally
+    a ``remediation`` hint, and optionally a structured ``details`` block so
+    callers can render typed diagnostics without parsing the human-readable
+    ``error_message``.
     """
 
     success: bool
     error_code: AdapterErrorCode | None = None
     error_message: str | None = None
+    remediation: RemediationHint | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -100,12 +158,15 @@ class ProbeResult:
         cls,
         error_code: AdapterErrorCode,
         message: str,
+        *,
+        remediation: RemediationHint | None = None,
         details: dict[str, Any] | None = None,
     ) -> ProbeResult:
         return cls(
             success=False,
             error_code=error_code,
             error_message=message,
+            remediation=remediation,
             details=details or {},
         )
 
@@ -131,7 +192,63 @@ class AdapterPreview:
     inventory_reachable: bool = False
     error: str | None = None
     error_code: AdapterErrorCode | None = None
+    remediation: RemediationHint | None = None
     details: dict[str, Any] = field(default_factory=dict)
+
+
+# Vendor probe phase/endpoint constants. Hoisted to module level so call
+# sites don't repeat the strings and a future rename touches one place.
+_GAM_PHASE = "get_current_network"
+_GAM_ENDPOINT = "NetworkService.getCurrentNetwork"
+
+_SS_PHASE_PROBE = "supply_probe"
+_SS_ENDPOINT_SUPPLY = "/supply/tags"
+
+_FW_PHASE_TOKEN_INFO = "token_info"
+_FW_ENDPOINT_TOKEN_INFO = "/auth/token/info"
+_FW_PHASE_LIST_SITES = "list_sites"
+_FW_ENDPOINT_LIST_SITES = "/services/v4/sites"
+
+_BS_PHASE = "get_network"
+_BS_ENDPOINT_NETWORK = "/networks/{network_id}"
+
+
+def _vendor_fault(
+    vendor: Vendor,
+    phase: str,
+    endpoint: str,
+    *,
+    status: int | None = None,
+    message: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the unified ``details["vendor_fault"]`` envelope.
+
+    Returns ``{"vendor_fault": {vendor, phase, endpoint,
+    vendor_status?, vendor_message?, <vendor>: {...}?}}``.
+
+    The discriminator ``vendor`` lets consumers branch once before reading
+    vendor-shaped fields. The optional nested ``<vendor>`` block (passed
+    via ``extra``) carries vendor-specific diagnostics that don't fit the
+    common shape — used today for GAM's SOAP service/reason fields.
+
+    Empty/None inner fields are dropped to keep the wire payload tight.
+    ``vendor_message`` is trimmed to 200 chars.
+
+    Note on ``vendor_message`` provenance: callers should pass curated text
+    (typed-exception messages we authored, or trimmed vendor response bodies).
+    Raw ``str(exc)`` from untyped exceptions can include ``requests``-style
+    URLs with internal hostnames — those callers should pass
+    ``type(exc).__name__`` instead.
+    """
+    fault: dict[str, Any] = {"vendor": vendor, "phase": phase, "endpoint": endpoint}
+    if status is not None:
+        fault["vendor_status"] = status
+    if message:
+        fault["vendor_message"] = message[:200]
+    if extra:
+        fault[vendor] = extra
+    return {"vendor_fault": fault}
 
 
 # ---------------------------------------------------------------------------
@@ -145,80 +262,42 @@ _GAM_FAULT_RE = re.compile(
     r"(?:;\s*trigger:'(?P<trigger>[^']*)')?\]"
 )
 
-# Map GAM ``AuthenticationError`` reason codes to our typed sub-codes.
-# Everything else (or no match) falls back to CONNECTION_FAILED.
-_GAM_REASON_TO_CODE = {
-    "NETWORK_NOT_FOUND": NETWORK_NOT_FOUND,
-    "NOT_ALLOWED": PERMISSION_DENIED,
-    "NO_NETWORKS_TO_ACCESS": PERMISSION_DENIED,
-    "AUTHENTICATION_FAILED": INVALID_CREDENTIALS,
-    "GOOGLE_ACCOUNT_AUTHENTICATION_FAILED": INVALID_CREDENTIALS,
+# Map GAM ``AuthenticationError`` reason codes to ``(error_code, remediation)``.
+# Everything else (or no match) falls back to ``CONNECTION_FAILED``.
+_GAM_REASON_CLASSIFICATION: dict[str, tuple[AdapterErrorCode, RemediationHint | None]] = {
+    # Network ID is a typo — operator can fix; no vendor involvement.
+    "NETWORK_NOT_FOUND": (NETWORK_NOT_FOUND, None),
+    # Service account isn't a member of this network — rebind to a network
+    # the account has access to, or grant the account access in GAM admin.
+    "NOT_ALLOWED": (PERMISSION_DENIED, CUSTOMER_REBINDS_ACCOUNT),
+    "NO_NETWORKS_TO_ACCESS": (PERMISSION_DENIED, CUSTOMER_REBINDS_ACCOUNT),
+    # Bad credentials — the code itself is unambiguous, but we surface the
+    # rotation hint anyway so the same UI affordance lights up across codes.
+    "AUTHENTICATION_FAILED": (INVALID_CREDENTIALS, CUSTOMER_ROTATES_TOKEN),
+    "GOOGLE_ACCOUNT_AUTHENTICATION_FAILED": (INVALID_CREDENTIALS, CUSTOMER_ROTATES_TOKEN),
 }
 
 
-def _build_gam_fault(match: re.Match[str]) -> dict[str, Any]:
-    """Convert a parsed regex match into the structured ``gam_fault`` dict."""
-    fault: dict[str, Any] = {
+def _build_gam_extra(match: re.Match[str]) -> dict[str, Any]:
+    """Extract GAM SOAP-specific fields from a regex match for the
+    ``vendor_fault.gam`` nested block."""
+    extra: dict[str, Any] = {
         "service": match.group("service"),
         "reason": match.group("reason"),
     }
     field_path = (match.group("field") or "").strip()
     if field_path:
-        fault["field_path"] = field_path
+        extra["field_path"] = field_path
     trigger = match.group("trigger")
     if trigger is not None:
-        fault["trigger"] = trigger
-    return fault
+        extra["trigger"] = trigger
+    return extra
 
 
-# Phase + endpoint labels for the SpringServe / FreeWheel ``vendor_fault``
-# blocks. Hoisted to module level so call sites don't repeat the strings
-# and so a refactor can rename them in one place.
-_SS_PHASE_PROBE = "supply_probe"
-_SS_ENDPOINT_SUPPLY = "/supply/tags"
-
-_FW_PHASE_TOKEN_INFO = "token_info"
-_FW_ENDPOINT_TOKEN_INFO = "/auth/token/info"
-_FW_PHASE_LIST_SITES = "list_sites"
-_FW_ENDPOINT_LIST_SITES = "/services/v4/sites"
-
-
-def _vendor_details(
-    vendor_key: str,
-    phase: str,
-    endpoint: str,
-    *,
-    status: int | None = None,
-    message: str | None = None,
-) -> dict[str, Any]:
-    """Build the full ``details`` envelope for a SpringServe/FreeWheel fail.
-
-    Returns ``{vendor_key: {phase, endpoint, vendor_status?, vendor_message?}}`` —
-    the wrapper key matches the existing ``gam_fault`` convention so the API
-    response shape is consistent across adapters. Mirrors the role
-    :func:`_build_gam_fault` plays for GAM, but at the wrapper level so each
-    call site is one line.
-
-    Empty/None inner fields are dropped to keep the wire payload tight.
-    ``vendor_message`` is trimmed to 200 chars — the diagnostic value is in
-    the first line or two.
-
-    Note on ``vendor_message`` provenance: callers should pass curated text
-    (typed-exception messages we authored, or trimmed vendor response bodies).
-    Raw ``str(exc)`` from untyped exceptions can include ``requests``-style
-    URLs with internal hostnames — those callers should pass
-    ``type(exc).__name__`` instead.
-    """
-    fault: dict[str, Any] = {"phase": phase, "endpoint": endpoint}
-    if status is not None:
-        fault["vendor_status"] = status
-    if message:
-        fault["vendor_message"] = message[:200]
-    return {vendor_key: fault}
-
-
-def _classify_gam_message(message: str) -> tuple[AdapterErrorCode, dict[str, Any]]:
-    """Inspect a GAM error message and produce ``(error_code, gam_fault)``.
+def _classify_gam_message(
+    message: str,
+) -> tuple[AdapterErrorCode, RemediationHint | None, dict[str, Any]]:
+    """Inspect a GAM error message and produce ``(error_code, remediation, gam_extra)``.
 
     GAM SOAP faults can include multiple error entries — a generic
     wrapper like ``[ServerError.SOAP_FAULT @ ...]`` often precedes the
@@ -226,20 +305,21 @@ def _classify_gam_message(message: str) -> tuple[AdapterErrorCode, dict[str, Any
     scan all entries and prefer the first one whose ``reason`` maps to
     a typed sub-code; if none classify, we fall back to the first
     parseable entry for diagnostics with code ``CONNECTION_FAILED``.
-    If no fault entry is parseable at all, returns
-    ``(CONNECTION_FAILED, {})``.
+    If no fault entry is parseable at all, returns ``(CONNECTION_FAILED, None, {})``.
     """
     matches = list(_GAM_FAULT_RE.finditer(message or ""))
     if not matches:
-        return CONNECTION_FAILED, {}
+        return CONNECTION_FAILED, None, {}
 
     for match in matches:
         reason = match.group("reason")
-        if reason in _GAM_REASON_TO_CODE:
-            return _GAM_REASON_TO_CODE[reason], _build_gam_fault(match)
+        if reason in _GAM_REASON_CLASSIFICATION:
+            code, remediation = _GAM_REASON_CLASSIFICATION[reason]
+            return code, remediation, _build_gam_extra(match)
 
-    # No classifiable reason — emit fault block for diagnostics anyway.
-    return CONNECTION_FAILED, _build_gam_fault(matches[0])
+    # No classifiable reason — emit gam_extra for diagnostics anyway, no
+    # remediation hint (we don't know what to suggest).
+    return CONNECTION_FAILED, None, _build_gam_extra(matches[0])
 
 
 def probe_adapter_connection(adapter_type: str, config: dict[str, Any]) -> ProbeResult:
@@ -292,24 +372,35 @@ def _test_gam(config: dict[str, Any]) -> ProbeResult:
         logger.exception("GAM imports failed")
         return ProbeResult.fail(CONNECTION_FAILED, f"GAM client unavailable: {exc}")
 
+    def _gam_details(message: str, gam_extra: dict[str, Any]) -> dict[str, Any]:
+        return _vendor_fault(
+            "gam",
+            _GAM_PHASE,
+            _GAM_ENDPOINT,
+            message=message,
+            extra=gam_extra or None,
+        )
+
     try:
         manager = GAMClientManager(config=config, network_code=str(network_code))
         result = manager.test_connection()
     except Exception as exc:
         logger.warning("GAM test_connection raised: %s", exc)
-        code, gam_fault = _classify_gam_message(str(exc))
+        message = str(exc)
+        code, remediation, gam_extra = _classify_gam_message(message)
         return ProbeResult.fail(
             code,
-            f"GAM connection probe failed: {exc}",
-            details={"gam_fault": gam_fault} if gam_fault else {},
+            f"GAM connection probe failed: {message}",
+            remediation=remediation,
+            details=_gam_details(message, gam_extra),
         )
 
     if result.status == HealthStatus.HEALTHY:
         return ProbeResult.ok()
 
     message = result.message or "GAM connection probe returned non-healthy status"
-    code, gam_fault = _classify_gam_message(message)
-    return ProbeResult.fail(code, message, details={"gam_fault": gam_fault} if gam_fault else {})
+    code, remediation, gam_extra = _classify_gam_message(message)
+    return ProbeResult.fail(code, message, remediation=remediation, details=_gam_details(message, gam_extra))
 
 
 def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
@@ -370,10 +461,15 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
         # Typed FreeWheel exceptions carry status_code; bare Exception
         # paths (e.g. requests.ConnectionError) do not — and we deliberately
         # drop str(exc) for those to avoid leaking internal hostnames the
-        # transport puts into the message (see _vendor_details docstring).
+        # transport puts into the message (see _vendor_fault docstring).
         if isinstance(exc, FreeWheelError):
-            return _vendor_details("freewheel_fault", phase, endpoint, status=exc.status_code, message=str(exc))
-        return _vendor_details("freewheel_fault", phase, endpoint, message=type(exc).__name__)
+            return _vendor_fault("freewheel", phase, endpoint, status=exc.status_code, message=str(exc))
+        return _vendor_fault("freewheel", phase, endpoint, message=type(exc).__name__)
+
+    def _fw_5xx_or_connection(exc: FreeWheelError) -> AdapterErrorCode:
+        # 5xx means we reached the vendor and got an error — retry-eligible.
+        # No status_code means we never got a response — connection-level.
+        return UPSTREAM_UNAVAILABLE if (exc.status_code or 0) >= 500 else CONNECTION_FAILED
 
     # Step 1: bearer validity.
     try:
@@ -382,21 +478,25 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
         return ProbeResult.fail(
             INVALID_CREDENTIALS,
             f"FreeWheel auth rejected: {exc}",
+            remediation=CUSTOMER_ROTATES_TOKEN,
             details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
         )
     except FreeWheelForbiddenError as exc:
+        # Bearer recognized but the entitlement set is wrong — the vendor
+        # must enable the right scopes on this token's account.
         return ProbeResult.fail(
             PERMISSION_DENIED,
             f"FreeWheel bearer lacks entitlements: {exc}",
+            remediation=VENDOR_ENABLES_ROLE,
             details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
         )
     except FreeWheelError as exc:
         # Includes FreeWheelNotFoundError on token_info: 404 here means the
         # auth gateway host is misconfigured (route doesn't exist), not a
         # role gap — keep as CONNECTION_FAILED. See list_sites for the
-        # symmetric 404-as-role-gap case.
+        # symmetric 404-as-role-gap case. 5xx splits to upstream_unavailable.
         return ProbeResult.fail(
-            CONNECTION_FAILED,
+            _fw_5xx_or_connection(exc),
             f"FreeWheel API error on token_info (status={exc.status_code}): {exc}",
             details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
         )
@@ -414,21 +514,21 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
     except FreeWheelForbiddenError as exc:
         # Bearer is valid (step 1 passed) but the publisher account it
         # represents can't read inventory. Either the token is for the
-        # wrong publisher or the inventory scope wasn't granted.
+        # wrong publisher or the inventory scope wasn't granted — most
+        # commonly fixed by getting a token for the right publisher.
         return ProbeResult.fail(
             PERMISSION_DENIED,
             (
                 f"FreeWheel bearer cannot read inventory for the configured publisher "
                 f"(403): {exc}. Verify the token is for the intended publisher account."
             ),
+            remediation=CUSTOMER_REBINDS_ACCOUNT,
             details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
         )
     except FreeWheelNotFoundError as exc:
         # 404 on inventory listing means the bearer authenticated but the
         # configured publisher account has no accessible inventory route —
-        # the role/scope-gap signature. Treat as PERMISSION_DENIED so UIs
-        # can render "your account doesn't have inventory access" copy
-        # without grepping the message.
+        # the role/scope-gap signature. Only the vendor can enable it.
         return ProbeResult.fail(
             PERMISSION_DENIED,
             (
@@ -436,11 +536,12 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
                 f"the configured publisher has no accessible inventory route: {exc}. "
                 "Verify the token is provisioned for the intended publisher account."
             ),
+            remediation=VENDOR_ENABLES_ROLE,
             details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
         )
     except FreeWheelError as exc:
         return ProbeResult.fail(
-            CONNECTION_FAILED,
+            _fw_5xx_or_connection(exc),
             f"FreeWheel API error on list_sites (status={exc.status_code}): {exc}",
             details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
         )
@@ -476,30 +577,61 @@ def _test_broadstreet(config: dict[str, Any]) -> ProbeResult:
         logger.exception("Broadstreet imports failed")
         return ProbeResult.fail(CONNECTION_FAILED, f"Broadstreet client unavailable: {exc}")
 
+    def _bs_details(exc: Exception, status: int | None = None) -> dict[str, Any]:
+        if isinstance(exc, BroadstreetAPIError):
+            return _vendor_fault(
+                "broadstreet",
+                _BS_PHASE,
+                _BS_ENDPOINT_NETWORK,
+                status=exc.status_code,
+                message=str(exc),
+            )
+        return _vendor_fault("broadstreet", _BS_PHASE, _BS_ENDPOINT_NETWORK, message=type(exc).__name__)
+
     try:
         client = BroadstreetClient(access_token=str(api_key), network_id=str(network_id))
         client.get_network()
     except BroadstreetAPIError as exc:
-        # 401 → bad key; 403 → no access to this network; 404 → wrong network_id.
+        # 401 → bad key; 403 → no access to this network; 404 → wrong network_id;
+        # 5xx → vendor down, retry-eligible.
         status = exc.status_code
         if status == 401:
-            return ProbeResult.fail(INVALID_CREDENTIALS, f"Broadstreet auth rejected (status=401): {exc}")
+            return ProbeResult.fail(
+                INVALID_CREDENTIALS,
+                f"Broadstreet auth rejected (status=401): {exc}",
+                remediation=CUSTOMER_ROTATES_TOKEN,
+                details=_bs_details(exc),
+            )
         if status == 403:
             return ProbeResult.fail(
                 PERMISSION_DENIED,
                 f"Broadstreet network access denied (status=403): {exc}",
+                remediation=CUSTOMER_REBINDS_ACCOUNT,
+                details=_bs_details(exc),
             )
         if status == 404:
             return ProbeResult.fail(
                 NETWORK_NOT_FOUND,
                 f"Broadstreet network {network_id!r} not found (status=404)",
+                details=_bs_details(exc),
             )
-        return ProbeResult.fail(CONNECTION_FAILED, f"Broadstreet API error (status={status}): {exc}")
+        if status and status >= 500:
+            return ProbeResult.fail(
+                UPSTREAM_UNAVAILABLE,
+                f"Broadstreet API unavailable (status={status}): {exc}",
+                details=_bs_details(exc),
+            )
+        return ProbeResult.fail(
+            CONNECTION_FAILED,
+            f"Broadstreet API error (status={status}): {exc}",
+            details=_bs_details(exc),
+        )
     except Exception as exc:
         logger.warning("Broadstreet get_network() transport failure: %s", exc)
         return ProbeResult.fail(
             CONNECTION_FAILED,
-            f"Broadstreet transport failure: {type(exc).__name__}: {exc}",
+            f"Broadstreet transport failure: {type(exc).__name__}",
+            details=_bs_details(exc),
         )
 
     return ProbeResult.ok()
@@ -556,8 +688,8 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
         # INVALID_CREDENTIALS) already tells consumers what was wrong;
         # phase/endpoint just tell them what was called.
         if isinstance(exc, SpringServeError):
-            return _vendor_details(
-                "springserve_fault",
+            return _vendor_fault(
+                "springserve",
                 _SS_PHASE_PROBE,
                 _SS_ENDPOINT_SUPPLY,
                 status=exc.status_code,
@@ -565,21 +697,24 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
             )
         # Untyped exception (e.g. requests.ConnectionError) — drop str(exc)
         # because it can include the full URL with internal hostnames.
-        return _vendor_details(
-            "springserve_fault",
+        return _vendor_fault(
+            "springserve",
             _SS_PHASE_PROBE,
             _SS_ENDPOINT_SUPPLY,
             message=type(exc).__name__,
         )
 
     def _ss_status_details(status: int, body: str | None) -> dict[str, Any]:
-        return _vendor_details(
-            "springserve_fault",
+        return _vendor_fault(
+            "springserve",
             _SS_PHASE_PROBE,
             _SS_ENDPOINT_SUPPLY,
             status=status,
             message=body,
         )
+
+    def _ss_5xx_or_connection(exc: SpringServeError) -> AdapterErrorCode:
+        return UPSTREAM_UNAVAILABLE if (exc.status_code or 0) >= 500 else CONNECTION_FAILED
 
     # Single call exercises both auth (token mint, if password grant) and
     # scope (a 403 here means the bearer is valid but can't see supply
@@ -589,14 +724,24 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
     try:
         status, body = client.probe("GET", f"{_SS_ENDPOINT_SUPPLY}?per_page=1")
     except SpringServeAuthError as exc:
-        return ProbeResult.fail(INVALID_CREDENTIALS, f"SpringServe auth rejected: {exc}", details=_ss_details(exc))
-    except SpringServeForbiddenError as exc:
         return ProbeResult.fail(
-            PERMISSION_DENIED, f"SpringServe bearer lacks entitlements: {exc}", details=_ss_details(exc)
+            INVALID_CREDENTIALS,
+            f"SpringServe auth rejected: {exc}",
+            remediation=CUSTOMER_ROTATES_TOKEN,
+            details=_ss_details(exc),
+        )
+    except SpringServeForbiddenError as exc:
+        # Bearer recognized but entitlements are wrong — typically the
+        # token is for the wrong account; rotate to one with supply scope.
+        return ProbeResult.fail(
+            PERMISSION_DENIED,
+            f"SpringServe bearer lacks entitlements: {exc}",
+            remediation=CUSTOMER_REBINDS_ACCOUNT,
+            details=_ss_details(exc),
         )
     except SpringServeError as exc:
         return ProbeResult.fail(
-            CONNECTION_FAILED,
+            _ss_5xx_or_connection(exc),
             f"SpringServe API error on supply probe (status={exc.status_code}): {exc}",
             details=_ss_details(exc),
         )
@@ -614,6 +759,7 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
         return ProbeResult.fail(
             INVALID_CREDENTIALS,
             "SpringServe bearer rejected on supply inventory probe (status=401)",
+            remediation=CUSTOMER_ROTATES_TOKEN,
             details=_ss_status_details(status, body),
         )
     if status == 403:
@@ -623,14 +769,13 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
                 "SpringServe bearer cannot read supply inventory (status=403). "
                 "Verify the token is for the intended publisher account."
             ),
+            remediation=CUSTOMER_REBINDS_ACCOUNT,
             details=_ss_status_details(status, body),
         )
     if status == 404:
         # Authenticated successfully (we got past mint) but the supply
         # endpoint returned 404 — the signature of "account exists but
-        # lacks the supply API role". Treat as PERMISSION_DENIED so UIs
-        # render "contact your SpringServe rep to enable the supply API"
-        # without grepping the message.
+        # lacks the supply API role". Only the vendor can enable it.
         return ProbeResult.fail(
             PERMISSION_DENIED,
             (
@@ -638,6 +783,13 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
                 "the account lacks the supply API role. Contact your SpringServe "
                 "representative to enable supply API access for this account."
             ),
+            remediation=VENDOR_ENABLES_ROLE,
+            details=_ss_status_details(status, body),
+        )
+    if status >= 500:
+        return ProbeResult.fail(
+            UPSTREAM_UNAVAILABLE,
+            f"SpringServe supply probe unavailable (status={status}): {body[:200]}",
             details=_ss_status_details(status, body),
         )
     return ProbeResult.fail(
@@ -701,27 +853,39 @@ def _preview_gam(config: dict[str, Any]) -> AdapterPreview:
         logger.exception("GAM imports failed")
         return AdapterPreview(ok=False, error=f"GAM client unavailable: {exc}", error_code=CONNECTION_FAILED)
 
+    def _gam_preview_details(message: str, gam_extra: dict[str, Any]) -> dict[str, Any]:
+        return _vendor_fault(
+            "gam",
+            _GAM_PHASE,
+            _GAM_ENDPOINT,
+            message=message,
+            extra=gam_extra or None,
+        )
+
     try:
         manager = GAMClientManager(config=config, network_code=str(network_code))
         result = manager.test_connection()
     except Exception as exc:
         logger.warning("GAM test_connection raised: %s", exc)
-        code, gam_fault = _classify_gam_message(str(exc))
+        message = str(exc)
+        code, remediation, gam_extra = _classify_gam_message(message)
         return AdapterPreview(
             ok=False,
-            error=f"GAM connection probe failed: {exc}",
+            error=f"GAM connection probe failed: {message}",
             error_code=code,
-            details={"gam_fault": gam_fault} if gam_fault else {},
+            remediation=remediation,
+            details=_gam_preview_details(message, gam_extra),
         )
 
     if result.status != HealthStatus.HEALTHY:
         message = result.message or "GAM connection probe returned non-healthy status"
-        code, gam_fault = _classify_gam_message(message)
+        code, remediation, gam_extra = _classify_gam_message(message)
         return AdapterPreview(
             ok=False,
             error=message,
             error_code=code,
-            details={"gam_fault": gam_fault} if gam_fault else {},
+            remediation=remediation,
+            details=_gam_preview_details(message, gam_extra),
         )
 
     # Fetch network metadata via getCurrentNetwork(). One extra call after auth proven.
@@ -788,15 +952,15 @@ def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
 
     def _fw_preview_details(exc: Exception) -> dict[str, Any]:
         if isinstance(exc, FreeWheelError):
-            return _vendor_details(
-                "freewheel_fault",
+            return _vendor_fault(
+                "freewheel",
                 _FW_PHASE_TOKEN_INFO,
                 _FW_ENDPOINT_TOKEN_INFO,
                 status=exc.status_code,
                 message=str(exc),
             )
-        return _vendor_details(
-            "freewheel_fault",
+        return _vendor_fault(
+            "freewheel",
             _FW_PHASE_TOKEN_INFO,
             _FW_ENDPOINT_TOKEN_INFO,
             message=type(exc).__name__,
@@ -810,6 +974,7 @@ def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error=f"FreeWheel auth rejected: {exc}",
             error_code=INVALID_CREDENTIALS,
+            remediation=CUSTOMER_ROTATES_TOKEN,
             details=_fw_preview_details(exc),
         )
     except FreeWheelForbiddenError as exc:
@@ -817,13 +982,15 @@ def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error=f"FreeWheel bearer lacks entitlements: {exc}",
             error_code=PERMISSION_DENIED,
+            remediation=VENDOR_ENABLES_ROLE,
             details=_fw_preview_details(exc),
         )
     except FreeWheelError as exc:
+        code: AdapterErrorCode = UPSTREAM_UNAVAILABLE if (exc.status_code or 0) >= 500 else CONNECTION_FAILED
         return AdapterPreview(
             ok=False,
             error=f"FreeWheel API error (status={exc.status_code}): {exc}",
-            error_code=CONNECTION_FAILED,
+            error_code=code,
             details=_fw_preview_details(exc),
         )
     except Exception as exc:
@@ -890,6 +1057,17 @@ def _preview_broadstreet(config: dict[str, Any]) -> AdapterPreview:
             error_code=CONNECTION_FAILED,
         )
 
+    def _bs_preview_details(exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, BroadstreetAPIError):
+            return _vendor_fault(
+                "broadstreet",
+                _BS_PHASE,
+                _BS_ENDPOINT_NETWORK,
+                status=exc.status_code,
+                message=str(exc),
+            )
+        return _vendor_fault("broadstreet", _BS_PHASE, _BS_ENDPOINT_NETWORK, message=type(exc).__name__)
+
     try:
         client = BroadstreetClient(access_token=str(api_key), network_id=str(network_id))
         network = client.get_network()
@@ -900,30 +1078,44 @@ def _preview_broadstreet(config: dict[str, Any]) -> AdapterPreview:
                 ok=False,
                 error=f"Broadstreet auth rejected (status=401): {exc}",
                 error_code=INVALID_CREDENTIALS,
+                remediation=CUSTOMER_ROTATES_TOKEN,
+                details=_bs_preview_details(exc),
             )
         if status == 403:
             return AdapterPreview(
                 ok=False,
                 error=f"Broadstreet network access denied (status=403): {exc}",
                 error_code=PERMISSION_DENIED,
+                remediation=CUSTOMER_REBINDS_ACCOUNT,
+                details=_bs_preview_details(exc),
             )
         if status == 404:
             return AdapterPreview(
                 ok=False,
                 error=f"Broadstreet network {network_id!r} not found",
                 error_code=NETWORK_NOT_FOUND,
+                details=_bs_preview_details(exc),
+            )
+        if status and status >= 500:
+            return AdapterPreview(
+                ok=False,
+                error=f"Broadstreet API unavailable (status={status}): {exc}",
+                error_code=UPSTREAM_UNAVAILABLE,
+                details=_bs_preview_details(exc),
             )
         return AdapterPreview(
             ok=False,
             error=f"Broadstreet API error (status={status}): {exc}",
             error_code=CONNECTION_FAILED,
+            details=_bs_preview_details(exc),
         )
     except Exception as exc:
         logger.warning("Broadstreet get_network() failed: %s", exc)
         return AdapterPreview(
             ok=False,
-            error=f"Broadstreet transport failure: {type(exc).__name__}: {exc}",
+            error=f"Broadstreet transport failure: {type(exc).__name__}",
             error_code=CONNECTION_FAILED,
+            details=_bs_preview_details(exc),
         )
 
     # Broadstreet network responses use camelCase keys per the v0 API; the
@@ -980,23 +1172,23 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
 
     def _ss_preview_details(exc: Exception) -> dict[str, Any]:
         if isinstance(exc, SpringServeError):
-            return _vendor_details(
-                "springserve_fault",
+            return _vendor_fault(
+                "springserve",
                 _SS_PHASE_PROBE,
                 _SS_ENDPOINT_SUPPLY,
                 status=exc.status_code,
                 message=str(exc),
             )
-        return _vendor_details(
-            "springserve_fault",
+        return _vendor_fault(
+            "springserve",
             _SS_PHASE_PROBE,
             _SS_ENDPOINT_SUPPLY,
             message=type(exc).__name__,
         )
 
     def _ss_preview_status_details(status: int, body: str | None) -> dict[str, Any]:
-        return _vendor_details(
-            "springserve_fault",
+        return _vendor_fault(
+            "springserve",
             _SS_PHASE_PROBE,
             _SS_ENDPOINT_SUPPLY,
             status=status,
@@ -1011,6 +1203,7 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error=f"SpringServe auth rejected: {exc}",
             error_code=INVALID_CREDENTIALS,
+            remediation=CUSTOMER_ROTATES_TOKEN,
             details=_ss_preview_details(exc),
         )
     except SpringServeForbiddenError as exc:
@@ -1018,13 +1211,15 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error=f"SpringServe bearer lacks entitlements: {exc}",
             error_code=PERMISSION_DENIED,
+            remediation=CUSTOMER_REBINDS_ACCOUNT,
             details=_ss_preview_details(exc),
         )
     except SpringServeError as exc:
+        code: AdapterErrorCode = UPSTREAM_UNAVAILABLE if (exc.status_code or 0) >= 500 else CONNECTION_FAILED
         return AdapterPreview(
             ok=False,
             error=f"SpringServe API error (status={exc.status_code}): {exc}",
-            error_code=CONNECTION_FAILED,
+            error_code=code,
             details=_ss_preview_details(exc),
         )
     except Exception as exc:
@@ -1050,6 +1245,7 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error="SpringServe bearer rejected (status=401)",
             error_code=INVALID_CREDENTIALS,
+            remediation=CUSTOMER_ROTATES_TOKEN,
             details=_ss_preview_status_details(status, body),
         )
     if status == 403:
@@ -1057,6 +1253,7 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error="SpringServe bearer cannot read supply inventory (status=403)",
             error_code=PERMISSION_DENIED,
+            remediation=CUSTOMER_REBINDS_ACCOUNT,
             details=_ss_preview_status_details(status, body),
         )
     if status == 404:
@@ -1068,6 +1265,14 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
                 "representative to enable supply API access."
             ),
             error_code=PERMISSION_DENIED,
+            remediation=VENDOR_ENABLES_ROLE,
+            details=_ss_preview_status_details(status, body),
+        )
+    if status >= 500:
+        return AdapterPreview(
+            ok=False,
+            error=f"SpringServe supply probe unavailable (status={status}): {body[:200]}",
+            error_code=UPSTREAM_UNAVAILABLE,
             details=_ss_preview_status_details(status, body),
         )
     return AdapterPreview(
