@@ -40,7 +40,11 @@ from src.adapters.springserve.schemas import (
     SpringServeConnectionConfig,
     SpringServeProductConfig,
 )
-from src.adapters.springserve.targeting import build_demand_tag_targeting, validate_targeting
+from src.adapters.springserve.targeting import (
+    build_demand_tag_kv_entries,
+    build_demand_tag_targeting,
+    validate_targeting,
+)
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.springserve_demand_tag_stats import (
     SpringServeDemandTagStatsRepository,
@@ -355,7 +359,30 @@ class SpringServeAdapter(AdServerAdapter):
                     end_time=end_time,
                     po_number=request.po_number,
                 )
-                self._client.demand_tags.create(**kwargs)
+                created_tag = self._client.demand_tags.create(**kwargs)
+                # KV / audience targeting goes through a separate sub-resource
+                # POST per the SpringServe docs (page 1628471383). The parent
+                # /demand_tags POST silently drops these fields if included
+                # in the body. See src/adapters/springserve/targeting.py.
+                kv_entries = build_demand_tag_kv_entries(package.targeting_overlay, tenant_id=self.tenant_id)
+                for entry in kv_entries:
+                    try:
+                        self._client.demand_tags.add_kv_entry(created_tag.id, **entry)
+                    except SpringServeError as kv_exc:
+                        # SpringServe blocks the sub-resource POST until the
+                        # parent's ``key_value_targeting`` flag is true, and
+                        # that flag isn't currently writable via the v0 API
+                        # on our AdOps role. Log + continue so the rest of
+                        # the buy still lands; signals will be re-applied
+                        # the day the API surface is unblocked.
+                        logger.warning(
+                            "SpringServe KV entry rejected for demand_tag %s (key_id=%s): %s "
+                            "body=%s -- see targeting.py module docstring for the API blocker.",
+                            created_tag.id,
+                            entry.get("key_id"),
+                            kv_exc,
+                            kv_exc.body,
+                        )
         except SpringServeError as exc:
             logger.warning("SpringServe create_media_buy failed: %s body=%s", exc, exc.body)
             return CreateMediaBuyError(
