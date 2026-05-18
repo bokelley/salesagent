@@ -1,0 +1,237 @@
+<!-- Dashboard jobs widget (issue #471).
+
+     Three persistent jobs the seller operator works in. Not a setup
+     sequence — these are ongoing work surfaces, always shown.
+
+     * **Discovery** — *the* primary job; bundles + signals. Today shows
+       counts; coverage analytics ("12 of 47 ad units exposed · 23
+       unreviewed") and the explicit "reviewed-and-don't-sell" state are
+       follow-ups.
+     * **Composition** — static products today; dynamic composition is
+       the direction. Hidden for embedded (storefront composes upstream).
+     * **Delivery** — light jumping-off card; the existing pipeline strip
+       below holds the live state. -->
+
+{% if dashboard_jobs %}
+<style>
+    .ld-jobs {
+        max-width: 1280px;
+        margin: 0 auto var(--sa-space-6);
+        font-family: var(--sa-font-sans);
+        color: var(--sa-ink);
+    }
+    .ld-jobs__intro {
+        font-family: var(--sa-font-serif);
+        font-size: 14px;
+        color: var(--sa-ink-50);
+        margin-bottom: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        font-weight: 500;
+    }
+    .ld-jobs__grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+    }
+    .ld-jobs__grid--two-col {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .ld-job {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-rule);
+        padding: 18px 20px;
+        display: flex;
+        flex-direction: column;
+        min-height: 200px;
+    }
+    .ld-job--primary {
+        border-color: var(--sa-ink);
+    }
+    .ld-job__header {
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--sa-rule-soft);
+    }
+    .ld-job__name {
+        font-family: var(--sa-font-serif);
+        font-size: 18px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        line-height: 1.2;
+        color: var(--sa-ink);
+        margin: 0;
+    }
+    .ld-job__tagline {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--sa-ink-70);
+        line-height: 1.4;
+    }
+    .ld-job__body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .ld-job__sub-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 8px 0;
+        border-top: 1px solid var(--sa-rule-soft);
+    }
+    .ld-job__sub-row:first-child { border-top: none; padding-top: 0; }
+    .ld-job__sub-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--sa-ink);
+        line-height: 1.3;
+    }
+    .ld-job__sub-count {
+        font-family: var(--sa-font-serif);
+        font-size: 24px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        font-variant-numeric: tabular-nums;
+        color: var(--sa-ink);
+        line-height: 1;
+    }
+    .ld-job__sub-count.is-zero { color: var(--sa-ink-50); }
+    .ld-job__sub-hint {
+        margin-top: 4px;
+        font-family: var(--sa-font-mono);
+        font-size: 10.5px;
+        color: var(--sa-ink-50);
+        line-height: 1.4;
+    }
+    .ld-job__count-block {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-bottom: 4px;
+    }
+    .ld-job__count {
+        font-family: var(--sa-font-serif);
+        font-size: 36px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
+        color: var(--sa-ink);
+        line-height: 1;
+    }
+    .ld-job__count.is-zero { color: var(--sa-ink-50); }
+    .ld-job__count-label {
+        font-family: var(--sa-font-sans);
+        font-size: 12px;
+        color: var(--sa-ink-70);
+    }
+    .ld-job__note {
+        font-size: 11.5px;
+        color: var(--sa-ink-50);
+        line-height: 1.45;
+        font-style: italic;
+    }
+    .ld-job__footer {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--sa-rule-soft);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .ld-job__cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 11px;
+        background: var(--sa-ink);
+        color: var(--sa-bg-page);
+        font-family: var(--sa-font-sans);
+        font-size: 11.5px;
+        font-weight: 500;
+        text-decoration: none;
+        border-radius: var(--sa-radius-sm);
+        white-space: nowrap;
+    }
+    .ld-job__cta:hover { color: var(--sa-bg-page); background: #000; text-decoration: none; }
+    .ld-job__cta--ghost {
+        background: var(--sa-bg-page);
+        color: var(--sa-ink-70);
+        border: 1px solid var(--sa-rule);
+    }
+    .ld-job__cta--ghost:hover { color: var(--sa-ink); border-color: var(--sa-ink-70); }
+
+    @media (max-width: 1024px) {
+        .ld-jobs__grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+        .ld-jobs__grid,
+        .ld-jobs__grid--two-col { grid-template-columns: 1fr; }
+        .ld-job { min-height: 0; }
+    }
+</style>
+
+{% set jobs = dashboard_jobs.jobs %}
+
+<section class="ld-jobs" aria-label="Operator jobs">
+    <div class="ld-jobs__intro">Your jobs</div>
+    <div class="ld-jobs__grid{% if jobs|length == 2 %} ld-jobs__grid--two-col{% endif %}">
+        {% for job in jobs %}
+            <article class="ld-job{% if job.key == 'discovery' %} ld-job--primary{% endif %}">
+                <header class="ld-job__header">
+                    <h3 class="ld-job__name">{{ job.name }}</h3>
+                    <div class="ld-job__tagline">{{ job.tagline }}</div>
+                </header>
+
+                <div class="ld-job__body">
+                    {# Discovery: sub-rows for each catalog dimension (bundles + signals). #}
+                    {% if job.sub_items %}
+                        {% for sub in job.sub_items %}
+                            <div class="ld-job__sub-row">
+                                <div>
+                                    <div class="ld-job__sub-name">{{ sub.name }}</div>
+                                    <div class="ld-job__sub-hint">{{ sub.coverage_hint }}</div>
+                                </div>
+                                <div style="text-align: right;">
+                                    <div class="ld-job__sub-count{% if sub.count == 0 %} is-zero{% endif %}">{{ sub.count }}</div>
+                                    {% if sub.action_url %}
+                                        <a href="{{ sub.action_url }}"
+                                           class="ld-job__cta{% if sub.count > 0 %} ld-job__cta--ghost{% endif %}"
+                                           style="margin-top: 6px;">
+                                            {{ sub.action_label }}
+                                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                                        </a>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        {# Composition / Delivery: single count or just a note + CTA. #}
+                        {% if job.count is defined %}
+                            <div class="ld-job__count-block">
+                                <span class="ld-job__count{% if job.count == 0 %} is-zero{% endif %}">{{ job.count }}</span>
+                                <span class="ld-job__count-label">{{ job.count_label }}</span>
+                            </div>
+                        {% endif %}
+                        {% if job.note %}
+                            <div class="ld-job__note">{{ job.note }}</div>
+                        {% endif %}
+                    {% endif %}
+                </div>
+
+                {# Footer CTA only on jobs without sub-items (Composition, Delivery). #}
+                {% if job.action_url and not job.sub_items %}
+                    <div class="ld-job__footer">
+                        <a href="{{ job.action_url }}" class="ld-job__cta">
+                            {{ job.action_label }}
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                        </a>
+                    </div>
+                {% endif %}
+            </article>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}

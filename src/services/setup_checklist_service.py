@@ -1283,36 +1283,35 @@ class SetupChecklistService:
 
         return tasks
 
-    def get_seller_setup_progress(self) -> dict[str, Any]:
-        """Compute seller setup progress for the dashboard widget (#471).
+    def get_dashboard_jobs(self) -> dict[str, Any]:
+        """Compute the three ongoing seller jobs for the dashboard (#471).
 
-        Two steps, framed around buyer demand — not tiers, not unlocks:
+        The operator's dashboard isn't a setup wizard with an "ready" state —
+        it's a workbench for three persistent jobs:
 
-        * **Step 1 — Catalog**: author the static raw materials that
-          compose into buyer-facing products. Two sub-items:
+        * **Discovery & Matching** — *the* primary job; the reason the
+          operator opens the dashboard. "Have I exposed the right
+          inventory and signals so buyers can find them?" Today the widget
+          surfaces bundle + signal counts; the richer coverage analytics
+          (what fraction of ad units / placements / KVs / audiences are
+          exposed vs. reviewed-and-explicitly-skipped) land in follow-up
+          issues. Adapter-agnostic in principle (GAM today; FreeWheel,
+          SpringServe, etc. as their syncs land).
 
-          * Inventory bundles (``InventoryProfile`` rows)
-          * Signal profiles (``TenantSignal`` rows)
+        * **Composition** — combine catalog into buyer-facing products.
+          Static product CRUD today; dynamic composition (price ×
+          optimization × targeting × demand) is the direction. Hidden for
+          embedded tenants: composition runs upstream in the storefront.
 
-        * **Step 2 — Products**: combine catalog materials into named
-          products buyers can query. Today this is static product CRUD;
-          dynamic composition (price × optimization × targeting × demand)
-          is the direction we're heading, but explicitly not built here.
-          Embedded tenants skip this step entirely — composition lives
-          upstream in their storefront.
+        * **Delivery** — fulfill the orders you've sold. Approvals,
+          pacing, exceptions. Light here — the existing Pipeline strip
+          below this widget shows the live state. This card is the
+          jumping-off point.
 
-        Distinct from :meth:`validate_setup_complete` (the hygiene gate:
-        SSO, AAO, ad server, currency). This widget is about the
-        catalog→products flow specifically; hygiene is handled by the
-        existing setup checklist widget.
-
-        Ad server isn't checked here either — same reason; the hygiene
-        widget already nags about it, and a tenant can author bundles
-        before the ad server is wired without that being a contradiction.
-
-        Inventory bundles are modeled as :class:`InventoryProfile`; the
-        UX label "Inventory bundle" — the salable-unit framing #471 wanted —
-        is a separate, focused rename.
+        These are **ongoing jobs**, not a sequence to complete; the widget
+        is always shown. Distinct from the hygiene gate
+        (:meth:`validate_setup_complete`) — that gates whether the agent
+        can take orders at all; these are the operator's day-to-day work.
         """
         from src.core.database.repositories.tenant_config import TenantConfigRepository
 
@@ -1340,67 +1339,73 @@ class SetupChecklistService:
                 or 0
             )
 
-            bundles_complete = inventory_bundle_count > 0
-            signals_complete = signal_profile_count > 0
-            catalog_complete = bundles_complete and signals_complete
-            products_complete = product_count > 0
-
-            steps = [
-                {
-                    "key": "catalog",
-                    "title": "Catalog",
-                    "summary": "Author the salable raw materials that compose into products.",
-                    "complete": catalog_complete,
-                    "sub_items": [
-                        {
-                            "key": "bundles",
-                            "name": "Inventory bundles",
-                            "complete": bundles_complete,
-                            "count": inventory_bundle_count,
-                            "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
-                            "action_label": "Inventory bundles",
-                            "blocker": None if bundles_complete else "Author at least one inventory bundle",
-                        },
-                        {
-                            "key": "signals",
-                            "name": "Signal profiles",
-                            "complete": signals_complete,
-                            "count": signal_profile_count,
-                            "action_url": self._route_url("tenant_signals.list_signals"),
-                            "action_label": "Signal profiles",
-                            "blocker": None if signals_complete else "Author at least one signal profile",
-                        },
-                    ],
-                },
-            ]
-
-            # Step 2 — Products. Embedded tenants don't see this step at
-            # all: composition runs upstream in their storefront. For
-            # open-instance tenants, products today is static CRUD; the
-            # widget surfaces that without celebrating it as the goal.
-            if not tenant.is_embedded:
-                steps.append(
+            discovery_job: dict[str, Any] = {
+                "key": "discovery",
+                "name": "Product discovery & matching",
+                "tagline": "Make sure buyers can find the right inventory and signals from you.",
+                "sub_items": [
                     {
-                        "key": "products",
-                        "title": "Products",
-                        "summary": "Buyer-facing products composed from your catalog.",
-                        "complete": products_complete,
-                        "count": product_count,
-                        "action_url": self._route_url("products.list_products"),
-                        "action_label": "Products",
-                        "blocker": None if products_complete else "Compose at least one product from your catalog",
-                    }
-                )
+                        "key": "bundles",
+                        "name": "Inventory bundles",
+                        "count": inventory_bundle_count,
+                        "started": inventory_bundle_count > 0,
+                        "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
+                        "action_label": "Review bundles" if inventory_bundle_count > 0 else "Author bundles",
+                        # Coverage analytics ("12 of 47 ad units exposed · 23 unreviewed") land in
+                        # the follow-up issue. Placeholder for now.
+                        "coverage_hint": "Coverage analytics coming — review your full inventory and decide what to expose.",
+                    },
+                    {
+                        "key": "signals",
+                        "name": "Signal profiles",
+                        "count": signal_profile_count,
+                        # Signals are optional — a publisher with zero signals is valid, but only
+                        # if they've reviewed their signal universe and made the call. Today the
+                        # widget can't tell those apart; the follow-up surfaces the review state.
+                        "started": signal_profile_count > 0,
+                        "action_url": self._route_url("tenant_signals.list_signals"),
+                        "action_label": "Review signals" if signal_profile_count > 0 else "Author signals",
+                        "coverage_hint": "Coverage analytics coming — review your signal universe and decide what to expose.",
+                    },
+                ],
+            }
 
-            # Widget hides entirely once every relevant step is done. For
-            # embedded this is just the catalog; for open-instance it
-            # includes products.
-            all_complete = all(step["complete"] for step in steps)
+            # Composition job — hidden entirely for embedded. The storefront
+            # owns composition; surfacing it on a publisher dashboard would
+            # mislead.
+            composition_job: dict[str, Any] | None = None
+            if not tenant.is_embedded:
+                composition_job = {
+                    "key": "composition",
+                    "name": "Composition",
+                    "tagline": "Combine your catalog into buyer-facing products.",
+                    "count": product_count,
+                    "count_label": "product" if product_count == 1 else "products",
+                    "action_url": self._route_url("products.list_products"),
+                    "action_label": "Manage products" if product_count > 0 else "Compose a product",
+                    # Static CRUD is the present-tense path; dynamic composition is the direction.
+                    "note": "Static products today. Dynamic composition (pricing × targeting × demand) is the direction.",
+                }
+
+            # Delivery job — light surface. The detailed pipeline (incoming /
+            # running / pending) is the existing strip below this widget.
+            delivery_job: dict[str, Any] = {
+                "key": "delivery",
+                "name": "Delivery",
+                "tagline": "Fulfill the orders you've sold.",
+                "action_url": self._route_url("operations.reporting"),
+                "action_label": "Reporting",
+                "note": "Approvals, pacing, and exceptions live in the pipeline below.",
+            }
+
+            jobs: list[dict[str, Any]] = [discovery_job]
+            if composition_job is not None:
+                jobs.append(composition_job)
+            jobs.append(delivery_job)
 
             return {
-                "all_complete": all_complete,
                 "is_embedded": tenant.is_embedded,
-                "steps": steps,
+                "jobs": jobs,
             }
 
     def get_next_steps(self) -> list[dict[str, str]]:

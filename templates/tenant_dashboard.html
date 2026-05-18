@@ -792,12 +792,11 @@
 {% include 'components/setup_checklist_widget.html' %}
 {% endif %}
 
-<!-- Seller setup progress (#471): catalog → products flow, framed around
-     buyer demand rather than tier progression. Hides once every relevant
-     step is complete (just catalog for embedded; catalog + products for
-     open-instance). -->
-{% if seller_setup and not seller_setup.all_complete %}
-{% include 'components/seller_setup_progress_widget.html' %}
+<!-- Dashboard jobs (#471): three ongoing operator surfaces — discovery,
+     composition, delivery. Always visible; these are persistent jobs,
+     not a setup sequence. -->
+{% if dashboard_jobs %}
+{% include 'components/dashboard_jobs_widget.html' %}
 {% endif %}
 
 <!-- Three-stage business framing: Incoming · Running · Pipeline -->
