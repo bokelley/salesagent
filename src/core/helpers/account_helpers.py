@@ -117,9 +117,8 @@ def _resolve_by_natural_key(
     """Resolve by natural key (brand + operator + sandbox).
 
     Lookup + ambiguity check + access check + status check. When no
-    Account matches the natural key, falls through to the sprint 1.8
-    buyer-advertiser routing chain to auto-create one — see
-    ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
+    Account matches the natural key, falls through to the buyer-advertiser
+    routing chain to auto-create one.
 
     The chain raises ``AdCPTenantNotActivated`` (TENANT_NOT_ACTIVATED)
     when the tenant has neither routing rules nor a default advertiser.

@@ -74,10 +74,9 @@ class EmbeddedTenantWriteError(Exception):
 # Anything not in this set (or any platform-managed table not listed at all) is locked.
 #
 # Tenant: platform-identity columns (name, billing_plan, is_active, subdomain,
-# external_*) remain locked. The business-rules surface is publisher-managed per
-# Sprint 5 design (docs/design/embedded-mode-sprint-5.md §"Pattern: shared
-# business logic with the UI") — the publisher edits these in the proxied admin
-# UI; the management API exposes the same writes for automation.
+# external_*) remain locked. The business-rules surface is publisher-managed —
+# the publisher edits these in the proxied admin UI; the management API exposes
+# the same writes for automation.
 PUBLISHER_WRITABLE_FIELDS: dict[type, set[str]] = {
     Tenant: {
         # Business rules — written by /settings/business-rules POST

@@ -596,7 +596,7 @@ class StatusPackagesBlock(BaseModel):
     """Package-level counters (line items inside media buys).
 
     ``last_24h_impressions`` is set to 0 until delivery aggregation is wired
-    up — see :mod:`docs/design/embedded-mode-sprint-1.5.md` Open Q #3.
+    up.
     """
 
     model_config = _config()

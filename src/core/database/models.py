@@ -193,8 +193,7 @@ class Tenant(Base, JSONValidatorMixin):
     # our outbound signatures can fetch our operator-side keys.
     # See docs/design/signing-non-embedded.md.
     brand_json_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    # Sprint 1.8 buyer-advertiser routing — see
-    # docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md.
+    # Buyer-advertiser routing.
     # Required-before-activation fallback advertiser. Buys whose
     # (operator_domain, brand_house, brand_id) triple doesn't match a
     # routing rule fall through to this advertiser; if NULL, the routing
@@ -1291,8 +1290,8 @@ SuperadminConfig = TenantManagementConfig
 class WebhookSubscription(Base):
     """Outbound webhook subscription owned by a tenant.
 
-    Sprint 6 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-6.md)
-    publishes tenant lifecycle events (workflow.created, workflow.decided,
+    [embedded-mode](../../../../docs/design/embedded-mode.md) publishes
+    tenant lifecycle events (workflow.created, workflow.decided,
     media_buy.status_changed, sync.completed, sync.failed,
     tenant.config_changed) to URLs registered here.
 
@@ -2235,8 +2234,6 @@ class AdvertiserRoutingRule(Base):
     when a buy comes in carrying inline ``account: AccountReference``
     (operator + brand + sandbox triple). Precedence: exact → house
     wildcard → operator wildcard → tenant default → reject.
-
-    See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
     """
 
     __tablename__ = "advertiser_routing_rules"
@@ -2307,9 +2304,6 @@ class GamAdvertiser(Base):
     routing rules might reference them. The picker hides inactive rows
     by default; the routing-rule editor surfaces a warning if a rule
     points at an inactive advertiser.
-
-    See ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``
-    "Piece D: GAM advertisers cache".
     """
 
     __tablename__ = "gam_advertisers"

@@ -8,9 +8,6 @@ Covers the three deliverables:
 3. ``POST /tenants/{tid}/buyer-advertiser-mappings`` rejects unknown
    ``gam_advertiser_id`` when the cache is populated; accepts when
    the cache is empty (graceful degradation during onboarding).
-
-See ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``
-"Piece D: GAM advertisers cache".
 """
 
 from __future__ import annotations

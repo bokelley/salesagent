@@ -1,6 +1,6 @@
 """Outbound webhook event publication.
 
-Sprint 6 of [embedded-mode](../../../docs/design/embedded-mode-sprint-6.md).
+[embedded-mode](../../../docs/design/embedded-mode.md).
 
 The single entry point :func:`publish_event` is called by business code
 when a tenant lifecycle event fires (workflow approved/rejected, sync

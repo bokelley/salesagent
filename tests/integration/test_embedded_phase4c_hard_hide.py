@@ -10,8 +10,6 @@ Coverage:
 - Signing keys POST routes return 403 on embedded tenants
 - Open tenants still see + can use the signing keys surface
 - OIDC blueprint not registered when ``MANAGED_INSTANCE=true``
-
-See ``docs/design/embedded-mode-sprint-7-ia-cleanup.md`` Phase 4c.
 """
 
 from __future__ import annotations

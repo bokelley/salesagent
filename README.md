@@ -143,7 +143,7 @@ docker compose logs adcp-server | head -50
 - **[Development Guide](docs/development/README.md)** - Local development and contributing
 - **[Architecture](docs/development/architecture.md)** - System design and database schema
 - **[Troubleshooting Guide](docs/development/troubleshooting.md)** - Monitoring and debugging
-- **[Tenant Management API spec](openapi.yaml)** ([JSON](openapi.json)) - OpenAPI 3.x spec for the platform-management REST surface; served live at `/api/v1/tenant-management/openapi.json` with Swagger UI at `/api/v1/tenant-management/docs`
+- **[Tenant Management API spec](openapi.yaml)** ([JSON](openapi.json)) - OpenAPI 3.x spec for the platform-management REST surface; served live at `/api/v1/tenant-management/docs/openapi.json` with Swagger UI at `/api/v1/tenant-management/docs/swagger` (Redoc at `/docs/redoc`). When the admin app is WSGI-mounted under `/admin/` in production, the public URLs gain the `/admin` prefix.
 
 ## Key Features
 

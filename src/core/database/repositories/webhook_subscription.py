@@ -1,6 +1,6 @@
 """WebhookSubscription repository — tenant-scoped CRUD for outbound webhooks.
 
-Sprint 6 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-6.md):
+[embedded-mode](../../../../docs/design/embedded-mode.md):
 the Tenant Management API exposes ``/tenants/{tid}/webhooks`` so host products
 can register destinations for tenant lifecycle events. All access goes through
 this repository so the structural guard (``test_architecture_no_raw_select.py``)

@@ -69,7 +69,7 @@ class AccountRepository:
 
         For ``billing="agent"`` the caller MUST pass ``principal_id`` —
         the buyer agent in the billing relationship is part of the natural
-        key per ``docs/design/sync-accounts-advertiser-mapping.md``.
+        key.
 
         The brand field is JSONType containing {"domain": ..., "brand_id": ...}.
         """

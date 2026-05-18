@@ -13,8 +13,6 @@ reach the browser).
 Workstream E adds promote-from-activity wiring: each activity row carries
 its (agent, operator, brand_house, brand_id) so the JS can prefill the
 Add Rule modal.
-
-See ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``.
 """
 
 from __future__ import annotations

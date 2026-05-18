@@ -1,7 +1,6 @@
 """Integration tests for Sprint 3 Tenant Management API endpoints.
 
-Covers the 8 new endpoints added in
-``docs/design/embedded-mode-sprint-3.md``:
+Covers 8 Tenant Management API endpoints:
 
 - workflows: list / detail / approve / reject (idempotency + 409 conflict cases)
 - media-buys: list / detail (read-only)

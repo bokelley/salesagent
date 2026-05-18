@@ -2,8 +2,6 @@
 
 Read-only tests that verify ``GET /tenant/<id>/buyer-routing`` renders
 the three-section layout against existing data.
-
-See ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``.
 """
 
 from __future__ import annotations

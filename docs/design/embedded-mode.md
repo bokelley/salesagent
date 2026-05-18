@@ -52,7 +52,7 @@ Embedded mode is permissive about *reads* (the salesagent fetches GAM inventory,
 
 The mechanism is `Tenant.auto_provision_advertisers` (default `false`). When `false`, an unmapped buy returns `ACCOUNT_NOT_PROVISIONED` and the publisher maps the advertiser explicitly via the Admin UI or API. When `true`, the salesagent calls `CompanyService.createCompanies` on the publisher's GAM network on first buy.
 
-We don't presume a default here because we don't yet know what host products / publishers will want, and the cost of guessing wrong (creating unwanted entities in someone else's ad server) is higher than the cost of a one-time per-tenant configuration step. See [sprint 1.8 addendum](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md#addendum-auto_provision_advertisers-retained-flag-not-dropped) for the full rationale.
+We don't presume a default here because we don't yet know what host products / publishers will want, and the cost of guessing wrong (creating unwanted entities in someone else's ad server) is higher than the cost of a one-time per-tenant configuration step.
 
 ## Architecture overview
 
@@ -109,7 +109,7 @@ The defining design choice of embedded mode: only *platform-managed* surfaces ar
 
 The boundary is *infrastructure vs. business*. Infrastructure (how the tenant connects, who it is externally, what plan it's on) — the platform cares; lock it. Business (what products the publisher offers, who their advertisers are, what they accept) — the publisher cares; let them do their job.
 
-Enforcement is a **scoped write guard** at the model layer (see [sprint 1 spec](./embedded-mode-sprint-1.md)): only the platform-managed columns/tables raise `EmbeddedTenantWriteError` when written from anywhere except the Tenant Management API. Publisher-managed tables are unaffected.
+Enforcement is a **scoped write guard** at the model layer (`src/core/database/embedded_tenant_guard.py`): only the platform-managed columns/tables raise `EmbeddedTenantWriteError` when written from anywhere except the Tenant Management API. Publisher-managed tables are unaffected.
 
 ### 2. Authentication: identity propagation from the host product edge
 
@@ -267,32 +267,15 @@ Net result: zero public exposure for the entire salesagent on an embedded instan
 
 **Open-instance behavior is unchanged.** Public MCP/A2A keeps `x-adcp-auth` bearer tokens per principal. The mode is selected by `MANAGED_INSTANCE`; the salesagent's `resolve_identity()` branches on it.
 
-> **Naming note.** The env var is still `MANAGED_INSTANCE` for backwards compatibility with existing deployments. New code references should treat it as the embedded-instance switch; renaming to `EMBEDDED_INSTANCE` is a separate cutover (see [`embedded-mode-rename.md`](./embedded-mode-rename.md)).
+> **Naming note.** The env var is still `MANAGED_INSTANCE` for backwards compatibility with existing deployments. New code references should treat it as the embedded-instance switch; renaming to `EMBEDDED_INSTANCE` is a separate cutover.
 
 ### 9. Webhooks (optional, post-v1)
 
 For the host product to surface live state without polling, add outbound webhooks: workflow created/approved/rejected, sync failed, media buy delivered, adapter connection lost. Signed payloads, at-least-once with retry. Not required for v1 — polling `GET /status` and `GET /workflows` is sufficient.
 
-## Phasing
+## Status
 
-| Sprint | Deliverable |
-|---|---|
-| Sprint | Deliverable | Required for launch? |
-|---|---|---|
-| **1** | **Full platform-managed surface via API.** Migrations (`is_embedded`, `external_org_id`, `external_source` on Tenant; external identity fields on AuditLog). `MANAGED_INSTANCE` env. Scoped write guard at the model layer. spectree wired up. Tenant lifecycle endpoints (provision, list, get, patch, deactivate, reactivate, delete). Adapter management endpoints (get, put, test-connection). Identity-header reader middleware. Reverse-proxy compatibility verified. Swagger UI live. *After this sprint, the host product can fully manage tenants via API.* | yes |
-| **1.5** | **Host integration essentials.** `POST /tenants/preview-adapter` (test creds + return network metadata before provisioning). `GET /tenants/{tid}/status` (consolidated operational status — adapter, syncs, workflows, media-buys, packages, creatives, webhooks). Identity-propagation contract sign-off as a stable integration spec. *Unblocks the host's UX.* | yes |
-| **2** | **Runtime hardening.** UI middleware that scopes nav by `is_embedded`, hides platform-config pages, renders banners. Network policy for `MANAGED_INSTANCE` (CIDR allow-lists; fail-closed on missing config). `resolve_identity()` change for MCP/A2A in embedded mode (header-scoped, no per-principal tokens). Super-admin override path. *After this sprint, the system is safely deployable in embedded mode.* | yes |
-| **3** | **Workflow mutations + drill-down reads.** Workflow approve/reject. List + detail endpoints for workflows, media-buys, audit-log. Sync history. Backs the `GET /status` summary with detail views the host can drill into. | yes |
-| **4 (optional)** | **Publisher-managed CRUD via API.** Principals + Products + autogenerate-from-GAM. Automation conveniences — publishers also do these via the proxied UI. | only if needed |
-| **5 (optional)** | **Remaining publisher-managed sub-resources via API.** Tags, authorized properties (incl. bulk import), inventory profiles, currency limits, slack, business rules, policy, creative agents, signals agents. | only if needed |
-| **6 (optional)** | **Outbound webhooks.** The host receives signed payloads on state changes; replaces polling load. | only if needed |
-| **7** | **IA cleanup — Tenant Settings vs Configure decomposition.** Entity promotions out of `tenant_settings.html` to standalone Configure → Workspace peer pages (Publishers, Signing Keys, Policies & Workflows, Integrations); fold-in of Products + Inventory to existing primary-nav pages; instance-level `EMBEDDED_CAPABILITIES` flags for selectively hiding workflows the storefront has absorbed; Tenant Settings page collapse on embedded. See [Sprint 7 spec](./embedded-mode-sprint-7-ia-cleanup.md). | yes |
-
-**Sprints 1, 1.5, 2, 3 are the required path** — they deliver everything a host product needs for an embedded-mode launch. Each is independently shippable.
-
-Sprints 4–6 are optional automation conveniences. They become relevant if the host wants programmatic publisher-side management (sprints 4–5) or near-real-time push notifications (sprint 6). Defer until there's a concrete need.
-
-Sprint 7 is required once the embedded mental model crystallizes — the IA must reflect "operator's day-to-day work" (top nav) vs. "publisher tunes once" (Configure) vs. "platform owns" (locked surfaces). Without it the UI invites operators into pages the storefront actually manages.
+The embedded-mode launch path has shipped. The Tenant Management API, identity propagation, network policy enforcement, UI hardening, workflow approve/reject mutations, drill-down read endpoints, outbound webhooks, buyer-advertiser routing, the GAM advertisers cache, and the IA cleanup (Tenant Settings vs Configure decomposition with instance-level `EMBEDDED_CAPABILITIES` flags) are all live. Publisher-managed CRUD via API (advertisers / products / sub-resource bulk endpoints) remains deferred — publishers manage these via the proxied UI and there's been no concrete need for programmatic access.
 
 ## Implementation notes
 

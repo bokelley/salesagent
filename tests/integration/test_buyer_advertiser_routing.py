@@ -3,8 +3,6 @@
 Walks every step of the precedence chain end-to-end against a real
 Postgres database, plus the sandbox carve-out and the
 ``TENANT_NOT_ACTIVATED`` fall-through.
-
-See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``.
 """
 
 from __future__ import annotations

@@ -1,8 +1,7 @@
 """Sprint 4 — UI hardening for embedded-mode tenants.
 
 The publisher-facing admin UI hides platform-managed surfaces when
-``tenant.is_embedded=True``. See
-``docs/design/embedded-mode-sprint-4-ui-hardening.md``.
+``tenant.is_embedded=True``.
 
 Covered surfaces:
 - ``/tenant/{id}/users`` returns 200 with the lock banner instead of the
@@ -352,9 +351,8 @@ class TestDangerZoneHiddenOnEmbedded:
 class TestAdvertisersDirectoryHiddenOnEmbedded:
     """Buyer Agents settings tab + section are hidden entirely on embedded tenants.
 
-    Sprint 7 IA cleanup supersedes the Sprint 4 "read-only directory
-    stays visible" decision (docs/design/embedded-mode-sprint-4-ui-hardening.md
-    "Terminology pin", lines 156-212). Buyer Routing
+    Sprint 7 IA cleanup hides the Buyer Agents directory entirely on
+    embedded tenants. Buyer Routing
     (Configure → Buying → Buyer routing) is the single canonical home
     for advertiser→buyer-agent mappings on embedded tenants, and
     Principal provisioning is platform-managed via the Tenant

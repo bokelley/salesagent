@@ -7,10 +7,10 @@ mirrors AdCP-legacy webhook auth (``X-AdCP-Signature: sha256=<hex>`` over
 ``f"{timestamp}.{body}"``, with ``X-AdCP-Timestamp`` carrying the unix
 seconds). Buyers verify with :func:`adcp.signing.webhook_hmac.verify_webhook_hmac`.
 
-Sprint 6 of [embedded-mode](../../../docs/design/embedded-mode-sprint-6.md).
+[embedded-mode](../../../docs/design/embedded-mode.md).
 
 The supervisor's ``send_mcp`` API is hardcoded to MCP-task webhook
-semantics (task_id + status), so we don't use it directly for the Sprint 6
+semantics (task_id + status), so we don't use it directly for the
 event payloads. The signing primitives are SDK-owned; only the dispatch
 loop is local.
 

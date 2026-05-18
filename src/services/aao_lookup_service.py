@@ -5,8 +5,6 @@ caching policy: 6-hour TTL per publisher_domain. PublisherPartner status
 counts (``total_properties``, ``authorized_properties``) are refreshed by
 the manual Refresh button + sync cron; the in-process cache covers
 hot-loop verification calls between refreshes.
-
-See ``docs/design/replace-authorized-properties-with-aao-lookup.md``.
 """
 
 from __future__ import annotations

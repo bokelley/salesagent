@@ -21,9 +21,6 @@ code matches vs fall-throughs without re-running the chain. The stamp
 collapses agent-specific and agent-agnostic matches into the same value
 (``exact``/``house``/``operator``) — the matched rule's ``principal_id``
 is the source of truth for callers who need to surface that distinction.
-
-See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``
-and ``docs/design/embedded-mode-sprint-5-buyer-routing-ux.md``.
 """
 
 from __future__ import annotations

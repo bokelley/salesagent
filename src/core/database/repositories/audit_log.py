@@ -1,6 +1,6 @@
 """Audit log repository — tenant-scoped reads + write helper.
 
-Sprint 3 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-3.md):
+[embedded-mode](../../../../docs/design/embedded-mode.md):
 the Tenant Management API surfaces audit log entries via
 ``GET /tenants/{tid}/audit-log``. All access goes through this repository so
 the structural guard (``test_architecture_no_raw_select.py``) keeps holding

@@ -1,6 +1,6 @@
 """Sprint 3 endpoint helpers for the Tenant Management API.
 
-Sprint 3 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-3.md)
+[embedded-mode](../../../../docs/design/embedded-mode.md)
 adds workflow approve/reject + read drill-down endpoints (workflows,
 media-buys, audit log, sync history) to ``src/admin/tenant_management_api.py``.
 The serializers, cursor helpers, and decision-recording logic live here so

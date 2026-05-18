@@ -2745,9 +2745,12 @@ components:
       type: object
     TenantStatusResponse.f44f287.StatusPackagesBlock:
       additionalProperties: false
-      description: "Package-level counters (line items inside media buys).\n\n``last_24h_impressions``\
-        \ is set to 0 until delivery aggregation is wired\nup \u2014 see :mod:`docs/design/embedded-mode-sprint-1.5.md`\
-        \ Open Q #3."
+      description: 'Package-level counters (line items inside media buys).
+
+
+        ``last_24h_impressions`` is set to 0 until delivery aggregation is wired
+
+        up.'
       properties:
         active_count:
           default: 0

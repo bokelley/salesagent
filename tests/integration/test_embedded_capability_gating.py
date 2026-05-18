@@ -9,8 +9,6 @@ Each capability has three tests:
 - Open instance: section visible, POST works.
 - Embedded + ``publisher``: section visible, POST works.
 - Embedded + ``storefront``: section hidden, POST returns 403.
-
-See ``docs/design/embedded-mode-sprint-7-ia-cleanup.md`` Phase 4b.
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 """Integration tests for Sprint 6 Tenant Management API outbound webhooks.
 
-Covers the 5 endpoints added in
-``docs/design/embedded-mode-sprint-6.md``:
+Covers the 5 webhook subscription endpoints:
 
 - list / create / get / delete (soft) / test webhook subscriptions
 

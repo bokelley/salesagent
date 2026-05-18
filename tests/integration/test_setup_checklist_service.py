@@ -958,9 +958,7 @@ class TestSprint7PrincipalsCreatedHideOnEmbedded:
     on embedded tenants. Principal provisioning is platform-managed (Tenant
     Management API + embedded-auth header bypass), so there is no operator
     action available — and the Buyer Agents settings tab the task would link
-    to is hidden in embedded mode (Sprint 7 IA cleanup, supersedes the
-    Sprint 4 read-only-directory call in
-    ``docs/design/embedded-mode-sprint-4-ui-hardening.md``).
+    to is hidden in embedded mode (Sprint 7 IA cleanup).
 
     Open-instance tenants still see the task — that's where standalone
     operators set up their Principals via Settings → Buyer Agents.

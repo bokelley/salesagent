@@ -1,6 +1,6 @@
 """SyncJob repository — tenant-scoped reads of the sync history.
 
-Sprint 3 of [embedded-mode](../../../../docs/design/embedded-mode-sprint-3.md):
+[embedded-mode](../../../../docs/design/embedded-mode.md):
 ``GET /tenants/{tid}/sync-history`` reads from ``sync_jobs``. Existing sync
 infrastructure (provision + ``/refresh``) writes rows directly via
 ``session.add(SyncJob(...))`` because that path is performance-critical and

@@ -397,8 +397,7 @@
            canonical home for advertiser→buyer-agent mappings, and Principal
            provisioning on embedded tenants is platform-managed via the
            Tenant Management API (so there's nothing for the operator to do
-           here). Supersedes the Sprint 4 "read-only directory stays visible"
-           call documented in docs/design/embedded-mode-sprint-4-ui-hardening.md. #}
+           here). #}
         {% if not embedded_view %}
         <a class="settings-nav-item" data-section="advertisers">
             <span class="settings-nav-icon">👥</span>
@@ -1094,9 +1093,7 @@
            Sprint 7 IA cleanup: this whole section is hidden on embedded tenants
            (both nav tab and content). Buyer Routing is the canonical home for
            advertiser→buyer-agent mappings; Principal provisioning is platform-
-           managed via the Tenant Management API. Supersedes the Sprint 4
-           "read-only directory stays visible" decision documented in
-           docs/design/embedded-mode-sprint-4-ui-hardening.md. #}
+           managed via the Tenant Management API. #}
         {% if not embedded_view %}
         <div id="advertisers" class="settings-section">
             <div class="settings-header">

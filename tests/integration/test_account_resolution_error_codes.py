@@ -69,8 +69,7 @@ class TestAccountResolutionErrorCodes:
         rules raises ``TENANT_NOT_ACTIVATED`` from the routing chain
         rather than the legacy ``AccountNotFoundError``.
 
-        See ``docs/design/embedded-mode-sprint-1.8-buyer-advertiser-routing.md``
-        — buyer-protocol error path IS the activation contract.
+        Buyer-protocol error path IS the activation contract.
         """
         from src.services.buyer_advertiser_routing import AdCPTenantNotActivated
         from tests.factories import TenantFactory

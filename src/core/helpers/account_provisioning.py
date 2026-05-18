@@ -5,7 +5,7 @@ Sits between ``_create_media_buy_impl`` and ``get_adapter()`` and answers
 the Account row instead of (or before) the legacy
 ``Principal.platform_mappings.gam_advertiser_id`` lookup.
 
-Branching matches ``docs/design/sync-accounts-advertiser-mapping.md``:
+Branching:
 
 - ``Account.status == "active"`` + ``platform_mappings.google_ad_manager.advertiser_id``
   set → return it. (Pre-mapped via Tenant Mgmt API or auto-provisioned

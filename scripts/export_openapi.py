@@ -1,7 +1,7 @@
 """Export the Tenant Management API OpenAPI spec to a static artifact.
 
 Why a static artifact when spectree already serves
-``/api/v1/tenant-management/openapi.json`` at runtime:
+``/api/v1/tenant-management/docs/openapi.json`` at runtime:
 
 * **SDK generation.** Scope3 (and any other consumer) generates a typed
   client from the spec. Pulling from runtime requires a live server;
@@ -56,7 +56,7 @@ def build_spec() -> dict:
     Imports the Tenant Management API blueprint, attaches it to a
     throwaway Flask app, and pulls ``spec.spec`` after registration.
     The dict is exactly what spectree serves at
-    ``/api/v1/tenant-management/openapi.json`` — same source of truth.
+    ``/api/v1/tenant-management/docs/openapi.json`` — same source of truth.
     """
     # Importing the module triggers ``spec.register(tenant_management_api)``
     # at module load (line 978). We still need a Flask app to anchor

@@ -107,7 +107,12 @@ logger = logging.getLogger(__name__)
 # Create Blueprint
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
 
-# OpenAPI spec — Swagger UI at /api/v1/tenant-management/docs, spec at /api/v1/tenant-management/openapi.json
+# OpenAPI spec is served by spectree under the blueprint's `path="docs"`:
+#   spec:       {blueprint_prefix}/docs/openapi.json
+#   Swagger UI: {blueprint_prefix}/docs/swagger
+#   Redoc:      {blueprint_prefix}/docs/redoc
+# In production the admin app is WSGI-mounted under /admin/, so the public URLs are
+# /admin/api/v1/tenant-management/docs/{openapi.json,swagger,redoc}.
 spec = SpecTree(
     "flask",
     title="Sales Agent — Tenant Management API",
