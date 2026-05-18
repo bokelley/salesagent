@@ -51,6 +51,15 @@ tenant_signals_bp = Blueprint("tenant_signals", __name__)
 
 _VALID_VALUE_TYPES = ("binary", "categorical", "numeric")
 _SIGNAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Display labels for the (multi-)adapter source list on the bulk-map UI
+# (#480). Keys match ``tenant.ad_server`` values.
+_ADAPTER_LABELS = {
+    "google_ad_manager": "Google Ad Manager",
+    "freewheel": "Freewheel",
+    "broadstreet": "Broadstreet",
+    "springserve": "SpringServe",
+    "mock": "Mock",
+}
 
 
 def _parse_csv(raw: str | None) -> list[str]:
@@ -141,6 +150,18 @@ def list_signals(tenant_id: str):
     # signals library's edit page).
     unmapped_segments = [s for s in segments if not s["mapped_signal_id"]]
     mapped_segments_count = len(segments) - len(unmapped_segments)
+    # Multi-adapter source list (#480). Today every tenant has exactly one
+    # ad server, so this is always a single-element list. When Freewheel /
+    # Broadstreet sync land, this expands and the template renders
+    # adapter sub-tabs. The template's current rendering is the N=1 case.
+    adapter_sources = [
+        {
+            "adapter": tenant.ad_server or "mock",
+            "label": _ADAPTER_LABELS.get(tenant.ad_server or "mock", tenant.ad_server or "Mock"),
+            "segments": unmapped_segments,
+            "keys": keys,
+        }
+    ]
     return render_template(
         "tenant_signals_list.html",
         tenant_id=tenant_id,
@@ -151,6 +172,7 @@ def list_signals(tenant_id: str):
         keys=keys,
         kv_index_size=len(kv_index),
         has_inventory=has_inventory,
+        adapter_sources=adapter_sources,
     )
 
 

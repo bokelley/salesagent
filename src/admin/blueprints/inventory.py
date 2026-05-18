@@ -11,6 +11,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.embedded_mode_auth import is_embedded_view
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
+from src.core.database.repositories.gam_sync import GAMSyncRepository
 
 logger = logging.getLogger(__name__)
 
@@ -173,24 +174,100 @@ def get_targeting_data(tenant_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _upsert_targeting_value_row(
+    repo: GAMSyncRepository,
+    *,
+    key_id: str,
+    key_name: str,
+    key_display_name: str,
+    value,
+    sync_time,
+) -> None:
+    """Upsert a ``custom_targeting_value`` row from a GAM discovery object.
+
+    Mirrors the shape that ``gam_inventory_service.py`` already writes when
+    its own value endpoint is hit — same metadata fields so cache reads are
+    uniform regardless of which path wrote the row.
+    """
+    from src.core.database.models import GAMInventory
+
+    metadata = {
+        "custom_targeting_key_id": str(key_id),
+        "display_name": value.display_name or value.name,
+        "match_type": value.match_type or "EXACT",
+        "key_name": key_name,
+        "key_display_name": key_display_name,
+    }
+    existing = repo.find_inventory_item("custom_targeting_value", value.id)
+    if existing:
+        existing.name = value.name
+        existing.path = [key_display_name, value.display_name or value.name]
+        existing.status = value.status or "ACTIVE"
+        existing.inventory_metadata = metadata
+        existing.last_synced = sync_time
+    else:
+        repo.add(
+            GAMInventory(
+                tenant_id=repo.tenant_id,
+                inventory_type="custom_targeting_value",
+                inventory_id=value.id,
+                name=value.name,
+                path=[key_display_name, value.display_name or value.name],
+                status=value.status or "ACTIVE",
+                inventory_metadata=metadata,
+                last_synced=sync_time,
+            )
+        )
+
+
+def _cached_targeting_values(repo: GAMSyncRepository, key_id: str, key_name: str) -> list[dict] | None:
+    """Return cached custom_targeting_value rows for ``key_id``, or None on miss.
+
+    Rows are persisted by either the bulk sync (when ``fetch_values=True``)
+    or the live-fetch path below on first call. We key by
+    ``inventory_metadata.custom_targeting_key_id`` so the cache is
+    re-readable without joining to the key row.
+    """
+    rows = repo.list_values_for_key(key_id)
+    if not rows:
+        return None
+    values = []
+    for row in rows:
+        md = row.inventory_metadata or {}
+        values.append(
+            {
+                "id": row.inventory_id,
+                "name": row.name,
+                "display_name": md.get("display_name") or row.name,
+                "match_type": md.get("match_type") or "EXACT",
+                "status": row.status or "ACTIVE",
+                "key_id": key_id,
+                "key_name": key_name,
+            }
+        )
+    return values
+
+
 @inventory_bp.route("/api/tenant/<tenant_id>/targeting/values/<key_id>", methods=["GET"])
 @require_tenant_access(api_mode=True)
 def get_targeting_values(tenant_id, key_id):
-    """Get custom targeting values for a specific key by querying GAM in real-time.
+    """Get custom targeting values for a key.
 
-    Since inventory sync doesn't fetch values by default (for performance),
-    this endpoint queries GAM directly to get fresh values on-demand.
+    Reads from cached ``GAMInventory`` rows (``inventory_type=
+    'custom_targeting_value'``) when available; falls back to a live GAM
+    fetch on cache miss and persists the result for next time. Set
+    ``?refresh=1`` to force a live re-sync.
 
     Args:
         tenant_id: Tenant identifier
         key_id: Custom targeting key ID
 
     Returns:
-        JSON array of custom targeting values with their metadata
+        JSON ``{values: [...], count, source: "cache"|"live"}``
     """
     try:
         with get_db_session() as db_session:
-            from src.core.database.models import GAMInventory, Tenant
+            from src.core.database.models import Tenant
 
             # Get tenant and verify it has GAM configured
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -198,15 +275,19 @@ def get_targeting_values(tenant_id, key_id):
                 return jsonify({"error": "Tenant not found"}), 404
 
             # Verify key exists in our database
-            key_stmt = select(GAMInventory).where(
-                GAMInventory.tenant_id == tenant_id,
-                GAMInventory.inventory_type == "custom_targeting_key",
-                GAMInventory.inventory_id == key_id,
-            )
-            key_row = db_session.scalars(key_stmt).first()
+            gam_sync_repo = GAMSyncRepository(db_session, tenant_id)
+            key_row = gam_sync_repo.find_inventory_item("custom_targeting_key", key_id)
 
             if not key_row:
                 return jsonify({"error": "Custom targeting key not found"}), 404
+
+            # Cache-first: skip live fetch when we have rows for this key,
+            # unless the caller asked to refresh.
+            refresh = request.args.get("refresh") in ("1", "true", "yes")
+            if not refresh:
+                cached = _cached_targeting_values(gam_sync_repo, key_id, key_row.name)
+                if cached is not None:
+                    return jsonify({"values": cached, "count": len(cached), "source": "cache"})
 
             # Query GAM in real-time for values
             adapter_config = tenant.adapter_config
@@ -309,7 +390,24 @@ def get_targeting_values(tenant_id, key_id):
                     }
                 )
 
-            return jsonify({"values": values, "count": len(values)})
+            # Persist values so subsequent calls hit cache and tenants without
+            # live GAM (demo, dev) can still browse the values they've fetched.
+            from datetime import UTC, datetime
+
+            key_display_name = (key_row.inventory_metadata or {}).get("display_name") or key_row.name
+            sync_time = datetime.now(UTC)
+            for gam_value in gam_values:
+                _upsert_targeting_value_row(
+                    gam_sync_repo,
+                    key_id=key_id,
+                    key_name=key_row.name,
+                    key_display_name=key_display_name,
+                    value=gam_value,
+                    sync_time=sync_time,
+                )
+            db_session.commit()
+
+            return jsonify({"values": values, "count": len(values), "source": "live"})
 
     except Exception as e:
         logger.error(f"Error fetching targeting values for key {key_id}: {e}", exc_info=True)

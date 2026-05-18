@@ -39,21 +39,33 @@
     {% else %}
 
     {# ========= State B / C — bulk-map table + library ========= #}
+    {# Multi-adapter (#480): when adapter_sources has >1 entry — i.e. the
+       tenant has Freewheel/Broadstreet alongside GAM — render a sub-tab
+       strip for adapter selection. Today this is always a single-element
+       list, so we render the flat single-adapter view. Re-adding sub-tabs
+       is mechanical: loop adapter_sources and emit one tab pane per
+       adapter with its own (segments, keys) pair. #}
     <div class="card mb-3" id="bulk-map-card">
         <div class="card-header d-flex align-items-center justify-content-between">
-            <h5 class="mb-0">Map targeting to signals</h5>
+            <h5 class="mb-0">
+                Map targeting to signals
+                {% if adapter_sources and adapter_sources|length == 1 %}
+                <span class="text-muted small ms-2">from {{ adapter_sources[0].label }}</span>
+                {% endif %}
+            </h5>
             <ul class="nav nav-pills nav-sm" role="tablist">
                 {% set seg_unmapped = segments | rejectattr('mapped_signal_id') | list | length %}
                 <li class="nav-item" role="presentation">
                     <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#segments-tab" type="button" role="tab">
                         Audience segments
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">{{ segments | length }}</span>
                         {% if seg_unmapped %}<span class="badge bg-primary ms-1">{{ seg_unmapped }} unmapped</span>{% endif %}
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#keys-tab" type="button" role="tab">
                         Custom keys
-                        <span class="text-muted small">({{ keys | length }})</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">{{ keys | length }}</span>
                     </button>
                 </li>
             </ul>
@@ -70,7 +82,7 @@
                                 <th>Segment</th>
                                 <th>Type</th>
                                 <th>Reach (people)</th>
-                                <th>GAM ID</th>
+                                <th class="gam-id-col d-none">GAM ID</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -85,7 +97,7 @@
                                 <td>{{ s.name }}</td>
                                 <td><span class="badge bg-light text-dark">{{ s.type or "—" }}</span></td>
                                 <td class="text-end">{{ "{:,}".format(s.size) if s.size else "—" }}</td>
-                                <td class="text-muted small font-monospace">{{ s.id }}</td>
+                                <td class="text-muted small font-monospace gam-id-col d-none">{{ s.id }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -98,9 +110,11 @@
                     {% else %}
                     <div class="p-4 text-center text-muted">
                         {% if mapped_segments_count %}
-                        All {{ mapped_segments_count }} synced segments are mapped. Manage them in <strong>Existing signals</strong> below.
+                        All {{ mapped_segments_count }} synced segments are mapped. Manage them in <strong>Existing signals</strong> below,
+                        or <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">re-sync inventory →</a>
+                        to pick up new segments from your ad server.
                         {% else %}
-                        No audience segments synced. Run inventory sync to load them.
+                        No audience segments synced. <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">Run inventory sync →</a>
                         {% endif %}
                     </div>
                     {% endif %}
@@ -126,7 +140,7 @@
                                         <span>{{ k.display_name }}</span>
                                         <span class="badge bg-light text-dark">{{ k.type }}</span>
                                     </div>
-                                    <small class="text-muted font-monospace">{{ k.id }}</small>
+                                    <small class="text-muted font-monospace gam-id-col d-none">{{ k.id }}</small>
                                 </button>
                                 {% endfor %}
                             </div>
@@ -231,7 +245,7 @@
     const idsToggle = document.getElementById('show-ids-toggle');
     if (idsToggle) {
         idsToggle.addEventListener('change', () => {
-            document.querySelectorAll('.signal-id-col').forEach(c => {
+            document.querySelectorAll('.signal-id-col, .gam-id-col').forEach(c => {
                 c.classList.toggle('d-none', !idsToggle.checked);
             });
         });

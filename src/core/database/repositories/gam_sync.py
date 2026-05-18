@@ -103,3 +103,46 @@ class GAMSyncRepository:
                 .order_by(GAMInventory.name)
             ).all()
         )
+
+    def list_values_for_key(self, key_id: str) -> list[GAMInventory]:
+        """Custom-targeting-value rows for one key, ordered by name.
+
+        Cache for the signals bulk-map UI's "click key → see values" path.
+        Persisted lazily on first live GAM fetch (see
+        ``inventory.get_targeting_values``) and during bulk sync when
+        operators opt into pre-fetching PREDEFINED-key values.
+        """
+        return list(
+            self._session.scalars(
+                select(GAMInventory)
+                .where(
+                    GAMInventory.tenant_id == self._tenant_id,
+                    GAMInventory.inventory_type == "custom_targeting_value",
+                    GAMInventory.inventory_metadata["custom_targeting_key_id"].astext == str(key_id),
+                )
+                .order_by(GAMInventory.name)
+            ).all()
+        )
+
+    def find_inventory_item(self, inventory_type: str, inventory_id: str) -> GAMInventory | None:
+        """One inventory row by ``(inventory_type, inventory_id)``, or None."""
+        return self._session.scalars(
+            select(GAMInventory).filter_by(
+                tenant_id=self._tenant_id,
+                inventory_type=inventory_type,
+                inventory_id=inventory_id,
+            )
+        ).first()
+
+    def add(self, item: GAMInventory) -> None:
+        """Add a new GAMInventory row. Caller commits.
+
+        Used by the targeting-value lazy persistence path. Sync workers
+        use bulk-batch upsert directly through Core SQL for perf — they
+        don't go through this repository.
+        """
+        if item.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"tenant mismatch: item.tenant_id={item.tenant_id!r} != repo tenant_id={self._tenant_id!r}"
+            )
+        self._session.add(item)
