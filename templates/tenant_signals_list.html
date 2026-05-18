@@ -151,15 +151,26 @@
           <div>Signal name · tags · usage</div>
           <div></div>
         </div>
+        {# Per-adapter wire shape for the bulk-create POST. GAM rows are
+           audience_segments keyed by ``segment_id``; SpringServe rows are
+           value_lists keyed by ``value_list_id`` + parent ``key_id``. The
+           data-row-kind picks which JS branch runs in tenant_signals.js. #}
+        {% set _row_kind = 'springserve_value_list' if adapter_key == 'springserve' else 'segment' %}
+        {% set _id_prefix = adapter_key if adapter_key else 'src' %}
         {% for s in segments %}
         {% set tags = s.mapped.tags if s.mapped else [] %}
         <div class="srow row-selectable {{ 'mapped' if s.mapped else 'unmapped' }}"
-             data-row-kind="segment"
+             data-row-kind="{{ _row_kind }}"
              data-scope="segments"
              data-mapped="{{ '1' if s.mapped else '0' }}"
              data-tags="{{ tags | join(',') }}"
              data-segment-id="{{ s.id }}"
              data-segment-name="{{ s.name }}"
+             {% if adapter_key == 'springserve' %}
+             data-value-list-id="{{ s.id }}"
+             data-key-id="{{ s._springserve_key_id }}"
+             data-key-name="{{ s._springserve_key_name }}"
+             {% endif %}
              {% if s.mapped %}
              data-signal-id="{{ s.mapped.signal_id }}"
              data-active-buys="{{ s.mapped.active_buys }}"
@@ -173,8 +184,8 @@
             <div class="src-name" title="{{ s.name }}">{{ s.name }}</div>
             <div class="src-meta">
               <span class="sig-chip sig-chip--type">{{ s.type }}</span>
-              <span class="num">{{ reach_compact(s.reach) }} people</span>
-              <span class="id">gam:{{ s.id }}</span>
+              <span class="num">{{ reach_compact(s.reach) }} {% if adapter_key == 'springserve' %}values{% else %}people{% endif %}</span>
+              <span class="id">{{ _id_prefix }}:{{ s.id }}</span>
             </div>
           </div>
           <div class="srow__arrow">{{ arrow_svg() }}</div>
@@ -200,11 +211,16 @@
             {% else %}
             <button type="button" class="sig-unmapped"
                     data-action="map-one"
-                    data-kind="segment"
+                    data-kind="{{ _row_kind }}"
                     data-segment-id="{{ s.id }}"
-                    data-segment-name="{{ s.name }}">
+                    data-segment-name="{{ s.name }}"
+                    {% if adapter_key == 'springserve' %}
+                    data-value-list-id="{{ s.id }}"
+                    data-key-id="{{ s._springserve_key_id }}"
+                    data-key-name="{{ s._springserve_key_name }}"
+                    {% endif %}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Map this segment
+              Map this {% if adapter_key == 'springserve' %}audience{% else %}segment{% endif %}
             </button>
             <span class="sig-hint">Tick to bulk-create on save · creates one signal_id</span>
             {% endif %}

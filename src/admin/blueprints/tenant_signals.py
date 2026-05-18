@@ -45,6 +45,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantSignal
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.signal_usage import SignalUsageRepository
+from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,159 @@ def _parse_float(raw: str | None) -> float | None:
 
 
 # ---------------------------------------------------------------------------
+# Per-adapter row loaders
+#
+# Each loader returns ``(segments, keys)`` in the template's row envelope:
+#   segment row: {"id", "name", "type", "reach", "mapped"}
+#   key row:     {"id", "name", "raw_name", "type", "values": [
+#                     {"id", "name", "display_name", "key_name", "mapped"}, ...
+#                 ], "mapped_count", "total_values", "is_freeform",
+#                 "has_cached_values"}
+# Keeping the envelope uniform means the template needs no per-adapter forks.
+# ---------------------------------------------------------------------------
+
+
+def _load_gam_signal_rows(
+    session: Any,
+    tenant_id: str,
+    segment_index: dict[str, TenantSignal],
+    kv_index: dict[tuple[str, str], TenantSignal],
+    mapped_payload: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Row loader for tenants whose ad server is Google Ad Manager."""
+    gam_repo = GAMSyncRepository(session, tenant_id)
+    segments_rows = gam_repo.list_inventory("audience_segment")
+    keys_rows = gam_repo.list_inventory("custom_targeting_key")
+
+    segments: list[dict[str, Any]] = []
+    for row in segments_rows:
+        mapped_sig = segment_index.get(row.inventory_id)
+        segments.append(
+            {
+                "id": row.inventory_id,
+                "name": row.name,
+                "type": (row.inventory_metadata or {}).get("type") or "UNKNOWN",
+                "reach": (row.inventory_metadata or {}).get("size"),
+                "mapped": mapped_payload(mapped_sig) if mapped_sig else None,
+            }
+        )
+
+    keys: list[dict[str, Any]] = []
+    for row in keys_rows:
+        key_id = row.inventory_id
+        key_name = (row.inventory_metadata or {}).get("display_name") or row.name
+        key_type = (row.inventory_metadata or {}).get("type") or "UNKNOWN"
+        value_rows = gam_repo.list_values_for_key(key_id) if key_type != "FREEFORM" else []
+        values: list[dict[str, Any]] = []
+        for v in value_rows:
+            mapped_sig = kv_index.get((str(key_id), str(v.inventory_id)))
+            values.append(
+                {
+                    "id": v.inventory_id,
+                    "name": v.name,
+                    "display_name": (v.inventory_metadata or {}).get("display_name") or v.name,
+                    "key_name": key_name,
+                    "mapped": mapped_payload(mapped_sig) if mapped_sig else None,
+                }
+            )
+        keys.append(
+            {
+                "id": key_id,
+                "name": key_name,
+                "raw_name": row.name,
+                "type": key_type,
+                "values": values,
+                "mapped_count": sum(1 for v in values if v["mapped"]),
+                "total_values": len(values),
+                "is_freeform": key_type == "FREEFORM",
+                "has_cached_values": len(value_rows) > 0,
+            }
+        )
+    return segments, keys
+
+
+def _load_springserve_signal_rows(
+    session: Any,
+    tenant_id: str,
+    segment_index: dict[str, TenantSignal],
+    mapped_payload: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Row loader for tenants whose ad server is SpringServe.
+
+    SpringServe's audience taxonomy lives in ``value_lists`` attached to
+    ``keys`` in the KV catalog (e.g. value_list "Podcast MV20-59"
+    contains the station IDs comprising the Men/Women 20-59 audio
+    audience). These slot into the page's "Audience segments" card
+    one-for-one. The keys themselves render as free-form custom
+    targeting keys -- no per-value bulk-map for them (free-form means
+    the publisher accepts any value at request time).
+    """
+    inv_repo = SpringServeInventoryRepository(session, tenant_id)
+
+    # Map key_id -> key display name so each value_list can label its
+    # parent key namespace (e.g. "station_id" or "fwprof").
+    key_rows = inv_repo.list_by_type("key")
+    key_name_by_id: dict[str, str] = {}
+    for key_row in key_rows:
+        raw = key_row.raw_json or {}
+        # SpringServe keys carry both ``key`` (wire name) and ``name``
+        # (display); prefer the wire name since the materializer needs it.
+        key_name_by_id[key_row.entity_id] = raw.get("key") or key_row.name or key_row.entity_id
+
+    value_list_rows = inv_repo.list_by_type("value_list")
+    segments: list[dict[str, Any]] = []
+    for row in value_list_rows:
+        raw = row.raw_json or {}
+        key_id = row.key_id or ""
+        key_name = key_name_by_id.get(key_id, key_id or "unknown")
+        free_values = raw.get("free_values") or []
+        value_ids = raw.get("value_ids") or []
+        mapped_sig = segment_index.get(row.entity_id)
+        segments.append(
+            {
+                "id": row.entity_id,
+                "name": row.name or row.entity_id,
+                # The "type" badge becomes the parent key namespace so
+                # operators can tell at a glance whether a row is an
+                # audio audience (station_id), platform (fwprof), etc.
+                "type": key_name,
+                # The most natural "reach" indicator we have at this layer
+                # is the count of values inside the list.
+                "reach": len(free_values) + len(value_ids),
+                "mapped": mapped_payload(mapped_sig) if mapped_sig else None,
+                # SpringServe-specific identifiers the bulk-create POST
+                # consumes when minting a TenantSignal from this row.
+                "_springserve_key_id": key_id,
+                "_springserve_key_name": key_name,
+            }
+        )
+
+    keys: list[dict[str, Any]] = []
+    for row in key_rows:
+        raw = row.raw_json or {}
+        wire_name = raw.get("key") or row.entity_id
+        # SpringServe ``definition_type`` is "free" (open values) or "list"
+        # (enumerated via value_lists). We render free-form keys as
+        # informational rows; constrained ones already surface their
+        # value_lists in the segments card above.
+        is_free = (raw.get("definition_type") or "").lower() == "free"
+        keys.append(
+            {
+                "id": row.entity_id,
+                "name": row.name or wire_name,
+                "raw_name": wire_name,
+                "type": "FREEFORM" if is_free else "PREDEFINED",
+                "values": [],  # bulk-mapping bare keys isn't supported yet
+                "mapped_count": 0,
+                "total_values": 0,
+                "is_freeform": is_free,
+                "has_cached_values": False,
+            }
+        )
+    return segments, keys
+
+
+# ---------------------------------------------------------------------------
 # Landing page — bulk-map + existing library
 # ---------------------------------------------------------------------------
 
@@ -122,10 +276,6 @@ def list_signals(tenant_id: str):
         signal_repo = TenantSignalRepository(session, tenant_id)
         segment_index, kv_index = signal_repo.mapped_index()
 
-        gam_repo = GAMSyncRepository(session, tenant_id)
-        segments_rows = gam_repo.list_inventory("audience_segment")
-        keys_rows = gam_repo.list_inventory("custom_targeting_key")
-
         signal_rows = signal_repo.list_all()
         usage_index = SignalUsageRepository(session, tenant_id).usage_index()
 
@@ -141,50 +291,13 @@ def list_signals(tenant_id: str):
                 ),
             }
 
-        segments: list[dict[str, Any]] = []
-        for row in segments_rows:
-            mapped_sig = segment_index.get(row.inventory_id)
-            segments.append(
-                {
-                    "id": row.inventory_id,
-                    "name": row.name,
-                    "type": (row.inventory_metadata or {}).get("type") or "UNKNOWN",
-                    "reach": (row.inventory_metadata or {}).get("size"),
-                    "mapped": _mapped_payload(mapped_sig) if mapped_sig else None,
-                }
-            )
-
-        keys: list[dict[str, Any]] = []
-        for row in keys_rows:
-            key_id = row.inventory_id
-            key_name = (row.inventory_metadata or {}).get("display_name") or row.name
-            key_type = (row.inventory_metadata or {}).get("type") or "UNKNOWN"
-            value_rows = gam_repo.list_values_for_key(key_id) if key_type != "FREEFORM" else []
-            values: list[dict[str, Any]] = []
-            for v in value_rows:
-                mapped_sig = kv_index.get((str(key_id), str(v.inventory_id)))
-                values.append(
-                    {
-                        "id": v.inventory_id,
-                        "name": v.name,
-                        "display_name": (v.inventory_metadata or {}).get("display_name") or v.name,
-                        "key_name": key_name,
-                        "mapped": _mapped_payload(mapped_sig) if mapped_sig else None,
-                    }
-                )
-            keys.append(
-                {
-                    "id": key_id,
-                    "name": key_name,
-                    "raw_name": row.name,
-                    "type": key_type,
-                    "values": values,
-                    "mapped_count": sum(1 for v in values if v["mapped"]),
-                    "total_values": len(values),
-                    "is_freeform": key_type == "FREEFORM",
-                    "has_cached_values": len(value_rows) > 0,
-                }
-            )
+        # Different adapters expose their targetable inventory through different
+        # data models. The page's row envelope is uniform; the loader is what
+        # changes. New adapters get a branch here.
+        if (tenant.ad_server or "") == "springserve":
+            segments, keys = _load_springserve_signal_rows(session, tenant_id, segment_index, _mapped_payload)
+        else:
+            segments, keys = _load_gam_signal_rows(session, tenant_id, segment_index, kv_index, _mapped_payload)
 
         composites: list[dict[str, Any]] = []
         for sig in signal_rows:
@@ -370,6 +483,40 @@ def bulk_create(tenant_id: str):
                         "value_id": value_id,
                     },
                     data_provider="publisher",
+                )
+                repo.add(signal)
+                created.append(signal_id)
+            elif kind == "springserve_value_list":
+                # A SpringServe value_list IS the publisher's named audience
+                # (e.g. "Podcast MV35-54" = the station IDs comprising that
+                # demographic audio audience). At materialization time the
+                # adapter will translate this into demand-tag KV targeting:
+                #   demand_tag.targeting_keys = [<key_name>]
+                #   filter rows where <key_name> IN <value_list contents>
+                value_list_id = str(item.get("value_list_id") or "")
+                key_id = str(item.get("key_id") or "")
+                key_name = str(item.get("key_name") or "")
+                vl_name = str(item.get("name") or f"value_list {value_list_id}")
+                if not value_list_id or not key_id:
+                    continue
+                if value_list_id in segment_index:
+                    skipped.append(segment_index[value_list_id].signal_id)
+                    continue
+                signal_id = unique_signal_id(vl_name, exists=lambda sid: repo.get_by_id(sid) is not None)
+                signal = TenantSignal(
+                    tenant_id=tenant_id,
+                    signal_id=signal_id,
+                    name=vl_name,
+                    value_type="binary",
+                    adapter_config={
+                        "type": "passthrough",
+                        "kind": "springserve_value_list",
+                        "key_id": key_id,
+                        "key_name": key_name,
+                        "value_list_id": value_list_id,
+                    },
+                    data_provider="publisher",
+                    targeting_dimension="audience",
                 )
                 repo.add(signal)
                 created.append(signal_id)

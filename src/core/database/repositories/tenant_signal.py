@@ -99,4 +99,12 @@ class TenantSignalRepository:
                 key_id, value_id = cfg.get("key_id"), cfg.get("value_id")
                 if key_id and value_id:
                     kv_index[(str(key_id), str(value_id))] = signal
+            elif kind == "springserve_value_list":
+                # SpringServe value_lists ARE the publisher's audience taxonomy
+                # (e.g. "Podcast MV35-54"). They behave like a GAM
+                # audience_segment for the bulk-map UI, so we key the index by
+                # value_list_id for the same "already mapped" badge surface.
+                vid = cfg.get("value_list_id")
+                if vid:
+                    segment_index[str(vid)] = signal
         return segment_index, kv_index
