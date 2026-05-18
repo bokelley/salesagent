@@ -18,7 +18,7 @@
     bulkDelete: `${scriptRoot}/tenant/${tenantId}/signals/bulk-delete`,
     signalDelete: (sid) => `${scriptRoot}/tenant/${tenantId}/signals/${encodeURIComponent(sid)}/delete`,
     signalRename: (sid) => `${scriptRoot}/tenant/${tenantId}/signals/${encodeURIComponent(sid)}/rename`,
-    targetingValues: (keyId) => `${scriptRoot}/admin/api/tenant/${tenantId}/targeting/values/${encodeURIComponent(keyId)}`,
+    targetingValues: (keyId) => `${scriptRoot}/api/tenant/${tenantId}/targeting/values/${encodeURIComponent(keyId)}`,
   };
 
   // ---------- Show IDs toggle ----------
