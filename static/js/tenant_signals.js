@@ -88,7 +88,7 @@
       qTag = m[1];
       qText = qText.slice(m[0].length).trim();
     }
-    document.querySelectorAll('tr[data-row-kind]').forEach((row) => {
+    document.querySelectorAll('[data-row-kind]').forEach((row) => {
       const mapped = row.dataset.mapped === '1';
       const tags = (row.dataset.tags || '').split(',').filter(Boolean);
       const text = row.textContent.toLowerCase();
@@ -153,7 +153,7 @@
     cb.addEventListener('change', () => {
       const scope = cb.dataset.selectAll;
       document.querySelectorAll(`.row-selectable[data-scope="${scope}"] input.sig-cb`).forEach((rowCb) => {
-        if (rowCb.closest('tr').style.display === 'none') return;
+        if (rowCb.closest('.row-selectable').style.display === 'none') return;
         rowCb.checked = cb.checked;
       });
       refreshBulkBar();
@@ -267,7 +267,14 @@
     const input = span.querySelector('input');
     input.focus();
     input.select();
+    // Guard: blur + Enter can both fire; the fetch is async; without a
+    // committed flag we mutate innerHTML twice and race the DOM. Lock
+    // after the first invocation.
+    let committed = false;
     const commit = async () => {
+      if (committed) return;
+      committed = true;
+      input.removeEventListener('blur', commit);
       const newName = input.value.trim();
       span.classList.remove('editing');
       if (!newName || newName === original) {
@@ -296,6 +303,8 @@
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); commit(); }
       if (e.key === 'Escape') {
+        committed = true;  // suppress the blur that follows
+        input.removeEventListener('blur', commit);
         span.classList.remove('editing');
         span.innerHTML = escapeHtml(original) + pencilSvg();
       }
