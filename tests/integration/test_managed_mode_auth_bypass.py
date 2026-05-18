@@ -613,3 +613,57 @@ class TestEmbeddedGuardLayerConsistency:
                 select(PublisherPartner).filter_by(tenant_id=tid, publisher_domain="contract-pin.example")
             ).one()
             assert row is not None
+
+
+class TestRequireAuthHonorsQueryTenantId:
+    """``@require_auth()`` routes that scope by ``?tenant_id=...`` query arg
+    (not URL kwarg) must trigger the embedded-mode bypass — same as
+    /tenant/<tenant_id>/... routes.
+
+    Before the fix at src/admin/utils/helpers.py:267, ``kwargs.get("tenant_id")``
+    was the only source consulted. Routes like /api/formats/list (mounted at
+    /api/formats, tenant_id in request.args) silently skipped the bypass,
+    fell through to OAuth, and 302'd to /login. From the embedded iframe,
+    the browser auto-followed the redirect into the SPA shell and the XHR
+    received HTML where JSON was expected — breaking the Create Product page.
+
+    See https://github.com/bokelley/salesagent/issues/489.
+    """
+
+    def test_valid_headers_authorize_query_scoped_route(self, client, managed_tenant, monkeypatch):
+        """Valid X-Identity-* + matching org_id + tenant_id in query string
+        → 200 JSON. NOT a 302 to /login (the pre-fix symptom)."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.get(
+            f"/api/formats/agents?tenant_id={managed_tenant['tenant_id']}",
+            headers=_identity_headers(managed_tenant["external_org_id"]),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        # Smoke-check the response is JSON, not HTML (the original bug
+        # symptom was ``<!doctype html>`` reaching the XHR).
+        body = resp.get_json()
+        assert body is not None, f"expected JSON, got: {resp.get_data(as_text=True)[:200]}"
+        assert "agents" in body
+
+    def test_missing_headers_returns_403_not_redirect(self, client, managed_tenant, monkeypatch):
+        """No X-Identity-* on an embedded tenant → 403 identity_required.
+        Crucially NOT a 302 to /login — that's what produced the HTML-where-
+        JSON-expected bug in the iframe."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "false")
+        resp = client.get(f"/api/formats/agents?tenant_id={managed_tenant['tenant_id']}")
+        assert resp.status_code == 403, resp.get_data(as_text=True)
+        assert "identity_required" in resp.get_data(as_text=True)
+
+    def test_org_mismatch_returns_403(self, client, managed_tenant, monkeypatch):
+        """Forged ?tenant_id= with mismatched X-Identity-Org-Id → 403
+        identity_org_mismatch. The query-arg fallback does not weaken
+        tenant isolation — the org_id check inside
+        authorize_embedded_request still fires."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        resp = client.get(
+            f"/api/formats/agents?tenant_id={managed_tenant['tenant_id']}",
+            headers=_identity_headers("wrong_org_id"),
+        )
+        assert resp.status_code == 403, resp.get_data(as_text=True)
+        assert "identity_org_mismatch" in resp.get_data(as_text=True)

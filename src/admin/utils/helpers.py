@@ -260,11 +260,16 @@ def require_auth(admin_only=False):
 
             # Embedded-mode bypass — checked BEFORE session-based auth.
             # Routes registered under /tenant/<tenant_id>/... receive
-            # tenant_id as a kwarg; if MANAGED_INSTANCE=true and the
-            # tenant is embedded, X-Identity-* headers from
-            # the upstream proxy authorize the request without OAuth.
+            # tenant_id as a kwarg; routes scoped via ?tenant_id=... (e.g.
+            # /api/formats/*) carry it in request.args. Both must trigger
+            # the bypass — otherwise an iframe XHR with valid X-Identity-*
+            # headers falls through to OAuth and 302s to /login, which the
+            # browser auto-follows into the SPA shell and returns HTML
+            # where JSON was expected. Tenant isolation is preserved by
+            # the X-Identity-Org-Id vs tenant.external_org_id check inside
+            # authorize_embedded_request — a forged ?tenant_id= still 403s.
             # See docs/integration/managed-mode-identity-contract.md.
-            tenant_id_kw = kwargs.get("tenant_id")
+            tenant_id_kw = kwargs.get("tenant_id") or request.args.get("tenant_id")
             if tenant_id_kw:
                 from src.admin.utils.embedded_mode_auth import (
                     EmbeddedAuthDeny,
