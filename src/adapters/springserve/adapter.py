@@ -128,9 +128,15 @@ class SpringServeAdapter(AdServerAdapter):
         if self.demand_partner_id is not None:
             self.demand_partner_id = int(self.demand_partner_id)
 
+        # Secrets are stored encrypted in adapter_config.config_json. The
+        # admin UI's test-connection path rehydrates through the schema's
+        # field validators (which auto-decrypt); orchestrated sync paths
+        # pass the raw JSON, so decrypt defensively here for both.
+        from src.adapters._secret_fields import decrypt_secret_value
+
         self.email = self.config.get("email")
-        self.password = self.config.get("password")
-        self.api_token = self.config.get("api_token")
+        self.password = decrypt_secret_value(self.config.get("password"))
+        self.api_token = decrypt_secret_value(self.config.get("api_token"))
         self.environment = self.config.get("environment", "production")
         self.base_url = SPRINGSERVE_HOSTS.get(self.environment, SPRINGSERVE_HOSTS["production"])
 
