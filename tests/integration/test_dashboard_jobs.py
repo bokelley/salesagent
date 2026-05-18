@@ -58,6 +58,7 @@ class TestThreeJobsShape:
 
         job_keys = [j["key"] for j in result["jobs"]]
         assert job_keys == ["discovery", "composition", "delivery"]
+        assert result["is_embedded"] is False
 
     def test_embedded_hides_composition_keeps_discovery_and_delivery(self, factory_session):
         # Need management_api_caller flag for direct embedded-tenant inserts.
@@ -163,23 +164,16 @@ class TestCompositionJob:
 class TestDeliveryJob:
     """Delivery is a light card — the pipeline strip below holds detail."""
 
-    def test_delivery_present_for_open_instance(self, factory_session):
+    def test_delivery_action_url_resolves_to_reporting(self, factory_session):
+        """The Delivery CTA must point at the reporting page (not a fallback
+        None or some other route)."""
         tenant = TenantFactory(is_embedded=False)
 
         delivery = _job(SetupChecklistService(tenant.tenant_id).get_dashboard_jobs(), "delivery")
 
         assert delivery["name"] == "Delivery"
-        assert delivery["action_url"]  # points at reporting
-
-    def test_delivery_present_for_embedded(self, factory_session):
-        """Delivery doesn't yoink upstream the way composition does —
-        embedded publishers still own approvals and pacing visibility."""
-        factory_session.info["management_api_caller"] = True
-        tenant = TenantFactory(is_embedded=True)
-
-        delivery = _job(SetupChecklistService(tenant.tenant_id).get_dashboard_jobs(), "delivery")
-
-        assert delivery["name"] == "Delivery"
+        assert delivery["action_url"] is not None
+        assert delivery["action_url"].endswith("/reporting")
 
 
 class TestEdgeCases:

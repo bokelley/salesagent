@@ -20,15 +20,6 @@
         font-family: var(--sa-font-sans);
         color: var(--sa-ink);
     }
-    .ld-jobs__intro {
-        font-family: var(--sa-font-serif);
-        font-size: 14px;
-        color: var(--sa-ink-50);
-        margin-bottom: 12px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        font-weight: 500;
-    }
     .ld-jobs__grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -40,13 +31,13 @@
     .ld-job {
         background: var(--sa-bg-surface);
         border: 1px solid var(--sa-rule);
-        padding: 18px 20px;
+        padding: 20px 24px;
         display: flex;
         flex-direction: column;
         min-height: 200px;
     }
     .ld-job--primary {
-        border-color: var(--sa-ink);
+        border: 1.5px solid var(--sa-ink);
     }
     .ld-job__header {
         margin-bottom: 14px;
@@ -59,8 +50,12 @@
         font-weight: 500;
         letter-spacing: -0.01em;
         line-height: 1.2;
-        color: var(--sa-ink);
+        /* Secondary cards desaturate; Discovery (primary) keeps full ink. */
+        color: var(--sa-ink-70);
         margin: 0;
+    }
+    .ld-job--primary .ld-job__name {
+        color: var(--sa-ink);
     }
     .ld-job__tagline {
         margin-top: 6px;
@@ -91,7 +86,7 @@
     }
     .ld-job__sub-count {
         font-family: var(--sa-font-serif);
-        font-size: 24px;
+        font-size: 20px;
         font-weight: 500;
         letter-spacing: -0.01em;
         font-variant-numeric: tabular-nums;
@@ -99,6 +94,14 @@
         line-height: 1;
     }
     .ld-job__sub-count.is-zero { color: var(--sa-ink-50); }
+    /* Bind count + CTA as a visual unit on the right side of the sub-row. */
+    .ld-job__sub-right {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+    }
+    .ld-job__sub-cta-spacer { margin-top: 6px; }
     .ld-job__sub-hint {
         margin-top: 4px;
         font-family: var(--sa-font-mono);
@@ -156,6 +159,7 @@
         white-space: nowrap;
     }
     .ld-job__cta:hover { color: var(--sa-bg-page); background: #000; text-decoration: none; }
+    .ld-job__cta:focus-visible { outline: 2px solid var(--sa-ink); outline-offset: 2px; }
     .ld-job__cta--ghost {
         background: var(--sa-bg-page);
         color: var(--sa-ink-70);
@@ -163,8 +167,11 @@
     }
     .ld-job__cta--ghost:hover { color: var(--sa-ink); border-color: var(--sa-ink-70); }
 
-    @media (max-width: 1024px) {
+    @media (max-width: 1024px) and (min-width: 641px) {
         .ld-jobs__grid { grid-template-columns: repeat(2, 1fr); }
+        /* Discovery (primary) spans both columns at the 2-col breakpoint so the
+           lighter secondary cards aren't orphaned alongside its taller content. */
+        .ld-job--primary { grid-column: 1 / -1; }
     }
     @media (max-width: 640px) {
         .ld-jobs__grid,
@@ -176,8 +183,7 @@
 {% set jobs = dashboard_jobs.jobs %}
 
 <section class="ld-jobs" aria-label="Operator jobs">
-    <div class="ld-jobs__intro">Your jobs</div>
-    <div class="ld-jobs__grid{% if jobs|length == 2 %} ld-jobs__grid--two-col{% endif %}">
+    <div class="ld-jobs__grid{% if dashboard_jobs.is_embedded %} ld-jobs__grid--two-col{% endif %}">
         {% for job in jobs %}
             <article class="ld-job{% if job.key == 'discovery' %} ld-job--primary{% endif %}">
                 <header class="ld-job__header">
@@ -194,12 +200,12 @@
                                     <div class="ld-job__sub-name">{{ sub.name }}</div>
                                     <div class="ld-job__sub-hint">{{ sub.coverage_hint }}</div>
                                 </div>
-                                <div style="text-align: right;">
+                                <div class="ld-job__sub-right">
                                     <div class="ld-job__sub-count{% if sub.count == 0 %} is-zero{% endif %}">{{ sub.count }}</div>
                                     {% if sub.action_url %}
                                         <a href="{{ sub.action_url }}"
                                            class="ld-job__cta{% if sub.count > 0 %} ld-job__cta--ghost{% endif %}"
-                                           style="margin-top: 6px;">
+                                           aria-label="{{ sub.action_label }} ({{ sub.name }})">
                                             {{ sub.action_label }}
                                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
                                         </a>
