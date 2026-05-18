@@ -171,6 +171,52 @@ def _build_gam_fault(match: re.Match[str]) -> dict[str, Any]:
     return fault
 
 
+# Phase + endpoint labels for the SpringServe / FreeWheel ``vendor_fault``
+# blocks. Hoisted to module level so call sites don't repeat the strings
+# and so a refactor can rename them in one place.
+_SS_PHASE_PROBE = "supply_probe"
+_SS_ENDPOINT_SUPPLY = "/supply/tags"
+
+_FW_PHASE_TOKEN_INFO = "token_info"
+_FW_ENDPOINT_TOKEN_INFO = "/auth/token/info"
+_FW_PHASE_LIST_SITES = "list_sites"
+_FW_ENDPOINT_LIST_SITES = "/services/v4/sites"
+
+
+def _vendor_details(
+    vendor_key: str,
+    phase: str,
+    endpoint: str,
+    *,
+    status: int | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    """Build the full ``details`` envelope for a SpringServe/FreeWheel fail.
+
+    Returns ``{vendor_key: {phase, endpoint, vendor_status?, vendor_message?}}`` —
+    the wrapper key matches the existing ``gam_fault`` convention so the API
+    response shape is consistent across adapters. Mirrors the role
+    :func:`_build_gam_fault` plays for GAM, but at the wrapper level so each
+    call site is one line.
+
+    Empty/None inner fields are dropped to keep the wire payload tight.
+    ``vendor_message`` is trimmed to 200 chars — the diagnostic value is in
+    the first line or two.
+
+    Note on ``vendor_message`` provenance: callers should pass curated text
+    (typed-exception messages we authored, or trimmed vendor response bodies).
+    Raw ``str(exc)`` from untyped exceptions can include ``requests``-style
+    URLs with internal hostnames — those callers should pass
+    ``type(exc).__name__`` instead.
+    """
+    fault: dict[str, Any] = {"phase": phase, "endpoint": endpoint}
+    if status is not None:
+        fault["vendor_status"] = status
+    if message:
+        fault["vendor_message"] = message[:200]
+    return {vendor_key: fault}
+
+
 def _classify_gam_message(message: str) -> tuple[AdapterErrorCode, dict[str, Any]]:
     """Inspect a GAM error message and produce ``(error_code, gam_fault)``.
 
@@ -295,6 +341,7 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
             FreeWheelAuthError,
             FreeWheelError,
             FreeWheelForbiddenError,
+            FreeWheelNotFoundError,
         )
         from src.adapters.freewheel.client import FreeWheelClient
         from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
@@ -319,23 +366,46 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
             f"FreeWheel client construction failed: {type(exc).__name__}: {exc}",
         )
 
+    def _fw_details(phase: str, endpoint: str, exc: Exception) -> dict[str, Any]:
+        # Typed FreeWheel exceptions carry status_code; bare Exception
+        # paths (e.g. requests.ConnectionError) do not — and we deliberately
+        # drop str(exc) for those to avoid leaking internal hostnames the
+        # transport puts into the message (see _vendor_details docstring).
+        if isinstance(exc, FreeWheelError):
+            return _vendor_details("freewheel_fault", phase, endpoint, status=exc.status_code, message=str(exc))
+        return _vendor_details("freewheel_fault", phase, endpoint, message=type(exc).__name__)
+
     # Step 1: bearer validity.
     try:
         client.token_info()
     except FreeWheelAuthError as exc:
-        return ProbeResult.fail(INVALID_CREDENTIALS, f"FreeWheel auth rejected: {exc}")
+        return ProbeResult.fail(
+            INVALID_CREDENTIALS,
+            f"FreeWheel auth rejected: {exc}",
+            details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
+        )
     except FreeWheelForbiddenError as exc:
-        return ProbeResult.fail(PERMISSION_DENIED, f"FreeWheel bearer lacks entitlements: {exc}")
+        return ProbeResult.fail(
+            PERMISSION_DENIED,
+            f"FreeWheel bearer lacks entitlements: {exc}",
+            details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
+        )
     except FreeWheelError as exc:
+        # Includes FreeWheelNotFoundError on token_info: 404 here means the
+        # auth gateway host is misconfigured (route doesn't exist), not a
+        # role gap — keep as CONNECTION_FAILED. See list_sites for the
+        # symmetric 404-as-role-gap case.
         return ProbeResult.fail(
             CONNECTION_FAILED,
             f"FreeWheel API error on token_info (status={exc.status_code}): {exc}",
+            details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
         )
     except Exception as exc:
         logger.warning("FreeWheel token_info() transport failure: %s", exc)
         return ProbeResult.fail(
             CONNECTION_FAILED,
-            f"FreeWheel transport failure: {type(exc).__name__}: {exc}",
+            f"FreeWheel transport failure: {type(exc).__name__}",
+            details=_fw_details(_FW_PHASE_TOKEN_INFO, _FW_ENDPOINT_TOKEN_INFO, exc),
         )
 
     # Step 2: publisher binding — does the bearer see inventory?
@@ -351,17 +421,35 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
                 f"FreeWheel bearer cannot read inventory for the configured publisher "
                 f"(403): {exc}. Verify the token is for the intended publisher account."
             ),
+            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
+        )
+    except FreeWheelNotFoundError as exc:
+        # 404 on inventory listing means the bearer authenticated but the
+        # configured publisher account has no accessible inventory route —
+        # the role/scope-gap signature. Treat as PERMISSION_DENIED so UIs
+        # can render "your account doesn't have inventory access" copy
+        # without grepping the message.
+        return ProbeResult.fail(
+            PERMISSION_DENIED,
+            (
+                f"FreeWheel inventory endpoint returned 404 — bearer authenticated but "
+                f"the configured publisher has no accessible inventory route: {exc}. "
+                "Verify the token is provisioned for the intended publisher account."
+            ),
+            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
         )
     except FreeWheelError as exc:
         return ProbeResult.fail(
             CONNECTION_FAILED,
             f"FreeWheel API error on list_sites (status={exc.status_code}): {exc}",
+            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
         )
     except Exception as exc:
         logger.warning("FreeWheel list_sites() transport failure: %s", exc)
         return ProbeResult.fail(
             CONNECTION_FAILED,
-            f"FreeWheel transport failure: {type(exc).__name__}: {exc}",
+            f"FreeWheel transport failure: {type(exc).__name__}",
+            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
         )
 
     return ProbeResult.ok()
@@ -456,7 +544,41 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
         logger.warning("SpringServe client construction failed: %s", exc)
         return ProbeResult.fail(
             CONNECTION_FAILED,
-            f"SpringServe client construction failed: {type(exc).__name__}: {exc}",
+            f"SpringServe client construction failed: {type(exc).__name__}",
+        )
+
+    def _ss_details(exc: Exception) -> dict[str, Any]:
+        # All probe paths target the supply endpoint; an internal token
+        # mint (password grant) is an implementation detail of probe() and
+        # we don't label exceptions as ``auth_mint`` because in the
+        # pre-minted-token case no mint happens — labeling the endpoint
+        # ``/auth`` would lie. The error_code on the envelope (e.g.
+        # INVALID_CREDENTIALS) already tells consumers what was wrong;
+        # phase/endpoint just tell them what was called.
+        if isinstance(exc, SpringServeError):
+            return _vendor_details(
+                "springserve_fault",
+                _SS_PHASE_PROBE,
+                _SS_ENDPOINT_SUPPLY,
+                status=exc.status_code,
+                message=str(exc),
+            )
+        # Untyped exception (e.g. requests.ConnectionError) — drop str(exc)
+        # because it can include the full URL with internal hostnames.
+        return _vendor_details(
+            "springserve_fault",
+            _SS_PHASE_PROBE,
+            _SS_ENDPOINT_SUPPLY,
+            message=type(exc).__name__,
+        )
+
+    def _ss_status_details(status: int, body: str | None) -> dict[str, Any]:
+        return _vendor_details(
+            "springserve_fault",
+            _SS_PHASE_PROBE,
+            _SS_ENDPOINT_SUPPLY,
+            status=status,
+            message=body,
         )
 
     # Single call exercises both auth (token mint, if password grant) and
@@ -465,21 +587,25 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
     # (status_code, body) without raising on non-2xx — auth/mint
     # failures still raise, which we surface separately.
     try:
-        status, body = client.probe("GET", "/supply/tags?per_page=1")
+        status, body = client.probe("GET", f"{_SS_ENDPOINT_SUPPLY}?per_page=1")
     except SpringServeAuthError as exc:
-        return ProbeResult.fail(INVALID_CREDENTIALS, f"SpringServe auth rejected: {exc}")
+        return ProbeResult.fail(INVALID_CREDENTIALS, f"SpringServe auth rejected: {exc}", details=_ss_details(exc))
     except SpringServeForbiddenError as exc:
-        return ProbeResult.fail(PERMISSION_DENIED, f"SpringServe bearer lacks entitlements: {exc}")
+        return ProbeResult.fail(
+            PERMISSION_DENIED, f"SpringServe bearer lacks entitlements: {exc}", details=_ss_details(exc)
+        )
     except SpringServeError as exc:
         return ProbeResult.fail(
             CONNECTION_FAILED,
-            f"SpringServe API error on auth (status={exc.status_code}): {exc}",
+            f"SpringServe API error on supply probe (status={exc.status_code}): {exc}",
+            details=_ss_details(exc),
         )
     except Exception as exc:
         logger.warning("SpringServe probe transport failure: %s", exc)
         return ProbeResult.fail(
             CONNECTION_FAILED,
-            f"SpringServe transport failure: {type(exc).__name__}: {exc}",
+            f"SpringServe transport failure: {type(exc).__name__}",
+            details=_ss_details(exc),
         )
 
     if status == 200:
@@ -488,6 +614,7 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
         return ProbeResult.fail(
             INVALID_CREDENTIALS,
             "SpringServe bearer rejected on supply inventory probe (status=401)",
+            details=_ss_status_details(status, body),
         )
     if status == 403:
         return ProbeResult.fail(
@@ -496,10 +623,27 @@ def _test_springserve(config: dict[str, Any]) -> ProbeResult:
                 "SpringServe bearer cannot read supply inventory (status=403). "
                 "Verify the token is for the intended publisher account."
             ),
+            details=_ss_status_details(status, body),
+        )
+    if status == 404:
+        # Authenticated successfully (we got past mint) but the supply
+        # endpoint returned 404 — the signature of "account exists but
+        # lacks the supply API role". Treat as PERMISSION_DENIED so UIs
+        # render "contact your SpringServe rep to enable the supply API"
+        # without grepping the message.
+        return ProbeResult.fail(
+            PERMISSION_DENIED,
+            (
+                "SpringServe supply endpoint returned 404 — the bearer is valid but "
+                "the account lacks the supply API role. Contact your SpringServe "
+                "representative to enable supply API access for this account."
+            ),
+            details=_ss_status_details(status, body),
         )
     return ProbeResult.fail(
         CONNECTION_FAILED,
         f"SpringServe supply probe returned status={status}: {body[:200]}",
+        details=_ss_status_details(status, body),
     )
 
 
@@ -642,6 +786,22 @@ def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
     environment = config.get("environment", "production")
     base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
 
+    def _fw_preview_details(exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, FreeWheelError):
+            return _vendor_details(
+                "freewheel_fault",
+                _FW_PHASE_TOKEN_INFO,
+                _FW_ENDPOINT_TOKEN_INFO,
+                status=exc.status_code,
+                message=str(exc),
+            )
+        return _vendor_details(
+            "freewheel_fault",
+            _FW_PHASE_TOKEN_INFO,
+            _FW_ENDPOINT_TOKEN_INFO,
+            message=type(exc).__name__,
+        )
+
     try:
         client = FreeWheelClient(api_token=api_token, username=username, password=password, base_url=base_url)
         token_info = client.token_info()
@@ -650,25 +810,29 @@ def _preview_freewheel(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error=f"FreeWheel auth rejected: {exc}",
             error_code=INVALID_CREDENTIALS,
+            details=_fw_preview_details(exc),
         )
     except FreeWheelForbiddenError as exc:
         return AdapterPreview(
             ok=False,
             error=f"FreeWheel bearer lacks entitlements: {exc}",
             error_code=PERMISSION_DENIED,
+            details=_fw_preview_details(exc),
         )
     except FreeWheelError as exc:
         return AdapterPreview(
             ok=False,
             error=f"FreeWheel API error (status={exc.status_code}): {exc}",
             error_code=CONNECTION_FAILED,
+            details=_fw_preview_details(exc),
         )
     except Exception as exc:
         logger.warning("FreeWheel token_info() failed: %s", exc)
         return AdapterPreview(
             ok=False,
-            error=f"FreeWheel transport failure: {type(exc).__name__}: {exc}",
+            error=f"FreeWheel transport failure: {type(exc).__name__}",
             error_code=CONNECTION_FAILED,
+            details=_fw_preview_details(exc),
         )
 
     # token_info shape: {"user_id": ..., "user_name": ..., "scope": ...}.
@@ -814,33 +978,62 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
             error_code=CONNECTION_FAILED,
         )
 
+    def _ss_preview_details(exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, SpringServeError):
+            return _vendor_details(
+                "springserve_fault",
+                _SS_PHASE_PROBE,
+                _SS_ENDPOINT_SUPPLY,
+                status=exc.status_code,
+                message=str(exc),
+            )
+        return _vendor_details(
+            "springserve_fault",
+            _SS_PHASE_PROBE,
+            _SS_ENDPOINT_SUPPLY,
+            message=type(exc).__name__,
+        )
+
+    def _ss_preview_status_details(status: int, body: str | None) -> dict[str, Any]:
+        return _vendor_details(
+            "springserve_fault",
+            _SS_PHASE_PROBE,
+            _SS_ENDPOINT_SUPPLY,
+            status=status,
+            message=body,
+        )
+
     try:
         client = SpringServeClient(api_token=api_token, email=email, password=password)
-        status, body = client.probe("GET", "/supply/tags?per_page=1")
+        status, body = client.probe("GET", f"{_SS_ENDPOINT_SUPPLY}?per_page=1")
     except SpringServeAuthError as exc:
         return AdapterPreview(
             ok=False,
             error=f"SpringServe auth rejected: {exc}",
             error_code=INVALID_CREDENTIALS,
+            details=_ss_preview_details(exc),
         )
     except SpringServeForbiddenError as exc:
         return AdapterPreview(
             ok=False,
             error=f"SpringServe bearer lacks entitlements: {exc}",
             error_code=PERMISSION_DENIED,
+            details=_ss_preview_details(exc),
         )
     except SpringServeError as exc:
         return AdapterPreview(
             ok=False,
             error=f"SpringServe API error (status={exc.status_code}): {exc}",
             error_code=CONNECTION_FAILED,
+            details=_ss_preview_details(exc),
         )
     except Exception as exc:
         logger.warning("SpringServe probe failed: %s", exc)
         return AdapterPreview(
             ok=False,
-            error=f"SpringServe transport failure: {type(exc).__name__}: {exc}",
+            error=f"SpringServe transport failure: {type(exc).__name__}",
             error_code=CONNECTION_FAILED,
+            details=_ss_preview_details(exc),
         )
 
     if status == 200:
@@ -857,15 +1050,29 @@ def _preview_springserve(config: dict[str, Any]) -> AdapterPreview:
             ok=False,
             error="SpringServe bearer rejected (status=401)",
             error_code=INVALID_CREDENTIALS,
+            details=_ss_preview_status_details(status, body),
         )
     if status == 403:
         return AdapterPreview(
             ok=False,
             error="SpringServe bearer cannot read supply inventory (status=403)",
             error_code=PERMISSION_DENIED,
+            details=_ss_preview_status_details(status, body),
+        )
+    if status == 404:
+        return AdapterPreview(
+            ok=False,
+            error=(
+                "SpringServe supply endpoint returned 404 — bearer is valid but the "
+                "account lacks the supply API role. Contact your SpringServe "
+                "representative to enable supply API access."
+            ),
+            error_code=PERMISSION_DENIED,
+            details=_ss_preview_status_details(status, body),
         )
     return AdapterPreview(
         ok=False,
         error=f"SpringServe supply probe returned status={status}: {body[:200]}",
         error_code=CONNECTION_FAILED,
+        details=_ss_preview_status_details(status, body),
     )

@@ -125,6 +125,66 @@ class TestFreeWheelProbe:
         assert result.error_code == PERMISSION_DENIED
         assert "cannot read inventory" in result.error_message
         assert "publisher" in result.error_message
+        fault = result.details["freewheel_fault"]
+        assert fault["phase"] == "list_sites"
+        assert fault["endpoint"] == "/services/v4/sites"
+        assert fault["vendor_status"] == 403
+
+    def test_inventory_404_classified_as_permission_denied(self):
+        """404 on the inventory probe is the role/scope-gap signature:
+        bearer authenticated but the configured publisher has no
+        accessible inventory route. UIs need PERMISSION_DENIED + a
+        structured fault block so they can render "your account doesn't
+        have inventory access" without grepping the message."""
+        from src.adapters.freewheel._transport import FreeWheelNotFoundError
+
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            client.token_info.return_value = {"sub": "user@example.com"}
+            client.inventory.list_sites.side_effect = FreeWheelNotFoundError(
+                "no sites", status_code=404, body="Not Found"
+            )
+            result = probe_adapter_connection("freewheel", self._config())
+        assert result.success is False
+        assert result.error_code == PERMISSION_DENIED
+        assert "404" in result.error_message
+        fault = result.details["freewheel_fault"]
+        assert fault["phase"] == "list_sites"
+        assert fault["endpoint"] == "/services/v4/sites"
+        assert fault["vendor_status"] == 404
+
+    def test_token_info_404_stays_connection_failed(self):
+        """Asymmetric counterpart to ``test_inventory_404_classified_as_permission_denied``.
+        A 404 from ``/auth/token/info`` is a host/route misconfiguration
+        (the auth gateway hostname is wrong) — not a role gap. It must
+        stay CONNECTION_FAILED so the embedder's "check your base URL"
+        copy fires instead of the "contact your rep" copy."""
+        from src.adapters.freewheel._transport import FreeWheelNotFoundError
+
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            client.token_info.side_effect = FreeWheelNotFoundError("no such route", status_code=404, body="Not Found")
+            result = probe_adapter_connection("freewheel", self._config())
+        assert result.success is False
+        assert result.error_code == CONNECTION_FAILED
+        fault = result.details["freewheel_fault"]
+        assert fault["phase"] == "token_info"
+        assert fault["endpoint"] == "/auth/token/info"
+        assert fault["vendor_status"] == 404
+
+    def test_token_info_failure_attaches_fault_details(self):
+        """All FreeWheel fail paths must emit a freewheel_fault block so the
+        embedder's typed-code UI can branch on machine-readable fields."""
+        from src.adapters.freewheel._transport import FreeWheelAuthError
+
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            client.token_info.side_effect = FreeWheelAuthError("token revoked", status_code=401)
+            result = probe_adapter_connection("freewheel", self._config())
+        fault = result.details["freewheel_fault"]
+        assert fault["phase"] == "token_info"
+        assert fault["endpoint"] == "/auth/token/info"
+        assert fault["vendor_status"] == 401
 
     def test_transport_failure_classified_as_connection_failed(self):
         with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
@@ -240,6 +300,68 @@ class TestSpringServeProbe:
         assert result.error_code == PERMISSION_DENIED
         assert "cannot read supply inventory" in result.error_message
         assert "publisher" in result.error_message
+        fault = result.details["springserve_fault"]
+        assert fault["phase"] == "supply_probe"
+        assert fault["endpoint"] == "/supply/tags"
+        assert fault["vendor_status"] == 403
+
+    def test_404_on_supply_probe_classified_as_permission_denied(self):
+        """SpringServe surfaces "your account lacks the supply API role" as a
+        404 on the supply endpoint (auth succeeded, route hidden from the
+        bearer). Treat as PERMISSION_DENIED + emit a springserve_fault block
+        so UIs render the "contact your SpringServe rep" copy instead of the
+        generic "could not connect" copy."""
+        with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
+            client = mock_cls.return_value
+            client.probe.return_value = (404, "Not Found")
+            result = probe_adapter_connection("springserve", self._config())
+        assert result.success is False
+        assert result.error_code == PERMISSION_DENIED
+        assert "404" in result.error_message
+        assert "supply API role" in result.error_message
+        fault = result.details["springserve_fault"]
+        assert fault["phase"] == "supply_probe"
+        assert fault["endpoint"] == "/supply/tags"
+        assert fault["vendor_status"] == 404
+        assert fault["vendor_message"] == "Not Found"
+
+    def test_auth_failure_attaches_fault_details(self):
+        """All SpringServe fail paths must emit a springserve_fault block.
+
+        Phase/endpoint are always ``supply_probe`` / ``/supply/tags`` —
+        ``client.probe()`` always targets the supply endpoint, and any
+        token mint that happens is an internal implementation detail of
+        the transport. Don't label exceptions with a speculative ``/auth``
+        endpoint that may or may not have actually been hit."""
+        from src.adapters.springserve._transport import SpringServeAuthError
+
+        with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
+            client = mock_cls.return_value
+            client.probe.side_effect = SpringServeAuthError("invalid", status_code=401)
+            result = probe_adapter_connection("springserve", self._config())
+        fault = result.details["springserve_fault"]
+        assert fault["phase"] == "supply_probe"
+        assert fault["endpoint"] == "/supply/tags"
+        assert fault["vendor_status"] == 401
+
+    def test_bare_exception_does_not_leak_str_exc(self):
+        """``requests.ConnectionError`` and similar untyped exceptions
+        embed the full URL (including internal hostnames) in ``str(exc)``.
+        The fault block must include ONLY the exception class name for
+        these paths — never the stringified message."""
+
+        with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
+            client = mock_cls.return_value
+            client.probe.side_effect = ConnectionError(
+                "HTTPSConnectionPool(host='internal-host.staging.local', port=443): "
+                "Max retries exceeded with url: /supply/tags"
+            )
+            result = probe_adapter_connection("springserve", self._config())
+        fault = result.details["springserve_fault"]
+        assert fault["vendor_message"] == "ConnectionError"
+        assert "internal-host" not in fault["vendor_message"]
+        # error_message on the envelope also must not leak the URL.
+        assert "internal-host" not in result.error_message
 
     def test_happy_path_returns_success(self):
         with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
@@ -426,3 +548,17 @@ class TestSpringServePreview:
         assert preview.ok is False
         assert preview.error_code == INVALID_CREDENTIALS
         assert "auth rejected" in preview.error
+        assert preview.details["springserve_fault"]["phase"] == "supply_probe"
+        assert preview.details["springserve_fault"]["endpoint"] == "/supply/tags"
+
+    def test_404_on_supply_probe_surfaces_as_permission_denied(self):
+        with patch("src.adapters.springserve.client.SpringServeClient") as mock_cls:
+            client = mock_cls.return_value
+            client.probe.return_value = (404, "Not Found")
+            preview = preview_adapter("springserve", {"api_token": "tok"})
+        assert preview.ok is False
+        assert preview.error_code == PERMISSION_DENIED
+        assert "supply API role" in preview.error
+        fault = preview.details["springserve_fault"]
+        assert fault["phase"] == "supply_probe"
+        assert fault["vendor_status"] == 404

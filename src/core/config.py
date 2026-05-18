@@ -138,12 +138,26 @@ def validate_configuration() -> None:
             # Configuration validation happens automatically via Pydantic
             pass
 
+        # ENCRYPTION_KEY is required. Without it any decrypt_api_key() call
+        # (e.g. provisioning an adapter config) raises 4 layers deep inside
+        # Pydantic and surfaces as an opaque 500. Fail loud at startup so
+        # operators see the problem before the first request hits.
+        if not os.environ.get("ENCRYPTION_KEY"):
+            raise RuntimeError(
+                "ENCRYPTION_KEY environment variable not set. "
+                "Required for encrypting adapter credentials and other sensitive data. "
+                "Generate one with: "
+                "python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' "
+                "or run `make setup` to auto-generate."
+            )
+
         # Note: GEMINI_API_KEY is optional - tenants configure their own AI keys
         # Note: SUPER_ADMIN_EMAILS is optional - per-tenant OIDC with Setup Mode is the default auth flow
 
         print("✅ Configuration validation passed")
         print(f"   GAM OAuth: {'✅ Configured' if config.gam_oauth.client_id else '❌ Not configured'}")
         print(f"   Database: {'✅ Configured' if config.database.url else '❌ Not configured'}")
+        print("   Encryption: ✅ Configured")  # always Configured here — the check above raised otherwise
         print(
             f"   Gemini API: {'✅ Configured' if config.gemini_api_key else '⚪ Not configured (tenants use own keys)'}"
         )
