@@ -95,16 +95,16 @@ def dashboard(tenant_id):
         config = get_tenant_config_from_db(tenant_id)
         features = config.get("features", {})
 
-        # Get setup checklist status + capability ladder (#471).
+        # Get setup checklist status + seller setup progress (#471).
         # Hygiene checklist gates orders entirely (SSO/AAO/currency/ad server).
-        # Capability ladder shows what the tenant can sell *today* — distinct
-        # concern from the hygiene gate.
+        # Seller setup progress is the catalog→products flow — distinct
+        # concern, framed around buyer demand rather than configuration.
         setup_status = None
-        capability_ladder = None
+        seller_setup = None
         try:
             checklist_service = SetupChecklistService(tenant_id)
             setup_status = checklist_service.get_setup_status()
-            capability_ladder = checklist_service.get_capability_ladder()
+            seller_setup = checklist_service.get_seller_setup_progress()
         except Exception as e:
             logger.warning(f"Failed to load setup checklist: {e}")
 
@@ -129,9 +129,9 @@ def dashboard(tenant_id):
             # Ledger dashboard bundle (masthead, incoming, running, pipeline,
             # revenue_chart, needs_attention, activity_ledger)
             ledger=ledger,
-            # Setup checklist + capability ladder
+            # Setup checklist + seller setup progress
             setup_status=setup_status,
-            capability_ladder=capability_ladder,
+            seller_setup=seller_setup,
         )
 
     except Exception as e:

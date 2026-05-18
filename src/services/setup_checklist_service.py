@@ -1283,30 +1283,36 @@ class SetupChecklistService:
 
         return tasks
 
-    def get_capability_ladder(self) -> dict[str, Any]:
-        """Compute the seller capability ladder (issue #471 / parent #451).
+    def get_seller_setup_progress(self) -> dict[str, Any]:
+        """Compute seller setup progress for the dashboard widget (#471).
 
-        Models the four-tier maturity ladder for what a seller can sell:
+        Two steps, framed around buyer demand — not tiers, not unlocks:
 
-        * **L1 Wholesale** — ad server + ≥1 inventory bundle. Buyers query
-          your bundles directly via ``get_products`` (open programmatic).
-        * **L2 + Signals** — L1 + ≥1 signal profile. Embedding sales agents
-          compose your bundles × signals at request time.
-        * **L3 Composed Products** — L1 + L2 + ≥1 product joining a bundle
-          with signal targeting. Operator authors named products.
-        * **L4 Forecast/guarantee** — out of scope; not modeled here.
+        * **Step 1 — Catalog**: author the static raw materials that
+          compose into buyer-facing products. Two sub-items:
 
-        Embedded tenants cap at L2: composition lives upstream in the
-        storefront, so L3 is hidden on those dashboards.
+          * Inventory bundles (``InventoryProfile`` rows)
+          * Signal profiles (``TenantSignal`` rows)
 
-        This is **separate from ``ready_for_orders``** (the hygiene gate
-        in :meth:`validate_setup_complete`). A tenant at L1 is genuinely
-        ready to take wholesale orders — they aren't "incomplete" for
-        not having composed products.
+        * **Step 2 — Products**: combine catalog materials into named
+          products buyers can query. Today this is static product CRUD;
+          dynamic composition (price × optimization × targeting × demand)
+          is the direction we're heading, but explicitly not built here.
+          Embedded tenants skip this step entirely — composition lives
+          upstream in their storefront.
 
-        Inventory bundles are modeled as :class:`InventoryProfile` today;
-        UX surfaces them as "Inventory bundles" — the salable-unit framing
-        that #471 wanted. The internal rename is a separate, focused PR.
+        Distinct from :meth:`validate_setup_complete` (the hygiene gate:
+        SSO, AAO, ad server, currency). This widget is about the
+        catalog→products flow specifically; hygiene is handled by the
+        existing setup checklist widget.
+
+        Ad server isn't checked here either — same reason; the hygiene
+        widget already nags about it, and a tenant can author bundles
+        before the ad server is wired without that being a contradiction.
+
+        Inventory bundles are modeled as :class:`InventoryProfile`; the
+        UX label "Inventory bundle" — the salable-unit framing #471 wanted —
+        is a separate, focused rename.
         """
         from src.core.database.repositories.tenant_config import TenantConfigRepository
 
@@ -1314,8 +1320,6 @@ class SetupChecklistService:
             tenant = TenantConfigRepository(session, self.tenant_id).get_tenant()
             if not tenant:
                 raise ValueError(f"Tenant {self.tenant_id} not found")
-
-            ad_server_configured, _ = self._evaluate_ad_server(tenant)
 
             inventory_bundle_count = (
                 session.scalar(
@@ -1331,110 +1335,72 @@ class SetupChecklistService:
                 )
                 or 0
             )
-            # L3 product validity: bundle attached AND signal targeting enabled
-            # (the operator opted the product into composition). signal_targeting_allowed
-            # is nullable, so compare explicitly to True to exclude NULL.
-            composed_product_count = (
-                session.scalar(
-                    select(func.count())
-                    .select_from(Product)
-                    .where(
-                        Product.tenant_id == self.tenant_id,
-                        Product.inventory_profile_id.isnot(None),
-                        Product.signal_targeting_allowed == True,  # noqa: E712
-                    )
-                )
+            product_count = (
+                session.scalar(select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id))
                 or 0
             )
 
-            wholesale_unlocked = ad_server_configured and inventory_bundle_count > 0
-            signals_unlocked = wholesale_unlocked and signal_profile_count > 0
-            composed_unlocked = signals_unlocked and composed_product_count > 0
+            bundles_complete = inventory_bundle_count > 0
+            signals_complete = signal_profile_count > 0
+            catalog_complete = bundles_complete and signals_complete
+            products_complete = product_count > 0
 
-            # Embedded tenants cap at L2 — the storefront owns composition.
-            max_unlockable_tier = 2 if tenant.is_embedded else 3
-
-            # Tier the tenant has reached. ``sum(bools)`` is correct because
-            # each higher rung's unlock implies the lower rungs (signals
-            # requires wholesale, composed requires signals). Capped to
-            # ``max_unlockable_tier`` so legacy embedded tenants with a
-            # composed product don't surface "L3" against a "2/2 tiers
-            # unlocked" meta — contradiction the widget can't reconcile.
-            raw_tier = sum([wholesale_unlocked, signals_unlocked, composed_unlocked])
-            current_tier = min(raw_tier, max_unlockable_tier)
-
-            wholesale_blockers: list[str] = []
-            if not ad_server_configured:
-                wholesale_blockers.append("Connect an ad server")
-            if inventory_bundle_count == 0:
-                wholesale_blockers.append("Author at least one inventory bundle")
-
-            signals_blockers: list[str] = []
-            if not wholesale_unlocked:
-                signals_blockers.append("Unlock Wholesale first")
-            if signal_profile_count == 0:
-                signals_blockers.append("Author at least one signal profile")
-
-            composed_blockers: list[str] = []
-            if not signals_unlocked:
-                composed_blockers.append("Unlock Wholesale + Signals first")
-            if composed_product_count == 0:
-                composed_blockers.append(
-                    "Author a product that attaches an inventory bundle and enables signal targeting"
-                )
-
-            rungs = [
+            steps = [
                 {
-                    "key": "wholesale",
-                    "tier": 1,
-                    "name": "Wholesale",
-                    "value_prop": "Buyers query your inventory bundles directly via get_products.",
-                    "unlocked": wholesale_unlocked,
-                    "blockers": wholesale_blockers,
-                    "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
-                    "action_label": "Inventory bundles",
-                    "counts": {
-                        "inventory_bundles": inventory_bundle_count,
-                    },
-                    "hidden": False,
-                },
-                {
-                    "key": "signals",
-                    "tier": 2,
-                    "name": "Wholesale + Signals",
-                    "value_prop": "Embedding sales agents compose your bundles × signals at request time.",
-                    "unlocked": signals_unlocked,
-                    "blockers": signals_blockers,
-                    "action_url": self._route_url("tenant_signals.list_signals"),
-                    "action_label": "Signal profiles",
-                    "counts": {
-                        "signal_profiles": signal_profile_count,
-                    },
-                    "hidden": False,
-                },
-                {
-                    "key": "composed_products",
-                    "tier": 3,
-                    "name": "Composed Products",
-                    "value_prop": "Author named products that combine inventory bundles with signal targeting.",
-                    "unlocked": composed_unlocked,
-                    "blockers": composed_blockers,
-                    "action_url": self._route_url("products.list_products"),
-                    "action_label": "Products",
-                    "counts": {
-                        "composed_products": composed_product_count,
-                    },
-                    # Embedded tenants don't author their own composed products —
-                    # the storefront does it upstream.
-                    "hidden": tenant.is_embedded,
+                    "key": "catalog",
+                    "title": "Catalog",
+                    "summary": "Author the salable raw materials that compose into products.",
+                    "complete": catalog_complete,
+                    "sub_items": [
+                        {
+                            "key": "bundles",
+                            "name": "Inventory bundles",
+                            "complete": bundles_complete,
+                            "count": inventory_bundle_count,
+                            "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
+                            "action_label": "Inventory bundles",
+                            "blocker": None if bundles_complete else "Author at least one inventory bundle",
+                        },
+                        {
+                            "key": "signals",
+                            "name": "Signal profiles",
+                            "complete": signals_complete,
+                            "count": signal_profile_count,
+                            "action_url": self._route_url("tenant_signals.list_signals"),
+                            "action_label": "Signal profiles",
+                            "blocker": None if signals_complete else "Author at least one signal profile",
+                        },
+                    ],
                 },
             ]
 
+            # Step 2 — Products. Embedded tenants don't see this step at
+            # all: composition runs upstream in their storefront. For
+            # open-instance tenants, products today is static CRUD; the
+            # widget surfaces that without celebrating it as the goal.
+            if not tenant.is_embedded:
+                steps.append(
+                    {
+                        "key": "products",
+                        "title": "Products",
+                        "summary": "Buyer-facing products composed from your catalog.",
+                        "complete": products_complete,
+                        "count": product_count,
+                        "action_url": self._route_url("products.list_products"),
+                        "action_label": "Products",
+                        "blocker": None if products_complete else "Compose at least one product from your catalog",
+                    }
+                )
+
+            # Widget hides entirely once every relevant step is done. For
+            # embedded this is just the catalog; for open-instance it
+            # includes products.
+            all_complete = all(step["complete"] for step in steps)
+
             return {
-                "current_tier": current_tier,
-                "max_unlockable_tier": max_unlockable_tier,
+                "all_complete": all_complete,
                 "is_embedded": tenant.is_embedded,
-                "rungs": rungs,
+                "steps": steps,
             }
 
     def get_next_steps(self) -> list[dict[str, str]]:

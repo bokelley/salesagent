@@ -792,11 +792,12 @@
 {% include 'components/setup_checklist_widget.html' %}
 {% endif %}
 
-<!-- Seller capability ladder (#471): what you can sell today + what unlocks
-     more. Hidden once the tenant has unlocked every tier available (L3 for
-     open-instance, L2 for embedded). -->
-{% if capability_ladder and capability_ladder.current_tier < capability_ladder.max_unlockable_tier %}
-{% include 'components/capability_ladder_widget.html' %}
+<!-- Seller setup progress (#471): catalog → products flow, framed around
+     buyer demand rather than tier progression. Hides once every relevant
+     step is complete (just catalog for embedded; catalog + products for
+     open-instance). -->
+{% if seller_setup and not seller_setup.all_complete %}
+{% include 'components/seller_setup_progress_widget.html' %}
 {% endif %}
 
 <!-- Three-stage business framing: Incoming · Running · Pipeline -->
