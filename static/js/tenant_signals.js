@@ -34,11 +34,17 @@
   injectShowIdsStyles();
 
   function injectShowIdsStyles() {
+    // v2 emits the GAM id as `<span class="id">gam:...</span>` inside
+    // `.src-meta`, `.krow__name`, and inside the composite `.crow__title`
+    // siblings. Hide all by default; reveal when the page root has
+    // `.show-ids`.
     const css = `
-      .signals-page .row-main__id { display: none; }
-      .signals-page.show-ids .row-main__id { display: inline; }
-      .signals-page .col-gam-id { display: none; }
-      .signals-page.show-ids .col-gam-id { display: table-cell; }
+      .signals-page .src-meta .id,
+      .signals-page .krow__name .id,
+      .signals-page .sig-meta .id { display: none; }
+      .signals-page.show-ids .src-meta .id,
+      .signals-page.show-ids .krow__name .id,
+      .signals-page.show-ids .sig-meta .id { display: inline; }
     `;
     const tag = document.createElement('style');
     tag.textContent = css;
@@ -143,33 +149,50 @@
     bulkbar.querySelector('[data-bulk="delete-count"]').textContent = mapped;
   }
 
-  document.querySelectorAll('.row-selectable input.sig-cb').forEach((cb) => {
-    cb.addEventListener('change', refreshBulkBar);
-    cb.addEventListener('click', (e) => e.stopPropagation());
+  // All checkbox / row-click handlers are DELEGATED on `document` so lazy-
+  // loaded value rows (injected after a key expand) pick up the wiring
+  // without re-binding. Per-element listeners would silently drop on new
+  // DOM nodes.
+
+  // Row-checkbox change → refresh bulk bar
+  document.addEventListener('change', (e) => {
+    const cb = e.target;
+    if (!(cb instanceof HTMLInputElement) || !cb.classList.contains('sig-cb')) return;
+    if (cb.dataset.selectAll) return;  // handled below
+    if (!cb.closest('.row-selectable')) return;
+    refreshBulkBar();
   });
 
-  // Header "select-all" within a card scope
-  document.querySelectorAll('input.sig-cb[data-select-all]').forEach((cb) => {
-    cb.addEventListener('change', () => {
-      const scope = cb.dataset.selectAll;
-      document.querySelectorAll(`.row-selectable[data-scope="${scope}"] input.sig-cb`).forEach((rowCb) => {
-        if (rowCb.closest('.row-selectable').style.display === 'none') return;
-        rowCb.checked = cb.checked;
-      });
+  // Prevent checkbox click from bubbling to row-toggle handler
+  document.addEventListener('click', (e) => {
+    const cb = e.target;
+    if (cb instanceof HTMLInputElement && cb.classList.contains('sig-cb') && cb.closest('.row-selectable')) {
+      e.stopPropagation();
+    }
+  }, true);  // capture phase so we run before the row handler
+
+  // Select-all checkbox (per-card scope)
+  document.addEventListener('change', (e) => {
+    const cb = e.target;
+    if (!(cb instanceof HTMLInputElement) || !cb.dataset.selectAll) return;
+    const scope = cb.dataset.selectAll;
+    document.querySelectorAll(`.row-selectable[data-scope="${scope}"] input.sig-cb`).forEach((rowCb) => {
+      if (rowCb.closest('.row-selectable').style.display === 'none') return;
+      rowCb.checked = cb.checked;
+    });
+    refreshBulkBar();
+  });
+
+  // Row body click → toggle checkbox
+  document.addEventListener('click', (e) => {
+    const row = e.target.closest('.row-selectable');
+    if (!row) return;
+    if (e.target.closest('input, button, a, .menu, .menu-trigger, .sig-name')) return;
+    const cb = row.querySelector('input.sig-cb');
+    if (cb) {
+      cb.checked = !cb.checked;
       refreshBulkBar();
-    });
-  });
-
-  // Click row body to toggle
-  document.querySelectorAll('.row-selectable').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      if (e.target.closest('input, button, a, .menu, .menu-trigger, .sig-name')) return;
-      const cb = row.querySelector('input.sig-cb');
-      if (cb) {
-        cb.checked = !cb.checked;
-        refreshBulkBar();
-      }
-    });
+    }
   });
 
   // ---------- Key expand/collapse ----------
