@@ -167,7 +167,7 @@ The `.env` file is created from `.env.template` during setup. Key variables:
 | `ADCP_AUTH_TEST_MODE` | `true` | Enables test login (disable for production) |
 | `CREATE_DEMO_TENANT` | `false` | Creates sample data on first startup |
 | `ENVIRONMENT` | `development` | `development` = strict validation, `production` = lenient |
-| `CONDUCTOR_PORT` | `8000` | Nginx proxy port |
+| `CONDUCTOR_PORT` | _(required)_ | Nginx proxy host port. Set per worktree by Conductor (no hardcoded default; missing value fails fast to prevent silent port collisions between worktrees). |
 
 For OAuth, GAM integration, and other production settings, see the comments in `.env.template` or [Environment Variables](../deployment/environment-variables.md).
 

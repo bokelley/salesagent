@@ -17,7 +17,7 @@
 #   3. Disable Setup Mode once SSO is working
 #
 # Environment variables (optional, via .env file):
-#   CONDUCTOR_PORT: Change proxy port (default: 8000, useful for multiple worktrees)
+#   CONDUCTOR_PORT: Required. Proxy host port (set per worktree by Conductor; no default to prevent silent collisions).
 #   CREATE_DEMO_TENANT=true: Create demo tenant with mock adapter
 
 services:
@@ -75,7 +75,7 @@ services:
     depends_on:
       - adcp-server
     ports:
-      - "${CONDUCTOR_PORT:-8000}:8000"
+      - "${CONDUCTOR_PORT:?CONDUCTOR_PORT is required (set per worktree by Conductor) — refusing to fall back to 8000 and risk colliding with another worktree}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

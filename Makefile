@@ -104,7 +104,7 @@ compose-build:
 	$(COMPOSE_BUILD_ARGS) docker compose build adcp-server
 
 compose-up: compose-build
-	$(COMPOSE_BUILD_ARGS) docker compose up -d --force-recreate adcp-server
+	$(COMPOSE_BUILD_ARGS) docker compose up -d --force-recreate adcp-server proxy
 
 # ─── Entity-scoped test runs ────────────────────────────────────
 # Usage: make test-entity ENTITY=delivery
