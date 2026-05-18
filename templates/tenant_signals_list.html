@@ -93,13 +93,6 @@
       </a>
     </div>
 
-    {# ===== Adapter source banner ===== #}
-    <div class="adapter-banner">
-      <span>Showing inventory from</span>
-      <span class="sig-chip sig-chip--info" style="font-family: var(--sig-mono);">{{ adapter_label }}</span>
-      <span>— this Sales Agent is wired to one adapter.</span>
-    </div>
-
     {# ===== Tag filter pills (page-wide) ===== #}
     {% if all_tags %}
     <div class="tag-bar" style="border-radius: 8px; border: 1px solid var(--sig-bd-hairline); margin-bottom: 16px;">
@@ -111,19 +104,26 @@
     {% endif %}
 
     {# =========================================
-       Audience segments card
+       Audience segments card  (v2 split-row)
        ========================================= #}
+    {%- macro arrow_svg() -%}
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12h14M13 5l7 7-7 7"/>
+    </svg>
+    {%- endmacro -%}
+
     <div class="sig-card">
       <div class="sig-card__header">
-        <h2 class="sig-card__title">
-          Audience segments
-          <span class="count">({{ segments|length }})</span>
-          <span class="from">from {{ adapter_label }}</span>
-        </h2>
-        <div class="sig-card__controls">
-          <span style="font-size: 12.5px; color: var(--sig-fg-tertiary);">
-            {{ counts.segments_mapped }} of {{ counts.segments_total }} mapped
-          </span>
+        <div>
+          <h2 class="sig-card__title">
+            Audience segments
+            <span class="count">{{ segments|length }}</span>
+          </h2>
+          <div class="sig-card__sub">
+            <span class="badge">{{ adapter_label }}</span>
+            <span>{{ counts.segments_mapped }} mapped · {{ counts.segments_total - counts.segments_mapped }} unmapped</span>
+          </div>
         </div>
       </div>
       <div class="sig-card__body">
@@ -133,291 +133,260 @@
           <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">Run inventory sync →</a>
         </div>
         {% else %}
-        <table class="sig-tbl">
-          <thead>
-            <tr>
-              <th class="col-check">
-                <input type="checkbox" class="sig-cb" data-select-all="segments">
-              </th>
-              <th>Segment · Mapping</th>
-              <th>Type</th>
-              <th class="num">Reach</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for s in segments %}
-            {% set tags = s.mapped.tags if s.mapped else [] %}
-            <tr class="row-selectable"
-                data-row-kind="segment"
-                data-scope="segments"
-                data-mapped="{{ '1' if s.mapped else '0' }}"
-                data-tags="{{ tags | join(',') }}"
-                data-segment-id="{{ s.id }}"
-                data-segment-name="{{ s.name }}"
-                {% if s.mapped %}
-                data-signal-id="{{ s.mapped.signal_id }}"
-                data-active-buys="{{ s.mapped.active_buys }}"
-                {% endif %}>
-              <td class="col-check">
-                <input type="checkbox" class="sig-cb"
-                       data-segment-id="{{ s.id }}"
-                       data-segment-name="{{ s.name }}">
-              </td>
-              <td>
-                <div class="row-main">
-                  <span class="row-main__name">{{ s.name }}</span>
-                  <span class="row-main__id">GAM&nbsp;{{ s.id }}</span>
-                </div>
-                <div class="row-meta">
-                  {% if s.mapped %}
-                  <span class="sig-dot sig-dot--mapped"></span>
-                  <span>Mapped as</span>
-                  <span class="row-meta__signal-name"
-                        data-signal-id="{{ s.mapped.signal_id }}"
-                        data-signal-name="{{ s.mapped.name }}">{{ s.mapped.name }} {{ pencil_svg() }}</span>
-                  <span class="row-main__id">{{ s.mapped.signal_id }}</span>
-                  <span class="row-meta__sep">·</span>
-                  {% for t in s.mapped.tags %}
-                  <span class="sig-chip sig-chip--tag">{{ t }}</span>
-                  {% endfor %}
-                  {% if not s.mapped.tags %}<span style="color: var(--sig-fg-muted); font-style: italic;">no tags</span>{% endif %}
-                  <span class="row-meta__sep">·</span>
-                  <span class="row-meta__usage">
-                    {% if s.mapped.active_buys %}
-                    <strong>{{ s.mapped.active_buys }}</strong> active {{ 'buy' if s.mapped.active_buys == 1 else 'buys' }}
-                    {% else %}
-                    <span style="color: var(--sig-fg-muted);">no active buys</span>
-                    {% endif %}
-                  </span>
-                  {% if s.mapped.last_ref %}
-                  <span class="row-meta__sep">·</span>
-                  <span class="row-meta__usage">last ref. {{ s.mapped.last_ref }}</span>
-                  {% endif %}
-                  {% else %}
-                  <span class="row-meta__unmapped">Unmapped</span>
-                  <span style="color: var(--sig-fg-muted);">— tick to expose, or</span>
-                  <button type="button" class="sig-btn sig-btn--link sig-btn--xs"
-                          data-action="map-one"
-                          data-kind="segment"
-                          data-segment-id="{{ s.id }}"
-                          data-segment-name="{{ s.name }}">
-                    Map now →
-                  </button>
-                  {% endif %}
-                </div>
-              </td>
-              <td style="width: 1px;">
-                <span class="sig-chip sig-chip--type">{{ s.type }}</span>
-              </td>
-              <td class="num" style="width: 1px;">
-                <span style="font-weight: 500; font-variant-numeric: tabular-nums;">{{ reach_compact(s.reach) }}</span>
-                <div style="font-size: 10.5px; color: var(--sig-fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 1px;">people</div>
-              </td>
-              <td style="width: 1px; text-align: right;">
-                <span class="row-actions">
-                  {% if s.mapped %}
-                  <span class="rel">
-                    <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
-                    <div class="menu" hidden>
-                      <div class="menu__head">Mapping</div>
-                      <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ s.mapped.signal_id }}">
-                        <span>Rename signal</span>
-                      </a>
-                      <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
-                        <span>Edit tags…</span>
-                      </a>
-                      <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
-                        <span>View signal page</span>
-                      </a>
-                      <div class="menu__sep"></div>
-                      <a href="#" class="menu__item danger"
-                         data-action="delete"
-                         data-signal-id="{{ s.mapped.signal_id }}"
-                         data-active-buys="{{ s.mapped.active_buys }}">
-                        <span>Delete signal</span>
-                      </a>
-                    </div>
-                  </span>
-                  {% else %}
-                  <button type="button" class="sig-btn sig-btn--outline sig-btn--sm"
-                          data-action="map-one"
-                          data-kind="segment"
-                          data-segment-id="{{ s.id }}"
-                          data-segment-name="{{ s.name }}">Map</button>
-                  {% endif %}
-                </span>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        <div class="split-labels">
+          <div></div>
+          <div>Source — from {{ adapter_label }}</div>
+          <div></div>
+          <div>Signal — what buyers see</div>
+          <div></div>
+        </div>
+        <div class="colhdr">
+          <div class="colhdr__check">
+            <input type="checkbox" class="sig-cb" data-select-all="segments">
+          </div>
+          <div class="src">
+            <span>Segment · type · reach</span>
+          </div>
+          <div></div>
+          <div>Signal name · tags · usage</div>
+          <div></div>
+        </div>
+        {% for s in segments %}
+        {% set tags = s.mapped.tags if s.mapped else [] %}
+        <div class="srow row-selectable {{ 'mapped' if s.mapped else 'unmapped' }}"
+             data-row-kind="segment"
+             data-scope="segments"
+             data-mapped="{{ '1' if s.mapped else '0' }}"
+             data-tags="{{ tags | join(',') }}"
+             data-segment-id="{{ s.id }}"
+             data-segment-name="{{ s.name }}"
+             {% if s.mapped %}
+             data-signal-id="{{ s.mapped.signal_id }}"
+             data-active-buys="{{ s.mapped.active_buys }}"
+             {% endif %}>
+          <div class="srow__check">
+            <input type="checkbox" class="sig-cb"
+                   data-segment-id="{{ s.id }}"
+                   data-segment-name="{{ s.name }}">
+          </div>
+          <div class="srow__source">
+            <div class="src-name" title="{{ s.name }}">{{ s.name }}</div>
+            <div class="src-meta">
+              <span class="sig-chip sig-chip--type">{{ s.type }}</span>
+              <span class="num">{{ reach_compact(s.reach) }} people</span>
+              <span class="id">gam:{{ s.id }}</span>
+            </div>
+          </div>
+          <div class="srow__arrow">{{ arrow_svg() }}</div>
+          <div class="srow__signal">
+            {% if s.mapped %}
+            <span class="sig-name"
+                  data-signal-id="{{ s.mapped.signal_id }}"
+                  data-signal-name="{{ s.mapped.name }}"
+                  title="{{ s.mapped.name }}">{{ s.mapped.name }} {{ pencil_svg() }}</span>
+            <div class="sig-meta">
+              {% for t in s.mapped.tags %}
+              <span class="sig-chip sig-chip--tag">{{ t }}</span>
+              {% endfor %}
+              {% if not s.mapped.tags %}<span style="color: var(--sig-fg-muted);">no tags</span>{% endif %}
+              <span class="sep">·</span>
+              {% if s.mapped.active_buys %}
+              <span><strong>{{ s.mapped.active_buys }}</strong> active {{ 'buy' if s.mapped.active_buys == 1 else 'buys' }}</span>
+              {% else %}
+              <span style="color: var(--sig-fg-muted);">no active buys</span>
+              {% endif %}
+              <span class="id">· {{ s.mapped.signal_id }}</span>
+            </div>
+            {% else %}
+            <button type="button" class="sig-unmapped"
+                    data-action="map-one"
+                    data-kind="segment"
+                    data-segment-id="{{ s.id }}"
+                    data-segment-name="{{ s.name }}">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+              Map this segment
+            </button>
+            <span class="sig-hint">Tick to bulk-create on save · creates one signal_id</span>
+            {% endif %}
+          </div>
+          <div class="srow__actions">
+            {% if s.mapped %}
+            <span class="rel">
+              <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
+              <div class="menu" hidden>
+                <div class="menu__head">Mapping</div>
+                <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ s.mapped.signal_id }}">
+                  <span>Rename signal</span>
+                </a>
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
+                  <span>Edit tags…</span>
+                </a>
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
+                  <span>View signal page</span>
+                </a>
+                <div class="menu__sep"></div>
+                <a href="#" class="menu__item danger"
+                   data-action="delete"
+                   data-signal-id="{{ s.mapped.signal_id }}"
+                   data-active-buys="{{ s.mapped.active_buys }}">
+                  <span>Delete signal</span>
+                </a>
+              </div>
+            </span>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
         {% endif %}
       </div>
     </div>
 
     {# =========================================
-       Custom targeting keys card
+       Custom targeting keys card  (v2 split-row)
        ========================================= #}
     {% if keys %}
     <div class="sig-card">
       <div class="sig-card__header">
-        <h2 class="sig-card__title">
-          Custom targeting keys
-          <span class="count">({{ keys|length }})</span>
-          <span class="from">from {{ adapter_label }}</span>
-        </h2>
-        <div class="sig-card__controls" style="font-size: 12.5px; color: var(--sig-fg-tertiary);">
-          Expand a key to tick (key, value) pairs.
+        <div>
+          <h2 class="sig-card__title">
+            Custom targeting keys
+            <span class="count">{{ keys|length }}</span>
+          </h2>
+          <div class="sig-card__sub">
+            <span class="badge">{{ adapter_label }}</span>
+            <span>{{ counts.kv_mapped }} of {{ counts.kv_total }} (key, value) pairs mapped{% if counts.freeform_keys %} · {{ counts.freeform_keys }} freeform{% endif %}</span>
+          </div>
+        </div>
+        <div class="sig-card__controls" style="font-size: 12px; color: var(--sig-fg-tertiary);">
+          Expand a key to map individual values.
         </div>
       </div>
       <div class="sig-card__body">
-        <table class="sig-tbl">
-          <thead>
-            <tr>
-              <th class="col-check"></th>
-              <th>Key · Mapping summary</th>
-              <th>Type</th>
-              <th class="num">Values</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for k in keys %}
-            <tr class="key-row" data-key-id="{{ k.id }}"
-                {% if k.has_cached_values %}data-lazy-load="0"{% else %}data-lazy-load="1"{% endif %}>
-              <td class="col-check"><span class="chev">▸</span></td>
-              <td>
-                <div class="row-main">
-                  <span class="row-main__name">{{ k.name }}</span>
-                  <span class="row-main__id">GAM&nbsp;{{ k.id }}</span>
+        {% for k in keys %}
+        <div class="krow" data-key-id="{{ k.id }}"
+             {% if k.has_cached_values %}data-lazy-load="0"{% else %}data-lazy-load="1"{% endif %}>
+          <div class="krow__chev">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+          </div>
+          <div class="krow__name">
+            <span class="name">{{ k.name }}</span>
+            <span class="id">gam:{{ k.id }}</span>
+            <span class="sig-chip sig-chip--type">{{ k.type }}</span>
+          </div>
+          <div></div>
+          <div class="krow__summary">
+            {% if k.is_freeform %}
+            <span style="color: var(--sig-amber); display: inline-flex; align-items: center; gap: 6px;">
+              <span class="sig-dot sig-dot--composite"></span> Freeform — can't enumerate values
+            </span>
+            {% else %}
+            <span><strong style="color: var(--sig-fg-primary);">{{ k.mapped_count }}</strong> of {{ k.total_values }} values mapped</span>
+            <span class="mini-bar"><span style="width: {{ (k.mapped_count * 100 / k.total_values) if k.total_values else 0 }}%;"></span></span>
+            {% endif %}
+          </div>
+          <div>
+            <button type="button" class="sig-btn sig-btn--ghost sig-btn--sm">Show values</button>
+          </div>
+        </div>
+        <div class="kvalues" data-key-id="{{ k.id }}" hidden>
+          {% if k.is_freeform %}
+          <div class="freeform-callout-v2">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V14M4 10V3M12 21V12M12 8V3M20 21V16M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+            <div>
+              <strong>Freeform key.</strong> GAM accepts any value for <code style="background: var(--sig-bg-card-elev); padding: 0 4px; border-radius: 3px; font-family: var(--sig-mono); font-size: 12px;">{{ k.raw_name }}</code>,
+              so there's nothing to enumerate. Bulk-mapping isn't possible here.
+            </div>
+          </div>
+          {% elif not k['values'] %}
+          <div class="freeform-callout-v2" style="background: var(--sig-bg-page);">
+            <div>No values synced for this key yet. <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">Re-sync inventory →</a></div>
+          </div>
+          {% else %}
+          {% for v in k['values'] %}
+          {% set tags = v.mapped.tags if v.mapped else [] %}
+          <div class="srow row-selectable {{ 'mapped' if v.mapped else 'unmapped' }}"
+               data-row-kind="kv"
+               data-scope="kv-{{ k.id }}"
+               data-mapped="{{ '1' if v.mapped else '0' }}"
+               data-tags="{{ tags | join(',') }}"
+               data-key-id="{{ k.id }}"
+               data-value-id="{{ v.id }}"
+               data-key-name="{{ k.raw_name }}"
+               data-value-name="{{ v.display_name }}"
+               {% if v.mapped %}
+               data-signal-id="{{ v.mapped.signal_id }}"
+               data-active-buys="{{ v.mapped.active_buys }}"
+               {% endif %}>
+            <div class="srow__check">
+              <input type="checkbox" class="sig-cb"
+                     data-key-id="{{ k.id }}"
+                     data-value-id="{{ v.id }}"
+                     data-key-name="{{ k.raw_name }}"
+                     data-value-name="{{ v.display_name }}">
+            </div>
+            <div class="srow__source">
+              <div class="src-name">
+                <code style="font-family: var(--sig-mono); font-size: 12.5px; color: var(--sig-fg-primary); background: var(--sig-bg-page); padding: 1px 7px; border-radius: 4px; border: 1px solid var(--sig-bd-hairline);">{{ k.raw_name }}={{ v.name }}</code>
+              </div>
+              <div class="src-meta">
+                <span class="id">gam:{{ v.id }}</span>
+              </div>
+            </div>
+            <div class="srow__arrow">{{ arrow_svg() }}</div>
+            <div class="srow__signal">
+              {% if v.mapped %}
+              <span class="sig-name"
+                    data-signal-id="{{ v.mapped.signal_id }}"
+                    data-signal-name="{{ v.mapped.name }}"
+                    title="{{ v.mapped.name }}">{{ v.mapped.name }} {{ pencil_svg() }}</span>
+              <div class="sig-meta">
+                {% for t in v.mapped.tags %}
+                <span class="sig-chip sig-chip--tag">{{ t }}</span>
+                {% endfor %}
+                {% if v.mapped.tags %}<span class="sep">·</span>{% endif %}
+                {% if v.mapped.active_buys %}
+                <span><strong>{{ v.mapped.active_buys }}</strong> active {{ 'buy' if v.mapped.active_buys == 1 else 'buys' }}</span>
+                {% else %}
+                <span style="color: var(--sig-fg-muted);">no active buys</span>
+                {% endif %}
+              </div>
+              {% else %}
+              <button type="button" class="sig-unmapped"
+                      data-action="map-one"
+                      data-kind="kv"
+                      data-key-id="{{ k.id }}"
+                      data-value-id="{{ v.id }}"
+                      data-key-name="{{ k.raw_name }}"
+                      data-value-name="{{ v.display_name }}">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                Map this value
+              </button>
+              <span class="sig-hint">creates a (key, value) signal on save</span>
+              {% endif %}
+            </div>
+            <div class="srow__actions">
+              {% if v.mapped %}
+              <span class="rel">
+                <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
+                <div class="menu" hidden>
+                  <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ v.mapped.signal_id }}">
+                    <span>Rename signal</span>
+                  </a>
+                  <a href="#" class="menu__item danger"
+                     data-action="delete"
+                     data-signal-id="{{ v.mapped.signal_id }}"
+                     data-active-buys="{{ v.mapped.active_buys }}">
+                    <span>Delete signal</span>
+                  </a>
                 </div>
-                <div class="row-meta">
-                  {% if k.is_freeform %}
-                  <span class="sig-dot sig-dot--composite"></span>
-                  <span style="color: var(--sig-fg-secondary);">Any value goes — can't enumerate.</span>
-                  {% else %}
-                  <span class="sig-dot sig-dot--mapped"></span>
-                  <span class="row-meta__usage">
-                    <strong>{{ k.mapped_count }}</strong> of {{ k.total_values }} values mapped
-                  </span>
-                  {% endif %}
-                </div>
-              </td>
-              <td style="width: 1px;"><span class="sig-chip sig-chip--type">{{ k.type }}</span></td>
-              <td class="num" style="width: 1px;">
-                <span style="font-weight: 500; font-variant-numeric: tabular-nums;">{% if k.is_freeform %}∞{% else %}{{ k.total_values }}{% endif %}</span>
-                <div style="font-size: 10.5px; color: var(--sig-fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 1px;">values</div>
-              </td>
-              <td style="width: 1px; text-align: right;">
-                <button type="button" class="sig-btn sig-btn--ghost sig-btn--sm">Expand</button>
-              </td>
-            </tr>
-            <tr class="key-values" data-key-id="{{ k.id }}" hidden>
-              <td colspan="5" style="padding: 0;">
-                <div class="key-values__wrap">
-                  {% if k.is_freeform %}
-                  <div class="freeform-callout">
-                    <div>
-                      <strong>Freeform key.</strong> GAM accepts any value for <code>{{ k.raw_name }}</code>,
-                      so there's nothing to enumerate. Bulk-mapping isn't possible here.
-                    </div>
-                  </div>
-                  {% elif not k['values'] %}
-                  <div class="kv-empty">No values cached yet. Click again to load from the ad server.</div>
-                  {% else %}
-                  <table class="sig-tbl">
-                    <tbody>
-                      {% for v in k['values'] %}
-                      {% set tags = v.mapped.tags if v.mapped else [] %}
-                      <tr class="row-selectable"
-                          data-row-kind="kv"
-                          data-scope="kv-{{ k.id }}"
-                          data-mapped="{{ '1' if v.mapped else '0' }}"
-                          data-tags="{{ tags | join(',') }}"
-                          data-key-id="{{ k.id }}"
-                          data-value-id="{{ v.id }}"
-                          data-key-name="{{ k.raw_name }}"
-                          data-value-name="{{ v.display_name }}"
-                          {% if v.mapped %}
-                          data-signal-id="{{ v.mapped.signal_id }}"
-                          data-active-buys="{{ v.mapped.active_buys }}"
-                          {% endif %}>
-                        <td class="col-check">
-                          <input type="checkbox" class="sig-cb"
-                                 data-key-id="{{ k.id }}"
-                                 data-value-id="{{ v.id }}"
-                                 data-key-name="{{ k.raw_name }}"
-                                 data-value-name="{{ v.display_name }}">
-                        </td>
-                        <td>
-                          <div class="row-main">
-                            <span class="row-main__name">
-                              <code style="font-family: var(--sig-mono); font-size: 12px; color: var(--sig-fg-secondary); background: var(--sig-bg-page); padding: 1px 6px; border-radius: 4px;">{{ k.raw_name }}={{ v.name }}</code>
-                            </span>
-                            <span class="row-main__id">gam&nbsp;{{ v.id }}</span>
-                          </div>
-                          {% if v.mapped %}
-                          <div class="row-meta">
-                            <span class="sig-dot sig-dot--mapped"></span>
-                            <span>Mapped as</span>
-                            <span class="row-meta__signal-name"
-                                  data-signal-id="{{ v.mapped.signal_id }}"
-                                  data-signal-name="{{ v.mapped.name }}">{{ v.mapped.name }} {{ pencil_svg() }}</span>
-                            {% for t in v.mapped.tags %}
-                            <span class="sig-chip sig-chip--tag">{{ t }}</span>
-                            {% endfor %}
-                            <span class="row-meta__sep">·</span>
-                            <span class="row-meta__usage">
-                              {% if v.mapped.active_buys %}
-                              <strong>{{ v.mapped.active_buys }}</strong> active {{ 'buy' if v.mapped.active_buys == 1 else 'buys' }}
-                              {% else %}
-                              <span style="color: var(--sig-fg-muted);">no active buys</span>
-                              {% endif %}
-                            </span>
-                          </div>
-                          {% else %}
-                          <div class="row-meta">
-                            <span class="row-meta__unmapped">Unmapped</span>
-                            <span style="color: var(--sig-fg-muted);">— tick to expose</span>
-                          </div>
-                          {% endif %}
-                        </td>
-                        <td style="width: 1px; text-align: right;">
-                          {% if v.mapped %}
-                          <span class="rel">
-                            <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
-                            <div class="menu" hidden>
-                              <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ v.mapped.signal_id }}">
-                                <span>Rename signal</span>
-                              </a>
-                              <a href="#" class="menu__item danger"
-                                 data-action="delete"
-                                 data-signal-id="{{ v.mapped.signal_id }}"
-                                 data-active-buys="{{ v.mapped.active_buys }}">
-                                <span>Delete signal</span>
-                              </a>
-                            </div>
-                          </span>
-                          {% endif %}
-                        </td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                  {% endif %}
-                </div>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="sig-card__footer">
-        <span>
-          {{ counts.kv_mapped }} of {{ counts.kv_total }} values mapped
-          {% if counts.freeform_keys %}· {{ counts.freeform_keys }} freeform key{{ '' if counts.freeform_keys == 1 else 's' }} (not bulk-mappable){% endif %}
-        </span>
+              </span>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+          {% endif %}
+        </div>
+        {% endfor %}
       </div>
     </div>
     {% endif %}
@@ -441,58 +410,70 @@
       <div class="sig-card__body">
         {% if not composites %}
         <div style="padding: 24px 20px; text-align: center; color: var(--sig-fg-tertiary); font-size: 13.5px;">
-          No composite signals yet. Combine multiple keys (e.g.
-          <code style="background: var(--sig-bg-page); padding: 0 4px; border-radius: 3px; font-family: var(--sig-mono);">genre=news AND vertical=auto</code>)
-          into a single <code>signal_id</code>.
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <div style="margin-top: 6px;">
+            No composite signals yet. Combine multiple keys (e.g.
+            <code style="background: var(--sig-bg-page); padding: 0 4px; border-radius: 3px; font-family: var(--sig-mono);">genre=news AND vertical=auto</code>)
+            into a single <code>signal_id</code>.
+          </div>
         </div>
         {% else %}
-        <table class="sig-tbl">
-          <thead>
-            <tr>
-              <th class="col-check"><input type="checkbox" class="sig-cb" data-select-all="composites"></th>
-              <th>Signal · Expression</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for c in composites %}
-            <tr class="row-selectable"
-                data-row-kind="composite"
-                data-scope="composites"
-                data-mapped="1"
-                data-tags="{{ c.tags | join(',') }}"
-                data-signal-id="{{ c.signal_id }}"
-                data-active-buys="{{ c.active_buys }}">
-              <td class="col-check"><input type="checkbox" class="sig-cb"></td>
-              <td>
-                <div class="row-main">
-                  <span class="row-main__name">{{ c.name }}</span>
-                  <span class="sig-chip sig-chip--composite">composite</span>
-                  <span class="row-main__id">{{ c.signal_id }}</span>
-                </div>
-                <div class="row-meta">
-                  <span class="sig-dot sig-dot--composite"></span>
-                  {% if c.expr %}<span class="expr">{{ c.expr }}</span>{% endif %}
-                  {% for t in c.tags %}
-                  <span class="sig-chip sig-chip--tag">{{ t }}</span>
-                  {% endfor %}
-                  <span class="row-meta__sep">·</span>
-                  <span class="row-meta__usage">
-                    {% if c.active_buys %}
-                    <strong>{{ c.active_buys }}</strong> active {{ 'buy' if c.active_buys == 1 else 'buys' }}
-                    {% else %}
-                    <span style="color: var(--sig-fg-muted);">no active buys</span>
-                    {% endif %}
-                  </span>
-                </div>
-              </td>
-              <td style="width: 1px; text-align: right;">
-                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="sig-btn sig-btn--outline sig-btn--sm">Edit</a>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        {% for c in composites %}
+        <div class="crow row-selectable"
+             data-row-kind="composite"
+             data-scope="composites"
+             data-mapped="1"
+             data-tags="{{ c.tags | join(',') }}"
+             data-signal-id="{{ c.signal_id }}"
+             data-active-buys="{{ c.active_buys }}">
+          <div>
+            <input type="checkbox" class="sig-cb">
+          </div>
+          <div class="crow__icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          </div>
+          <div class="crow__body">
+            <div class="crow__title">
+              <span class="name">{{ c.name }}</span>
+              <span class="sig-chip sig-chip--composite">composite</span>
+              <span style="font-family: var(--sig-mono); font-size: 11px; color: var(--sig-fg-muted);">{{ c.signal_id }}</span>
+            </div>
+            <div class="crow__meta">
+              {% if c.expr %}<span class="crow__expr">{{ c.expr }}</span>{% endif %}
+              {% for t in c.tags %}
+              <span class="sig-chip sig-chip--tag">{{ t }}</span>
+              {% endfor %}
+              <span style="color: var(--sig-bd-default);">·</span>
+              {% if c.active_buys %}
+              <span><strong style="color: var(--sig-fg-primary);">{{ c.active_buys }}</strong> active {{ 'buy' if c.active_buys == 1 else 'buys' }}</span>
+              {% else %}
+              <span style="color: var(--sig-fg-muted);">no active buys</span>
+              {% endif %}
+            </div>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="sig-btn sig-btn--outline sig-btn--sm">Edit expression</a>
+            <span class="rel">
+              <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
+              <div class="menu" hidden>
+                <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ c.signal_id }}">
+                  <span>Rename signal</span>
+                </a>
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="menu__item">
+                  <span>Edit tags…</span>
+                </a>
+                <div class="menu__sep"></div>
+                <a href="#" class="menu__item danger"
+                   data-action="delete"
+                   data-signal-id="{{ c.signal_id }}"
+                   data-active-buys="{{ c.active_buys }}">
+                  <span>Delete</span>
+                </a>
+              </div>
+            </span>
+          </div>
+        </div>
+        {% endfor %}
         {% endif %}
       </div>
     </div>
