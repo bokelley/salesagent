@@ -107,7 +107,7 @@
 
   function visibleSelected() {
     return [...document.querySelectorAll('.row-selectable input.sig-cb:checked')]
-      .filter((cb) => cb.closest('tr').style.display !== 'none');
+      .filter((cb) => cb.closest('.row-selectable').style.display !== 'none');
   }
 
   function classifySelection() {
@@ -115,7 +115,7 @@
     let mapped = 0, unmapped = 0;
     const items = [];
     sel.forEach((cb) => {
-      const row = cb.closest('tr');
+      const row = cb.closest('.row-selectable');
       const kind = row.dataset.rowKind;
       const isMapped = row.dataset.mapped === '1';
       if (isMapped || kind === 'composite') mapped++;
@@ -435,24 +435,34 @@
   });
 
   // ---------- Single-row Map button (one-shot create) ----------
-  document.querySelectorAll('[data-action="map-one"]').forEach((btn) => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const d = btn.dataset;
-      let item;
-      if (d.kind === 'segment') {
-        item = { kind: 'audience_segment', segment_id: d.segmentId, segment_name: d.segmentName };
-      } else {
-        return;
-      }
-      try {
-        const data = await postJson(urls.bulkCreate, { items: [item] });
-        if (data.created) window.location.reload();
-        else alert('Already mapped.');
-      } catch (err) {
-        alert('Map failed: ' + err.message);
-      }
-    });
+  // Delegated so lazy-loaded value rows also pick it up.
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action="map-one"]');
+    if (!btn) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const d = btn.dataset;
+    let item;
+    if (d.kind === 'segment') {
+      item = { kind: 'audience_segment', segment_id: d.segmentId, segment_name: d.segmentName };
+    } else if (d.kind === 'kv') {
+      item = {
+        kind: 'custom_key_value',
+        key_id: d.keyId,
+        value_id: d.valueId,
+        key_name: d.keyName,
+        value_name: d.valueName,
+      };
+    } else {
+      return;
+    }
+    try {
+      const data = await postJson(urls.bulkCreate, { items: [item] });
+      if (data.created) window.location.reload();
+      else alert('Already mapped.');
+    } catch (err) {
+      alert('Map failed: ' + err.message);
+    }
   });
 
   // ---------- Overflow-menu delete / unmap ----------
