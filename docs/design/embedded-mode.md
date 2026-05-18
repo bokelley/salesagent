@@ -2,7 +2,7 @@
 
 **Status:** Draft v3
 **Author:** Brian O'Kelley
-**Last updated:** 2026-05-04
+**Last updated:** 2026-05-17
 
 > **Reference deployment.** Embedded mode is the deployment shape that lets PSA run *inside* a host product — an SSP console, a publisher tools SaaS, a wrapper-management service, anything that already authenticates publishers and wants to add a sales agent without sending users to a second URL. Scope3 Storefront is the first reference deployment and is named in concrete examples throughout. Nothing in the design is Scope3-specific.
 
@@ -286,10 +286,13 @@ For the host product to surface live state without polling, add outbound webhook
 | **4 (optional)** | **Publisher-managed CRUD via API.** Principals + Products + autogenerate-from-GAM. Automation conveniences — publishers also do these via the proxied UI. | only if needed |
 | **5 (optional)** | **Remaining publisher-managed sub-resources via API.** Tags, authorized properties (incl. bulk import), inventory profiles, currency limits, slack, business rules, policy, creative agents, signals agents. | only if needed |
 | **6 (optional)** | **Outbound webhooks.** The host receives signed payloads on state changes; replaces polling load. | only if needed |
+| **7** | **IA cleanup — Tenant Settings vs Configure decomposition.** Entity promotions out of `tenant_settings.html` to standalone Configure → Workspace peer pages (Publishers, Signing Keys, Policies & Workflows, Integrations); fold-in of Products + Inventory to existing primary-nav pages; instance-level `EMBEDDED_CAPABILITIES` flags for selectively hiding workflows the storefront has absorbed; Tenant Settings page collapse on embedded. See [Sprint 7 spec](./embedded-mode-sprint-7-ia-cleanup.md). | yes |
 
 **Sprints 1, 1.5, 2, 3 are the required path** — they deliver everything a host product needs for an embedded-mode launch. Each is independently shippable.
 
 Sprints 4–6 are optional automation conveniences. They become relevant if the host wants programmatic publisher-side management (sprints 4–5) or near-real-time push notifications (sprint 6). Defer until there's a concrete need.
+
+Sprint 7 is required once the embedded mental model crystallizes — the IA must reflect "operator's day-to-day work" (top nav) vs. "publisher tunes once" (Configure) vs. "platform owns" (locked surfaces). Without it the UI invites operators into pages the storefront actually manages.
 
 ## Implementation notes
 

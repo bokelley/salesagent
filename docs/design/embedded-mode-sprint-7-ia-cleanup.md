@@ -2,8 +2,8 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [Sprint 4 (UI hardening)](./embedded-mode-sprint-4-ui-hardening.md), [Sprint 5 (Buyer Routing UX)](./embedded-mode-sprint-5-buyer-routing-ux.md)
-**Status:** Phase 1a + 1b + 4a + 4b + 4c landed; Phases 2, 3, 4d not yet started. Phase 4 reframed 2026-05-16 around instance-level capability flags (see Phase 4 below).
-**Last updated:** 2026-05-16
+**Status:** All phases landed (Phase 1a, 1b, 2, 3, 4a, 4b, 4c, 4d). Phase 1c (`/status` envelope scope-flip) remains deferred. Phase 4 reframed 2026-05-16 around instance-level capability flags. Two follow-up issues filed after design review: #471 (dashboard config-mode → operational-mode flip per #451) and #473 (IA refinements: `inventory_sync` capability flag, Publishers → Inventory operations move, Webhooks nav hide, advertisers vestigial section).
+**Last updated:** 2026-05-17
 
 ## Why this sprint exists
 
@@ -94,7 +94,16 @@ Surfaces left alone (deliberately not in scope for Phase 1b):
 
 Add `principals_created` to `_PLATFORM_KEYS_WHEN_MANAGED` in `src/admin/services/tenant_status_service.py` so the `/status` JSON correctly tags it as `platform` scope on embedded. This changes what Storefront (and other Tenant Management API consumers) see in their setup feed — coordinate the rollout with the upstream consumer before shipping.
 
-### Phase 2 — Entity promotion to Configure peers
+### Phase 2 — Entity promotion to Configure peers ✅ LANDED (2026-05-16 / 2026-05-17)
+
+Shipped as four sequential PRs, one per entity, each with parallel code + security review and an admin merge gate:
+
+- **Publishers** — #431
+- **Signing Keys** — #433
+- **Policies & Workflows** — #434
+- **Integrations** — #435
+
+Each promotion followed the same playbook (template extraction → new blueprint route → nav entry → POST handler redirects → `_PROMOTED_SECTION_REDIRECTS` legacy deep-link forwarding → setup-checklist `action_url` updates → integration pins).
 
 Promote the three remaining entity-shaped Settings sub-sections to standalone pages under Configure → Workspace:
 
@@ -115,12 +124,16 @@ For each promotion:
 
 Recommend shipping each entity promotion as its own PR to keep review focused.
 
-### Phase 3 — Fold-in to existing primary-nav pages
+### Phase 3 — Fold-in to existing primary-nav pages ✅ LANDED (2026-05-17, #470)
 
-- **Products section** → fold defaults config into the primary-nav `Products` page as a Settings tab.
-- **Inventory section** → merge into Configure → Inventory (the four existing peers already own the entity model).
+Landed as #470, building on the #453 top-nav promotion of `Products | Inventory | Signals` (the #451 mental model — operator's day-to-day building blocks belong in primary nav, not Settings/Configure).
 
-After Phase 3, Tenant Settings contains only: Account, Ad Server, Danger Zone.
+- **Products section** → deleted from `tenant_settings.html`; canonical home is the top-nav `Products` page (`/products/`). `_PROMOTED_SECTION_REDIRECTS["products"]` forwards legacy `/settings/products` deep-links.
+- **Inventory section** → deleted from `tenant_settings.html`; canonical homes are top-nav `Inventory` (`/inventory-profiles/` — the composable profiles) and `Configure → Inventory operations → Sync inventory` (`/inventory` — the GAM sync UI). `_PROMOTED_SECTION_REDIRECTS["inventory"]` forwards to `/inventory`.
+
+The #470 PR also pruned the now-dead context-building code from the `tenant_settings` route (~80 lines: GAM count queries, product counts, running-sync lookups) and the orphan GAM-sync JS (~270 lines in `static/js/tenant_settings.js`).
+
+After Phase 3, `tenant_settings.html` contains only: Account, Ad Server, Buyer Agents (open instances only — vestigial; see #473), API & Tokens, Advanced, Danger Zone.
 
 ### Phase 4 — Headless capability flags + selective section hide on embedded
 
@@ -208,17 +221,20 @@ Three surfaces never make sense on embedded regardless of which storefront is th
 - **OIDC blueprint** registration. Already unused on embedded per `embedded-mode.md`. Gate route registration on `not settings.managed_instance` (or at least the nav entry).
 - **Buyer Agents tab.** Already shipped in Phase 1a — listed here for completeness.
 
-**Phase 4d — Tenant Settings page collapse.**
+**Phase 4d — Tenant Settings page collapse.** ✅ LANDED (2026-05-16, #436)
 
-After 4b + 4c land and the reference storefront has flipped its capability flags, the Scope3 embedded instance will see:
+After 4b + 4c land and the reference storefront has flipped its capability flags, the Scope3 embedded instance sees:
 - Account, Ad Server, Danger Zone: already `not embedded_view` gated.
 - All Business Rules subsections: capability=storefront → hidden.
 - All Integrations subsections: capability=storefront → hidden.
 - Signing Keys: hard-gated → hidden.
 
-Result: the Tenant Settings page renders empty on embedded for the Scope3 deployment. Land the original spec's bullet now — gate the Configure → Workspace → Tenant Settings nav entry and the `/tenant/<id>/settings` route on `not embedded_view`. The same logic applies to any Phase-2-promoted standalone Configure peer page (Policies & Workflows, Integrations) where every subsection inside it has flipped to storefront: if all subsections are gated off, the page itself goes too.
+The Tenant Settings page renders empty on embedded for the Scope3 deployment. #436 shipped:
+- `tenant_settings` route returns `_embedded_locked_page.html` on embedded (single "Platform settings managed by …" banner) before any data loading. Same pattern as `users.list_users` and `inventory.sync_inventory`.
+- Configure → Workspace → Tenant Settings nav entry hidden on embedded.
+- The dead `{% if embedded_view %}` banner-stub branch removed from `tenant_settings.html` (template is no longer rendered for embedded tenants).
 
-Don't land 4d until 4b has shipped and the storefront operator has confirmed its capability set produces a complete empty-page state. Otherwise an embedded operator could lose access to a workflow the storefront hasn't actually absorbed yet.
+The same logic applies to the Phase-2-promoted standalone Configure peer pages — they remain accessible because at least one subsection inside each is still publisher-owned. If a future storefront flips all subsections inside Policies & Workflows / Integrations to storefront, those pages should collapse to the same locked-page treatment. Not implemented yet (no current consumer).
 
 **Migration safety.**
 
@@ -237,9 +253,58 @@ Don't land 4d until 4b has shipped and the storefront operator has confirmed its
 
 4. **Embedded operators must never lose access mid-phase.** Phase 4 (hide Tenant Settings entirely on embedded) cannot land until Phase 2 promotions are complete and all embedded-accessible sections (Policies & Workflows, Integrations, Publishers, Signing Keys) have peer Configure entries. The fold-ins (Products, Inventory) are non-blocking — embedded tenants already access those concepts elsewhere.
 
+## Outcome (post-landing audit)
+
+After all phases landed (2026-05-17), the IA is:
+
+**Top nav** (operator's day-to-day):
+`Dashboard · Media Buys · Products · Inventory · Signals · Creatives · Workflows · Reports`
+
+**Configure dropdown:**
+
+```
+Inventory operations
+  • Browse inventory
+  • Targeting criteria
+  • Sync inventory                 (hidden on embedded — hard gate, candidate for inventory_sync capability flag per #473)
+
+Buying
+  • Buyer routing                  (editable on embedded — publisher-managed per Sprint 5)
+
+Delivery
+  • Webhooks                       (candidate for nav-hide per #473 — dev/devops surface, not operator-facing)
+
+Workspace
+  • Publishers                     (candidate for Inventory operations move per #473)
+  • Policies & Workflows           (subsections capability-gated: brand_manifest, creative_approval, advertising_policy, product_ranking)
+  • Integrations                   (subsections capability-gated: slack, ai_services, creative_agents, signals_agents)
+  • Signing keys                   (hard-hidden on embedded — Phase 4c)
+  • Tenant Settings                (hidden on embedded — Phase 4d; locked page on direct nav)
+```
+
+**Tenant Settings page** (open instances only; locked on embedded):
+Account · Ad Server · Buyer Agents (vestigial — see #473) · API & Tokens · Advanced · Danger Zone
+
+**`EMBEDDED_CAPABILITIES` capability flags** (8 today; storefront opts each workflow in per-instance):
+`slack`, `ai_services`, `creative_agents`, `signals_agents`, `creative_approval`, `brand_manifest`, `advertising_policy`, `product_ranking`. Default `publisher`; ignored on open instances.
+
+## Follow-up work after design review
+
+Two issues filed after a post-landing design review (2026-05-17 session):
+
+- **#471 — Dashboard config-mode → operational-mode flip.** The last open piece of the #451 mental model. `SetupChecklistService` exists, but its checkpoints don't yet map cleanly to #451's 4-checkpoint UX ("at least one Inventory Profile / Signal Profile / Product with composition"). Needs new checkpoints + a UX pass on `components/setup_checklist_widget.html`.
+
+- **#473 — IA refinements bundle:**
+  - `inventory_sync` capability flag (generalize the current hard-hide into the existing `EMBEDDED_CAPABILITIES` pattern; defaults to `storefront` to preserve current behavior).
+  - Move Publishers → Inventory operations group (Publishers models inventory authorization; sitting under Workspace was historical accident).
+  - Hide Webhooks from Configure nav entirely (it's a dev/devops surface, not operator config — direct URL stays accessible).
+  - Remove vestigial `<div id="advertisers">` from `tenant_settings.html` (same shape as Products + Inventory pre-#470; Buyer Routing is canonical).
+
 ## Cross-references
 
-- [Sprint 4 (UI hardening) — Settings → Advertisers reversal](./embedded-mode-sprint-4-ui-hardening.md#settings--advertisers-reversal-sprint-7) — the Sprint 4 design decision this sprint reverses.
+- [Sprint 4 (UI hardening) — Settings → Advertisers reversal](./embedded-mode-sprint-4-ui-hardening.md#settings-advertisers-reversal-sprint-7) — the Sprint 4 design decision this sprint reverses.
 - [Sprint 5 (Buyer Routing UX)](./embedded-mode-sprint-5-buyer-routing-ux.md) — the half-completed promotion of advertiser mapping out of Settings, which motivated this sprint.
 - `templates/tenant_settings.html` — the mega-page being decomposed.
 - `templates/base.html` — the Configure menu being populated.
+- `src/admin/utils/embedded_capabilities.py` — `EMBEDDED_CAPABILITIES` parser, `capability_owner()` / `publisher_owns()` helpers.
+- `src/core/database/embedded_tenant_guard.py` — model-layer write guard for platform-managed surfaces (`PUBLISHER_WRITABLE_FIELDS` allow-list).

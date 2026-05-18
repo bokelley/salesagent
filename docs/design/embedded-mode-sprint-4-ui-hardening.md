@@ -2,8 +2,8 @@
 
 **Parent design:** [embedded-mode](./embedded-mode.md)
 **Builds on:** [sprint 1.7](./replace-authorized-properties-with-aao-lookup.md), [sprint 1.8](./embedded-mode-sprint-1.8-buyer-advertiser-routing.md)
-**Status:** Captured (sprint-4 territory); Settings → Advertisers read-only-directory call partially superseded by Sprint 7 IA cleanup — see [Settings → Advertisers reversal](#settings--advertisers-reversal-sprint-7).
-**Last updated:** 2026-05-14
+**Status:** Captured (sprint-4 territory). The section-by-section `/settings` hide is largely **superseded by Sprint 7 Phase 4d** (#436, 2026-05-16): on embedded, the `/tenant/<id>/settings` route now returns `_embedded_locked_page.html` *before* the multi-section template renders. The per-section hide pattern lives on for the standalone Configure → Workspace peer pages (Policies & Workflows, Integrations) where individual subsections are gated by `EMBEDDED_CAPABILITIES` flags. Settings → Advertisers read-only-directory call also reversed by Sprint 7 — see [Settings → Advertisers reversal](#settings-advertisers-reversal-sprint-7).
+**Last updated:** 2026-05-17
 
 ## Scope
 
