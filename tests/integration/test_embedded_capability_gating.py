@@ -202,10 +202,12 @@ def test_old_products_deep_link_redirects(embedded_client, open_tenant_id):
 def test_old_inventory_deep_link_redirects(embedded_client, open_tenant_id):
     """``/settings/inventory`` was the legacy in-page anchor. The GAM sync
     UI moved to /inventory (Configure → Inventory operations → Sync inventory).
-    The redirect lands on the canonical page."""
+    The redirect lands on the canonical page — exact match prevents drift
+    onto adjacent paths like /inventory/browse or /inventory-profiles."""
     resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/inventory", follow_redirects=False)
     assert resp.status_code == 302
-    assert f"/tenant/{open_tenant_id}/inventory" in resp.headers["Location"]
+    # Match the path component exactly (allow scheme+host prefix from Flask).
+    assert resp.headers["Location"].endswith(f"/tenant/{open_tenant_id}/inventory")
 
 
 def test_tenant_settings_no_longer_renders_products_or_inventory_sections(embedded_client, open_tenant_id):

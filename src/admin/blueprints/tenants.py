@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 from babel import numbers as babel_numbers
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from src.admin.services import DashboardService
 from src.admin.utils import get_tenant_config_from_db, require_tenant_access
@@ -268,53 +268,12 @@ def tenant_settings(tenant_id, section=None):
             )
 
             # Get advertiser data for the advertisers section
-            from src.core.database.models import GAMInventory, Principal
+            from src.core.database.models import Principal
 
             stmt = select(Principal).filter_by(tenant_id=tenant_id)
             principals = db_session.scalars(stmt).all()
             advertiser_count = len(principals)
             active_advertisers = len(principals)  # For now, assume all are active
-
-            # Check for running sync jobs
-            from src.core.database.models import SyncJob
-
-            running_sync = None
-            if active_adapter == "google_ad_manager":
-                stmt = (
-                    select(SyncJob)
-                    .filter_by(tenant_id=tenant_id, status="running", sync_type="inventory")
-                    .order_by(SyncJob.started_at.desc())
-                )
-                running_sync = db_session.scalars(stmt).first()
-
-            # Get last sync time from most recently updated inventory item
-            last_sync_time = None
-            print(f"DEBUG: Checking last sync time - active_adapter: {active_adapter}")
-            if active_adapter == "google_ad_manager":
-                stmt = (
-                    select(GAMInventory.updated_at)
-                    .filter_by(tenant_id=tenant_id)
-                    .order_by(GAMInventory.updated_at.desc())
-                    .limit(1)
-                )
-                last_updated = db_session.scalar(stmt)
-                print(f"DEBUG: Last inventory update for tenant {tenant_id}: {last_updated}")
-                if last_updated:
-                    from datetime import datetime
-
-                    # Format as human-readable time
-                    now = datetime.now(UTC)
-                    diff = now - last_updated.replace(tzinfo=UTC)
-                    if diff.total_seconds() < 60:
-                        last_sync_time = "Just now"
-                    elif diff.total_seconds() < 3600:
-                        mins = int(diff.total_seconds() / 60)
-                        last_sync_time = f"{mins} minute{'s' if mins != 1 else ''} ago"
-                    elif diff.total_seconds() < 86400:
-                        hours = int(diff.total_seconds() / 3600)
-                        last_sync_time = f"{hours} hour{'s' if hours != 1 else ''} ago"
-                    else:
-                        last_sync_time = last_updated.strftime("%b %d, %Y at %I:%M %p")
 
             # Convert adapter_config to dict format for template compatibility
             adapter_config_dict = {}
@@ -338,64 +297,6 @@ def tenant_settings(tenant_id, section=None):
             # These are now guaranteed to be lists (or None) from the database
             authorized_domains = tenant.authorized_domains or []
             authorized_emails = tenant.authorized_emails or []
-
-            # Get product counts
-            from src.core.database.models import Product
-
-            stmt = select(Product).filter_by(tenant_id=tenant_id)
-            products = db_session.scalars(stmt).all()
-            product_count = len(products)
-            # Note: Product model doesn't have status field
-            active_products = product_count  # All products are considered active
-            draft_products = 0  # No draft status tracking
-
-            # Creative formats removed - table dropped in migration f2addf453200
-            # Formats are now fetched from creative agents via AdCP (not stored in DB)
-            # Template section also removed - no longer passed to template
-
-            # Get inventory counts
-            from src.core.database.models import GAMInventory
-
-            try:
-                stmt = select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
-                inventory_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="ad_unit")
-                )
-                ad_units_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="placement")
-                )
-                placements_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="custom_targeting_key")
-                )
-                custom_targeting_keys_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="custom_targeting_value")
-                )
-                custom_targeting_values_count = db_session.scalar(stmt) or 0
-            except Exception as e:
-                # Table may not exist or query may fail - rollback and gracefully handle
-                logger.warning(f"Could not load inventory counts: {e}")
-                db_session.rollback()
-                inventory_count = 0
-                ad_units_count = 0
-                placements_count = 0
-                custom_targeting_keys_count = 0
-                custom_targeting_values_count = 0
 
             # All services (MCP, A2A, Admin) run on the same unified port
             admin_port = int(os.environ.get("ADCP_SALES_PORT", 8080)) if not is_production else None
@@ -442,8 +343,6 @@ def tenant_settings(tenant_id, section=None):
                 adapter_config=adapter_config_dict,  # Use dict format
                 oauth_configured=oauth_configured,
                 gam_oauth_configured=gam_oauth_configured,  # Environment check for GAM OAuth
-                last_sync_time=last_sync_time,
-                running_sync=running_sync,  # Pass running sync info
                 principals=principals,
                 advertiser_count=advertiser_count,
                 active_advertisers=active_advertisers,
@@ -455,15 +354,7 @@ def tenant_settings(tenant_id, section=None):
                 sales_agent_domain=get_sales_agent_domain(),
                 authorized_domains=authorized_domains,
                 authorized_emails=authorized_emails,
-                product_count=product_count,
-                active_products=active_products,
-                draft_products=draft_products,
-                inventory_count=inventory_count,
-                ad_units_count=ad_units_count,
                 currency_limits=currency_limits,
-                placements_count=placements_count,
-                custom_targeting_keys_count=custom_targeting_keys_count,
-                custom_targeting_values_count=custom_targeting_values_count,
                 setup_status=setup_status,
                 available_currencies=available_currencies,  # Currency list from Babel
                 single_tenant_mode=is_single_tenant_mode(),
