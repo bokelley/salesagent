@@ -1767,6 +1767,11 @@ class TenantSignal(Base, JSONValidatorMixin):
     # Categorical taxonomy. Empty list for non-categorical signals.
     categories: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
 
+    # AdCP ``Signal.tags`` — lowercase string labels for grouping / filtering
+    # within the catalog. Pattern enforced at the API boundary, not in the
+    # column itself (Postgres can't cheaply validate per-element).
+    tags: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+
     # Numeric bounds (when value_type='numeric'). NULL when N/A.
     range_min: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)
     range_max: Mapped[Decimal | None] = mapped_column(DECIMAL(20, 6), nullable=True)

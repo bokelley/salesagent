@@ -10,6 +10,7 @@
     "data_provider": signal.data_provider or "",
     "value_type": signal.value_type,
     "categories": (signal.categories or []) | join(", "),
+    "tags": (signal.tags or []) | join(", "),
     "range_min": signal.range_min if signal.range_min is not none else "",
     "range_max": signal.range_max if signal.range_max is not none else "",
     "adapter_config": (signal.adapter_config or {}) | tojson(indent=2),
@@ -44,6 +45,19 @@
                     <label class="form-label">Description</label>
                     <textarea name="description" class="form-control" rows="2">{{ effective.description }}</textarea>
                 </div>
+
+                <div class="mb-1">
+                    <label class="form-label">Tags</label>
+                    <input name="tags" type="text"
+                           class="form-control{% if errors and errors.tags %} is-invalid{% endif %}"
+                           value="{{ effective.tags }}"
+                           placeholder="premium, sports, q4_holiday">
+                    {% if errors and errors.tags %}<div class="invalid-feedback">{{ errors.tags }}</div>{% endif %}
+                    <div class="form-text">
+                        Comma-separated. Lowercase letters, digits, <code>_</code>, <code>-</code> only.
+                        Used for grouping / filtering in the library.
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -51,7 +65,14 @@
         <div class="card mb-3">
             <div class="card-header"><h5 class="mb-0">Maps to</h5></div>
             <div class="card-body">
-                <p class="mb-3"><strong>{{ mapping_summary.label }}</strong></p>
+                <p class="mb-3">
+                    <strong>{{ mapping_summary.label }}</strong>
+                    {% if mapping_summary.gam_url %}
+                    <a href="{{ mapping_summary.gam_url }}" target="_blank" rel="noopener" class="ms-2 small">
+                        {{ mapping_summary.gam_label }} →
+                    </a>
+                    {% endif %}
+                </p>
                 {% if mapping_summary.rows %}
                 <dl class="row mb-0">
                     {% for r in mapping_summary.rows %}

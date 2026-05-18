@@ -52,6 +52,8 @@ tenant_signals_bp = Blueprint("tenant_signals", __name__)
 
 _VALID_VALUE_TYPES = ("binary", "categorical", "numeric")
 _SIGNAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+# AdCP ``Tag`` regex — lowercase alphanumeric with `_` and `-` only.
+_TAG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 # Display labels for the (multi-)adapter source list on the bulk-map UI
 # (#480). Keys match ``tenant.ad_server`` values.
 _ADAPTER_LABELS = {
@@ -67,6 +69,26 @@ def _parse_csv(raw: str | None) -> list[str]:
     if not raw:
         return []
     return [piece.strip() for piece in raw.split(",") if piece.strip()]
+
+
+def _normalize_tags(raw: str | list[str] | None) -> list[str]:
+    """Coerce input to a deduplicated, sorted list of valid tags.
+
+    Accepts a comma/whitespace-separated string OR a list of strings.
+    Validates each against the AdCP Tag pattern (lowercase alnum + ``_-``).
+    Raises ValueError on invalid input — callers translate to a flash or
+    400 response.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        pieces = [p.strip().lower() for p in re.split(r"[,\s]+", raw) if p.strip()]
+    else:
+        pieces = [str(p).strip().lower() for p in raw if str(p).strip()]
+    bad = [t for t in pieces if not _TAG_PATTERN.match(t)]
+    if bad:
+        raise ValueError(f"invalid tag(s): {', '.join(bad)} (lowercase alnum + _- only)")
+    return sorted(set(pieces))
 
 
 def _parse_float(raw: str | None) -> float | None:
@@ -140,6 +162,7 @@ def list_signals(tenant_id: str):
                     "description": row.description,
                     "value_type": row.value_type,
                     "categories": row.categories or [],
+                    "tags": row.tags or [],
                     "adapter_kind": (row.adapter_config or {}).get("kind"),
                     "is_composed": (row.adapter_config or {}).get("type") == "composed",
                     "is_complex": (row.adapter_config or {}).get("kind") == "gam_targeting_groups",
@@ -148,6 +171,10 @@ def list_signals(tenant_id: str):
                     "last_referenced_at": usage.last_referenced_at if usage else None,
                 }
             )
+        tag_set: set[str] = set()
+        for row in rows:
+            tag_set.update(row.tags or [])
+        all_tags = sorted(tag_set)
 
     has_inventory = bool(segments or keys)
     # Bulk-map shows UN-mapped rows only — the mapped ones already appear
@@ -173,6 +200,7 @@ def list_signals(tenant_id: str):
         tenant_id=tenant_id,
         tenant_name=tenant.name,
         signals=signals,
+        all_tags=all_tags,
         segments=unmapped_segments,
         mapped_segments_count=mapped_segments_count,
         keys=keys,
@@ -502,6 +530,11 @@ def edit_signal(tenant_id: str, signal_id: str):
             mapping_summary = _summarize_adapter_config(
                 signal.adapter_config or {}, GAMSyncRepository(session, tenant_id)
             )
+            # Deep-link the entity into GAM admin when we know the
+            # network. Saves operators from copy-pasting the segment_id
+            # into a new tab.
+            network_code = getattr(tenant.adapter_config, "gam_network_code", None) if tenant.adapter_config else None
+            mapping_summary = _enrich_summary_with_gam_links(mapping_summary, signal.adapter_config or {}, network_code)
             # Project the signal to its buyer-visible ``get_signals`` wire
             # shape — operators want to see what a buyer would discover.
             from src.core.tools.signals import _tenant_signal_to_adcp
@@ -537,6 +570,170 @@ def edit_signal(tenant_id: str, signal_id: str):
         session.commit()
     flash(f"Signal {signal_id!r} updated.", "success")
     return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
+
+
+_BULK_OPS = ("add_tag", "remove_tag", "rename_prefix", "rename_suffix")
+
+
+def _apply_bulk_update(
+    repo: TenantSignalRepository, signal_ids: list[str], op_name: str, value: str
+) -> tuple[list[str], list[str]]:
+    """Apply ``op_name`` to each signal in ``signal_ids``. Pure data-shaping
+    over the repository — no session mgmt, no HTTP. Returns ``(updated_ids,
+    skipped_ids)``. Caller commits.
+    """
+    updated: list[str] = []
+    skipped: list[str] = []
+    for signal in repo.list_by_ids([str(sid) for sid in signal_ids]):
+        if op_name == "add_tag":
+            tags = list(signal.tags or [])
+            if value not in tags:
+                signal.tags = sorted(set(tags + [value]))
+                updated.append(signal.signal_id)
+            else:
+                skipped.append(signal.signal_id)
+        elif op_name == "remove_tag":
+            tags = list(signal.tags or [])
+            if value in tags:
+                signal.tags = [t for t in tags if t != value]
+                updated.append(signal.signal_id)
+            else:
+                skipped.append(signal.signal_id)
+        elif op_name == "rename_prefix":
+            if not signal.name.startswith(value):
+                signal.name = f"{value}{signal.name}"
+                updated.append(signal.signal_id)
+            else:
+                skipped.append(signal.signal_id)
+        elif op_name == "rename_suffix":
+            if not signal.name.endswith(value):
+                signal.name = f"{signal.name}{value}"
+                updated.append(signal.signal_id)
+            else:
+                skipped.append(signal.signal_id)
+    return updated, skipped
+
+
+@tenant_signals_bp.route("/bulk-update", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("bulk_update_tenant_signals")
+def bulk_update(tenant_id: str):
+    """Apply an operator-grade bulk operation to N signals at once.
+
+    Request: ``{"signal_ids": [...], "op": "add_tag" | "remove_tag" |
+    "rename_prefix" | "rename_suffix", "value": "..."}``.
+
+    Operations:
+      - ``add_tag`` / ``remove_tag``: ``value`` is one tag, applied/removed
+        idempotently on each signal's ``tags`` list.
+      - ``rename_prefix``: ``value`` is prepended to ``name`` if not
+        already present. ``signal_id`` is immutable — only the human
+        ``name`` changes.
+      - ``rename_suffix``: ``value`` is appended to ``name`` if not
+        already present.
+
+    Returns ``{"updated": N, "skipped": [signal_id, ...]}``.
+    """
+    payload = request.get_json(silent=True) or {}
+    signal_ids = payload.get("signal_ids") or []
+    op_name = payload.get("op")
+    value = (payload.get("value") or "").strip()
+    if not isinstance(signal_ids, list) or not signal_ids:
+        return jsonify({"error": "signal_ids must be a non-empty list"}), 400
+    if op_name not in _BULK_OPS:
+        return jsonify({"error": f"unsupported op: {op_name!r}"}), 400
+    if not value:
+        return jsonify({"error": "value is required"}), 400
+
+    if op_name in ("add_tag", "remove_tag"):
+        try:
+            normalized = _normalize_tags(value)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if len(normalized) != 1:
+            return jsonify({"error": "tag operations take exactly one tag"}), 400
+        value = normalized[0]
+
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return jsonify({"error": "tenant not found"}), 404
+        repo = TenantSignalRepository(session, tenant_id)
+        updated, skipped = _apply_bulk_update(repo, signal_ids, op_name, value)
+        session.commit()
+
+    return jsonify({"updated": len(updated), "skipped": skipped, "signal_ids": updated})
+
+
+def _apply_bulk_delete(
+    repo: TenantSignalRepository,
+    usage_repo: SignalUsageRepository,
+    signal_ids: list[str],
+    confirm_typed: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Delete each signal in ``signal_ids`` after the reference-safety gate.
+
+    Returns ``(deleted_ids, not_found_ids, blocked_referenced_ids)``. When
+    any referenced signal is in the request and ``confirm_typed`` is not
+    "DELETE", returns blocked IDs and deletes nothing. Caller commits when
+    blocked is empty.
+    """
+    usage = usage_repo.usage_index()
+    referenced = sorted({sid for sid in signal_ids if sid in usage})
+    if referenced and confirm_typed != "DELETE":
+        return [], [], referenced
+    deleted: list[str] = []
+    not_found: list[str] = []
+    for sid in signal_ids:
+        signal = repo.get_by_id(str(sid))
+        if signal is None:
+            not_found.append(str(sid))
+            continue
+        repo.delete(signal)
+        deleted.append(signal.signal_id)
+    return deleted, not_found, []
+
+
+@tenant_signals_bp.route("/bulk-delete", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("bulk_delete_tenant_signals")
+def bulk_delete(tenant_id: str):
+    """Delete N signals at once with the same reference-count safety as
+    the single delete (#475).
+
+    Request: ``{"signal_ids": [...], "confirm_typed": "DELETE"}``. When
+    any of the listed signals are referenced by an active media buy,
+    ``confirm_typed`` must equal ``"DELETE"`` — same gate as single
+    delete, scaled to the bulk surface.
+    """
+    payload = request.get_json(silent=True) or {}
+    signal_ids = payload.get("signal_ids") or []
+    confirm_typed = payload.get("confirm_typed") or ""
+    if not isinstance(signal_ids, list) or not signal_ids:
+        return jsonify({"error": "signal_ids must be a non-empty list"}), 400
+
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return jsonify({"error": "tenant not found"}), 404
+        deleted, not_found, blocked = _apply_bulk_delete(
+            TenantSignalRepository(session, tenant_id),
+            SignalUsageRepository(session, tenant_id),
+            signal_ids,
+            confirm_typed,
+        )
+        if blocked:
+            return (
+                jsonify(
+                    {
+                        "error": "active buys reference one or more signals",
+                        "referenced": blocked,
+                        "confirm_required": True,
+                    }
+                ),
+                409,
+            )
+        session.commit()
+
+    return jsonify({"deleted": len(deleted), "not_found": not_found, "signal_ids": deleted})
 
 
 @tenant_signals_bp.route("/<signal_id>/delete", methods=["POST", "DELETE"])
@@ -586,6 +783,7 @@ def _validate_edit_form(form) -> tuple[dict, dict, dict]:
         "description": (form.get("description") or "").strip(),
         "value_type": (form.get("value_type") or "").strip(),
         "categories": (form.get("categories") or "").strip(),
+        "tags": (form.get("tags") or "").strip(),
         "range_min": (form.get("range_min") or "").strip(),
         "range_max": (form.get("range_max") or "").strip(),
         "targeting_dimension": (form.get("targeting_dimension") or "").strip(),
@@ -602,6 +800,11 @@ def _validate_edit_form(form) -> tuple[dict, dict, dict]:
     parsed["description"] = form_data["description"] or None
     parsed["targeting_dimension"] = form_data["targeting_dimension"] or None
     parsed["data_provider"] = form_data["data_provider"] or None
+
+    try:
+        parsed["tags"] = _normalize_tags(form_data["tags"])
+    except ValueError as exc:
+        errors["tags"] = str(exc)
 
     if form_data["value_type"]:
         if form_data["value_type"] not in _VALID_VALUE_TYPES:
@@ -629,6 +832,46 @@ def _validate_edit_form(form) -> tuple[dict, dict, dict]:
             errors["adapter_config"] = f"Invalid JSON: {exc}"
 
     return form_data, errors, parsed
+
+
+def _gam_admin_url(network_code: str | None, kind: str, entity_id: str) -> str | None:
+    """Build a deep link into the GAM admin UI for the given entity.
+
+    Returns ``None`` when the network isn't known (deep link impossible)
+    or the entity kind isn't a GAM primitive we know how to address.
+    Patterns derived from the GAM admin's hash-based router.
+    """
+    if not network_code or not entity_id:
+        return None
+    base = f"https://admanager.google.com/{network_code}"
+    if kind == "audience_segment":
+        return f"{base}#delivery/audience-segments/detail/audience_segment_id={entity_id}"
+    if kind == "custom_targeting_key":
+        return f"{base}#inventory/custom-targeting/detail/key_id={entity_id}"
+    return None
+
+
+def _enrich_summary_with_gam_links(summary: dict, adapter_config: dict, network_code: str | None) -> dict:
+    """Add a ``gam_url`` field to summary rows for entities we can deep-link.
+
+    Mutates and returns ``summary``. Skips composed / unknown shapes —
+    only pass-through audience_segment + custom_key_value carry a single
+    entity that can sensibly be linked.
+    """
+    if not network_code:
+        return summary
+    kind = adapter_config.get("kind")
+    if kind == "audience_segment":
+        url = _gam_admin_url(network_code, "audience_segment", str(adapter_config.get("segment_id") or ""))
+        if url:
+            summary["gam_url"] = url
+            summary["gam_label"] = "Open in GAM Admin"
+    elif kind == "custom_key_value":
+        url = _gam_admin_url(network_code, "custom_targeting_key", str(adapter_config.get("key_id") or ""))
+        if url:
+            summary["gam_url"] = url
+            summary["gam_label"] = "Open key in GAM Admin"
+    return summary
 
 
 # ---------------------------------------------------------------------------

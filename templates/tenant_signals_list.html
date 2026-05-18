@@ -173,11 +173,11 @@
 
     {# ========= Existing signals library ========= #}
     <div class="card">
-        <div class="card-header d-flex align-items-center justify-content-between">
+        <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
             <h5 class="mb-0">Existing signals ({{ signals | length }})</h5>
-            <div class="d-flex align-items-center gap-3">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
                 <input type="search" id="signals-search" class="form-control form-control-sm"
-                       placeholder="Filter by name…" style="max-width:240px"
+                       placeholder="Filter by name or tag:foo…" style="max-width:260px"
                        autocomplete="off">
                 <div class="form-check form-switch mb-0">
                     <input type="checkbox" class="form-check-input" id="show-ids-toggle">
@@ -185,13 +185,27 @@
                 </div>
             </div>
         </div>
+        {% if all_tags %}
+        <div class="card-body py-2 px-3 border-bottom">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <span class="small text-muted">Tags:</span>
+                {% for tag in all_tags %}
+                <button type="button" class="btn btn-sm btn-outline-secondary tag-filter-pill"
+                        data-tag="{{ tag }}">{{ tag }}</button>
+                {% endfor %}
+                <button type="button" class="btn btn-sm btn-link p-0 ms-2 d-none" id="clear-tag-filter">clear</button>
+            </div>
+        </div>
+        {% endif %}
         <div class="card-body p-0">
             {% if signals %}
-            <table class="table table-sm table-hover mb-0">
+            <table class="table table-sm table-hover mb-0" id="signals-table">
                 <thead>
                     <tr>
+                        <th style="width:36px"><input type="checkbox" class="form-check-input" id="signals-select-all"></th>
                         <th>Name</th>
                         <th class="signal-id-col d-none">signal_id</th>
+                        <th>Tags</th>
                         <th class="text-end">Active buys</th>
                         <th>Last referenced</th>
                         <th>Updated</th>
@@ -200,7 +214,14 @@
                 </thead>
                 <tbody>
                     {% for s in signals %}
-                    <tr>
+                    <tr data-signal-id="{{ s.signal_id }}"
+                        data-signal-name="{{ s.name }}"
+                        data-active-buys="{{ s.active_buy_count }}"
+                        data-tags="{{ s.tags | join(',') }}">
+                        <td>
+                            <input type="checkbox" class="form-check-input signal-select"
+                                   data-signal-id="{{ s.signal_id }}">
+                        </td>
                         <td>
                             {{ s.name }}
                             {% if s.is_complex %}
@@ -214,6 +235,11 @@
                             {% endif %}
                         </td>
                         <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
+                        <td class="small">
+                            {% for t in s.tags %}
+                            <span class="badge bg-secondary-subtle text-secondary-emphasis me-1">{{ t }}</span>
+                            {% endfor %}
+                        </td>
                         <td class="text-end small">
                             {% if s.active_buy_count %}
                             <strong>{{ s.active_buy_count }}</strong>
@@ -250,6 +276,30 @@
             </div>
             {% endif %}
         </div>
+    </div>
+</div>
+
+{# Sticky bulk-action toolbar — hidden until at least one row is selected. #}
+<div class="position-fixed bottom-0 start-0 end-0 bg-white border-top shadow-lg py-2 d-none"
+     id="signals-bulk-bar" style="z-index:1030">
+    <div class="container d-flex align-items-center gap-3 flex-wrap">
+        <strong><span id="signals-bulk-count">0</span> selected</strong>
+        <div class="vr"></div>
+        <div class="input-group input-group-sm" style="max-width:280px">
+            <input type="text" class="form-control" id="bulk-tag-input"
+                   placeholder="tag name" autocomplete="off">
+            <button type="button" class="btn btn-outline-secondary" id="bulk-add-tag">Add tag</button>
+            <button type="button" class="btn btn-outline-secondary" id="bulk-remove-tag">Remove tag</button>
+        </div>
+        <div class="input-group input-group-sm" style="max-width:280px">
+            <input type="text" class="form-control" id="bulk-rename-input"
+                   placeholder="prefix or suffix text" autocomplete="off">
+            <button type="button" class="btn btn-outline-secondary" id="bulk-rename-prefix">Prefix</button>
+            <button type="button" class="btn btn-outline-secondary" id="bulk-rename-suffix">Suffix</button>
+        </div>
+        <button type="button" class="btn btn-outline-danger btn-sm ms-auto" id="bulk-delete-btn">
+            Delete selected
+        </button>
     </div>
 </div>
 
@@ -327,6 +377,136 @@
 })();
 </script>
 
+{# Library-wide controls — render in all states (no inventory required). #}
+<script>
+(function() {
+    'use strict';
+    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = {{ tenant_id | tojson }};
+    const bulkUpdateUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-update';
+    const bulkDeleteUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-delete';
+
+    const tableRows = document.querySelectorAll('#signals-table tbody tr');
+    if (!tableRows.length) return;
+
+    // ---- Show IDs toggle (covers signal_id columns and bulk-map GAM ids) ----
+    document.getElementById('show-ids-toggle')?.addEventListener('change', (e) => {
+        document.querySelectorAll('.signal-id-col, .gam-id-col').forEach(c => {
+            c.classList.toggle('d-none', !e.target.checked);
+        });
+    });
+
+    // ---- Filter by name OR by tag:foo prefix ----
+    let activeTag = null;
+    const searchInput = document.getElementById('signals-search');
+    const clearTag = document.getElementById('clear-tag-filter');
+    function applyFilters() {
+        const q = (searchInput?.value || '').trim().toLowerCase();
+        let qTag = activeTag;
+        let qText = q;
+        const m = q.match(/^tag:([a-z0-9_-]+)/);
+        if (m) {
+            qTag = m[1];
+            qText = q.slice(m[0].length).trim();
+        }
+        tableRows.forEach(row => {
+            const tags = (row.dataset.tags || '').split(',').filter(Boolean);
+            const text = row.textContent.toLowerCase();
+            const tagOk = !qTag || tags.includes(qTag);
+            const textOk = !qText || text.includes(qText);
+            row.style.display = tagOk && textOk ? '' : 'none';
+        });
+        // Pill state
+        document.querySelectorAll('.tag-filter-pill').forEach(p => {
+            p.classList.toggle('active', p.dataset.tag === activeTag);
+        });
+        if (clearTag) clearTag.classList.toggle('d-none', !activeTag);
+    }
+    searchInput?.addEventListener('input', applyFilters);
+    document.querySelectorAll('.tag-filter-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+            activeTag = (activeTag === pill.dataset.tag) ? null : pill.dataset.tag;
+            applyFilters();
+        });
+    });
+    clearTag?.addEventListener('click', () => { activeTag = null; applyFilters(); });
+
+    // ---- Selection + sticky bulk bar ----
+    const bulkBar = document.getElementById('signals-bulk-bar');
+    const bulkCount = document.getElementById('signals-bulk-count');
+    const selectAll = document.getElementById('signals-select-all');
+    function selectedIds() {
+        return [...document.querySelectorAll('.signal-select:checked')].map(cb => cb.dataset.signalId);
+    }
+    function refreshBulk() {
+        const ids = selectedIds();
+        bulkCount.textContent = ids.length;
+        bulkBar.classList.toggle('d-none', ids.length === 0);
+    }
+    document.querySelectorAll('.signal-select').forEach(cb => cb.addEventListener('change', refreshBulk));
+    selectAll?.addEventListener('change', () => {
+        document.querySelectorAll('#signals-table tbody tr').forEach(row => {
+            if (row.style.display === 'none') return;
+            const cb = row.querySelector('.signal-select');
+            if (cb) cb.checked = selectAll.checked;
+        });
+        refreshBulk();
+    });
+
+    async function postJson(url, body) {
+        const r = await fetch(url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        return data;
+    }
+    async function runBulkUpdate(op, value) {
+        const ids = selectedIds();
+        if (!ids.length) return;
+        if (!value) { alert('Enter a value first.'); return; }
+        try {
+            const data = await postJson(bulkUpdateUrl, {signal_ids: ids, op, value});
+            alert(`Updated ${data.updated} signal(s)${data.skipped.length ? `; skipped ${data.skipped.length}` : ''}.`);
+            window.location.reload();
+        } catch (e) { alert('Bulk update failed: ' + e.message); }
+    }
+    document.getElementById('bulk-add-tag')?.addEventListener('click',
+        () => runBulkUpdate('add_tag', document.getElementById('bulk-tag-input').value.trim()));
+    document.getElementById('bulk-remove-tag')?.addEventListener('click',
+        () => runBulkUpdate('remove_tag', document.getElementById('bulk-tag-input').value.trim()));
+    document.getElementById('bulk-rename-prefix')?.addEventListener('click',
+        () => runBulkUpdate('rename_prefix', document.getElementById('bulk-rename-input').value));
+    document.getElementById('bulk-rename-suffix')?.addEventListener('click',
+        () => runBulkUpdate('rename_suffix', document.getElementById('bulk-rename-input').value));
+
+    document.getElementById('bulk-delete-btn')?.addEventListener('click', async () => {
+        const ids = selectedIds();
+        if (!ids.length) return;
+        const referenced = [...document.querySelectorAll('.signal-select:checked')]
+            .filter(cb => parseInt(cb.closest('tr').dataset.activeBuys, 10) > 0)
+            .map(cb => cb.dataset.signalId);
+        let confirmTyped = '';
+        if (referenced.length) {
+            confirmTyped = prompt(
+                `${referenced.length} of ${ids.length} selected signal(s) are referenced by active media buys ` +
+                `and will break those buys. Type DELETE to confirm:`
+            );
+            if (confirmTyped !== 'DELETE') return;
+        } else if (!confirm(`Delete ${ids.length} selected signal(s)?`)) {
+            return;
+        }
+        try {
+            const data = await postJson(bulkDeleteUrl, {signal_ids: ids, confirm_typed: confirmTyped});
+            alert(`Deleted ${data.deleted} signal(s)` + (data.not_found.length ? `; ${data.not_found.length} not found` : ''));
+            window.location.reload();
+        } catch (e) { alert('Bulk delete failed: ' + e.message); }
+    });
+})();
+</script>
+
 {% if has_inventory %}
 <script>
 (function() {
@@ -336,28 +516,6 @@
     const tenantId = {{ tenant_id | tojson }};
     const apiBase = scriptRoot + '/admin/api/tenant/' + tenantId;
     const bulkCreateUrl = scriptRoot + '/tenant/' + tenantId + '/signals/bulk-create';
-
-    const idsToggle = document.getElementById('show-ids-toggle');
-    if (idsToggle) {
-        idsToggle.addEventListener('change', () => {
-            document.querySelectorAll('.signal-id-col, .gam-id-col').forEach(c => {
-                c.classList.toggle('d-none', !idsToggle.checked);
-            });
-        });
-    }
-
-    // ---- Filter Existing Signals by name ----
-    const searchInput = document.getElementById('signals-search');
-    if (searchInput) {
-        const existingRows = document.querySelectorAll('.card:has(h5):not(#bulk-map-card) tbody tr');
-        searchInput.addEventListener('input', () => {
-            const q = searchInput.value.trim().toLowerCase();
-            existingRows.forEach(row => {
-                const text = row.textContent.toLowerCase();
-                row.style.display = !q || text.includes(q) ? '' : 'none';
-            });
-        });
-    }
 
     const selected = [];
     const countSpan = document.getElementById('bulk-selection-count');

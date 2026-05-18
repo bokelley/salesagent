@@ -1938,6 +1938,11 @@ class Signal(LibrarySignal):
     # marketplace, custom, owned). Use `.value` for string comparisons.
     deployments: SchemaVariant[list[SignalDeployment]] = Field(..., description="Array of platform deployments")
 
+    # AdCP ``SignalDefinition.tags`` projected onto the wire ``Signal``.
+    # Optional — defaults to ``None``. Storefronts that support tag-based
+    # filtering surface these to buyers; others ignore them.
+    tags: list[str] | None = Field(default=None, description="Tags for grouping and filtering signals in the catalog")
+
     # Internal fields — excluded from serialization.
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
     created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)

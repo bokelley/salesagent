@@ -107,6 +107,11 @@ def _tenant_signal_to_adcp(
         signal_kwargs["categories"] = list(ts.categories)
     if range_obj is not None:
         signal_kwargs["range"] = range_obj
+    if ts.tags:
+        # AdCP Signal allows extra fields. Tags aren't part of the
+        # tightest wire schema, but a storefront that supports them can
+        # filter on them — and they're round-tripped via extra='allow'.
+        signal_kwargs["tags"] = list(ts.tags)
     return Signal.model_validate(signal_kwargs)
 
 
