@@ -470,33 +470,19 @@ class TestAdvertisersDeprecationBannerOnStandalone:
 # ---------------------------------------------------------------------------
 
 
-class TestSyncInventoryHiddenOnEmbedded:
-    """The Sync Inventory page is hidden on embedded tenants — the
-    deep-link redirects to Browse Inventory (read-only inventory
-    surface that embedded publishers DO use).
+class TestSyncInventoryRenderOnOpenInstance:
+    """The Sync Inventory page renders on open-instance tenants. The
+    embedded hide is no longer per-tenant — Sprint 7 IA refinement (#473)
+    moved it to the ``inventory_sync`` capability flag (env-driven,
+    defaults to ``storefront`` on embedded). See
+    ``TestInventorySyncCapabilityGate`` in
+    ``test_embedded_capability_gating.py`` for the env-flag coverage of
+    the embedded-side hide and redirect.
 
     Sync itself is driven by the upstream platform via
-    ``POST /api/v1/tenant-management/tenants/{id}/refresh``.
+    ``POST /api/v1/tenant-management/tenants/{id}/refresh`` on
+    storefront-owned deployments.
     """
-
-    def test_embedded_tenant_redirects_to_browse(self, embedded_client, embedded_tenant_id):
-        """Embedded `/inventory` redirects to `/inventory/browse` rather
-        than landing on a lock banner — the Browse page is the useful
-        destination publishers want when they click an inventory deep-link."""
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/inventory", follow_redirects=False)
-        assert resp.status_code in (301, 302, 303, 307, 308)
-        assert resp.location.endswith(f"/tenant/{embedded_tenant_id}/inventory/browse")
-
-    def test_embedded_omits_sync_controls(self, embedded_client, embedded_tenant_id):
-        """After following the redirect, the Browse page renders — and
-        critically NOT the sync controls page (which is host-driven)."""
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/inventory", follow_redirects=True)
-        body = resp.get_data(as_text=True)
-        # The Sync Inventory page's three sync buttons must NOT render.
-        assert "Incremental Sync" not in body
-        assert "Full Reset" not in body
-        # The targeting-sync button label is unique to the page heading.
-        assert 'id="syncTargetingBtn"' not in body
 
     def test_open_tenant_renders_sync_controls(self, embedded_client, open_tenant_id):
         """Open-instance tenants see the narrowed Sync Inventory page —
@@ -516,23 +502,10 @@ class TestSyncInventoryHiddenOnEmbedded:
         assert "Inventory Profiles" not in body
         assert "Browse Inventory" not in body or "Browse Inventory</a>" in body
 
-    def test_embedded_dashboard_drops_sync_inventory_link(self, embedded_client, embedded_tenant_id):
-        """Embedded dashboard nav must NOT link to /tenant/<id>/inventory."""
-        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}")
-        assert resp.status_code == 200, resp.get_data(as_text=True)
-        body = resp.get_data(as_text=True)
-        # The Sync Inventory action-button label is unique.
-        assert "Sync Inventory" not in body
-        # Verify the /inventory route is not linked from the dashboard
-        # (other inventory paths like /inventory/browse are allowed).
-        assert f'/tenant/{embedded_tenant_id}/inventory"' not in body
-
     # NOTE: The Ledger dashboard redesign (PR #24) removed top-level inventory
     # nav from the tenant dashboard in favour of the Incoming/Running/Pipeline
     # editorial layout. The "Sync Inventory" link is no longer surfaced from
     # the dashboard — publishers reach Sync Inventory via the Settings rail.
-    # The standalone Sync Inventory page (``/tenant/<id>/inventory``) still
-    # works (covered by ``test_open_tenant_renders_sync_controls`` above).
 
 
 # ---------------------------------------------------------------------------

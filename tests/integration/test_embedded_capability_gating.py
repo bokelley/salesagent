@@ -201,7 +201,7 @@ def test_old_products_deep_link_redirects(embedded_client, open_tenant_id):
 
 def test_old_inventory_deep_link_redirects(embedded_client, open_tenant_id):
     """``/settings/inventory`` was the legacy in-page anchor. The GAM sync
-    UI moved to /inventory (Configure → Inventory operations → Sync inventory).
+    UI moved to /inventory (Configure → Inventory → Sync inventory).
     The redirect lands on the canonical page — exact match prevents drift
     onto adjacent paths like /inventory/browse or /inventory-profiles."""
     resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/inventory", follow_redirects=False)
@@ -223,6 +223,89 @@ def test_tenant_settings_no_longer_renders_products_or_inventory_sections(embedd
     # appeared inside tenant_settings.html.)
     assert '<div id="products" class="settings-section"' not in body
     assert '<div id="inventory" class="settings-section"' not in body
+
+
+# ---------------------------------------------------------------------------
+# Sprint 7 IA refinement (#473): inventory_sync capability flag
+# ---------------------------------------------------------------------------
+
+
+class TestInventorySyncCapabilityGate:
+    """Sprint 7 IA refinement (#473): ``inventory_sync`` capability flag
+    gates the Sync Inventory nav entry + route. Default ownership is
+    ``publisher`` on open instances and remains ``publisher`` on embedded
+    unless ``EMBEDDED_CAPABILITIES`` declares it ``storefront``-owned."""
+
+    def test_nav_visible_on_open_instance(self, embedded_client, open_tenant_id):
+        """Open instances ignore EMBEDDED_CAPABILITIES — Sync inventory nav renders."""
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        # Check the href, not just the visible string — "Sync inventory"
+        # could appear in other surfaces; the menu link is the canonical
+        # nav signal.
+        assert f'href="/tenant/{open_tenant_id}/inventory"' in body
+
+    def test_nav_visible_on_embedded_publisher_owned(self, monkeypatch, embedded_client, open_tenant_id):
+        """Embedded + inventory_sync=publisher (opt-in): nav renders."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"inventory_sync": "publisher"}')
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert f'href="/tenant/{open_tenant_id}/inventory"' in body
+
+    def test_nav_hidden_when_storefront_owned_default(self, monkeypatch, embedded_client, open_tenant_id):
+        """Embedded with no EMBEDDED_CAPABILITIES: inventory_sync defaults
+        to storefront (preserves the pre-#473 hide), so the nav is gone."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert f'href="/tenant/{open_tenant_id}/inventory"' not in body
+
+    def test_route_redirected_page_omits_sync_controls(self, monkeypatch, embedded_client, open_tenant_id):
+        """Following the redirect lands on Browse Inventory — and crucially
+        does NOT render the Sync Inventory page's three sync buttons.
+        Backstop in case some other route ever renders ``sync_inventory.html``."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/inventory", follow_redirects=True)
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "Incremental Sync" not in body
+        assert "Full Reset" not in body
+        assert 'id="syncTargetingBtn"' not in body
+
+    def test_route_redirects_when_storefront_owned_default(self, monkeypatch, embedded_client, open_tenant_id):
+        """Embedded default (storefront-owned): ``/inventory`` deep-link
+        redirects to Browse Inventory — the host drives sync via the
+        Tenant Management API."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/inventory", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith(f"/tenant/{open_tenant_id}/inventory/browse")
+
+    def test_route_renders_when_publisher_owned(self, monkeypatch, embedded_client, open_tenant_id):
+        """Embedded + inventory_sync=publisher (opt-in): ``/inventory``
+        renders the Sync page (mirror of
+        ``test_route_redirected_page_omits_sync_controls``)."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"inventory_sync": "publisher"}')
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/inventory")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        # Mock-adapter tenants render the warning banner instead of the
+        # three sync buttons; either is the canonical "Sync page rendered"
+        # signal and distinguishes from the storefront-owned redirect.
+        assert "Inventory sync is only available for Google Ad Manager" in body or "Incremental Sync" in body
 
 
 # ---------------------------------------------------------------------------

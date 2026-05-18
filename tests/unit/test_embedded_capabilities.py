@@ -73,6 +73,28 @@ class TestCapabilityOwnerEmbeddedInstance:
         monkeypatch.setenv("EMBEDDED_CAPABILITIES", "")
         assert capability_owner("creative_approval") == "publisher"
 
+    def test_inventory_sync_defaults_to_storefront_on_embedded(self, monkeypatch):
+        """``inventory_sync`` is the documented exception (#473) — defaults
+        to ``"storefront"`` on embedded so flipping ``MANAGED_INSTANCE`` on
+        preserves the historical hide. Publisher-owned deployments must
+        opt back in explicitly via ``EMBEDDED_CAPABILITIES``."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+        assert capability_owner("inventory_sync") == "storefront"
+
+    def test_inventory_sync_publisher_opt_in(self, monkeypatch):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"inventory_sync": "publisher"}')
+        assert capability_owner("inventory_sync") == "publisher"
+
+    def test_inventory_sync_open_instance_is_publisher(self, monkeypatch):
+        """Open instance: env var ignored; ``inventory_sync`` follows the
+        global rule and returns ``"publisher"`` despite the embedded
+        default override."""
+        monkeypatch.delenv("MANAGED_INSTANCE", raising=False)
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+        assert capability_owner("inventory_sync") == "publisher"
+
     def test_whitespace_only_treated_as_unset(self, monkeypatch):
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         monkeypatch.setenv("EMBEDDED_CAPABILITIES", "   ")

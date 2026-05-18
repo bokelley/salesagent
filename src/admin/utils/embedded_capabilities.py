@@ -25,10 +25,14 @@ Format::
 
     EMBEDDED_CAPABILITIES='{"creative_approval": "storefront", "slack": "storefront"}'
 
-Unknown keys → default ``"publisher"``. Invalid JSON or non-``str``
-values → ``ValueError`` at first call (fail loud — misconfiguration
-silently leaving every workflow on the publisher side would be the
-worst failure mode).
+Unknown keys → default ``"publisher"`` (the rule), with one exception
+documented in ``_EMBEDDED_DEFAULTS``: capabilities that pre-existed
+the publisher-default rule and shipped as storefront-owned. New
+capabilities should follow the default and stay out of that dict.
+
+Invalid JSON or non-``str`` values → ``ValueError`` at first call
+(fail loud — misconfiguration silently leaving every workflow on the
+publisher side would be the worst failure mode).
 """
 
 from __future__ import annotations
@@ -40,6 +44,23 @@ from typing import Literal
 from src.admin.utils.embedded_mode_auth import is_managed_instance
 
 CapabilityOwner = Literal["publisher", "storefront"]
+
+# Retrofit dict for capabilities that pre-existed the
+# "everything-defaults-to-publisher" rule and shipped as
+# storefront-owned. Adding entries here is a yellow flag — new
+# capabilities should follow the rule (default publisher; storefronts
+# opt in via EMBEDDED_CAPABILITIES). This dict exists to back-fit env
+# flags around behavior that already lived on the storefront side
+# without forcing operators to set EMBEDDED_CAPABILITIES to keep their
+# existing deployment shape.
+_EMBEDDED_DEFAULTS: dict[str, CapabilityOwner] = {
+    # The storefront historically drove inventory sync via
+    # ``POST /api/v1/tenant-management/tenants/{id}/refresh`` on
+    # embedded — the publisher saw the result but couldn't push the
+    # button. Defaults to ``"storefront"`` so flipping MANAGED_INSTANCE
+    # on without touching EMBEDDED_CAPABILITIES preserves that hide.
+    "inventory_sync": "storefront",
+}
 
 
 def _parse_capabilities() -> dict[str, CapabilityOwner]:
@@ -70,7 +91,7 @@ def capability_owner(name: str) -> CapabilityOwner:
     """
     if not is_managed_instance():
         return "publisher"
-    return _parse_capabilities().get(name, "publisher")
+    return _parse_capabilities().get(name, _EMBEDDED_DEFAULTS.get(name, "publisher"))
 
 
 def publisher_owns(name: str) -> bool:

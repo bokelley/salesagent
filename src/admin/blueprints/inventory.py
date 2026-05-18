@@ -8,6 +8,7 @@ from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import publisher_owns
 from src.admin.utils.embedded_mode_auth import is_embedded_view
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
@@ -321,11 +322,19 @@ def get_targeting_values(tenant_id, key_id):
 def inventory_browser(tenant_id):
     """Display the Sync Inventory page (sync controls + sync state only).
 
-    On embedded tenants the page is replaced with the platform-managed
-    lock banner — sync is driven by the upstream platform via
-    ``POST /api/v1/tenant-management/tenants/{id}/refresh``. Returns 200
-    (not 404) so deep-links land on a "managed by your platform"
-    explanation rather than a dead end.
+    Gated by the ``inventory_sync`` capability flag. When the storefront
+    owns it (the historical embedded default), sync is driven by the
+    upstream platform via ``POST /api/v1/tenant-management/tenants/{id}/refresh``
+    and this page redirects to Browse Inventory. When the publisher owns
+    it, the page renders normally on both open and embedded tenants.
+
+    Why ``publisher_owns`` here but ``is_embedded_view`` in
+    ``targeting_browser`` / ``_load_tenant_for_inventory``: sync is a
+    per-instance contract between the salesagent and the storefront
+    (who pushes the button), so it follows the env flag. Browse and
+    targeting are per-tenant read surfaces that adapt their UI to the
+    *current request's* embedded context (preview mode, header auth),
+    so they follow ``is_embedded_view``.
 
     Browse Inventory, Targeting Criteria, and Inventory Profiles are
     now top-level nav siblings — see ``inventory_browse``,
@@ -337,13 +346,11 @@ def inventory_browser(tenant_id):
         if not tenant:
             return "Tenant not found", 404
 
-        if is_embedded_view(tenant):
-            # Embedded views don't get the per-tenant Sync Inventory page —
-            # the host drives sync via POST /tenants/<id>/refresh. Redirect
-            # the deep-link to Browse Inventory (the read-only inventory
-            # surface that embedded publishers DO use). Also fires for
-            # preview requests on a non-embedded tenant authenticated via
-            # headers.
+        if not publisher_owns("inventory_sync"):
+            # Storefront owns sync — the host drives it via
+            # POST /tenants/<id>/refresh. Redirect the deep-link to
+            # Browse Inventory (the read-only surface embedded publishers
+            # still use).
             return redirect(url_for("inventory.inventory_browse", tenant_id=tenant.tenant_id))
 
         adapter_type = tenant.ad_server or "mock"

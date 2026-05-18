@@ -146,21 +146,18 @@
                        What remains here is operational: browsing the raw
                        ad-server inventory tree and the targeting-criteria
                        directory the profiles draw from. #}
-                    <div class="sa-menu__group-label">Inventory operations</div>
+                    <div class="sa-menu__group-label">Inventory</div>
+                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/publishers/">Publishers</a>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory/browse">Browse inventory</a>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/targeting">Targeting criteria</a>
-                    {% if not embedded_view %}
+                    {% if publisher_owns('inventory_sync') %}
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/inventory">Sync inventory</a>
                     {% endif %}
 
                     <div class="sa-menu__group-label">Buying</div>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/buyer-routing">Buyer routing</a>
 
-                    <div class="sa-menu__group-label">Delivery</div>
-                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/webhooks">Webhooks</a>
-
                     <div class="sa-menu__group-label">Workspace</div>
-                    <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/publishers/">Publishers</a>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings/policies/">Policies &amp; Workflows</a>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings/integrations/">Integrations</a>
                     {% if not embedded_view %}
