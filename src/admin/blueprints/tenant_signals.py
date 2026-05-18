@@ -43,6 +43,7 @@ from src.admin.utils.signal_id import unique_signal_id
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantSignal
 from src.core.database.repositories.gam_sync import GAMSyncRepository
+from src.core.database.repositories.signal_usage import SignalUsageRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 
 logger = logging.getLogger(__name__)
@@ -119,20 +120,25 @@ def list_signals(tenant_id: str):
         ]
 
         rows = signal_repo.list_all()
-        signals = [
-            {
-                "signal_id": row.signal_id,
-                "name": row.name,
-                "description": row.description,
-                "value_type": row.value_type,
-                "categories": row.categories or [],
-                "adapter_kind": (row.adapter_config or {}).get("kind"),
-                "is_composed": (row.adapter_config or {}).get("type") == "composed",
-                "is_complex": (row.adapter_config or {}).get("kind") == "gam_targeting_groups",
-                "updated_at": row.updated_at,
-            }
-            for row in rows
-        ]
+        usage_index = SignalUsageRepository(session, tenant_id).usage_index()
+        signals = []
+        for row in rows:
+            usage = usage_index.get(row.signal_id)
+            signals.append(
+                {
+                    "signal_id": row.signal_id,
+                    "name": row.name,
+                    "description": row.description,
+                    "value_type": row.value_type,
+                    "categories": row.categories or [],
+                    "adapter_kind": (row.adapter_config or {}).get("kind"),
+                    "is_composed": (row.adapter_config or {}).get("type") == "composed",
+                    "is_complex": (row.adapter_config or {}).get("kind") == "gam_targeting_groups",
+                    "updated_at": row.updated_at,
+                    "active_buy_count": usage.active_buy_count if usage else 0,
+                    "last_referenced_at": usage.last_referenced_at if usage else None,
+                }
+            )
 
     has_inventory = bool(segments or keys)
     # Bulk-map shows UN-mapped rows only — the mapped ones already appear
@@ -515,15 +521,31 @@ def edit_signal(tenant_id: str, signal_id: str):
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 @log_admin_action("delete_tenant_signal")
 def delete_signal(tenant_id: str, signal_id: str):
+    """Delete a signal with reference-count safety.
+
+    When active media buys reference the signal_id, require the operator
+    to type DELETE (sent as form field ``confirm_typed=DELETE``). The JS
+    modal prompts for this; the server enforces it so curl users can't
+    skip the check. Zero references → no confirm needed.
+    """
     with get_db_session() as session:
         repo = TenantSignalRepository(session, tenant_id)
         signal = repo.get_by_id(signal_id)
         if signal is None:
             flash(f"Signal {signal_id!r} not found.", "error")
-        else:
-            repo.delete(signal)
-            session.commit()
-            flash(f"Signal {signal_id!r} deleted.", "success")
+            return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
+
+        active_buys = SignalUsageRepository(session, tenant_id).count_references(signal_id)
+        if active_buys > 0 and request.form.get("confirm_typed") != "DELETE":
+            flash(
+                f"Signal {signal_id!r} is referenced by {active_buys} active media buy(s). Type DELETE to confirm.",
+                "error",
+            )
+            return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
+
+        repo.delete(signal)
+        session.commit()
+        flash(f"Signal {signal_id!r} deleted.", "success")
     return redirect(url_for("tenant_signals.list_signals", tenant_id=tenant_id))
 
 

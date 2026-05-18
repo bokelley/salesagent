@@ -178,6 +178,8 @@
                     <tr>
                         <th>Name</th>
                         <th class="signal-id-col d-none">signal_id</th>
+                        <th class="text-end">Active buys</th>
+                        <th>Last referenced</th>
                         <th>Updated</th>
                         <th></th>
                     </tr>
@@ -192,18 +194,37 @@
                             {% elif s.is_composed %}
                             <span class="badge bg-light text-dark ms-1">composed</span>
                             {% endif %}
+                            {% if s.active_buy_count %}
+                            <span class="badge bg-info-subtle text-info-emphasis ms-1"
+                                  title="Active media buys referencing this signal">in use by {{ s.active_buy_count }}</span>
+                            {% endif %}
                         </td>
                         <td class="signal-id-col d-none font-monospace small">{{ s.signal_id }}</td>
+                        <td class="text-end small">
+                            {% if s.active_buy_count %}
+                            <strong>{{ s.active_buy_count }}</strong>
+                            {% else %}
+                            <span class="text-muted">0</span>
+                            {% endif %}
+                        </td>
+                        <td class="small text-muted">
+                            {% if s.last_referenced_at %}
+                            {{ s.last_referenced_at.strftime("%Y-%m-%d") }}
+                            {% else %}
+                            never
+                            {% endif %}
+                        </td>
                         <td class="small text-muted">{{ s.updated_at.strftime("%Y-%m-%d") if s.updated_at else "—" }}</td>
                         <td class="text-end">
                             <a class="btn btn-sm btn-outline-secondary"
                                href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}">Edit</a>
-                            <form method="POST"
-                                  action="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}"
-                                  class="d-inline"
-                                  onsubmit="return confirm('Delete signal &quot;{{ s.name }}&quot;?\n\nActive media buys referencing this signal_id ({{ s.signal_id }}) in audience_include / audience_exclude will fail at next materialization. Confirm only if no live campaigns use it.')">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                            </form>
+                            <button type="button" class="btn btn-sm btn-outline-danger signal-delete-btn"
+                                    data-signal-id="{{ s.signal_id }}"
+                                    data-signal-name="{{ s.name }}"
+                                    data-active-buys="{{ s.active_buy_count }}"
+                                    data-delete-url="{{ url_for('tenant_signals.delete_signal', tenant_id=tenant_id, signal_id=s.signal_id) }}">
+                                Delete
+                            </button>
                         </td>
                     </tr>
                     {% endfor %}
@@ -217,6 +238,78 @@
         </div>
     </div>
 </div>
+
+{# Delete confirmation modal — typed-DELETE gate for signals referenced by active buys #}
+<div class="modal fade" id="signal-delete-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form class="modal-content" method="POST" id="signal-delete-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token else '' }}">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete signal <span class="font-monospace" id="del-signal-name"></span>?</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">
+          <code id="del-signal-id"></code> is referenced by
+          <strong><span id="del-active-buys"></span> active media buy(s)</strong>
+          in <code>audience_include</code> / <code>audience_exclude</code>.
+        </p>
+        <p class="text-danger small mb-3">
+          Deleting will cause those buys to fail at next materialization. This can't be undone.
+        </p>
+        <label class="form-label small">Type <strong>DELETE</strong> to confirm:</label>
+        <input type="text" class="form-control" name="confirm_typed" id="del-confirm-input" autocomplete="off">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="del-confirm-submit" disabled>Delete signal</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+// Delete-confirmation modal — wired regardless of whether bulk-map is rendered,
+// since the existing-signals library + delete buttons render in all states.
+(function() {
+    'use strict';
+    const modalEl = document.getElementById('signal-delete-modal');
+    if (!modalEl) return;
+    const modal = new bootstrap.Modal(modalEl);
+    const form = document.getElementById('signal-delete-form');
+    const nameEl = document.getElementById('del-signal-name');
+    const idEl = document.getElementById('del-signal-id');
+    const countEl = document.getElementById('del-active-buys');
+    const input = document.getElementById('del-confirm-input');
+    const submit = document.getElementById('del-confirm-submit');
+
+    document.querySelectorAll('.signal-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const activeBuys = parseInt(btn.dataset.activeBuys, 10) || 0;
+            const signalName = btn.dataset.signalName;
+            const signalId = btn.dataset.signalId;
+            form.action = btn.dataset.deleteUrl;
+            nameEl.textContent = signalName;
+            idEl.textContent = signalId;
+            countEl.textContent = activeBuys;
+            input.value = '';
+            // Zero references → submit immediately, skip the typed gate.
+            if (activeBuys === 0) {
+                if (!confirm(`Delete signal "${signalName}"? It isn't referenced by any active media buy.`)) return;
+                form.submit();
+                return;
+            }
+            submit.disabled = true;
+            modal.show();
+            setTimeout(() => input.focus(), 200);
+        });
+    });
+
+    input.addEventListener('input', () => {
+        submit.disabled = input.value.trim() !== 'DELETE';
+    });
+})();
+</script>
 
 {% if has_inventory %}
 <script>

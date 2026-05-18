@@ -27,6 +27,7 @@ from src.core.database.repositories.inventory_profile import InventoryProfileRep
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.signal_usage import SignalUsage, SignalUsageRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
@@ -51,6 +52,8 @@ __all__ = [
     "PrincipalRepository",
     "ProductRepository",
     "ProductUoW",
+    "SignalUsage",
+    "SignalUsageRepository",
     "SyncJobRepository",
     "TenantSignalRepository",
     "TenantConfigRepository",
