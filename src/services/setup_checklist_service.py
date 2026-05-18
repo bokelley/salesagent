@@ -632,7 +632,7 @@ class SetupChecklistService:
                         name="Inventory Sync",
                         description="Sync ad units and placements from ad server",
                         is_complete=inventory_synced,
-                        action_url=self._settings_url("inventory"),
+                        action_url=self._route_url("inventory.inventory_browser"),
                         details=inventory_details,
                     )
                 )
@@ -1047,7 +1047,7 @@ class SetupChecklistService:
                         name="Inventory Sync",
                         description="Sync ad units and placements from ad server",
                         is_complete=inventory_synced,
-                        action_url=self._settings_url("inventory"),
+                        action_url=self._route_url("inventory.inventory_browser"),
                         details=(
                             f"{gam_inventory_count:,} inventory items synced"
                             if inventory_synced

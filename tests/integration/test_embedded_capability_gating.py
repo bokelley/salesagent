@@ -187,6 +187,43 @@ def test_tenant_settings_no_longer_renders_integrations_section(embedded_client,
 
 
 # ---------------------------------------------------------------------------
+# Phase 3 (#437): Products + Inventory in-page tabs removed
+# ---------------------------------------------------------------------------
+
+
+def test_old_products_deep_link_redirects(embedded_client, open_tenant_id):
+    """``/settings/products`` was the legacy in-page anchor. Products lives
+    in primary top nav now (#451). Old deep-links forward there."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/products", follow_redirects=False)
+    assert resp.status_code == 302
+    assert f"/tenant/{open_tenant_id}/products/" in resp.headers["Location"]
+
+
+def test_old_inventory_deep_link_redirects(embedded_client, open_tenant_id):
+    """``/settings/inventory`` was the legacy in-page anchor. The GAM sync
+    UI moved to /inventory (Configure → Inventory operations → Sync inventory).
+    The redirect lands on the canonical page."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/inventory", follow_redirects=False)
+    assert resp.status_code == 302
+    assert f"/tenant/{open_tenant_id}/inventory" in resp.headers["Location"]
+
+
+def test_tenant_settings_no_longer_renders_products_or_inventory_sections(embedded_client, open_tenant_id):
+    """Sprint 7 Phase 3 (#437): in-page Products + Inventory tabs are gone
+    — rail entries (data-section=...) and content (<div id=...) both."""
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings")
+    body = resp.get_data(as_text=True)
+    assert 'data-section="products"' not in body
+    assert 'data-section="inventory"' not in body
+    # The standalone Products and Inventory pages own those IDs now —
+    # checking that the in-page section divs are gone from /settings.
+    # (Both <div id="products"> and <div id="inventory"> previously
+    # appeared inside tenant_settings.html.)
+    assert '<div id="products" class="settings-section"' not in body
+    assert '<div id="inventory" class="settings-section"' not in body
+
+
+# ---------------------------------------------------------------------------
 # POST handler 403 enforcement (defense-in-depth)
 # ---------------------------------------------------------------------------
 

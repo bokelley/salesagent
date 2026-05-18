@@ -195,7 +195,7 @@ def setup_checklist(tenant_id):
 
 
 _PROMOTED_SECTION_REDIRECTS = {
-    # Sprint 7 Phase 2 entity promotions. Old deep-links like
+    # Sprint 7 Phase 2 + 3 entity promotions. Old deep-links like
     # ``/settings/publishers`` or ``/settings/signing-keys`` would silently
     # render the default account section now that the in-page sections
     # are gone — give them a clean redirect to the new standalone page
@@ -208,6 +208,10 @@ _PROMOTED_SECTION_REDIRECTS = {
     # route instead of the standalone page; redirect it cleanly.
     "policies": "settings.policies_page",
     "integrations": "settings.integrations_page",
+    # Sprint 7 Phase 3 (#437): Products + Inventory in-page tabs are gone.
+    # Products is in primary top nav; Inventory's sync UI lives at /inventory.
+    "products": "products.list_products",
+    "inventory": "inventory.inventory_browser",
 }
 
 
