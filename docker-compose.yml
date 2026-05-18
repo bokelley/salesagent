@@ -112,6 +112,11 @@ services:
       # Skip the SSO gate (multi-tenant deployments treat auth as platform-managed).
       ADCP_TESTING: "true"
       ADCP_MULTI_TENANT: "true"
+      # Dev-only Fernet key so quickstart works without `make setup` first.
+      # The .env file (if present) overrides this — production deployments
+      # MUST set ENCRYPTION_KEY via their own env. Validate_configuration()
+      # refuses to start without one. Mirrors scripts/test-stack.sh.
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"
       # Development settings
       PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
       PYTHONUNBUFFERED: "1"
