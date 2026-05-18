@@ -748,7 +748,7 @@ class SpringServeAdapter(AdServerAdapter):
                     "id": f"supply_tag:{row.entity_id}",
                     "name": row.name or row.entity_id,
                     "type": "supply_tag",
-                    "parent": row.parent_id,
+                    "parent": row.supply_router_id or row.supply_partner_id,
                 }
                 for row in supply_tags
             ]

@@ -847,15 +847,22 @@ def test_springserve_connection(tenant_id, **kwargs):
 def list_springserve_inventory(tenant_id, **kwargs):
     """Return locally-cached SpringServe inventory entries for the product setup UI.
 
-    Filterable by ``entity_type`` (supply_partner, supply_tag). Optional
-    ``parent_id`` narrows supply_tags to one supply_partner.
+    Filterable by ``entity_type`` (supply_partner, supply_router, supply_tag,
+    key, value_list). Optional narrowing by the corresponding FK:
+
+    * ``supply_partner_id`` -- list routers under a partner, or all tags
+      (including orphans) under a partner
+    * ``supply_router_id`` -- list tags inside a router
+    * ``key_id`` -- list value_lists attached to a key
     """
     from src.core.database.repositories.springserve_inventory import (
         SpringServeInventoryRepository,
     )
 
     entity_type = request.args.get("entity_type")
-    parent_id = request.args.get("parent_id")
+    supply_partner_id = request.args.get("supply_partner_id")
+    supply_router_id = request.args.get("supply_router_id")
+    key_id = request.args.get("key_id")
     q = request.args.get("q")
 
     if not entity_type:
@@ -863,10 +870,21 @@ def list_springserve_inventory(tenant_id, **kwargs):
 
     with get_db_session() as session:
         repo = SpringServeInventoryRepository(session, tenant_id)
-        rows = repo.list_by_type(entity_type, parent_id=parent_id)
+        rows = repo.list_by_type(
+            entity_type,
+            supply_partner_id=supply_partner_id,
+            supply_router_id=supply_router_id,
+            key_id=key_id,
+        )
 
     items = [
-        {"id": row.entity_id, "name": row.name, "parent_id": row.parent_id}
+        {
+            "id": row.entity_id,
+            "name": row.name,
+            "supply_partner_id": row.supply_partner_id,
+            "supply_router_id": row.supply_router_id,
+            "key_id": row.key_id,
+        }
         for row in rows
         if not q or (row.name and q.lower() in row.name.lower())
     ]

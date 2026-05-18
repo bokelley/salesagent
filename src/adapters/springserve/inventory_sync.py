@@ -1,18 +1,30 @@
 """SpringServe inventory taxonomy sync.
 
-Walks the operator's SpringServe supply-side entities and upserts them
-into the ``springserve_inventory`` cache. The cache feeds the product
-configuration UI -- operators pick from synced supply tags instead of
-typing IDs.
+Walks the operator's SpringServe supply hierarchy and KV catalog into the
+``springserve_inventory`` cache. The cache feeds the product configuration
+UI and the bundle-composition logic that runs at ``get_products`` time --
+operators pick from synced inventory, and the composer can intersect a
+buyer brief against rich metadata without round-tripping to SpringServe.
 
-Today: the supply-side GETs (``/supply_partners``, ``/supply_tags``)
-return 403 on the operator's account; the sync raises
-:class:`SupplyScopeNotGranted` so the scheduler logs and retries
-without exception spam. The Stage 5 README documents the scope ask.
+What gets cached (one ``entity_type`` per row, explicit FK columns linking
+hierarchy):
 
-Day-of-scope: verify response shapes match the assumed
-``{id, name, supply_partner_id}`` minimum and tune
-:meth:`_supply_tag_row_to_dict` if the field names differ.
+* ``supply_partner`` -- top-level seller relationships
+* ``supply_router`` -- routing groups under a partner; this is the natural
+  bundle root because it's where the publisher does the curation work
+  (named offering, environment, format, supply scope)
+* ``supply_tag`` -- inventory atoms; each tag belongs to a partner directly
+  and OPTIONALLY to one router (orphan tags allowed)
+* ``key`` -- the publisher's KV namespace catalog (targeting + audience
+  surface declared per the publisher's data model)
+* ``value_list`` -- named value sets attached to a key; this is where
+  publisher-curated audience segments live (e.g. "Audio M25-54" =
+  station_id IN <curated list of station IDs>)
+
+When scope isn't granted yet the underlying call surfaces a
+:class:`SpringServeForbiddenError`; we trap it once at the top of
+:meth:`run` and raise :class:`SupplyScopeNotGranted` so the shared
+scheduler gets a clean signal rather than a raw 403.
 """
 
 from __future__ import annotations
@@ -73,17 +85,29 @@ class SpringServeInventorySync:
         self._session = session
 
     def run(self) -> InventorySyncResult:
-        """Walk supply_partners + supply_tags and upsert into the cache.
+        """Walk the full supply hierarchy + KV catalog and upsert into the cache.
 
         Returns an :class:`InventorySyncResult` with per-entity counts.
         Raises :class:`SupplyScopeNotGranted` when the first read hits 403.
+
+        Steps:
+
+        1. List partners, routers, tags (the three supply tiers).
+        2. For each router, fetch its tag list and stash the mapping
+           so we can backfill ``supply_router_id`` on each tag row --
+           neither side carries the back-reference natively.
+        3. List keys + value_lists (the KV/audience catalog).
+        4. Bulk-upsert everything in one transaction.
         """
         started = datetime.now(UTC)
         counts: dict[str, int] = {}
-        errors: dict[str, str] = {}
         try:
             partners = self._fetch_all(self._supply.list_supply_partners)
+            routers = self._fetch_all(self._supply.list_supply_routers)
             tags = self._fetch_all(self._supply.list_supply_tags)
+            tag_to_router = self._build_tag_to_router_map(routers)
+            keys = self._fetch_all(self._supply.list_keys)
+            value_lists = self._fetch_all(self._supply.list_value_lists)
         except SpringServeForbiddenError as exc:
             logger.info("SpringServe supply scope not granted: %s", exc)
             raise SupplyScopeNotGranted() from exc
@@ -98,30 +122,78 @@ class SpringServeInventorySync:
             )
 
         repo = SpringServeInventoryRepository(self._session, self._tenant_id)
-        touched_partners = repo.bulk_upsert(
-            [self._supply_partner_row_to_dict(p) for p in partners if p.get("id") is not None]
+        counts["supply_partner"] = repo.bulk_upsert(
+            [self._supply_partner_row(p) for p in partners if p.get("id") is not None]
         )
-        touched_tags = repo.bulk_upsert([self._supply_tag_row_to_dict(t) for t in tags if t.get("id") is not None])
+        counts["supply_router"] = repo.bulk_upsert(
+            [self._supply_router_row(r) for r in routers if r.get("id") is not None]
+        )
+        counts["supply_tag"] = repo.bulk_upsert(
+            [self._supply_tag_row(t, tag_to_router) for t in tags if t.get("id") is not None]
+        )
+        counts["key"] = repo.bulk_upsert([self._key_row(k) for k in keys if k.get("id") is not None])
+        counts["value_list"] = repo.bulk_upsert(
+            [self._value_list_row(v) for v in value_lists if v.get("id") is not None]
+        )
         self._session.commit()
-        counts["supply_partner"] = touched_partners
-        counts["supply_tag"] = touched_tags
+
+        total = sum(counts.values())
         logger.info(
-            "SpringServe inventory sync: tenant=%s partners=%d tags=%d",
+            "SpringServe inventory sync: tenant=%s %s",
             self._tenant_id,
-            touched_partners,
-            touched_tags,
+            " ".join(f"{k}={v}" for k, v in counts.items()),
         )
         return InventorySyncResult(
             started_at=started,
             finished_at=datetime.now(UTC),
             succeeded=True,
             counts=counts,
-            errors=errors,
-            rows_updated=touched_partners + touched_tags,
+            rows_updated=total,
         )
 
+    # ----- helpers -----
+
+    def _build_tag_to_router_map(self, routers: list[dict[str, Any]]) -> dict[str, str]:
+        """For each router, call the filter endpoint and build a tag_id->router_id index.
+
+        SpringServe's API doesn't carry the back-reference on either side
+        of the tag<->router relationship, so the only way to discover it is
+        to filter the tag list by each router_id. O(routers) extra calls,
+        bounded and small (typical publisher has under 20 routers).
+        """
+        mapping: dict[str, str] = {}
+        for router in routers:
+            rid = router.get("id")
+            if rid is None:
+                continue
+            page = 1
+            while True:
+                batch = self._supply.list_supply_tags_in_router(rid, page=page, per_page=self.PER_PAGE)
+                if not batch:
+                    break
+                for tag in batch:
+                    tag_id = tag.get("id")
+                    if tag_id is not None:
+                        # First-seen wins. Live data shows no router-router
+                        # overlap, so this is safe; if SpringServe changes
+                        # that, the warning surfaces it.
+                        tag_key = str(tag_id)
+                        if tag_key in mapping and mapping[tag_key] != str(rid):
+                            logger.warning(
+                                "SpringServe tag %s appears in multiple routers (%s, %s); keeping first",
+                                tag_key,
+                                mapping[tag_key],
+                                rid,
+                            )
+                        else:
+                            mapping[tag_key] = str(rid)
+                if len(batch) < self.PER_PAGE:
+                    break
+                page += 1
+        return mapping
+
     def _fetch_all(self, list_callable: Any) -> list[dict[str, Any]]:
-        """Walk paginated results until an empty page comes back."""
+        """Walk paginated results until an empty or short page comes back."""
         items: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -134,22 +206,68 @@ class SpringServeInventorySync:
             page += 1
         return items
 
+    # ----- row mappers -----
+
     @staticmethod
-    def _supply_partner_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+    def _supply_partner_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "entity_type": "supply_partner",
             "entity_id": str(row["id"]),
             "name": row.get("name"),
-            "parent_id": None,
+            "supply_partner_id": None,
+            "supply_router_id": None,
+            "key_id": None,
             "raw_json": row,
         }
 
     @staticmethod
-    def _supply_tag_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+    def _supply_router_row(row: dict[str, Any]) -> dict[str, Any]:
+        partner_id = row.get("supply_partner_id")
+        return {
+            "entity_type": "supply_router",
+            "entity_id": str(row["id"]),
+            "name": row.get("name"),
+            "supply_partner_id": str(partner_id) if partner_id is not None else None,
+            "supply_router_id": None,
+            "key_id": None,
+            "raw_json": row,
+        }
+
+    @staticmethod
+    def _supply_tag_row(row: dict[str, Any], tag_to_router: dict[str, str]) -> dict[str, Any]:
+        partner_id = row.get("supply_partner_id")
+        router_id = tag_to_router.get(str(row["id"]))
         return {
             "entity_type": "supply_tag",
             "entity_id": str(row["id"]),
             "name": row.get("name"),
-            "parent_id": str(row["supply_partner_id"]) if row.get("supply_partner_id") is not None else None,
+            "supply_partner_id": str(partner_id) if partner_id is not None else None,
+            "supply_router_id": router_id,
+            "key_id": None,
+            "raw_json": row,
+        }
+
+    @staticmethod
+    def _key_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "entity_type": "key",
+            "entity_id": str(row["id"]),
+            "name": row.get("name") or row.get("key"),
+            "supply_partner_id": None,
+            "supply_router_id": None,
+            "key_id": None,
+            "raw_json": row,
+        }
+
+    @staticmethod
+    def _value_list_row(row: dict[str, Any]) -> dict[str, Any]:
+        key_id = row.get("key_id")
+        return {
+            "entity_type": "value_list",
+            "entity_id": str(row["id"]),
+            "name": row.get("name"),
+            "supply_partner_id": None,
+            "supply_router_id": None,
+            "key_id": str(key_id) if key_id is not None else None,
             "raw_json": row,
         }

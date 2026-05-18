@@ -2567,11 +2567,21 @@ class SpringServeInventory(Base, JSONValidatorMixin):
         String(40),
         nullable=False,
         primary_key=True,
-        comment=("SpringServe entity kind: supply_partner, supply_tag, supply_group, account"),
+        comment=("SpringServe entity kind: supply_partner, supply_router, supply_tag, key, value_list"),
     )
     entity_id: Mapped[str] = mapped_column(String(64), nullable=False, primary_key=True)
     name: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    parent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Explicit foreign-key columns rather than a polymorphic ``parent_id``.
+    # Each row populates only the FKs that apply to its entity_type:
+    #   supply_partner row  -> all FKs NULL
+    #   supply_router row   -> supply_partner_id set
+    #   supply_tag row      -> supply_partner_id set; supply_router_id set
+    #                         iff the tag belongs to a router (orphans allowed)
+    #   key row             -> all FKs NULL
+    #   value_list row      -> key_id set
+    supply_partner_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    supply_router_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     raw_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -2580,6 +2590,8 @@ class SpringServeInventory(Base, JSONValidatorMixin):
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
         Index("idx_springserve_inventory_tenant_type", "tenant_id", "entity_type"),
+        Index("idx_springserve_inventory_router", "tenant_id", "supply_router_id"),
+        Index("idx_springserve_inventory_key", "tenant_id", "key_id"),
     )
 
 
