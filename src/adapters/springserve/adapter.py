@@ -281,7 +281,13 @@ class SpringServeAdapter(AdServerAdapter):
             ),
             "is_active": False,  # Inactive until a creative is bound.
         }
-        kwargs.update(build_demand_tag_targeting(package.targeting_overlay, product_config))
+        kwargs.update(
+            build_demand_tag_targeting(
+                package.targeting_overlay,
+                product_config,
+                tenant_id=self.tenant_id,
+            )
+        )
         return kwargs
 
     # ----- create_media_buy -----
