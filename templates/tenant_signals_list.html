@@ -242,8 +242,10 @@
 {# Delete confirmation modal — typed-DELETE gate for signals referenced by active buys #}
 <div class="modal fade" id="signal-delete-modal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
+    {# CSRF defense for this form lives in src/admin/app.py:enforce_admin_csrf
+       (Origin/Referer match against request.host_url). No token field is
+       wired in this stack — see security review on PR #482 + #498. #}
     <form class="modal-content" method="POST" id="signal-delete-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token else '' }}">
       <div class="modal-header">
         <h5 class="modal-title">Delete signal <span class="font-monospace" id="del-signal-name"></span>?</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>

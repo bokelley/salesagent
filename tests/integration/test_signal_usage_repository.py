@@ -89,30 +89,48 @@ class TestUsageIndexCountsActiveReferences:
 
         assert index["sports_fans"].active_buy_count == 2
 
-    def test_excludes_completed_and_draft_buys(self, integration_db):
+    def test_excludes_terminal_status_buys(self, integration_db):
+        """``completed`` / ``canceled`` / ``cancelled`` / ``rejected`` /
+        ``failed`` are terminal — references are historical."""
         from src.core.database.repositories.signal_usage import SignalUsageRepository
 
         with _SignalUsageEnv() as env:
             tenant = TenantFactory(tenant_id="usage_t2")
             principal = PrincipalFactory(tenant=tenant)
-            _buy_with_signals(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_completed",
-                status="completed",
-                include=["sports_fans"],
-            )
-            _buy_with_signals(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_draft",
-                status="draft",
-                include=["sports_fans"],
-            )
+            for i, terminal in enumerate(("completed", "canceled", "cancelled", "rejected", "failed")):
+                _buy_with_signals(
+                    tenant=tenant,
+                    principal=principal,
+                    media_buy_id=f"mb_term_{i}",
+                    status=terminal,
+                    include=["sports_fans"],
+                )
             session = env.get_session()
             index = SignalUsageRepository(session, "usage_t2").usage_index()
 
         assert "sports_fans" not in index
+
+    def test_includes_paused_and_pending_buys(self, integration_db):
+        """Paused and pending_* buys still reference the signal — they
+        will (or could) re-serve. Deleting under them breaks live work."""
+        from src.core.database.repositories.signal_usage import SignalUsageRepository
+
+        with _SignalUsageEnv() as env:
+            tenant = TenantFactory(tenant_id="usage_t2b")
+            principal = PrincipalFactory(tenant=tenant)
+            for i, live in enumerate(("paused", "pending_creatives", "pending_start", "pending_approval", "draft")):
+                _buy_with_signals(
+                    tenant=tenant,
+                    principal=principal,
+                    media_buy_id=f"mb_live_{i}",
+                    status=live,
+                    include=["sports_fans"],
+                )
+            session = env.get_session()
+            index = SignalUsageRepository(session, "usage_t2b").usage_index()
+
+        # Five live buys all reference the same signal.
+        assert index["sports_fans"].active_buy_count == 5
 
     def test_counts_audience_exclude_references(self, integration_db):
         from src.core.database.repositories.signal_usage import SignalUsageRepository
@@ -291,6 +309,32 @@ class TestRawRequestEdgeCases:
             index = SignalUsageRepository(session, "usage_t10").usage_index()
 
         assert index == {}
+
+    def test_top_level_targeting_overlay_is_walked(self, integration_db):
+        """Update-shape: ``targeting_overlay`` may sit at request root,
+        not only under ``packages[*]``. Both must be honored."""
+        from src.core.database.repositories.signal_usage import SignalUsageRepository
+
+        with _SignalUsageEnv() as env:
+            tenant = TenantFactory(tenant_id="usage_t_top")
+            principal = PrincipalFactory(tenant=tenant)
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_top_overlay",
+                status="active",
+                raw_request={
+                    "targeting_overlay": {
+                        "audience_include": ["top_level_sig"],
+                        "audience_exclude": ["top_level_neg"],
+                    }
+                },
+            )
+            session = env.get_session()
+            index = SignalUsageRepository(session, "usage_t_top").usage_index()
+
+        assert index["top_level_sig"].active_buy_count == 1
+        assert index["top_level_neg"].active_buy_count == 1
 
     def test_null_audience_include_is_skipped(self, integration_db):
         from src.core.database.repositories.signal_usage import SignalUsageRepository

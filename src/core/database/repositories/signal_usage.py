@@ -1,21 +1,32 @@
-"""SignalUsage repository — count active media buys referencing a TenantSignal.
+"""SignalUsage repository — count live media buys referencing a TenantSignal.
 
 A ``signal_id`` lands inside the create_media_buy request JSON at
 ``packages[*].targeting_overlay.audience_include`` and
-``audience_exclude``. We persist that payload verbatim on
-``MediaBuy.raw_request`` (JSONB). To answer "which signals are buyers
-actually referencing right now?" we scan the active subset of buys for
-the tenant and walk the JSON in Python.
+``audience_exclude`` (and defensively at the request top level for the
+update-shape, where AdCP also accepts these keys). We persist that
+payload verbatim on ``MediaBuy.raw_request`` (JSONB). To answer "which
+signals are buyers actually referencing right now?" we scan the live
+subset of buys for the tenant and walk the JSON in Python.
 
-Active = status in ('active', 'approved'). Paused buys still count —
-the references are still live, the buy is just temporarily not serving.
-Completed and cancelled buys are excluded; the references are
-historical and shouldn't block a delete.
+**What counts as live?** Anything *not* in a terminal status. We use an
+exclusion list — terminal = ``{completed, canceled, cancelled, rejected,
+failed}``. Everything else counts:
+
+- ``active`` / ``approved`` — serving now
+- ``paused`` — temporarily not serving but will resume
+- ``pending_creatives`` / ``pending_start`` / ``pending_approval`` —
+  waiting on something, will serve once it clears
+- ``draft`` — not yet committed but the reference is recorded
+
+Inverting from an allowlist to a denylist matches the safety invariant:
+a delete should be blocked when a buy *could* serve, not only when it
+*is* serving. New statuses introduced by future PRs default to "live"
+unless explicitly added to the terminal set.
 
 Why Python iteration and not JSONB path queries: the rest of the
 codebase walks ``raw_request`` in Python (see
 ``src/core/tools/media_buy_delivery.py``) and operates at publisher
-scale — typically <1000 active buys per tenant. A single SELECT + dict
+scale — typically <1000 live buys per tenant. A single SELECT + dict
 walk is cheaper than maintaining a JSONB-path query idiom that doesn't
 exist elsewhere in the codebase.
 """
@@ -35,31 +46,56 @@ from src.core.database.models import MediaBuy
 
 @dataclass(frozen=True)
 class SignalUsage:
-    """Per-signal usage snapshot over a tenant's active media buys."""
+    """Per-signal usage snapshot over a tenant's live media buys."""
 
     active_buy_count: int
     last_referenced_at: datetime | None
 
 
-_ACTIVE_STATUSES: tuple[str, ...] = ("active", "approved")
+# Terminal statuses — signal references on these buys are historical
+# and don't block delete. Anything else is treated as live (see module
+# docstring). ``cancelled`` and ``canceled`` are both listed because
+# the codebase isn't fully consistent on spelling.
+_TERMINAL_STATUSES: tuple[str, ...] = (
+    "completed",
+    "canceled",
+    "cancelled",
+    "rejected",
+    "failed",
+)
 
 
 def _iter_referenced_signal_ids(raw_request: dict[str, Any] | None) -> Iterable[str]:
-    """Yield every ``signal_id`` referenced by a create_media_buy payload.
+    """Yield every ``signal_id`` referenced by a media-buy request payload.
 
-    Handles missing keys defensively — older payloads may not have a
-    ``packages`` field, or may omit ``targeting_overlay`` per package.
-    Yields duplicates: the same signal can appear in multiple packages
-    of one buy. Callers deduplicate per buy.
+    Walks both shapes the AdCP request schema admits:
+
+    - ``packages[*].targeting_overlay.{audience_include,audience_exclude}``
+      — the canonical create_media_buy shape.
+    - ``targeting_overlay.{audience_include,audience_exclude}`` at the
+      request top level — accepted by ``update_media_buy`` and any caller
+      that pre-flights with a buy-level overlay. Defensive walk; closes
+      the gap one schema-shape change away from being a real bug.
+
+    Handles missing keys defensively. Yields duplicates: the same signal
+    can appear in multiple packages of one buy — callers dedupe per buy.
     """
     if not raw_request:
         return
-    for pkg in raw_request.get("packages") or []:
-        overlay = (pkg or {}).get("targeting_overlay") or {}
+
+    def _walk_overlay(overlay: dict[str, Any] | None) -> Iterable[str]:
+        if not overlay:
+            return
         for field in ("audience_include", "audience_exclude"):
             for sid in overlay.get(field) or []:
                 if isinstance(sid, str) and sid:
                     yield sid
+
+    # Top-level overlay (update_media_buy / convenience shape)
+    yield from _walk_overlay(raw_request.get("targeting_overlay"))
+    # Per-package overlay (create_media_buy canonical shape)
+    for pkg in raw_request.get("packages") or []:
+        yield from _walk_overlay((pkg or {}).get("targeting_overlay"))
 
 
 class SignalUsageRepository:
@@ -83,7 +119,7 @@ class SignalUsageRepository:
         """
         stmt = select(MediaBuy.raw_request, MediaBuy.updated_at).where(
             MediaBuy.tenant_id == self._tenant_id,
-            MediaBuy.status.in_(_ACTIVE_STATUSES),
+            MediaBuy.status.notin_(_TERMINAL_STATUSES),
         )
         counts: dict[str, int] = {}
         last_seen: dict[str, datetime] = {}
