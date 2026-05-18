@@ -792,6 +792,13 @@
 {% include 'components/setup_checklist_widget.html' %}
 {% endif %}
 
+<!-- Seller capability ladder (#471): what you can sell today + what unlocks
+     more. Hidden once the tenant has unlocked every tier available (L3 for
+     open-instance, L2 for embedded). -->
+{% if capability_ladder and capability_ladder.current_tier < capability_ladder.max_unlockable_tier %}
+{% include 'components/capability_ladder_widget.html' %}
+{% endif %}
+
 <!-- Three-stage business framing: Incoming · Running · Pipeline -->
 {% set inc = ledger.incoming %}
 {% set run = ledger.running %}

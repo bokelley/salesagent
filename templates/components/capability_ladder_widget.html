@@ -1,0 +1,229 @@
+<!-- Seller capability ladder (issue #471 / parent #451).
+
+     Maps the operator's day-to-day mental model: what they can sell *today*,
+     and what unlocks the next tier of selling. Distinct from the hygiene
+     checklist (SSO/AAO/currency/ad-server) — those gate orders entirely;
+     this widget shows compositional readiness.
+
+     L1 Wholesale: bundles only
+     L2 Wholesale + Signals: bundles × signals via upstream composition
+     L3 Composed Products: operator-authored bundle × signal products
+     (Embedded tenants cap at L2 — storefront does composition.) -->
+
+{% if capability_ladder %}
+<style>
+    .ld-ladder {
+        background: var(--sa-bg-surface);
+        border: 1px solid var(--sa-rule);
+        padding: 20px 24px;
+        margin-bottom: var(--sa-space-6);
+        max-width: 1280px;
+        margin-left: auto;
+        margin-right: auto;
+        font-family: var(--sa-font-sans);
+        color: var(--sa-ink);
+    }
+    .ld-ladder__head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--sa-rule);
+        margin-bottom: 14px;
+    }
+    .ld-ladder__title {
+        font-family: var(--sa-font-serif);
+        font-size: 22px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        line-height: 1;
+        margin: 0;
+        color: var(--sa-ink);
+    }
+    .ld-ladder__sub {
+        margin-top: 6px;
+        font-size: 12.5px;
+        color: var(--sa-ink-70);
+    }
+    .ld-ladder__tier-block { text-align: right; }
+    .ld-ladder__tier-value {
+        font-family: var(--sa-font-serif);
+        font-size: 36px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+    }
+    .ld-ladder__tier-meta {
+        margin-top: 4px;
+        font-family: var(--sa-font-mono);
+        font-size: 11px;
+        color: var(--sa-ink-50);
+    }
+    .ld-ladder__rung {
+        display: grid;
+        grid-template-columns: 28px 1fr auto;
+        gap: 14px;
+        align-items: flex-start;
+        padding: 14px 0;
+        border-top: 1px solid var(--sa-rule-soft);
+    }
+    .ld-ladder__rung:first-of-type { border-top: none; }
+    .ld-ladder__rung--locked .ld-ladder__rung-name { color: var(--sa-ink-70); }
+    .ld-ladder__mark {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 1.5px solid var(--sa-rule);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--sa-font-serif);
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--sa-ink-50);
+        background: var(--sa-bg-page);
+        flex-shrink: 0;
+    }
+    .ld-ladder__mark.is-unlocked {
+        background: var(--sa-ink);
+        border-color: var(--sa-ink);
+        color: var(--sa-bg-page);
+    }
+    .ld-ladder__rung-name {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--sa-ink);
+        line-height: 1.3;
+    }
+    .ld-ladder__rung-value {
+        font-size: 12px;
+        color: var(--sa-ink-70);
+        margin-top: 4px;
+        line-height: 1.45;
+    }
+    .ld-ladder__rung-blockers {
+        margin-top: 8px;
+        font-size: 11.5px;
+        color: var(--sa-warning);
+        line-height: 1.5;
+    }
+    .ld-ladder__rung-blockers li {
+        margin: 0;
+        padding-left: 14px;
+        position: relative;
+    }
+    .ld-ladder__rung-blockers li::before {
+        content: "↑";
+        position: absolute;
+        left: 0;
+        color: var(--sa-warning);
+    }
+    .ld-ladder__rung-counts {
+        margin-top: 6px;
+        font-family: var(--sa-font-mono);
+        font-size: 11px;
+        color: var(--sa-ink-50);
+    }
+    .ld-ladder__cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 11px;
+        background: var(--sa-ink);
+        color: var(--sa-bg-page);
+        font-family: var(--sa-font-sans);
+        font-size: 11.5px;
+        font-weight: 500;
+        text-decoration: none;
+        border-radius: var(--sa-radius-sm);
+        white-space: nowrap;
+    }
+    .ld-ladder__cta:hover { color: var(--sa-bg-page); background: #000; text-decoration: none; }
+    .ld-ladder__cta--ghost {
+        background: var(--sa-bg-page);
+        color: var(--sa-ink-70);
+        border: 1px solid var(--sa-rule);
+    }
+    .ld-ladder__cta--ghost:hover { color: var(--sa-ink); background: var(--sa-bg-page); }
+    .ld-ladder__embedded-note {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--sa-rule-soft);
+        font-size: 11.5px;
+        font-style: italic;
+        color: var(--sa-ink-50);
+    }
+</style>
+
+{% set ladder = capability_ladder %}
+{% set visible_rungs = ladder.rungs | rejectattr('hidden', 'equalto', true) | list %}
+{% set unlocked_count = visible_rungs | selectattr('unlocked', 'equalto', true) | list | length %}
+{% set total_visible = visible_rungs | length %}
+
+<div class="ld-ladder">
+    <div class="ld-ladder__head">
+        <div>
+            <h3 class="ld-ladder__title">What you can sell</h3>
+            <div class="ld-ladder__sub">
+                {% if ladder.current_tier == 0 %}
+                    Unlock Wholesale to start taking orders.
+                {% elif ladder.current_tier >= ladder.max_unlockable_tier %}
+                    You've unlocked every tier available to this tenant.
+                {% else %}
+                    You're at Tier {{ ladder.current_tier }}. Unlock more to expand what buyers can compose.
+                {% endif %}
+            </div>
+        </div>
+        <div class="ld-ladder__tier-block">
+            <div class="ld-ladder__tier-value">L{{ ladder.current_tier }}</div>
+            <div class="ld-ladder__tier-meta">{{ unlocked_count }}/{{ total_visible }} tiers unlocked</div>
+        </div>
+    </div>
+
+    {% for rung in visible_rungs %}
+        <div class="ld-ladder__rung{% if not rung.unlocked %} ld-ladder__rung--locked{% endif %}">
+            <span class="ld-ladder__mark{% if rung.unlocked %} is-unlocked{% endif %}">
+                {% if rung.unlocked %}
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                {% else %}
+                    L{{ rung.tier }}
+                {% endif %}
+            </span>
+            <div>
+                <div class="ld-ladder__rung-name">{{ rung.name }}</div>
+                <div class="ld-ladder__rung-value">{{ rung.value_prop }}</div>
+                {% if not rung.unlocked and rung.blockers %}
+                    <ul class="ld-ladder__rung-blockers" style="list-style:none; padding:0;">
+                        {% for blocker in rung.blockers %}
+                            <li>{{ blocker }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+                {% if rung.unlocked and rung.counts %}
+                    <div class="ld-ladder__rung-counts">
+                        {% for label, count in rung.counts.items() %}
+                            {{ count }} {{ label | replace('_', ' ') }}{% if not loop.last %} · {% endif %}
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <div>
+                {% if rung.action_url %}
+                    <a href="{{ rung.action_url }}" class="ld-ladder__cta{% if rung.unlocked %} ld-ladder__cta--ghost{% endif %}">
+                        {{ rung.action_label }}
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+    {% endfor %}
+
+    {% if ladder.is_embedded %}
+        <div class="ld-ladder__embedded-note">
+            Composition runs upstream in your host product — composed products aren't authored here.
+        </div>
+    {% endif %}
+</div>
+{% endif %}

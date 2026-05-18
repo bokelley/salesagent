@@ -18,11 +18,13 @@ from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
+    InventoryProfile,
     Principal,
     Product,
     PublisherPartner,
     Tenant,
     TenantAuthConfig,
+    TenantSignal,
 )
 
 logger = logging.getLogger(__name__)
@@ -468,6 +470,31 @@ class SetupChecklistService:
             ),
         ]
 
+    @staticmethod
+    def _evaluate_ad_server(tenant: Tenant) -> tuple[bool, str]:
+        """Compute ``(is_configured, config_details)`` for the tenant's ad server.
+
+        Shared by ``_check_critical_tasks``, ``_build_critical_tasks``, and
+        ``get_capability_ladder``. Mock adapter only counts as configured when
+        ``ADCP_TESTING=true`` — otherwise it's treated as not production-ready.
+        """
+        if not (tenant.ad_server and tenant.ad_server != ""):
+            return False, "No ad server configured"
+
+        if tenant.is_gam_tenant:
+            return True, "GAM configured - Test connection to verify"
+
+        if tenant.ad_server == "mock":
+            if os.environ.get("ADCP_TESTING") == "true":
+                return True, "Mock adapter configured (test mode)"
+            return False, "Mock adapter - Configure a real ad server for production"
+
+        if tenant.ad_server in {"triton", "triton_digital", "freewheel"}:
+            return True, f"{tenant.ad_server} adapter configured"
+
+        # Unknown adapter type - show warning but don't block
+        return True, f"{tenant.ad_server} adapter - verify configuration"
+
     def _check_critical_tasks(self, session, tenant: Tenant) -> list[SetupTask]:
         """Check critical tasks required before first order."""
         tasks = []
@@ -479,43 +506,7 @@ class SetupChecklistService:
 
         # 1. Ad Server FULLY CONFIGURED - CRITICAL BLOCKER
         # This is the most important task - nothing else can be done until ad server works
-        ad_server_selected = tenant.ad_server is not None and tenant.ad_server != ""
-
-        # For GAM, check that it's fully configured with OAuth credentials
-        ad_server_fully_configured = False
-        config_details = "No ad server configured"
-
-        if ad_server_selected:
-            if tenant.is_gam_tenant:
-                # Check if GAM has OAuth tokens (indicates successful authentication)
-                # GAM config is stored in the adapter_config table, not directly on tenant
-                # For now, just check if adapter is selected
-                has_credentials = True  # Assume configured if GAM is selected
-                ad_server_fully_configured = has_credentials
-
-                if has_credentials:
-                    config_details = "GAM configured - Test connection to verify"
-                else:
-                    config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
-            elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
-            elif tenant.ad_server in {"triton", "triton_digital", "freewheel"}:
-                # Schema-driven adapters — configured once credentials are saved.
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter configured"
-            else:
-                # Unknown adapter type - show warning but don't block
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter - verify configuration"
+        ad_server_fully_configured, config_details = self._evaluate_ad_server(tenant)
 
         tasks.append(
             SetupTask(
@@ -940,31 +931,7 @@ class SetupChecklistService:
         tasks = list(self._build_aao_tasks(tenant))
 
         # 1. Ad Server Configuration
-        ad_server_selected = tenant.ad_server is not None and tenant.ad_server != ""
-        ad_server_fully_configured = False
-        config_details = "No ad server configured"
-
-        if ad_server_selected:
-            if tenant.is_gam_tenant:
-                ad_server_fully_configured = True
-                config_details = "GAM configured - Test connection to verify"
-            elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
-            elif tenant.ad_server in {"triton", "triton_digital", "freewheel"}:
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter configured"
-            else:
-                ad_server_fully_configured = True
-                config_details = f"{tenant.ad_server} adapter - verify configuration"
+        ad_server_fully_configured, config_details = self._evaluate_ad_server(tenant)
 
         tasks.append(
             SetupTask(
@@ -1315,6 +1282,161 @@ class SetupChecklistService:
         )
 
         return tasks
+
+    def get_capability_ladder(self) -> dict[str, Any]:
+        """Compute the seller capability ladder (issue #471 / parent #451).
+
+        Models the four-tier maturity ladder for what a seller can sell:
+
+        * **L1 Wholesale** — ad server + ≥1 inventory bundle. Buyers query
+          your bundles directly via ``get_products`` (open programmatic).
+        * **L2 + Signals** — L1 + ≥1 signal profile. Embedding sales agents
+          compose your bundles × signals at request time.
+        * **L3 Composed Products** — L1 + L2 + ≥1 product joining a bundle
+          with signal targeting. Operator authors named products.
+        * **L4 Forecast/guarantee** — out of scope; not modeled here.
+
+        Embedded tenants cap at L2: composition lives upstream in the
+        storefront, so L3 is hidden on those dashboards.
+
+        This is **separate from ``ready_for_orders``** (the hygiene gate
+        in :meth:`validate_setup_complete`). A tenant at L1 is genuinely
+        ready to take wholesale orders — they aren't "incomplete" for
+        not having composed products.
+
+        Inventory bundles are modeled as :class:`InventoryProfile` today;
+        UX surfaces them as "Inventory bundles" — the salable-unit framing
+        that #471 wanted. The internal rename is a separate, focused PR.
+        """
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+        with get_db_session() as session:
+            tenant = TenantConfigRepository(session, self.tenant_id).get_tenant()
+            if not tenant:
+                raise ValueError(f"Tenant {self.tenant_id} not found")
+
+            ad_server_configured, _ = self._evaluate_ad_server(tenant)
+
+            inventory_bundle_count = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(InventoryProfile)
+                    .where(InventoryProfile.tenant_id == self.tenant_id)
+                )
+                or 0
+            )
+            signal_profile_count = (
+                session.scalar(
+                    select(func.count()).select_from(TenantSignal).where(TenantSignal.tenant_id == self.tenant_id)
+                )
+                or 0
+            )
+            # L3 product validity: bundle attached AND signal targeting enabled
+            # (the operator opted the product into composition). signal_targeting_allowed
+            # is nullable, so compare explicitly to True to exclude NULL.
+            composed_product_count = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Product)
+                    .where(
+                        Product.tenant_id == self.tenant_id,
+                        Product.inventory_profile_id.isnot(None),
+                        Product.signal_targeting_allowed == True,  # noqa: E712
+                    )
+                )
+                or 0
+            )
+
+            wholesale_unlocked = ad_server_configured and inventory_bundle_count > 0
+            signals_unlocked = wholesale_unlocked and signal_profile_count > 0
+            composed_unlocked = signals_unlocked and composed_product_count > 0
+
+            # Tier the tenant has reached. 0 = nothing salable yet.
+            if composed_unlocked:
+                current_tier = 3
+            elif signals_unlocked:
+                current_tier = 2
+            elif wholesale_unlocked:
+                current_tier = 1
+            else:
+                current_tier = 0
+
+            # Embedded tenants cap at L2 — the storefront owns composition.
+            max_unlockable_tier = 2 if tenant.is_embedded else 3
+
+            wholesale_blockers: list[str] = []
+            if not ad_server_configured:
+                wholesale_blockers.append("Connect an ad server")
+            if inventory_bundle_count == 0:
+                wholesale_blockers.append("Author at least one inventory bundle")
+
+            signals_blockers: list[str] = []
+            if not wholesale_unlocked:
+                signals_blockers.append("Unlock Wholesale first")
+            if signal_profile_count == 0:
+                signals_blockers.append("Author at least one signal profile")
+
+            composed_blockers: list[str] = []
+            if not signals_unlocked:
+                composed_blockers.append("Unlock Wholesale + Signals first")
+            if composed_product_count == 0:
+                composed_blockers.append(
+                    "Author a product that attaches an inventory bundle and enables signal targeting"
+                )
+
+            rungs = [
+                {
+                    "key": "wholesale",
+                    "tier": 1,
+                    "name": "Wholesale",
+                    "value_prop": "Buyers query your inventory bundles directly via get_products.",
+                    "unlocked": wholesale_unlocked,
+                    "blockers": wholesale_blockers,
+                    "action_url": self._route_url("inventory_profiles.list_inventory_profiles"),
+                    "action_label": "Inventory bundles",
+                    "counts": {
+                        "inventory_bundles": inventory_bundle_count,
+                    },
+                    "hidden": False,
+                },
+                {
+                    "key": "signals",
+                    "tier": 2,
+                    "name": "Wholesale + Signals",
+                    "value_prop": "Embedding sales agents compose your bundles × signals at request time.",
+                    "unlocked": signals_unlocked,
+                    "blockers": signals_blockers,
+                    "action_url": self._route_url("tenant_signals.list_signals"),
+                    "action_label": "Signal profiles",
+                    "counts": {
+                        "signal_profiles": signal_profile_count,
+                    },
+                    "hidden": False,
+                },
+                {
+                    "key": "composed_products",
+                    "tier": 3,
+                    "name": "Composed Products",
+                    "value_prop": "Author named products that combine inventory bundles with signal targeting.",
+                    "unlocked": composed_unlocked,
+                    "blockers": composed_blockers,
+                    "action_url": self._route_url("products.list_products"),
+                    "action_label": "Products",
+                    "counts": {
+                        "composed_products": composed_product_count,
+                    },
+                    # Embedded tenants don't author their own composed products —
+                    # the storefront does it upstream.
+                    "hidden": tenant.is_embedded,
+                },
+            ]
+
+            return {
+                "current_tier": current_tier,
+                "max_unlockable_tier": max_unlockable_tier,
+                "is_embedded": tenant.is_embedded,
+                "rungs": rungs,
+            }
 
     def get_next_steps(self) -> list[dict[str, str]]:
         """Get prioritized next steps for incomplete tasks.
