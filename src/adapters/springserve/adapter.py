@@ -336,6 +336,10 @@ class SpringServeAdapter(AdServerAdapter):
         assert self._client is not None
         assert self.demand_partner_id is not None
         try:
+            # SpringServe requires a numeric rate on campaign create. Pick the
+            # first package's rate as a representative figure -- per-package
+            # rates land on the demand_tag itself a few lines below.
+            first_rate, _ = self._resolve_pricing_rate(packages[0], package_pricing_info) if packages else (0.0, "")
             campaign = self._client.campaigns.create(
                 name=buy_name,
                 demand_partner_id=int(self.demand_partner_id),
@@ -347,6 +351,7 @@ class SpringServeAdapter(AdServerAdapter):
                     f"packages={len(packages)}, "
                     f"flight={start_time.date()}..{end_time.date()}"
                 ),
+                rate=first_rate,
                 rate_currency=rate_currency,
             )
             for package in packages:

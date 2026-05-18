@@ -33,6 +33,7 @@ class SpringServeCampaignsClient:
         code: str | None = None,
         secondary_code: str | None = None,
         note: str | None = None,
+        rate: float | str = 0.0,
         rate_currency: str = "USD",
         cost_model_type: int = 0,
     ) -> Campaign:
@@ -41,11 +42,18 @@ class SpringServeCampaignsClient:
         Campaigns are created paused (``is_active=False``) so the operator
         can verify configuration before unleashing demand. Flip via
         :meth:`update` once creative + demand tags are wired.
+
+        ``rate`` is required on create even when the publisher will price
+        per demand_tag -- SpringServe rejects with HTTP 422 ``"Rate can't
+        be blank, Rate is not a number"`` otherwise. Existing campaigns
+        can hold ``rate=null``, so the value here is just a creation-time
+        placeholder.
         """
         body: dict[str, Any] = {
             "name": name,
             "demand_partner_id": demand_partner_id,
             "is_active": is_active,
+            "rate": str(rate),
             "rate_currency": rate_currency,
             "cost_model_type": cost_model_type,
         }

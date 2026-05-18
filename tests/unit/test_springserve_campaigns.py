@@ -49,6 +49,11 @@ class TestCreate:
                 "name": "adcp_smoke_test",
                 "demand_partner_id": 88061,
                 "is_active": False,
+                # SpringServe rejects campaign creates without a numeric
+                # ``rate`` (HTTP 422 "Rate can't be blank, Rate is not a
+                # number"). Default is ``0.0`` -- per-package rates land
+                # on the demand_tag itself.
+                "rate": "0.0",
                 "rate_currency": "USD",
                 "cost_model_type": 0,
             },
