@@ -216,6 +216,27 @@ class TestCapabilityLadderEmbeddedCap:
         assert ladder["max_unlockable_tier"] == 3
         assert ladder["is_embedded"] is False
 
+    def test_embedded_current_tier_capped_at_max(self, embedded_factory_session):
+        """If an embedded tenant somehow has a composed product (legacy data
+        or a storefront write), ``current_tier`` must not exceed
+        ``max_unlockable_tier`` — otherwise the widget shows the contradictory
+        'L3 · 2/2 tiers unlocked'.
+        """
+        tenant = TenantFactory(is_embedded=True)
+        bundle = InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id)
+        TenantSignalFactory(tenant=tenant, tenant_id=tenant.tenant_id)
+        ProductFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_profile_id=bundle.id,
+            signal_targeting_allowed=True,
+        )
+
+        ladder = SetupChecklistService(tenant.tenant_id).get_capability_ladder()
+
+        assert ladder["max_unlockable_tier"] == 2
+        assert ladder["current_tier"] == 2  # capped, not 3
+
     def test_embedded_hides_composed_products_rung(self, embedded_factory_session):
         tenant = TenantFactory(is_embedded=True)
 

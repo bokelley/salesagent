@@ -1351,18 +1351,17 @@ class SetupChecklistService:
             signals_unlocked = wholesale_unlocked and signal_profile_count > 0
             composed_unlocked = signals_unlocked and composed_product_count > 0
 
-            # Tier the tenant has reached. 0 = nothing salable yet.
-            if composed_unlocked:
-                current_tier = 3
-            elif signals_unlocked:
-                current_tier = 2
-            elif wholesale_unlocked:
-                current_tier = 1
-            else:
-                current_tier = 0
-
             # Embedded tenants cap at L2 — the storefront owns composition.
             max_unlockable_tier = 2 if tenant.is_embedded else 3
+
+            # Tier the tenant has reached. ``sum(bools)`` is correct because
+            # each higher rung's unlock implies the lower rungs (signals
+            # requires wholesale, composed requires signals). Capped to
+            # ``max_unlockable_tier`` so legacy embedded tenants with a
+            # composed product don't surface "L3" against a "2/2 tiers
+            # unlocked" meta — contradiction the widget can't reconcile.
+            raw_tier = sum([wholesale_unlocked, signals_unlocked, composed_unlocked])
+            current_tier = min(raw_tier, max_unlockable_tier)
 
             wholesale_blockers: list[str] = []
             if not ad_server_configured:
