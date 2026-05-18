@@ -113,6 +113,11 @@ tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix=
 #   Redoc:      {blueprint_prefix}/docs/redoc
 # In production the admin app is WSGI-mounted under /admin/, so the public URLs are
 # /admin/api/v1/tenant-management/docs/{openapi.json,swagger,redoc}.
+#
+# The spec endpoint is intentionally unauthenticated — it describes shapes,
+# not data. Every endpoint below is gated by ``require_tenant_management_api_key``
+# (``X-Tenant-Management-API-Key`` header). If you ever mount additional routes
+# on this blueprint without that decorator, revisit this assumption.
 spec = SpecTree(
     "flask",
     title="Sales Agent — Tenant Management API",
