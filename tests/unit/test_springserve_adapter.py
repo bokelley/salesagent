@@ -246,6 +246,86 @@ class TestLiveCreateMediaBuy:
         # No demand tags created if campaign failed.
         adapter._client.demand_tags.create.assert_not_called()
 
+    def test_kv_entry_known_scope_blocker_is_swallowed(self, mock_principal):
+        """The documented 422 ("Targeter must have key_value_targeting set
+        to true") is the one and only KV error we tolerate -- the buy still
+        lands so geo/device/supply targeting can take effect."""
+        from unittest.mock import patch
+
+        from src.adapters.springserve import SpringServeValidationError
+
+        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeValidationError(
+            "POST /demand_tag_keys -> HTTP 422",
+            status_code=422,
+            body='{"error":"Targeter must have key_value_targeting set to true"}',
+        )
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": ["x"]}],
+        ):
+            from tests.helpers.adapter_test_helpers import make_sample_create_request, make_sample_video_package
+
+            response = invoke_create_media_buy(adapter, make_sample_create_request(), [make_sample_video_package()])
+
+        # The buy still landed.
+        assert not hasattr(response, "errors") or not response.errors
+        adapter._client.demand_tags.add_kv_entry.assert_called_once_with(
+            800001,
+            key_id="3997",
+            list_type="white_list",
+            group="1",
+            free_values=["x"],
+        )
+
+    def test_kv_entry_other_422_propagates(self, mock_principal):
+        """A different 422 (not the known blocker) MUST surface as an
+        upstream_error -- not silently mask a real validation failure."""
+        from unittest.mock import patch
+
+        from src.adapters.springserve import SpringServeValidationError
+
+        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeValidationError(
+            "POST /demand_tag_keys -> HTTP 422",
+            status_code=422,
+            body='{"error":"Free values can\'t be blank"}',
+        )
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": []}],
+        ):
+            from tests.helpers.adapter_test_helpers import make_sample_create_request, make_sample_video_package
+
+            response = invoke_create_media_buy(adapter, make_sample_create_request(), [make_sample_video_package()])
+
+        assert hasattr(response, "errors") and response.errors
+        assert response.errors[0].code == "upstream_error"
+
+    def test_kv_entry_5xx_propagates(self, mock_principal):
+        """Transient SpringServe failures (5xx, rate limit, auth) must NOT
+        be silently swallowed by the KV-entry catch."""
+        from unittest.mock import patch
+
+        from src.adapters.springserve._transport import SpringServeServerError
+
+        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeServerError(
+            "POST /demand_tag_keys -> HTTP 503",
+            status_code=503,
+            body="upstream timeout",
+        )
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": ["x"]}],
+        ):
+            from tests.helpers.adapter_test_helpers import make_sample_create_request, make_sample_video_package
+
+            response = invoke_create_media_buy(adapter, make_sample_create_request(), [make_sample_video_package()])
+
+        assert hasattr(response, "errors") and response.errors
+        assert response.errors[0].code == "upstream_error"
+
 
 class TestLiveCreatives:
     """Stage 3 creative upload + binding."""
