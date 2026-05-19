@@ -21,12 +21,11 @@ def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=
     """Invoke the helper with the given inputs. Returns the principal_id or None."""
     from src.core import auth as auth_module
 
-    with patch.object(
-        auth_module, "_get_header_case_insensitive", side_effect=lambda h, n: h.get(n)
-    ):
+    with patch.object(auth_module, "_get_header_case_insensitive", side_effect=lambda h, n: h.get(n)):
         with patch("src.admin.utils.embedded_mode_auth.is_managed_instance", return_value=True):
             with patch.object(auth_module, "get_db_session") as mock_db:
                 session = MagicMock()
+
                 # If an explicit principal id was queried, return the matching
                 # principal (or None). Otherwise list_all returns all principals.
                 def _scalars(stmt):
@@ -47,18 +46,14 @@ def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=
                             result.first.return_value = mock
                         else:
                             result.first.return_value = None
-                    result.all.return_value = [
-                        MagicMock(principal_id=p["principal_id"]) for p in principals_in_tenant
-                    ]
+                    result.all.return_value = [MagicMock(principal_id=p["principal_id"]) for p in principals_in_tenant]
                     return result
 
                 session.scalars.side_effect = _scalars
                 mock_db.return_value.__enter__ = MagicMock(return_value=session)
                 mock_db.return_value.__exit__ = MagicMock(return_value=False)
 
-                return auth_module._try_resolve_embedded_buyer_identity(
-                    headers, tenant_context, require_valid_token
-                )
+                return auth_module._try_resolve_embedded_buyer_identity(headers, tenant_context, require_valid_token)
 
 
 class TestEmbeddedBuyerIdentity:

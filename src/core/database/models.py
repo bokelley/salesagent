@@ -1650,29 +1650,26 @@ class InventoryProfile(Base, JSONValidatorMixin):
     )
 
 
-class InventoryReviewState(Base):
-    """Operator review state for each synced inventory entity.
+class InventoryBundleReference(Base):
+    """Denormalized "is this synced entity in ≥1 inventory bundle?" lookup.
 
     Backs the Job 1 (Discovery) coverage analytics on the dashboard
-    (#485). The dashboard answers "of all my synced ad units and
-    placements, how many are exposed to buyers via a bundle, how many
-    have I explicitly decided not to sell, how many are still unreviewed?"
+    (#485). A row's existence means the entity is referenced by at
+    least one ``InventoryProfile``. No state machine, no review/skip
+    semantics — operators don't review-each-ad-unit, they author
+    bundles and the same placement gets reused across many of them.
 
-    The ``status`` state machine:
-
-    * ``pending`` — synced from the adapter, not yet decided. Default.
-    * ``in_bundle`` — referenced by ≥1 ``InventoryProfile``. Maintained
-      at bundle-save time by the inventory_profiles blueprint.
-    * ``explicitly_skipped`` — operator decided this entity isn't for
-      sale. Cleared if the operator later adds it to a bundle.
+    Used to compute "of N synced ad units, M appear in a bundle" without
+    forcing a JSON-blob JOIN over every ``InventoryProfile`` at request
+    time. The table is kept fresh at bundle-save time by
+    :func:`src.services.inventory_review_state_sync.recompute_in_bundle_status`.
 
     Keyed by ``(tenant_id, adapter, entity_type, external_id)``. The
-    ``entity_type`` slot leaves room for #486 to reuse the same table
-    with ``entity_type='signal_candidate'`` rather than duplicate the
-    schema for signals.
+    ``entity_type`` slot leaves room for future denormalizations
+    (e.g. signal candidates) without duplicating the schema.
     """
 
-    __tablename__ = "inventory_review_state"
+    __tablename__ = "inventory_bundle_reference"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(
@@ -1682,14 +1679,10 @@ class InventoryReviewState(Base):
     )
     # ``gam`` | ``freewheel`` | ``springserve`` — adapter that owns the entity.
     adapter: Mapped[str] = mapped_column(String(50), nullable=False)
-    # ``ad_unit`` | ``placement`` today. ``signal_candidate`` reserved for #486.
+    # ``ad_unit`` | ``placement`` today.
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     # Adapter-native id. Strings — adapters vary (some are int-like, some not).
     external_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    # ``pending`` | ``in_bundle`` | ``explicitly_skipped``.
-    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    reviewed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
@@ -1703,16 +1696,15 @@ class InventoryReviewState(Base):
             "adapter",
             "entity_type",
             "external_id",
-            name="uq_inventory_review_state",
+            name="uq_inventory_bundle_reference",
         ),
         Index(
-            "idx_inventory_review_state_tenant_type_status",
+            "idx_inventory_bundle_reference_tenant_type",
             "tenant_id",
             "entity_type",
-            "status",
         ),
         Index(
-            "idx_inventory_review_state_tenant_adapter_type",
+            "idx_inventory_bundle_reference_tenant_adapter_type",
             "tenant_id",
             "adapter",
             "entity_type",

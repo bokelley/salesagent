@@ -198,30 +198,22 @@
                             <div class="ld-job__sub-row">
                                 <div>
                                     <div class="ld-job__sub-name">{{ sub.name }}</div>
-                                    {# Coverage analytics for adapters we track (#485). Renders
-                                       real numbers when the tenant's adapter is supported and
-                                       has synced inventory; otherwise falls back to the
-                                       placeholder hint so the row still reads as actionable. #}
+                                    {# Bundle-coverage for adapters we track (#485). Real numbers
+                                       when the tenant has synced inventory; otherwise a
+                                       placeholder hint. No "unreviewed" framing — un-bundled
+                                       entities are informational, not a TODO. #}
                                     {% if sub.coverage and sub.coverage.has_synced_inventory %}
                                         {% set cov = sub.coverage %}
-                                        {% if cov.all_reviewed %}
-                                            <div class="ld-job__sub-hint">
-                                                All ad units and placements reviewed
-                                                ({{ cov.ad_units.in_bundle + cov.placements.in_bundle }} in bundles,
-                                                {{ cov.ad_units.explicitly_skipped + cov.placements.explicitly_skipped }} skipped).
-                                            </div>
-                                        {% else %}
-                                            <div class="ld-job__sub-hint">
-                                                Ad units: {{ cov.ad_units.in_bundle }} of {{ cov.ad_units.total }} in bundles · {{ cov.ad_units.pending }} unreviewed.
-                                                Placements: {{ cov.placements.in_bundle }} of {{ cov.placements.total }} · {{ cov.placements.pending }} unreviewed.
-                                            </div>
-                                        {% endif %}
+                                        <div class="ld-job__sub-hint">
+                                            Ad units: {{ cov.ad_units.bundled }} of {{ cov.ad_units.synced }} in a bundle.
+                                            Placements: {{ cov.placements.bundled }} of {{ cov.placements.synced }}.
+                                        </div>
                                     {% else %}
                                         <div class="ld-job__sub-hint">
                                             {% if sub.key == 'bundles' %}
-                                                Coverage analytics coming — review your full inventory and decide what to expose.
+                                                Author bundles to expose the inventory shapes buyers query.
                                             {% else %}
-                                                Coverage analytics coming — review your signal universe and decide what to expose.
+                                                Coverage analytics coming — author signals you want exposed.
                                             {% endif %}
                                         </div>
                                     {% endif %}

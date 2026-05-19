@@ -29,8 +29,8 @@ from tests.factories.core import (
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
+from tests.factories.inventory_bundle_reference import InventoryBundleReferenceFactory
 from tests.factories.inventory_profile import InventoryProfileFactory
-from tests.factories.inventory_review_state import InventoryReviewStateFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
@@ -66,7 +66,7 @@ ALL_FACTORIES = [
     PublisherPartnerFactory,
     PrincipalFactory,
     InventoryProfileFactory,
-    InventoryReviewStateFactory,
+    InventoryBundleReferenceFactory,
     ProductFactory,
     ProductInventoryMappingFactory,
     PricingOptionFactory,
@@ -99,7 +99,7 @@ __all__ = [
     "FormatFactory",
     "FormatIdFactory",
     "InventoryProfileFactory",
-    "InventoryReviewStateFactory",
+    "InventoryBundleReferenceFactory",
     "CurrencyLimitFactory",
     "GamAdvertiserFactory",
     "GAMInventoryFactory",

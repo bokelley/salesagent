@@ -47,39 +47,44 @@ _setup_status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
-# Adapter slugs that have inventory_review_state coverage data today (#485).
+# Adapter slugs that have inventory bundle-coverage data today (#485).
 # FreeWheel and SpringServe land when their sync surfaces participate.
 _INVENTORY_COVERAGE_TRACKED_ADAPTERS: frozenset[str] = frozenset({"google_ad_manager", "gam"})
 
 
-def _build_inventory_coverage(repo: Any, tenant_ad_server: str | None) -> dict[str, Any] | None:
-    """Coverage payload for the Discovery card's bundles sub-item (#485).
+def _build_inventory_coverage(
+    bundle_ref_repo: Any,
+    gam_sync_repo: Any,
+    tenant_ad_server: str | None,
+) -> dict[str, Any] | None:
+    """Bundle-coverage payload for the Discovery card's bundles sub-item (#485).
 
-    Returns ``None`` for tenants on adapters we don't track yet — the widget
-    falls back to a placeholder hint. For tracked adapters, returns counts
-    for ad units and placements split out by review status:
+    Frames Job 1 as "do my bundles cover the inventory shapes buyers ask
+    for" — *not* as review-each-ad-unit. Returns counts for ad units and
+    placements with two values each: how many are synced (denominator) and
+    how many appear in ≥1 inventory bundle (numerator). No review or skip
+    state — multi-use is the norm and an un-bundled entity is informational,
+    not a TODO.
 
-    * ``total`` — synced from the adapter (denominator)
-    * ``in_bundle`` — referenced by ≥1 InventoryProfile
-    * ``explicitly_skipped`` — operator decided not to sell
-    * ``pending`` — synced, not bundled, not skipped (the actionable bucket)
-
-    The ``all_reviewed`` flag is True when ``pending == 0`` — the end-state
-    of Job 1: every synced entity has either been bundled or skipped.
+    Returns ``None`` for tenants on adapters we don't track yet; the widget
+    falls back to a placeholder hint.
     """
     if tenant_ad_server not in _INVENTORY_COVERAGE_TRACKED_ADAPTERS:
         return None
     adapter_slug = "gam"
-    ad_units = repo.coverage_summary(adapter=adapter_slug, entity_type="ad_unit")
-    placements = repo.coverage_summary(adapter=adapter_slug, entity_type="placement")
-    all_reviewed = ad_units["pending"] == 0 and placements["pending"] == 0
-    total = ad_units["total"] + placements["total"]
+    ad_units = {
+        "synced": gam_sync_repo.count_inventory("ad_unit"),
+        "bundled": bundle_ref_repo.count_bundled(adapter=adapter_slug, entity_type="ad_unit"),
+    }
+    placements = {
+        "synced": gam_sync_repo.count_inventory("placement"),
+        "bundled": bundle_ref_repo.count_bundled(adapter=adapter_slug, entity_type="placement"),
+    }
     return {
         "adapter": adapter_slug,
         "ad_units": ad_units,
         "placements": placements,
-        "all_reviewed": all_reviewed,
-        "has_synced_inventory": total > 0,
+        "has_synced_inventory": (ad_units["synced"] + placements["synced"]) > 0,
     }
 
 
@@ -1375,17 +1380,19 @@ class SetupChecklistService:
                 or 0
             )
 
-            # Inventory coverage analytics (#485). Only computed for tenants
-            # on an adapter we track (GAM today). Embedded tenants don't see
-            # publisher-side inventory coverage — their storefront drives the
-            # narrative — but they can still expose bundles, so the count
-            # remains accurate.
-            from src.core.database.repositories.inventory_review_state import (
-                InventoryReviewStateRepository,
+            # Inventory bundle-coverage (#485). "Of N synced ad units, how
+            # many appear in at least one bundle?" Only for tenants on an
+            # adapter we track (GAM today). Multi-use is the norm — the same
+            # placement can be in many bundles — so the bundled count is
+            # distinct entities, not bundle references.
+            from src.core.database.repositories.gam_sync import GAMSyncRepository
+            from src.core.database.repositories.inventory_bundle_reference import (
+                InventoryBundleReferenceRepository,
             )
 
             inventory_coverage = _build_inventory_coverage(
-                InventoryReviewStateRepository(session, self.tenant_id),
+                bundle_ref_repo=InventoryBundleReferenceRepository(session, self.tenant_id),
+                gam_sync_repo=GAMSyncRepository(session, self.tenant_id),
                 tenant_ad_server=tenant.ad_server,
             )
 

@@ -10,7 +10,7 @@ Core invariant: every query includes ``tenant_id`` in the WHERE clause.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import GamAdvertiser, GAMInventory, GAMLineItem, GAMOrder
@@ -87,6 +87,24 @@ class GAMSyncRepository:
     # ------------------------------------------------------------------
     # GAMInventory readers — fuel the signals bulk-map UI
     # ------------------------------------------------------------------
+
+    def count_inventory(self, inventory_type: str) -> int:
+        """Number of synced GAM inventory rows of one type for the tenant.
+
+        Used by the dashboard's Job 1 coverage hint (#485) as the
+        denominator: "N of M ad units in a bundle."
+        """
+        return (
+            self._session.scalar(
+                select(func.count())
+                .select_from(GAMInventory)
+                .where(
+                    GAMInventory.tenant_id == self._tenant_id,
+                    GAMInventory.inventory_type == inventory_type,
+                )
+            )
+            or 0
+        )
 
     def list_inventory(self, inventory_type: str) -> list[GAMInventory]:
         """Return synced GAM inventory rows of one type

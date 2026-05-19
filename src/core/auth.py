@@ -240,9 +240,7 @@ def get_principal_from_context(
         # protocol-level token check — trust is established by the network
         # layer (the salesagent binds to a private interface and accepts
         # buyer-protocol traffic only from the configured host product proxy).
-        embedded_principal_id = _try_resolve_embedded_buyer_identity(
-            headers, tenant_context, require_valid_token
-        )
+        embedded_principal_id = _try_resolve_embedded_buyer_identity(headers, tenant_context, require_valid_token)
         if embedded_principal_id is not None:
             return (embedded_principal_id, tenant_context)
 
@@ -332,18 +330,14 @@ def _try_resolve_embedded_buyer_identity(
         # — partial index already enforces uniqueness, so this is a single
         # indexed point-lookup.
         if explicit_principal_id:
-            stmt = select(ModelPrincipal).filter_by(
-                principal_id=explicit_principal_id, tenant_id=tenant_id
-            )
+            stmt = select(ModelPrincipal).filter_by(principal_id=explicit_principal_id, tenant_id=tenant_id)
             principal = session_factory.scalars(stmt).first()
             return principal.principal_id if principal else None
 
         # Default path: lone embedded principal. Embedded tenants are
         # provisioned with exactly one principal; if the count is anything
         # else, require explicit X-Principal-Id rather than guessing.
-        principals = session_factory.scalars(
-            select(ModelPrincipal).filter_by(tenant_id=tenant_id)
-        ).all()
+        principals = session_factory.scalars(select(ModelPrincipal).filter_by(tenant_id=tenant_id)).all()
         if len(principals) == 1:
             return principals[0].principal_id
         return None
