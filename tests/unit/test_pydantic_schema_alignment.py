@@ -82,6 +82,13 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "include_webhook_activity",
         "webhook_activity_limit",
     },
+    # Live spec adds caching ETag-style fields to ``GetProductsRequest``
+    # that the installed ``adcp`` library (5.5.0) doesn't expose on
+    # ``LibraryGetProductsRequest``. Same library-vs-spec drift.
+    "/schemas/latest/media-buy/get-products-request.json": {
+        "if_catalog_version",
+        "if_pricing_version",
+    },
 }
 
 
