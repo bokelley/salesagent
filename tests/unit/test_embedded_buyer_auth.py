@@ -18,8 +18,14 @@ import pytest
 
 
 def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=True):
-    """Invoke the helper with the given inputs. Returns the principal_id or None."""
+    """Invoke the helper. Returns (principal_id_or_None, added_principal_or_None).
+
+    ``added_principal`` is the ModelPrincipal instance the helper added via
+    ``session.add(...)`` when the zero-principal auto-create path runs.
+    """
     from src.core import auth as auth_module
+
+    added = []
 
     with patch.object(
         auth_module, "_get_header_case_insensitive", side_effect=lambda h, n: h.get(n)
@@ -27,14 +33,9 @@ def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=
         with patch("src.admin.utils.embedded_mode_auth.is_managed_instance", return_value=True):
             with patch.object(auth_module, "get_db_session") as mock_db:
                 session = MagicMock()
-                # If an explicit principal id was queried, return the matching
-                # principal (or None). Otherwise list_all returns all principals.
+
                 def _scalars(stmt):
                     result = MagicMock()
-                    # filter_by inside the stmt isn't introspectable in the mock,
-                    # so the test drives behaviour by setting principals_in_tenant
-                    # and the requested header. The helper calls .first() for
-                    # explicit lookups and .all() for the default-principal path.
                     explicit = headers.get("X-Principal-Id")
                     if explicit is not None:
                         match = next(
@@ -53,12 +54,14 @@ def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=
                     return result
 
                 session.scalars.side_effect = _scalars
+                session.add.side_effect = lambda obj: added.append(obj)
                 mock_db.return_value.__enter__ = MagicMock(return_value=session)
                 mock_db.return_value.__exit__ = MagicMock(return_value=False)
 
-                return auth_module._try_resolve_embedded_buyer_identity(
+                result = auth_module._try_resolve_embedded_buyer_identity(
                     headers, tenant_context, require_valid_token
                 )
+                return result, (added[0] if added else None)
 
 
 class TestEmbeddedBuyerIdentity:
@@ -74,7 +77,7 @@ class TestEmbeddedBuyerIdentity:
         assert result is None
 
     def test_returns_none_when_tenant_not_embedded(self):
-        result = _call(
+        result, _ = _call(
             headers={"X-Principal-Id": "principal_x"},
             tenant_context={"tenant_id": "tenant_a", "is_embedded": False},
             principals_in_tenant=[{"principal_id": "principal_x"}],
@@ -82,7 +85,7 @@ class TestEmbeddedBuyerIdentity:
         assert result is None
 
     def test_returns_none_when_no_tenant_context(self):
-        result = _call(
+        result, _ = _call(
             headers={"X-Principal-Id": "principal_x"},
             tenant_context=None,
             principals_in_tenant=[],
@@ -90,7 +93,7 @@ class TestEmbeddedBuyerIdentity:
         assert result is None
 
     def test_resolves_explicit_principal_when_match_exists(self):
-        result = _call(
+        result, _ = _call(
             headers={"X-Principal-Id": "principal_x"},
             tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
             principals_in_tenant=[{"principal_id": "principal_x"}],
@@ -109,7 +112,7 @@ class TestEmbeddedBuyerIdentity:
             )
 
     def test_explicit_principal_mismatch_returns_none_when_not_require_valid(self):
-        result = _call(
+        result, _ = _call(
             headers={"X-Principal-Id": "principal_other"},
             tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
             principals_in_tenant=[{"principal_id": "principal_x"}],
@@ -118,9 +121,7 @@ class TestEmbeddedBuyerIdentity:
         assert result is None
 
     def test_defaults_to_lone_principal_when_no_header(self):
-        # Backfill path: existing embedded tenants have exactly one principal.
-        # No X-Principal-Id needed — the lone principal is the default.
-        result = _call(
+        result, _ = _call(
             headers={},
             tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
             principals_in_tenant=[{"principal_id": "principal_lone"}],
@@ -128,8 +129,7 @@ class TestEmbeddedBuyerIdentity:
         assert result == "principal_lone"
 
     def test_returns_none_when_multiple_principals_and_no_header(self):
-        # Ambiguous — refuse to guess. Caller must send X-Principal-Id.
-        result = _call(
+        result, _ = _call(
             headers={},
             tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
             principals_in_tenant=[
@@ -139,10 +139,46 @@ class TestEmbeddedBuyerIdentity:
         )
         assert result is None
 
-    def test_returns_none_when_zero_principals_and_no_header(self):
-        result = _call(
+    def test_auto_creates_default_principal_when_zero_exist(self):
+        """Embedded tenants with no Principal row self-heal on first auth call.
+
+        Removes the need for any host-side backfill of pre-existing tenants
+        that were provisioned without `initial_principal`. The host product
+        is the source of truth; the Principal row is a schema-level detail.
+        """
+        result, added = _call(
             headers={},
-            tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
+            tenant_context={
+                "tenant_id": "tenant_a",
+                "is_embedded": True,
+                "ad_server": "google_ad_manager",
+            },
             principals_in_tenant=[],
         )
-        assert result is None
+        assert result is not None
+        assert result.startswith("prin_")
+        # Inline-created Principal carries the embedded marker on its
+        # access_token so it's distinguishable from open-instance bearers.
+        assert added is not None
+        assert added.tenant_id == "tenant_a"
+        assert added.principal_id == result
+        assert added.access_token.startswith("embedded-mode-no-token:")
+        # Placeholder platform mapping keyed by the tenant's adapter type
+        # — required by the PlatformMappingModel validator; operator can
+        # patch the advertiser_id once a real one is known.
+        assert added.platform_mappings == {
+            "google_ad_manager": {"advertiser_id": "placeholder"}
+        }
+
+    def test_auto_create_falls_back_to_mock_mapping_for_unknown_adapter(self):
+        result, added = _call(
+            headers={},
+            tenant_context={
+                "tenant_id": "tenant_a",
+                "is_embedded": True,
+                "ad_server": None,
+            },
+            principals_in_tenant=[],
+        )
+        assert result is not None
+        assert added.platform_mappings == {"mock": {"advertiser_id": "default"}}

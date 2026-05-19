@@ -302,21 +302,33 @@ def _try_resolve_embedded_buyer_identity(
     Returns the principal_id when:
       * ``MANAGED_INSTANCE=true`` (deployment-level opt-in)
       * the resolved tenant has ``is_embedded=True``
-      * either an explicit ``X-Principal-Id`` header is present and names a
-        principal in this tenant, OR the tenant has exactly one principal
-        (the backfill path: existing PSAs predate the access_token being
-        returned at provision time, but their lone embedded principal can
-        still be used as the default acting identity).
+      * one of the following resolves a principal:
+          - explicit ``X-Principal-Id`` header naming a principal in the tenant
+          - exactly one principal exists in the tenant (lone-default)
+          - **zero principals exist** → a default principal is auto-created
+            inline and its id is returned. Embedded tenants treat the host
+            product as the source of truth; Principal rows are an
+            implementation detail of the schema, not a credential. The
+            auto-create makes the buyer-protocol surface self-healing so a
+            tenant provisioned without ``initial_principal`` (existing PSAs
+            from before the host product started passing it) doesn't need
+            host-side backfill to start accepting mutations.
 
-    Returns ``None`` when any precondition fails — caller falls through to
-    the standard token-or-anonymous flow. Raises ``AdCPAuthenticationError``
-    when ``require_valid_token`` is true AND a ``X-Principal-Id`` header was
-    explicitly sent but does not match any principal in the tenant; this
-    mirrors how an invalid bearer token is handled by the existing flow.
+    Returns ``None`` when ``MANAGED_INSTANCE`` is unset, the tenant isn't
+    embedded, or the tenant has multiple principals AND no ``X-Principal-Id``
+    is sent (ambiguous — caller must disambiguate). Raises
+    ``AdCPAuthenticationError`` when ``require_valid_token`` is true AND a
+    ``X-Principal-Id`` header was explicitly sent but does not match any
+    principal in the tenant; this mirrors how an invalid bearer token is
+    handled by the existing flow.
 
     See ``docs/design/embedded-mode.md`` §2 for the contract.
     """
-    # Lazy import: avoid pulling the admin module at core/auth.py import time.
+    # Lazy imports: avoid pulling these at core/auth.py module-load time.
+    import secrets
+    import uuid
+    from datetime import UTC, datetime
+
     from src.admin.utils.embedded_mode_auth import is_managed_instance
 
     if not is_managed_instance():
@@ -338,14 +350,50 @@ def _try_resolve_embedded_buyer_identity(
             principal = session_factory.scalars(stmt).first()
             return principal.principal_id if principal else None
 
-        # Default path: lone embedded principal. Embedded tenants are
-        # provisioned with exactly one principal; if the count is anything
-        # else, require explicit X-Principal-Id rather than guessing.
         principals = session_factory.scalars(
             select(ModelPrincipal).filter_by(tenant_id=tenant_id)
         ).all()
         if len(principals) == 1:
             return principals[0].principal_id
+
+        if len(principals) == 0:
+            # Auto-create a default Principal for the embedded tenant. The
+            # host product is the source of truth — principals on the
+            # salesagent side are a schema detail, not a credential. The
+            # ``embedded-mode-no-token:`` marker keeps the access_token
+            # namespace non-overlapping with real bearers (existing
+            # convention; see ``scripts/verify_embedded_mode.py``).
+            # ``platform_mappings`` carries a placeholder entry for the
+            # tenant's adapter so the row passes the
+            # ``PlatformMappingModel`` validator (which requires at least
+            # one mapping). The placeholder mirrors what ``/tenants``
+            # POST writes when ``create_default_principal=true``; an
+            # operator can patch it via the admin UI once a real
+            # advertiser is known.
+            adapter_type = (
+                tenant_context.get("ad_server") if tenant_context else None
+            )
+            new_principal_id = f"prin_{uuid.uuid4().hex[:8]}"
+            session_factory.add(
+                ModelPrincipal(
+                    tenant_id=tenant_id,
+                    principal_id=new_principal_id,
+                    name="Embedded default principal",
+                    access_token=f"embedded-mode-no-token:{secrets.token_urlsafe(8)}",
+                    platform_mappings=_default_platform_mappings_for(adapter_type),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            session_factory.commit()
+            logger.info(
+                "Auto-created default Principal for embedded tenant: tenant=%s principal=%s",
+                tenant_id,
+                new_principal_id,
+            )
+            return new_principal_id
+
+        # Multiple principals — ambiguous, require explicit X-Principal-Id.
         return None
 
     with get_db_session() as session:
@@ -372,6 +420,26 @@ def _try_resolve_embedded_buyer_identity(
         )
 
     return None
+
+
+def _default_platform_mappings_for(adapter_type: str | None) -> dict[str, dict]:
+    """Placeholder ``platform_mappings`` for an auto-created embedded principal.
+
+    Mirrors the shape ``/tenants`` POST writes when ``create_default_principal=true``:
+    a single entry keyed by the tenant's adapter type with a placeholder
+    advertiser id. The platform mapping validator (``PlatformMappingModel``)
+    requires at least one mapping; the host product or an operator can
+    overwrite this once a real advertiser id is known.
+    """
+    if adapter_type == "google_ad_manager":
+        return {"google_ad_manager": {"advertiser_id": "placeholder"}}
+    if adapter_type == "freewheel":
+        return {"freewheel": {"advertiser_id": "placeholder"}}
+    if adapter_type in ("triton", "triton_digital"):
+        return {"triton": {"advertiser_id": "placeholder"}}
+    # Mock + unknown adapter types — `mock` carries no semantics beyond a
+    # passing validator and is the safest default.
+    return {"mock": {"advertiser_id": "default"}}
 
 
 def get_principal_adapter_mapping(principal_id: str, tenant_id: str | None = None) -> dict[str, Any]:
