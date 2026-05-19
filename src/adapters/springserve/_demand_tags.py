@@ -139,6 +139,13 @@ class SpringServeDemandTagsClient:
             )
             body["demand_class"] = wire_value
         body.update(extras)
+        # Dict-spread callers occasionally pass the read-side ``is_active``
+        # name in **extras (e.g. forwarding from a deserialized entity).
+        # Translate at the wire boundary so the wire field always wins --
+        # silent no-ops on this exact field are the regression mode that
+        # the wire-shape audit corrected.
+        if "is_active" in body:
+            body["active"] = body.pop("is_active")
         response = self._transport.post_json("/demand_tags", body)
         return DemandTag.model_validate(response)
 
@@ -156,9 +163,15 @@ class SpringServeDemandTagsClient:
         Note: SpringServe's write API uses ``active``, not ``is_active``
         (the latter is silently ignored). We accept ``is_active`` as the
         public kwarg name for consistency with the read entity and
-        translate at the wire boundary.
+        translate at the wire boundary. Dict-spread callers (e.g.
+        ``client.update(id, **entity.model_dump())``) also get the
+        translation -- silent no-ops on ``is_active`` are the regression
+        mode the wire-shape audit corrected, so we catch the name in
+        **fields too.
         """
         body: dict[str, Any] = dict(fields)
+        if "is_active" in body:
+            body["active"] = body.pop("is_active")
         if is_active is not None:
             body["active"] = is_active
         response = self._transport.put_json(f"/demand_tags/{demand_tag_id}", body)

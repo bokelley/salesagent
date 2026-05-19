@@ -150,7 +150,17 @@ class SpringServeAdapter(AdServerAdapter):
         # opt-in -- most publishers route audience/context through supply
         # tag selection, not demand_tag_keys. Both are tenant-level adapter
         # config; see SpringServeConnectionConfig for the full rationale.
+        # Validate eagerly -- stored ``config_json`` can bypass the Pydantic
+        # schema enum if it was written by a path that doesn't round-trip
+        # through model_validate (raw DB writes, legacy admin code, etc).
+        from src.adapters.springserve._demand_tags import DEMAND_CLASS_WIRE_VALUES
+
         self.demand_class = self.config.get("demand_class", "line_item")
+        if self.demand_class not in DEMAND_CLASS_WIRE_VALUES:
+            raise ValueError(
+                f"SpringServe demand_class={self.demand_class!r} is not one of "
+                f"{sorted(DEMAND_CLASS_WIRE_VALUES.keys())}"
+            )
         self.enable_key_value_targeting = bool(self.config.get("enable_key_value_targeting", False))
 
         if self.dry_run:

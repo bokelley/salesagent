@@ -282,10 +282,9 @@ class TestCreativeRoundTrip:
                 is_active=False,
                 secondary_code="pkg_creative_smoke",
                 # Line Item class is what supports the Creatives tab + hosted
-                # binding. Without this, SpringServe accounts whose default class
-                # is "Tag" silently produce a demand tag that can't be bound to
-                # hosted creatives -- the bug Mathijs Vols at Talpa surfaced on
-                # 2026-05-19.
+                # binding. Without this, SpringServe accounts whose default
+                # class is "Tag" silently produce a demand tag that can't be
+                # bound to hosted creatives.
                 demand_class="line_item",
             )
 

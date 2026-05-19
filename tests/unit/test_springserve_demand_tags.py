@@ -274,6 +274,33 @@ class TestUpdate:
         client.update(800001, is_active=True)
         transport.put_json.assert_called_once_with("/demand_tags/800001", {"active": True})
 
+    def test_update_dict_spread_is_active_also_translates_to_active(self, client, transport):
+        """The original bug -- writes through ``is_active`` silently no-op'd
+        on the wire -- is just as easy to hit via ``**entity.model_dump()``
+        or any other dict-spread call site. Guard against the regression by
+        proving the translation happens for both the named-kwarg path and
+        the **fields passthrough."""
+        transport.put_json.return_value = _demand_tag_response(is_active=False)
+        client.update(800001, **{"is_active": False, "rate": "30.0"})
+        transport.put_json.assert_called_once_with("/demand_tags/800001", {"active": False, "rate": "30.0"})
+
+    def test_create_dict_spread_is_active_translates_to_active(self, client, transport):
+        """Same guard on the create path -- a caller spreading
+        ``**entity.model_dump()`` shouldn't be able to bypass the wire
+        translation and silently produce an active demand tag."""
+        transport.post_json.return_value = _demand_tag_response()
+        client.create(
+            name="x",
+            campaign_id=1,
+            demand_partner_id=2,
+            start_date=datetime(2026, 6, 1, tzinfo=UTC),
+            end_date=datetime(2026, 6, 30, tzinfo=UTC),
+            **{"is_active": False},  # arrives via **extras
+        )
+        body = transport.post_json.call_args.args[1]
+        assert body["active"] is False
+        assert "is_active" not in body
+
     def test_arbitrary_fields_pass_through(self, client, transport):
         transport.put_json.return_value = _demand_tag_response()
         client.update(800001, rate="30.0", end_date="2026-07-31T00:00:00.000000Z")
