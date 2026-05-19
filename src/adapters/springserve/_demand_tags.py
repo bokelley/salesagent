@@ -139,3 +139,43 @@ class SpringServeDemandTagsClient:
 
     def delete(self, demand_tag_id: int) -> None:
         self._transport.delete_json(f"/demand_tags/{demand_tag_id}")
+
+    def add_kv_entry(
+        self,
+        demand_tag_id: int,
+        *,
+        key_id: str | int,
+        list_type: str,
+        group: str = "1",
+        free_values: list[str] | None = None,
+        value_ids: list[int] | None = None,
+        value_list_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """POST one Key-Value targeting entry to the demand tag's sub-resource.
+
+        Endpoint: ``POST /api/v0/demand_tags/<demand_tag_id>/demand_tag_keys``
+        (SpringServe docs page 1628471383). Returns the created entry's
+        record (with its own ``id`` so the entry can be PUT/DELETE'd
+        later via the same path + entry id).
+
+        Grouping: same ``group`` = AND, different ``group`` = OR. Within
+        an entry the value array is OR.
+
+        Caller must first ensure the parent demand_tag has
+        ``key_value_targeting=true`` set -- the sub-resource POST rejects
+        with HTTP 422 "Targeter must have key_value_targeting set to
+        true" otherwise. That flag is not currently writable via the v0
+        API on AdOps-tier accounts; see ``targeting.py`` module docstring.
+        """
+        body: dict[str, Any] = {
+            "key_id": str(key_id),
+            "list_type": list_type,
+            "group": group,
+        }
+        if free_values:
+            body["free_values"] = list(free_values)
+        if value_ids:
+            body["value_ids"] = list(value_ids)
+        if value_list_ids:
+            body["value_list_ids"] = list(value_list_ids)
+        return self._transport.post_json(f"/demand_tags/{demand_tag_id}/demand_tag_keys", body)

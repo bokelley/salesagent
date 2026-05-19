@@ -26,11 +26,30 @@ class SpringServeInventoryRepository:
         self._session = session
         self._tenant_id = tenant_id
 
-    def list_by_type(self, entity_type: str, *, parent_id: str | None = None) -> list[SpringServeInventory]:
-        """Return cached rows of one entity_type, optionally filtered by parent."""
+    def list_by_type(
+        self,
+        entity_type: str,
+        *,
+        supply_partner_id: str | None = None,
+        supply_router_id: str | None = None,
+        key_id: str | None = None,
+    ) -> list[SpringServeInventory]:
+        """Return cached rows of one entity_type, optionally filtered by FK.
+
+        At most one FK filter is expected per call -- the natural pairings:
+
+        * ``entity_type="supply_router", supply_partner_id=X``
+        * ``entity_type="supply_tag", supply_router_id=X`` (tags in a router)
+        * ``entity_type="supply_tag", supply_partner_id=X`` (all tags incl. orphans)
+        * ``entity_type="value_list", key_id=X``
+        """
         stmt = select(SpringServeInventory).filter_by(tenant_id=self._tenant_id, entity_type=entity_type)
-        if parent_id is not None:
-            stmt = stmt.filter(SpringServeInventory.parent_id == parent_id)
+        if supply_partner_id is not None:
+            stmt = stmt.filter(SpringServeInventory.supply_partner_id == supply_partner_id)
+        if supply_router_id is not None:
+            stmt = stmt.filter(SpringServeInventory.supply_router_id == supply_router_id)
+        if key_id is not None:
+            stmt = stmt.filter(SpringServeInventory.key_id == key_id)
         return list(self._session.scalars(stmt).all())
 
     def bulk_upsert(self, rows: Iterable[dict]) -> int:

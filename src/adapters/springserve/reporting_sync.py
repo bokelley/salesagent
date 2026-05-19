@@ -101,62 +101,82 @@ class SpringServeReportingSync:
         end_date: date | None = None,
         demand_tag_ids: list[str] | None = None,
     ) -> ReportingSyncResult:
-        """Refresh stats for ``demand_tag_ids`` (or all tags in scope) over
+        """Refresh stats for ``demand_tag_ids`` (required, non-empty) over
         ``[start_date, end_date]``. Defaults: today.
+
+        The SpringServe Reporting API does not echo the demand-tag id back
+        in rows and sums across multi-id filters, so per-tag stats require
+        one job per tag. We loop here and aggregate.
         """
         today = datetime.now(UTC).date()
         start = start_date or today
         end = end_date or today
-        spec = JobSpec(
-            start_date=start,
-            end_date=end,
-            demand_tag_ids=list(demand_tag_ids or []),
-            use_async=(end - start).days > self.SYNC_MAX_DAYS,
-        )
+        if not demand_tag_ids:
+            # The Reporting API doesn't tag rows with their source demand_tag_id
+            # and sums across multi-id filters, so per-tag stats require one job
+            # per tag. The scheduler may call us before any packages have been
+            # pushed -- soft-fail with a descriptive error rather than crash.
+            return ReportingSyncResult(
+                rows_updated=0,
+                report_id=None,
+                error="no demand_tag_ids supplied (nothing to sync yet)",
+            )
+        use_async = (end - start).days > self.SYNC_MAX_DAYS
 
+        all_rows = []
+        last_report_id: str | None = None
         try:
-            if spec.use_async:
-                report_id = self._reporting.submit_async(spec)
-                self._reporting.poll_until_done(report_id)
-                rows = self._reporting.fetch_rows(report_id)
-            else:
-                report_id = None
-                rows = self._reporting.submit_sync(spec)
+            for tag_id in demand_tag_ids:
+                spec = JobSpec(
+                    start_date=start,
+                    end_date=end,
+                    demand_tag_id=tag_id,
+                    use_async=use_async,
+                )
+                if use_async:
+                    report_id = self._reporting.submit_async(spec)
+                    self._reporting.poll_until_done(report_id)
+                    rows = self._reporting.fetch_rows(report_id, demand_tag_id=tag_id)
+                    last_report_id = report_id
+                else:
+                    rows = self._reporting.submit_sync(spec)
+                all_rows.extend(rows)
         except SpringServeForbiddenError as exc:
             logger.info("SpringServe reporting scope not granted: %s", exc)
             raise ReportingScopeNotGranted() from exc
         except ReportingError as exc:
             logger.warning("SpringServe reporting job failed: %s", exc)
-            return ReportingSyncResult(rows_updated=0, report_id=None, error=str(exc))
+            return ReportingSyncResult(rows_updated=0, report_id=last_report_id, error=str(exc))
 
         now = datetime.now(UTC)
         payloads = [
             {
                 "demand_tag_id": row.demand_tag_id,
-                "campaign_id": row.campaign_id,
+                "campaign_id": None,
                 "impressions": row.impressions,
                 "completed_views": row.completed_views,
                 "clicks": row.clicks,
                 "spend_micros": row.spend_micros,
-                "currency": row.currency,
+                "currency": None,
                 "as_of": now,
                 "last_synced_at": now,
             }
-            for row in rows
+            for row in all_rows
         ]
         repo = SpringServeDemandTagStatsRepository(self._session, self._tenant_id)
         touched = repo.bulk_upsert(payloads)
         self._session.commit()
         logger.info(
-            "SpringServe reporting sync: tenant=%s window=%s..%s rows=%d touched=%d report_id=%s",
+            "SpringServe reporting sync: tenant=%s window=%s..%s tags=%d rows=%d touched=%d report_id=%s",
             self._tenant_id,
             start,
             end,
-            len(rows),
+            len(demand_tag_ids),
+            len(all_rows),
             touched,
-            report_id,
+            last_report_id,
         )
-        return ReportingSyncResult(rows_updated=touched, report_id=report_id, error=None)
+        return ReportingSyncResult(rows_updated=touched, report_id=last_report_id, error=None)
 
 
 __all__ = ["ReportingScopeNotGranted", "ReportingSyncResult", "SpringServeReportingSync"]

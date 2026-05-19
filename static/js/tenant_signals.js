@@ -386,6 +386,19 @@
           value_name: d.valueName,
         };
       }
+      if (it.kind === 'springserve_value_list') {
+        // SpringServe audience: the value_list (e.g. "Podcast MV35-54")
+        // becomes one TenantSignal carrying both its own id and the
+        // parent KV namespace so the materializer can write a demand-tag
+        // KV filter at create_media_buy time.
+        return {
+          kind: 'springserve_value_list',
+          value_list_id: d.valueListId,
+          key_id: d.keyId,
+          key_name: d.keyName,
+          name: d.segmentName,
+        };
+      }
       return null;
     }).filter(Boolean);
     if (!payload.length) return;
@@ -484,6 +497,14 @@
         value_id: d.valueId,
         key_name: d.keyName,
         value_name: d.valueName,
+      };
+    } else if (d.kind === 'springserve_value_list') {
+      item = {
+        kind: 'springserve_value_list',
+        value_list_id: d.valueListId,
+        key_id: d.keyId,
+        key_name: d.keyName,
+        name: d.segmentName,
       };
     } else {
       return;

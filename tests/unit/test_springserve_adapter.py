@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.adapters import get_adapter_default_channels, get_adapter_schemas
 from src.adapters.springserve import SpringServeAdapter
 from src.adapters.springserve.schemas import SpringServeConnectionConfig, SpringServeProductConfig
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
 from tests.helpers.adapter_test_helpers import (
     invoke_create_media_buy,
     make_sample_create_request,
@@ -245,6 +246,100 @@ class TestLiveCreateMediaBuy:
         assert response.errors[0].code == "upstream_error"
         # No demand tags created if campaign failed.
         adapter._client.demand_tags.create.assert_not_called()
+
+    def test_kv_entry_known_scope_blocker_is_swallowed(self, mock_principal, sample_request, sample_packages):
+        """The documented 422 ("Targeter must have key_value_targeting set
+        to true") is the one and only KV error we tolerate -- the buy still
+        lands so geo/device/supply targeting can take effect."""
+        from src.adapters.springserve import SpringServeValidationError
+
+        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeValidationError(
+            "POST /demand_tag_keys -> HTTP 422",
+            status_code=422,
+            body='{"error":"Targeter must have key_value_targeting set to true"}',
+        )
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": ["x"]}],
+        ):
+            response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        # The buy still landed.
+        assert isinstance(response, CreateMediaBuySuccess)
+        adapter._client.demand_tags.add_kv_entry.assert_called_once_with(
+            800001,
+            key_id="3997",
+            list_type="white_list",
+            group="1",
+            free_values=["x"],
+        )
+
+    def test_kv_entry_other_422_propagates(self, mock_principal, sample_request, sample_packages):
+        """A different 422 (not the known blocker) MUST surface as an
+        upstream_error -- not silently mask a real validation failure."""
+        from src.adapters.springserve import SpringServeValidationError
+
+        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter._client.demand_tags.add_kv_entry.side_effect = SpringServeValidationError(
+            "POST /demand_tag_keys -> HTTP 422",
+            status_code=422,
+            body='{"error":"Free values can\'t be blank"}',
+        )
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": []}],
+        ):
+            response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        assert isinstance(response, CreateMediaBuyError)
+        assert response.errors[0].code == "upstream_error"
+
+    @pytest.mark.parametrize(
+        "exc_factory,exc_label",
+        [
+            (
+                lambda: __import__(
+                    "src.adapters.springserve._transport", fromlist=["SpringServeAuthError"]
+                ).SpringServeAuthError("POST /demand_tag_keys -> HTTP 401", status_code=401, body="invalid token"),
+                "auth-401",
+            ),
+            (
+                lambda: __import__(
+                    "src.adapters.springserve._transport", fromlist=["SpringServeRateLimitError"]
+                ).SpringServeRateLimitError(
+                    "POST /demand_tag_keys -> HTTP 429", status_code=429, body="too many requests"
+                ),
+                "rate-limit-429",
+            ),
+            (
+                lambda: __import__(
+                    "src.adapters.springserve._transport", fromlist=["SpringServeServerError"]
+                ).SpringServeServerError("POST /demand_tag_keys -> HTTP 503", status_code=503, body="upstream timeout"),
+                "server-5xx",
+            ),
+        ],
+        ids=["auth-401", "rate-limit-429", "server-5xx"],
+    )
+    def test_kv_entry_non_validation_errors_propagate(
+        self, mock_principal, sample_request, sample_packages, exc_factory, exc_label
+    ):
+        """Transient or auth-level SpringServe failures (401/429/5xx) MUST
+        propagate to the buyer as upstream_error -- they're sibling
+        classes of SpringServeValidationError and must not get caught by
+        the narrow KV blocker handler. Each error class is exercised
+        explicitly so a future refactor that re-broadens the catch fails
+        loudly here."""
+        adapter = self._adapter_with_mock_client(mock_principal)
+        adapter._client.demand_tags.add_kv_entry.side_effect = exc_factory()
+        with patch(
+            "src.adapters.springserve.adapter.build_demand_tag_kv_entries",
+            return_value=[{"key_id": "3997", "list_type": "white_list", "group": "1", "free_values": ["x"]}],
+        ):
+            response = invoke_create_media_buy(adapter, sample_request, sample_packages)
+
+        assert isinstance(response, CreateMediaBuyError), f"{exc_label} should surface as upstream_error"
+        assert response.errors[0].code == "upstream_error"
 
 
 class TestLiveCreatives:

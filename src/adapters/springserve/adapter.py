@@ -33,14 +33,23 @@ from src.adapters.base import (
     TargetingCapabilities,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.adapters.springserve.client import SpringServeAuthError, SpringServeClient, SpringServeError
+from src.adapters.springserve.client import (
+    SpringServeAuthError,
+    SpringServeClient,
+    SpringServeError,
+    SpringServeValidationError,
+)
 from src.adapters.springserve.formats import springserve_creative_formats
 from src.adapters.springserve.schemas import (
     SPRINGSERVE_HOSTS,
     SpringServeConnectionConfig,
     SpringServeProductConfig,
 )
-from src.adapters.springserve.targeting import build_demand_tag_targeting, validate_targeting
+from src.adapters.springserve.targeting import (
+    build_demand_tag_kv_entries,
+    build_demand_tag_targeting,
+    validate_targeting,
+)
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.springserve_demand_tag_stats import (
     SpringServeDemandTagStatsRepository,
@@ -124,9 +133,15 @@ class SpringServeAdapter(AdServerAdapter):
         if self.demand_partner_id is not None:
             self.demand_partner_id = int(self.demand_partner_id)
 
+        # Secrets are stored encrypted in adapter_config.config_json. The
+        # admin UI's test-connection path rehydrates through the schema's
+        # field validators (which auto-decrypt); orchestrated sync paths
+        # pass the raw JSON, so decrypt defensively here for both.
+        from src.adapters._secret_fields import decrypt_secret_value
+
         self.email = self.config.get("email")
-        self.password = self.config.get("password")
-        self.api_token = self.config.get("api_token")
+        self.password = decrypt_secret_value(self.config.get("password"))
+        self.api_token = decrypt_secret_value(self.config.get("api_token"))
         self.environment = self.config.get("environment", "production")
         self.base_url = SPRINGSERVE_HOSTS.get(self.environment, SPRINGSERVE_HOSTS["production"])
 
@@ -281,7 +296,13 @@ class SpringServeAdapter(AdServerAdapter):
             ),
             "is_active": False,  # Inactive until a creative is bound.
         }
-        kwargs.update(build_demand_tag_targeting(package.targeting_overlay, product_config))
+        kwargs.update(
+            build_demand_tag_targeting(
+                package.targeting_overlay,
+                product_config,
+                tenant_id=self.tenant_id,
+            )
+        )
         return kwargs
 
     # ----- create_media_buy -----
@@ -326,6 +347,10 @@ class SpringServeAdapter(AdServerAdapter):
         assert self._client is not None
         assert self.demand_partner_id is not None
         try:
+            # SpringServe requires a numeric rate on campaign create. Pick the
+            # first package's rate as a representative figure -- per-package
+            # rates land on the demand_tag itself a few lines below.
+            first_rate, _ = self._resolve_pricing_rate(packages[0], package_pricing_info) if packages else (0.0, "")
             campaign = self._client.campaigns.create(
                 name=buy_name,
                 demand_partner_id=int(self.demand_partner_id),
@@ -337,6 +362,7 @@ class SpringServeAdapter(AdServerAdapter):
                     f"packages={len(packages)}, "
                     f"flight={start_time.date()}..{end_time.date()}"
                 ),
+                rate=first_rate,
                 rate_currency=rate_currency,
             )
             for package in packages:
@@ -349,7 +375,14 @@ class SpringServeAdapter(AdServerAdapter):
                     end_time=end_time,
                     po_number=request.po_number,
                 )
-                self._client.demand_tags.create(**kwargs)
+                created_tag = self._client.demand_tags.create(**kwargs)
+                # KV / audience targeting goes through a separate sub-resource
+                # POST per the SpringServe docs (page 1628471383). The parent
+                # /demand_tags POST silently drops these fields if included
+                # in the body. See src/adapters/springserve/targeting.py.
+                kv_entries = build_demand_tag_kv_entries(package.targeting_overlay, tenant_id=self.tenant_id)
+                for entry in kv_entries:
+                    self._post_kv_entry_or_raise(created_tag.id, entry)
         except SpringServeError as exc:
             logger.warning("SpringServe create_media_buy failed: %s body=%s", exc, exc.body)
             return CreateMediaBuyError(
@@ -497,6 +530,37 @@ class SpringServeAdapter(AdServerAdapter):
             results.extend(self._skip_extra_creative_result(li, ci) for ci in losers)
             results.append(self._bind_creative_to_demand_tag(li, winner))
         return results
+
+    # The specific 422 SpringServe returns when ``key_value_targeting`` on
+    # the parent demand_tag isn't set — the v0 API doesn't let us flip
+    # that flag on our AdOps role, so the sub-resource POST is blocked
+    # publisher-wide until the scope is granted. ``targeting.py`` docstring
+    # has the full story.
+    _KV_SCOPE_BLOCKER_TOKENS = ("key_value_targeting set to true",)
+
+    def _post_kv_entry_or_raise(self, demand_tag_id: int, entry: dict[str, Any]) -> None:
+        """POST one KV-targeting entry; tolerate ONLY the known scope-blocker.
+
+        Anything else (5xx, 401, 429, a different 422) re-raises so the
+        outer ``create_media_buy`` error path surfaces it to the buyer.
+        The earlier blanket-catch was masking real failures as if they
+        were the documented blocker.
+        """
+        assert self._client is not None
+        try:
+            self._client.demand_tags.add_kv_entry(demand_tag_id, **entry)
+            return
+        except SpringServeValidationError as exc:
+            body = (exc.body or "").lower()
+            if not any(tok in body for tok in self._KV_SCOPE_BLOCKER_TOKENS):
+                # Different 422 -- not the known blocker. Let it propagate.
+                raise
+            logger.warning(
+                "SpringServe KV entry rejected for demand_tag %s key_id=%s "
+                "(known API blocker on key_value_targeting flag; targeting will not apply)",
+                demand_tag_id,
+                entry.get("key_id"),
+            )
 
     def _skip_extra_creative_result(self, line_item_id: str, creative_id: str) -> dict[str, Any]:
         if self.dry_run:
@@ -748,7 +812,7 @@ class SpringServeAdapter(AdServerAdapter):
                     "id": f"supply_tag:{row.entity_id}",
                     "name": row.name or row.entity_id,
                     "type": "supply_tag",
-                    "parent": row.parent_id,
+                    "parent": row.supply_router_id or row.supply_partner_id,
                 }
                 for row in supply_tags
             ]
