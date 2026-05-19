@@ -284,6 +284,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Test the actual quickstart flow users follow
+    env:
+      # docker-compose.yml requires CONDUCTOR_PORT to be set so multi-
+      # worktree dev setups can't silently collide on 8000. Every step
+      # in this job that interpolates docker-compose.yml (up, exec, logs)
+      # needs it. CI runs in an isolated job, so 8000 is safe here.
+      # See PR #505.
+      CONDUCTOR_PORT: "8000"
 
     steps:
     - uses: actions/checkout@v6
