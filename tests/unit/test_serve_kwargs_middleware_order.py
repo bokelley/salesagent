@@ -158,6 +158,26 @@ def test_stateless_http_defaults_off(value):
     )
 
 
+def test_auth_optional_tools_known_to_sdk_validator():
+    """Every entry in ``AUTH_OPTIONAL_TOOLS`` must be in the SDK's
+    ``ADCP_TOOL_DEFINITIONS``. The same set is passed to
+    ``BearerTokenAuth.mcp_discovery_tools``, which runs
+    ``validate_discovery_set`` at construction — a name the SDK doesn't
+    know about would crash the server at boot. Catching it here makes
+    the failure visible in unit tests instead.
+    """
+    from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+
+    from core.main import AUTH_OPTIONAL_TOOLS
+
+    sdk_known_names = {t["name"] for t in ADCP_TOOL_DEFINITIONS}
+    unknown = AUTH_OPTIONAL_TOOLS - sdk_known_names
+    assert not unknown, (
+        f"AUTH_OPTIONAL_TOOLS contains tools the SDK doesn't know about — "
+        f"BearerTokenAuth will reject them at construction: {sorted(unknown)}"
+    )
+
+
 def test_stateless_http_unset_is_stateful():
     """Unset env var must yield stateful mode — no surprise behavior on
     deployments that haven't opted in."""

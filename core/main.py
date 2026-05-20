@@ -83,10 +83,28 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
-from src.core.mcp_auth_middleware import AUTH_OPTIONAL_TOOLS
 from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
+
+
+# Tools callable without a bearer token. Buyers need to discover the agent
+# before they have credentials.
+#
+# Passed as ``BearerTokenAuth.mcp_discovery_tools`` in :func:`_serve_kwargs`.
+# Every entry must exist in ``adcp.server.mcp_tools.ADCP_TOOL_DEFINITIONS``
+# or ``BearerTokenAuth`` rejects it at construction via ``validate_discovery_set``.
+# ``list_accounts`` is deliberately excluded — salesagent's
+# ``_list_accounts_impl`` enforces BR-RULE-055 INV-3 and raises
+# ``AUTH_TOKEN_INVALID`` for unauthenticated callers, so gating it pre-auth
+# here only funnels rejected callers into the impl-layer error path.
+AUTH_OPTIONAL_TOOLS = frozenset(
+    {
+        "get_adcp_capabilities",
+        "get_products",
+        "list_creative_formats",
+    }
+)
 
 
 # ---- Tenant resolution (uses adcp PR #544 CallableSubdomainTenantRouter) ----
@@ -630,8 +648,7 @@ def _serve_kwargs(
         # token, but a missing one is fine); everything else requires
         # valid auth pre-dispatch. The set must cover what AdCP buyers
         # need to discover the agent before they have credentials.
-        # ``AUTH_OPTIONAL_TOOLS`` is shared with ``MCPAuthMiddleware`` so
-        # the transport gate and the FastMCP middleware agree.
+        # See ``AUTH_OPTIONAL_TOOLS`` above for the canonical definition.
         "auth": BearerTokenAuth(
             validate_token=_validate_token,
             mcp_discovery_tools=DISCOVERY_TOOLS | AUTH_OPTIONAL_TOOLS,
