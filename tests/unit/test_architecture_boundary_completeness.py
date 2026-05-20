@@ -23,7 +23,6 @@ IMPL_REGISTRY = [
     # capabilities response is built by adcp.decisioning.PlatformHandler from
     # the DecisioningCapabilities object; no local _impl on the new architecture.
     ("src.core.tools.creative_formats", "_list_creative_formats_impl"),
-    ("src.core.tools.properties", "_list_authorized_properties_impl"),
     ("src.core.tools.products", "_get_products_impl"),
     ("src.core.tools.media_buy_create", "_create_media_buy_impl"),
     ("src.core.tools.media_buy_update", "_update_media_buy_impl"),

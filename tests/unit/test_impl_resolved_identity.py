@@ -44,12 +44,6 @@ class TestImplSignaturesAcceptResolvedIdentity:
         param = self._get_identity_param(_list_creative_formats_impl)
         assert param is not None, "_list_creative_formats_impl must have 'identity' parameter"
 
-    def test_properties_impl_accepts_resolved_identity(self):
-        from src.core.tools.properties import _list_authorized_properties_impl
-
-        param = self._get_identity_param(_list_authorized_properties_impl)
-        assert param is not None, "_list_authorized_properties_impl must have 'identity' parameter"
-
     def test_products_impl_accepts_resolved_identity(self):
         from src.core.tools.products import _get_products_impl
 
@@ -125,7 +119,6 @@ class TestNoTransportImportsInImpl:
 
     IMPL_FUNCTIONS = [
         ("src.core.tools.creative_formats", "_list_creative_formats_impl"),
-        ("src.core.tools.properties", "_list_authorized_properties_impl"),
         ("src.core.tools.products", "_get_products_impl"),
         ("src.core.tools.media_buy_create", "_create_media_buy_impl"),
         ("src.core.tools.media_buy_update", "_update_media_buy_impl"),

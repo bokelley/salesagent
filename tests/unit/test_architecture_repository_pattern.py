@@ -29,7 +29,6 @@ IMPL_FILES = [
     "src/core/tools/products.py",
     "src/core/tools/capabilities.py",
     "src/core/tools/creative_formats.py",
-    "src/core/tools/properties.py",
     "src/core/tools/creatives/listing.py",
     "src/core/tools/creatives/_sync.py",
     "src/core/tools/creatives/_assignments.py",
@@ -211,23 +210,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "test_updating_profile_inventory_affects_product_implementation_config",
     ),
     ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_properties_affects_all_products"),
-    # tests/integration/test_list_authorized_properties_integration.py
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_reads_from_publisher_partner",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_all_registered_publishers",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_empty_when_no_publishers",
-    ),
-    (
-        "tests/integration/test_list_authorized_properties_integration.py",
-        "test_list_authorized_properties_returns_sorted_domains",
-    ),
     # tests/integration/test_media_buy_readiness.py
     ("tests/integration/test_media_buy_readiness.py", "test_tenant"),
     ("tests/integration/test_media_buy_readiness.py", "test_principal"),
