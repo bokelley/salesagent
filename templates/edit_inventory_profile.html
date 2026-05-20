@@ -28,15 +28,18 @@
             <small style="color: var(--sa-text-muted);">A descriptive name for this inventory configuration</small>
         </div>
 
-        <div class="form-group">
-            <label for="profile_id">Profile ID</label>
-            <input type="text" id="profile_id" name="profile_id" value="{{ profile.profile_id }}" readonly disabled>
-            <small style="color: var(--sa-text-muted);">Profile ID cannot be changed after creation.</small>
-        </div>
+        {# Profile ID is the internal slug — operators don't need it on edit.
+           Carried through the form as a hidden field so POST keeps working. #}
+        <input type="hidden" id="profile_id" name="profile_id" value="{{ profile.profile_id }}">
 
         <div class="form-group">
-            <label for="description">Description</label>
-            <textarea id="description" name="description" rows="3" placeholder="Describe what inventory this profile covers">{{ profile.description if profile.description else '' }}</textarea>
+            <label for="description">How buyers see this</label>
+            <textarea id="description" name="description" rows="4"
+                placeholder='Tell buyers what they get. Be factual, but explain why it&apos;s worth buying.
+e.g. "Our homepage — 100% viewable, 25% above-network engagement, no rotation."'>{{ profile.description if profile.description else '' }}</textarea>
+            <small style="color: var(--sa-text-muted);">
+                This shows in <code>list_products</code> when buyers discover your inventory. Treat it as merchandising copy.
+            </small>
         </div>
 
         <!-- Section 2: Inventory Selection -->
@@ -212,17 +215,12 @@
             </div>
         </div>
 
-        <!-- Section 5: Optional Targeting Template -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Default Targeting (Optional)</h3>
-        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Optional default targeting rules that products can inherit</p>
+        {# Default targeting was a raw-JSON field that operators got wrong
+           more often than right. Hidden from the edit UX; products handle
+           targeting at compose time. Carried as a hidden no-op so POST
+           validates. Re-introduce only with a structured editor. #}
+        <input type="hidden" id="targeting_template" name="targeting_template" value="">
 
-        <div class="form-group">
-            <label for="targeting_template">Targeting Template (JSON)</label>
-            <textarea id="targeting_template" name="targeting_template" rows="6"
-                      placeholder='{"geo_countries": ["US"], "device_type_any_of": ["desktop", "mobile"]}'
-                      style="font-family: monospace; font-size: 0.9rem;"></textarea>
-            <small style="color: var(--sa-text-muted);">Optional. Products using this profile can inherit or override these targeting rules.</small>
-        </div>
 
         <!-- Submit Buttons -->
         <div style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd;">
