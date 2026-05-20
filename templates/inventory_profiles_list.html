@@ -255,9 +255,13 @@
                                        href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=b.id) }}">
                                         Preview resolved shape
                                     </a>
-                                    <button class="item" role="menuitem" data-action="clone" data-id="{{ b.id }}">
-                                        Clone bundle
-                                    </button>
+                                    <form method="post"
+                                          action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=b.id) }}"
+                                          style="margin: 0;">
+                                        <button type="submit" class="item" role="menuitem">
+                                            Duplicate bundle
+                                        </button>
+                                    </form>
                                     <div class="sep"></div>
                                     <button class="item danger" role="menuitem"
                                             data-action="delete" data-id="{{ b.id }}" data-name="{{ b.name }}">
@@ -403,23 +407,18 @@
         }
     });
 
-    // Clone is a placeholder — wire to a real endpoint in a follow-up.
-    // Delete posts to the existing /<id>/delete route.
+    // Duplicate posts via the menu's <form>. Delete fires a DELETE fetch.
     list.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-action]');
+        const btn = e.target.closest('[data-action="delete"]');
         if (!btn) return;
-        if (btn.dataset.action === 'clone') {
-            alert('Clone bundle — wiring lands in a follow-up.');
-        } else if (btn.dataset.action === 'delete') {
-            if (!confirm(`Delete bundle "${btn.dataset.name}"?`)) return;
-            const root = document.querySelector('.bundles-page');
-            const scriptRoot = root.dataset.scriptRoot || '';
-            const tenantId = root.dataset.tenantId;
-            fetch(`${scriptRoot}/admin/tenant/${tenantId}/inventory-profiles/${btn.dataset.id}/delete`, {
-                method: 'DELETE',
-                credentials: 'same-origin',
-            }).then(r => r.ok ? location.reload() : alert('Delete failed'));
-        }
+        if (!confirm(`Delete bundle "${btn.dataset.name}"?`)) return;
+        const root = document.querySelector('.bundles-page');
+        const scriptRoot = root.dataset.scriptRoot || '';
+        const tenantId = root.dataset.tenantId;
+        fetch(`${scriptRoot}/admin/tenant/${tenantId}/inventory-profiles/${btn.dataset.id}/delete`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        }).then(r => r.ok ? location.reload() : alert('Delete failed'));
     });
 
     // "What's not bundled" — collapsible rail.

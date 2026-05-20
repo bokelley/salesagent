@@ -209,6 +209,12 @@ class TestTemplateUrlValidation:
                             if "tenant_signals" in endpoint and ("edit" in endpoint or "delete" in endpoint):
                                 test_params["signal_id"] = "test_signal"
 
+                            # Add profile_id for inventory_profiles per-bundle actions
+                            if "inventory_profiles" in endpoint and (
+                                "edit" in endpoint or "delete" in endpoint or "duplicate" in endpoint
+                            ):
+                                test_params["profile_id"] = 1
+
                             url_for(endpoint, **test_params)
                         except BuildError as e:
                             form_errors.append({"template": str(relative_path), "endpoint": endpoint, "error": str(e)})

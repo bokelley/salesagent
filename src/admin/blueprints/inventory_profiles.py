@@ -52,6 +52,20 @@ def _generate_profile_id(name: str) -> str:
     return profile_id
 
 
+def _unique_profile_id(session, tenant_id: str, base: str) -> str:
+    """Return a tenant-unique profile_id, suffixing _2, _3, ... if needed."""
+    existing = set(
+        session.scalars(select(InventoryProfile.profile_id).where(InventoryProfile.tenant_id == tenant_id)).all()
+    )
+    if base not in existing:
+        return base
+    for i in range(2, 1000):
+        candidate = f"{base}_{i}"
+        if candidate not in existing:
+            return candidate
+    raise RuntimeError(f"Could not find unique profile_id for {base}")
+
+
 def _get_inventory_summary(inventory_config: dict) -> str:
     """Generate human-readable inventory summary.
 
@@ -750,6 +764,47 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             property_tags=property_tags_list,
             active_tab="inventory_profiles",
         )
+
+
+@inventory_profiles_bp.route("/<int:profile_id>/duplicate", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("duplicate_inventory_profile")
+def duplicate_inventory_profile(tenant_id: str, profile_id: int):
+    """Duplicate an inventory bundle and open the copy in the editor.
+
+    Copies bundle-shaped fields (inventory, formats, properties, targeting, constraints,
+    description) but does NOT copy GAM preset bindings — those are 1:1 with a single bundle
+    and would create ambiguous sync targets.
+    """
+    with get_db_session() as session:
+        source = session.get(InventoryProfile, profile_id)
+        if not source or source.tenant_id != tenant_id:
+            flash("Inventory bundle not found", "error")
+            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+        new_name = f"{source.name} (copy)"
+        new_profile_id = _unique_profile_id(session, tenant_id, _generate_profile_id(new_name))
+
+        copy = InventoryProfile(
+            tenant_id=tenant_id,
+            profile_id=new_profile_id,
+            name=new_name,
+            description=source.description,
+            inventory_config=source.inventory_config,
+            format_ids=source.format_ids,
+            publisher_properties=source.publisher_properties,
+            targeting_template=source.targeting_template,
+            constraints=source.constraints,
+        )
+        session.add(copy)
+        session.flush()
+        new_id = copy.id
+        # Pick up the new bundle in the bundle-reference index (#485).
+        recompute_bundle_references(session, tenant_id)
+        session.commit()
+
+        flash(f"Duplicated '{source.name}' — editing the copy now.", "success")
+        return redirect(url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=new_id))
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/delete", methods=["DELETE", "POST"])

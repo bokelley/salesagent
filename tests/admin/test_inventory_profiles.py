@@ -216,11 +216,84 @@ class TestInventoryProfileDelete:
             profile = session.get(InventoryProfile, profile_pk)
         assert profile is None
 
-    def test_delete_nonexistent_profile_returns_404(self, client, test_tenant):
-        """POST delete for a nonexistent profile returns 404."""
+    def test_delete_nonexistent_profile_via_post_flashes_and_redirects(self, client, test_tenant):
+        """POST delete for a nonexistent profile flashes and redirects to the list."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/999999/delete",
             follow_redirects=False,
         )
+        assert response.status_code in (302, 303)
+        assert f"/tenant/{test_tenant}/inventory-profiles/" in response.headers.get("Location", "")
+
+    def test_delete_nonexistent_profile_via_delete_returns_404(self, client, test_tenant):
+        """DELETE for a nonexistent profile returns 404 JSON."""
+        _auth_session(client, test_tenant)
+        response = client.delete(
+            f"/tenant/{test_tenant}/inventory-profiles/999999/delete",
+        )
         assert response.status_code == 404
+
+
+class TestInventoryProfileDuplicate:
+    """Test inventory profile duplication."""
+
+    def test_duplicate_creates_copy_and_redirects_to_edit(self, client, test_tenant):
+        """POST /duplicate creates a copy with the same fields and redirects to its edit page."""
+        _auth_session(client, test_tenant)
+        source_pk = _create_sample_profile(test_tenant, name="Source Bundle", profile_id="source_bundle")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{source_pk}/duplicate",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            source = session.get(InventoryProfile, source_pk)
+            copy = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == test_tenant,
+                    InventoryProfile.name == "Source Bundle (copy)",
+                )
+            ).first()
+
+        assert copy is not None
+        assert copy.id != source_pk
+        assert copy.profile_id == "source_bundle_copy"
+        assert copy.inventory_config == source.inventory_config
+        assert copy.format_ids == source.format_ids
+        assert copy.publisher_properties == source.publisher_properties
+        assert f"/inventory-profiles/{copy.id}/edit" in response.headers.get("Location", "")
+
+    def test_duplicate_twice_generates_unique_profile_ids(self, client, test_tenant):
+        """Duplicating twice yields ..._copy and ..._copy_2."""
+        _auth_session(client, test_tenant)
+        source_pk = _create_sample_profile(test_tenant, name="Twice Bundle", profile_id="twice_bundle")
+
+        client.post(f"/tenant/{test_tenant}/inventory-profiles/{source_pk}/duplicate", follow_redirects=False)
+        client.post(f"/tenant/{test_tenant}/inventory-profiles/{source_pk}/duplicate", follow_redirects=False)
+
+        with get_db_session() as session:
+            ids = sorted(
+                session.scalars(
+                    select(InventoryProfile.profile_id).where(InventoryProfile.tenant_id == test_tenant)
+                ).all()
+            )
+        assert "twice_bundle" in ids
+        assert "twice_bundle_copy" in ids
+        assert "twice_bundle_copy_2" in ids
+
+    def test_duplicate_nonexistent_redirects_to_list(self, client, test_tenant):
+        """Duplicating a missing bundle redirects without creating anything."""
+        _auth_session(client, test_tenant)
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/999999/duplicate",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            count = len(
+                list(session.scalars(select(InventoryProfile).where(InventoryProfile.tenant_id == test_tenant)).all())
+            )
+        assert count == 0
