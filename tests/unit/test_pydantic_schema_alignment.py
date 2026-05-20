@@ -72,6 +72,14 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "time_granularity",
         "include_window_breakdown",
     },
+    # AdCP spec exposes catalog/pricing version preconditions on
+    # ``GetProductsRequest`` but the installed ``adcp`` Python library (5.6.0)
+    # doesn't surface them on ``LibraryGetProductsRequest`` yet. Remove when
+    # the library catches up.
+    "/schemas/latest/media-buy/get-products-request.json": {
+        "if_catalog_version",
+        "if_pricing_version",
+    },
     # Same pattern: the live spec adds purge + webhook-activity flags to
     # ``ListCreativesRequest`` but the installed ``adcp`` Python library
     # (5.5.0) doesn't expose them on ``LibraryListCreativesRequest``.
