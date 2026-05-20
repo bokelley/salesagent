@@ -64,10 +64,12 @@ jobs:
         with open("/tmp/uvscan/uv.lock", "w") as f:
             f.write(out)
         PY
-        # PYSEC-2026-89: Markdown DoS vuln, no fix released (3.10.2 is latest).
-        # Salesagent doesn't render untrusted Markdown, so the attack surface
-        # doesn't apply. Remove when upstream ships a fix.
-        uvx uv-secure --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89 /tmp/uvscan/uv.lock
+        # PYSEC-2026-89: Markdown DoS, no fix released; salesagent does not
+        #   render untrusted Markdown so the attack surface doesn't apply.
+        # PYSEC-2025-183: PyJWT 2.12.1 (latest). CI's uv-secure DB still flags
+        #   this while local has dropped it — ``--allow-unused-ignores`` keeps
+        #   both environments green without thrashing the list.
+        uvx uv-secure --allow-unused-ignores --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183 /tmp/uvscan/uv.lock
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)

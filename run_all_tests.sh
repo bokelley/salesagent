@@ -114,11 +114,14 @@ fi
 
 # --- Security audit ---
 echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
-# PYSEC-2026-89 is a Markdown DoS vuln (no fix released; salesagent does
-# not render untrusted Markdown so the attack surface doesn't apply).
-# Remove when upstream ships a fix.
-IGNORED_VULNS="GHSA-5239-wwwm-4pmq,PYSEC-2026-89"
-if uvx uv-secure --no-check-uv-tool --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
+# PYSEC-2026-89: Markdown DoS, no fix released; salesagent does not render
+#   untrusted Markdown so the attack surface doesn't apply.
+# PYSEC-2025-183: PyJWT 2.12.1 (latest). CI's uv-secure DB still flags this
+#   while the local DB has dropped it — ``--allow-unused-ignores`` keeps
+#   both environments green without thrashing the list.
+# Remove either when upstream ships a fix.
+IGNORED_VULNS="GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183"
+if uvx uv-secure --no-check-uv-tool --allow-unused-ignores --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
     echo -e "${GREEN}Security audit passed${NC}"
 else
     echo -e "${RED}Security audit FAILED — run: uvx uv-secure --ignore-vulns $IGNORED_VULNS${NC}"
