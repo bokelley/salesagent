@@ -554,23 +554,19 @@ def _serve_kwargs(
         # path also covers signing for non-embedded tenants). Auto-emit on
         # the SDK side would double-fire.
         "auto_emit_completion_webhooks": False,
-        # Bearer-token auth wraps both MCP and A2A legs. adcp 5.4.0
-        # (#720 / #721) makes ``Authorization: Bearer <token>`` the
-        # always-accepted spec-canonical carrier on BOTH legs and turns
-        # the legacy ``x-adcp-auth: <raw>`` header into an additive
-        # opt-in alias on the MCP leg for early adopters that haven't
-        # migrated. New clients use ``Authorization: Bearer`` and
-        # interoperate with off-the-shelf a2a-sdk and MCP buyer SDKs;
-        # legacy MCP clients sending ``x-adcp-auth`` keep working
-        # unchanged. Migration is a one-way drift with no flag day.
-        # ``mcp_discovery_tools`` (adcp 5.6.0 #745) gates the MCP transport
-        # layer: tools in the set return 401 only on a bad token (missing is
-        # fine), everything else requires a valid bearer pre-dispatch.
-        # Without it, every ``tools/call`` 401s pre-auth — including
-        # ``get_products`` and the other AdCP discovery tools that buyers
-        # must be able to hit before they have credentials.
-        # ``AUTH_OPTIONAL_TOOLS`` is the single source of truth shared with
-        # the FastMCP-layer ``MCPAuthMiddleware`` so the two gates agree.
+        # Bearer-token auth wraps both MCP and A2A legs.
+        # ``Authorization: Bearer <token>`` is the spec-canonical carrier
+        # on both legs. ``x-adcp-auth: <raw>`` is an additive alias on
+        # the MCP leg only — kept so legacy MCP buyers interoperate with
+        # off-the-shelf MCP and a2a-sdk clients without code changes.
+        #
+        # ``mcp_discovery_tools`` gates ``tools/call`` at the transport:
+        # tools in the set bypass the bearer check (still 401 on a bad
+        # token, but a missing one is fine); everything else requires
+        # valid auth pre-dispatch. The set must cover what AdCP buyers
+        # need to discover the agent before they have credentials.
+        # ``AUTH_OPTIONAL_TOOLS`` is shared with ``MCPAuthMiddleware`` so
+        # the transport gate and the FastMCP middleware agree.
         "auth": BearerTokenAuth(
             validate_token=_validate_token,
             mcp_discovery_tools=DISCOVERY_TOOLS | AUTH_OPTIONAL_TOOLS,
