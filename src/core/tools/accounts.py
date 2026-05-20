@@ -2,7 +2,8 @@
 
 Handles account management per AdCP spec (UC-011):
 - Agent-scoped results (BR-RULE-054)
-- Auth-optional list with empty fallback (BR-RULE-055)
+- Authenticated list — INV-3 of BR-RULE-055: unauthenticated callers raise
+  AUTH_TOKEN_INVALID (consistent with sync_accounts; see _list_accounts_impl)
 - Upsert by natural key (BR-RULE-056)
 - Atomic XOR response (BR-RULE-057)
 - Brand echo (BR-RULE-058)
