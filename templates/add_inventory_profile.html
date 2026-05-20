@@ -1,31 +1,31 @@
 {% extends "base.html" %}
 
-{% block title %}Create Inventory Profile - Sales Agent Admin{% endblock %}
+{% block title %}Create Inventory Bundle - Sales Agent Admin{% endblock %}
 
 {% block content %}
 <div class="sa-card">
     <div class="back-button-container">
         <a href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
-            ← Back to Inventory Profiles
+            ← Back to Inventory Bundles
         </a>
     </div>
 
     <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
         <div>
-            <h2 class="sa-page-header__title">Create Inventory Profile</h2>
-            <p class="sa-page-header__subtitle">Create a reusable inventory configuration that can be used across multiple products</p>
+            <h2 class="sa-page-header__title">Create Inventory Bundle</h2>
+            <p class="sa-page-header__subtitle">A salable shape — placements, formats, and properties bundled together for buyers to discover.</p>
         </div>
     </header>
 
     <form id="profile-form" method="POST">
         <!-- Section 1: Basic Information -->
-        <h3 style="margin-top: 0; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Profile Information</h3>
-        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Basic details about this inventory profile</p>
+        <h3 style="margin-top: 0; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Bundle Information</h3>
+        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Basic details about this inventory bundle</p>
 
         <div class="form-group">
-            <label for="name">Profile Name *</label>
+            <label for="name">Bundle Name *</label>
             <input type="text" id="name" name="name" required placeholder="e.g., Homepage Premium Display">
-            <small style="color: var(--sa-text-muted);">A descriptive name for this inventory configuration</small>
+            <small style="color: var(--sa-text-muted);">A short, descriptive name buyers will see in <code>list_products</code>.</small>
         </div>
 
         {# Profile ID is the internal slug — auto-generated server-side from
@@ -113,7 +113,7 @@ e.g. "Our homepage — 100% viewable, 25% above-network engagement, no rotation.
         <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Specify which publisher properties (websites, apps, etc.) this inventory represents</p>
 
         <div class="alert alert-info">
-            <strong>Required:</strong> Inventory profiles must specify which properties they cover for AdCP compliance.
+            <strong>Required:</strong> Inventory bundles must specify which properties they cover for AdCP compliance.
         </div>
 
         <!-- Property Selection Mode -->
@@ -223,7 +223,7 @@ e.g. "Our homepage — 100% viewable, 25% above-network engagement, no rotation.
 
         <!-- Submit Buttons -->
         <div style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd;">
-            <button type="submit" class="btn btn-primary">Create Inventory Profile</button>
+            <button type="submit" class="btn btn-primary">Create Bundle</button>
             <a href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
         </div>
     </form>

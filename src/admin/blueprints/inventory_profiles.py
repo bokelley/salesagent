@@ -341,7 +341,7 @@ def add_inventory_profile(tenant_id: str):
             # Basic fields
             name = form_data.get("name", "").strip()
             if not name:
-                flash("Profile name is required", "error")
+                flash("Bundle name is required", "error")
                 return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
             profile_id = form_data.get("profile_id", "").strip() or _generate_profile_id(name)
@@ -471,7 +471,7 @@ def add_inventory_profile(tenant_id: str):
                     )
                 )
                 if existing:
-                    flash(f"Inventory profile with ID '{profile_id}' already exists", "error")
+                    flash(f"Inventory bundle with ID '{profile_id}' already exists", "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
                 profile = InventoryProfile(
@@ -491,12 +491,12 @@ def add_inventory_profile(tenant_id: str):
                 recompute_bundle_references(session, tenant_id)
                 session.commit()
 
-                flash(f"Inventory profile '{name}' created successfully!", "success")
+                flash(f"Inventory bundle '{name}' created successfully!", "success")
                 return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
         except Exception as e:
             logger.error(f"Error creating inventory profile: {e}", exc_info=True)
-            flash(f"Error creating inventory profile: {str(e)}", "error")
+            flash(f"Error creating inventory bundle: {str(e)}", "error")
             return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
     # GET: Show form
@@ -504,7 +504,7 @@ def add_inventory_profile(tenant_id: str):
         # Get tenant and check primary_domain upfront
         tenant = session.get(Tenant, tenant_id)
         if not tenant or not tenant.primary_domain:
-            flash("Tenant primary_domain must be configured before creating inventory profiles", "warning")
+            flash("Tenant primary_domain must be configured before creating inventory bundles", "warning")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         # Get authorized properties for property selection
@@ -536,7 +536,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         profile = session.get(InventoryProfile, profile_id)
 
         if not profile or profile.tenant_id != tenant_id:
-            flash("Inventory profile not found", "error")
+            flash("Inventory bundle not found", "error")
             return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
         if request.method == "POST":
@@ -706,7 +706,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 session.commit()
 
                 # Success message with warning about future updates
-                flash(f"Inventory profile '{profile.name}' updated successfully!", "success")
+                flash(f"Inventory bundle '{profile.name}' updated successfully!", "success")
                 if product_count > 0:
                     flash(
                         f"Note: This profile is used by {product_count} product(s). "
@@ -718,14 +718,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
             except Exception as e:
                 logger.error(f"Error updating inventory profile: {e}", exc_info=True)
-                flash(f"Error updating inventory profile: {str(e)}", "error")
+                flash(f"Error updating inventory bundle: {str(e)}", "error")
                 session.rollback()
 
         # GET: Show form with existing data
         # Get tenant and check primary_domain upfront
         tenant = session.get(Tenant, tenant_id)
         if not tenant or not tenant.primary_domain:
-            flash("Tenant primary_domain must be configured before editing inventory profiles", "warning")
+            flash("Tenant primary_domain must be configured before editing inventory bundles", "warning")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         authorized_properties = session.scalars(
@@ -762,8 +762,8 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
 
         if not profile or profile.tenant_id != tenant_id:
             if request.method == "DELETE":
-                return jsonify({"error": "Inventory profile not found"}), 404
-            flash("Inventory profile not found", "error")
+                return jsonify({"error": "Inventory bundle not found"}), 404
+            flash("Inventory bundle not found", "error")
             return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
         # Check if any products use this profile
@@ -773,7 +773,7 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
         )
 
         if product_count > 0:
-            error_msg = f"Cannot delete inventory profile - used by {product_count} product(s)"
+            error_msg = f"Cannot delete inventory bundle - used by {product_count} product(s)"
             if request.method == "DELETE":
                 return jsonify({"error": error_msg}), 400
             flash(error_msg, "error")
@@ -787,9 +787,9 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
         session.commit()
 
         if request.method == "DELETE":
-            return jsonify({"success": True, "message": f"Inventory profile '{profile_name}' deleted successfully"})
+            return jsonify({"success": True, "message": f"Inventory bundle '{profile_name}' deleted successfully"})
 
-        flash(f"Inventory profile '{profile_name}' deleted successfully", "success")
+        flash(f"Inventory bundle '{profile_name}' deleted successfully", "success")
         return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
 
@@ -801,7 +801,7 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
         profile = session.get(InventoryProfile, profile_id)
 
         if not profile or profile.tenant_id != tenant_id:
-            return jsonify({"error": "Inventory profile not found"}), 404
+            return jsonify({"error": "Inventory bundle not found"}), 404
 
         return jsonify(
             {
@@ -829,7 +829,7 @@ def preview_inventory_profile(tenant_id: str, profile_id: int):
         profile = session.get(InventoryProfile, profile_id)
 
         if not profile or profile.tenant_id != tenant_id:
-            return jsonify({"error": "Inventory profile not found"}), 404
+            return jsonify({"error": "Inventory bundle not found"}), 404
 
         return jsonify(
             {
