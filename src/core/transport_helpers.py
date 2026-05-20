@@ -51,8 +51,13 @@ def resolve_identity_from_context(
     Returns:
         ResolvedIdentity, or None if ctx is None and no headers available
     """
-    # Handle ToolContext directly (already has resolved identity info)
-    if isinstance(ctx, ToolContext):
+    # Handle ToolContext directly (already has resolved identity info).
+    # Skip when both ``tenant_id`` and ``principal_id`` are ``None`` —
+    # this happens on discovery-tool calls where ``BearerTokenAuth``
+    # bypasses validation at the transport gate, so ``request.state``
+    # carries no principal even when the buyer sent a valid token.
+    # Fall through to header-based resolution in that case.
+    if isinstance(ctx, ToolContext) and (ctx.tenant_id is not None or ctx.principal_id is not None):
         # Create lazy tenant — DB query deferred until a field beyond
         # tenant_id is accessed. Most _impl paths only need tenant_id
         # for DB queries, so the full load often never happens.
