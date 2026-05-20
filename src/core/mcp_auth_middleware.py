@@ -16,14 +16,21 @@ from src.core.transport_helpers import resolve_identity_from_context
 logger = logging.getLogger(__name__)
 
 # Discovery tools that work without authentication.
-# All other tools require a valid auth token.
+#
+# Single source of truth — also passed to ``BearerTokenAuth.mcp_discovery_tools``
+# in ``core.main._serve_kwargs`` so the transport-layer gate (adcp 5.6.0 #745)
+# and this FastMCP middleware agree on what's allowed pre-auth.
+#
+# Every name in this set must appear in ``adcp.server.mcp_tools.ADCP_TOOL_DEFINITIONS``
+# or ``BearerTokenAuth.__init__`` will raise via ``validate_discovery_set``.
+# ``list_authorized_properties`` is NOT yet in the SDK's definitions, so it
+# requires auth — buyers must authenticate before listing authorized properties.
 AUTH_OPTIONAL_TOOLS = frozenset(
     {
         "get_adcp_capabilities",
         "get_products",
         "list_accounts",
         "list_creative_formats",
-        "list_authorized_properties",
     }
 )
 

@@ -50,17 +50,30 @@ class TestMCPAuthMiddlewareExists:
         assert "on_call_tool" in MCPAuthMiddleware.__dict__, "MCPAuthMiddleware must override on_call_tool"
 
     def test_auth_optional_tools_defined(self):
-        """AUTH_OPTIONAL_TOOLS set must be defined with discovery tools."""
+        """AUTH_OPTIONAL_TOOLS set must be defined with discovery tools.
+
+        Every entry must also exist in the SDK's ``ADCP_TOOL_DEFINITIONS`` because
+        the same set is passed to ``BearerTokenAuth.mcp_discovery_tools``, which
+        validates names at construction (adcp 5.6.0 #745).
+        """
+        from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+
         from src.core.mcp_auth_middleware import AUTH_OPTIONAL_TOOLS
 
         expected_discovery = {
             "get_adcp_capabilities",
             "get_products",
             "list_creative_formats",
-            "list_authorized_properties",
         }
         assert expected_discovery.issubset(AUTH_OPTIONAL_TOOLS), (
             f"AUTH_OPTIONAL_TOOLS missing discovery tools: {expected_discovery - AUTH_OPTIONAL_TOOLS}"
+        )
+
+        sdk_known_names = {t["name"] for t in ADCP_TOOL_DEFINITIONS}
+        unknown = AUTH_OPTIONAL_TOOLS - sdk_known_names
+        assert not unknown, (
+            f"AUTH_OPTIONAL_TOOLS contains tools the SDK doesn't know about — "
+            f"BearerTokenAuth will reject them at construction: {sorted(unknown)}"
         )
 
 

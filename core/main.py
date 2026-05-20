@@ -58,6 +58,7 @@ from adcp.server import (
     Tenant,
     auth_context_factory,
 )
+from adcp.server.mcp_tools import DISCOVERY_TOOLS
 from adcp.server.spec_compat import _spec_compat_hooks_impl
 from sqlalchemy import select
 
@@ -81,6 +82,7 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
+from src.core.mcp_auth_middleware import AUTH_OPTIONAL_TOOLS
 from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
@@ -561,8 +563,17 @@ def _serve_kwargs(
         # interoperate with off-the-shelf a2a-sdk and MCP buyer SDKs;
         # legacy MCP clients sending ``x-adcp-auth`` keep working
         # unchanged. Migration is a one-way drift with no flag day.
+        # ``mcp_discovery_tools`` (adcp 5.6.0 #745) gates the MCP transport
+        # layer: tools in the set return 401 only on a bad token (missing is
+        # fine), everything else requires a valid bearer pre-dispatch.
+        # Without it, every ``tools/call`` 401s pre-auth — including
+        # ``get_products`` and the other AdCP discovery tools that buyers
+        # must be able to hit before they have credentials.
+        # ``AUTH_OPTIONAL_TOOLS`` is the single source of truth shared with
+        # the FastMCP-layer ``MCPAuthMiddleware`` so the two gates agree.
         "auth": BearerTokenAuth(
             validate_token=_validate_token,
+            mcp_discovery_tools=DISCOVERY_TOOLS | AUTH_OPTIONAL_TOOLS,
             mcp_legacy_header_aliases=["x-adcp-auth"],
         ),
         "asgi_middleware": asgi_middleware,
