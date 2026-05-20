@@ -56,6 +56,7 @@ from adcp.server import (
     Principal,
     SubdomainTenantMiddleware,
     Tenant,
+    ToolContext,
     auth_context_factory,
 )
 from adcp.server.mcp_tools import DISCOVERY_TOOLS
@@ -187,6 +188,70 @@ def _validate_token(token: str) -> Principal | None:
     return Principal(
         caller_identity=row.principal_id,
         tenant_id=row.tenant_id,
+    )
+
+
+def auth_context_factory_with_discovery_fallback(meta):
+    """Wrap :func:`adcp.server.auth.auth_context_factory` to recover the
+    authenticated principal on the MCP discovery-tool path.
+
+    ``BearerTokenAuth.mcp_discovery_tools`` (adcp 5.6.0 #745) instructs the
+    transport gate to bypass bearer-token validation for the configured
+    tool set. The bypass clears ``request.state`` and the SDK auth
+    ContextVars to ``None`` even when the buyer DID send a token — by
+    design, so unauthenticated discovery works. The downside: authenticated
+    buyers hitting a discovery tool reach the dispatch task with no
+    resolved principal, so ``SalesagentAccountStore.resolve`` and
+    ``_build_identity`` (which both read ``current_principal`` /
+    ``current_tenant``) fall over with ``ACCOUNT_NOT_FOUND`` or
+    ``AUTH_TOKEN_INVALID``.
+
+    This factory runs in the dispatch task. When the upstream factory
+    returns an anonymous ``ToolContext`` we re-extract the bearer token
+    from the request headers, validate it via :func:`_validate_token`,
+    populate the SDK ContextVars and return a populated
+    ``ToolContext``. ContextVars set here propagate to ``_resolve_account``
+    and ``_build_identity`` downstream in the same task. Anonymous
+    buyers (no token) get the original anonymous ``ToolContext``
+    unchanged so genuinely unauthenticated discovery still works.
+    """
+    ctx = auth_context_factory(meta)
+    if ctx.caller_identity is not None or ctx.tenant_id is not None:
+        return ctx
+    request = getattr(meta, "request_context", None)
+    if request is None or not hasattr(request, "headers"):
+        return ctx
+    token: str | None = None
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = request.headers.get("x-adcp-auth")
+    if not token:
+        return ctx
+    principal = _validate_token(token)
+    if principal is None:
+        return ctx
+
+    # Lazy imports — avoid pulling adcp.server.auth internals at module load.
+    from adcp.decisioning.context import AuthInfo
+    from adcp.server.auth import current_principal, current_tenant
+
+    current_principal.set(principal.caller_identity)
+    current_tenant.set(principal.tenant_id)
+
+    return ToolContext(
+        request_id=ctx.request_id,
+        caller_identity=principal.caller_identity,
+        tenant_id=principal.tenant_id,
+        metadata={
+            **(ctx.metadata or {}),
+            "adcp.auth_info": AuthInfo(
+                kind="bearer",
+                principal=principal.caller_identity,
+                credential=None,
+            ),
+        },
     )
 
 
@@ -573,7 +638,7 @@ def _serve_kwargs(
             mcp_legacy_header_aliases=["x-adcp-auth"],
         ),
         "asgi_middleware": asgi_middleware,
-        "context_factory": auth_context_factory,
+        "context_factory": auth_context_factory_with_discovery_fallback,
         "allowed_hosts": _allowed_hosts(),
         "allowed_origins": [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:8000").split(",")],
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
