@@ -25,51 +25,25 @@ jobs:
         version: ${{ env.UV_VERSION }}
 
     - name: Scan for vulnerabilities
-      # GHSA-5239-wwwm-4pmq: Pygments ReDoS in AdlLexer (CVE-2026-4539) - no fix available;
-      #   local-access-only (AV:L, CVSS 3.3); ADL lexer not invoked by this application
+      # ``uv audit`` queries OSV directly and runs against the resolved lockfile.
+      # No per-package PyPI metadata fetch (the failure mode that forced
+      # uv-secure to ship with a mistralai-strip workaround), so we don't need
+      # the lockfile munging anymore.
       #
-      # Filter mistralai from the lockfile before scanning. ``pydantic-ai-slim``
-      # transitively pulls mistralai via its ``mistral`` extra, but the package
-      # was quarantined on PyPI in May 2026 (all versions removed from the JSON
-      # API; ``project-status="quarantined"`` on the simple index). uv-secure
-      # tries to GET pypi.org/pypi/mistralai/1.9.11/json for EVERY package
-      # (transitives included) regardless of ``--ignore-pkgs`` or
-      # ``--check-direct-dependency-*-only`` — those flags only filter
-      # reporting, not the metadata fetch. The 404 short-circuits with exit 3.
-      #
-      # We don't import mistralai anywhere in src/ or core/ (``grep -rn
-      # mistralai src/ core/`` is empty), and the upstream extra carries no
-      # functionality we use. Stripping mistralai from a temporary lockfile
-      # copy lets the scan complete on every other dependency, including
-      # everything else pydantic-ai-slim pulls in.
-      #
-      # Revert this once pydantic-ai-slim drops the mistral extra or PyPI
-      # un-quarantines the package.
+      # Ignored vulnerabilities (re-evaluate when upstream ships fixes):
+      #   GHSA-5239-wwwm-4pmq — Pygments ReDoS in AdlLexer (CVE-2026-4539). No
+      #     fix released; local-access-only (AV:L, CVSS 3.3); ADL lexer not
+      #     invoked by this application.
+      #   PYSEC-2026-89 — Markdown DoS. No fix released; salesagent doesn't
+      #     render untrusted Markdown so the attack surface doesn't apply.
+      #   PYSEC-2025-183 — PyJWT 2.12.1 (latest). DBs disagree on whether this
+      #     applies to 2.12.1; ignore here so a transient flag doesn't break
+      #     CI mid-merge.
       run: |
-        # Strip the mistralai ``[[package]]`` block from a temp copy of the
-        # lockfile so uv-secure doesn't choke on the PyPI quarantine 404.
-        # uv-secure requires the file to be named uv.lock / pylock.toml /
-        # requirements.txt, hence the directory.
-        mkdir -p /tmp/uvscan
-        python3 - <<'PY'
-        import re
-        with open("uv.lock") as f:
-            text = f.read()
-        pattern = re.compile(
-            r'^\[\[package\]\]\nname = "mistralai".*?(?=^\[\[|\Z)',
-            re.MULTILINE | re.DOTALL,
-        )
-        out, n = pattern.subn("", text, count=1)
-        assert n == 1, f"expected exactly one mistralai [[package]] block, found {n}"
-        with open("/tmp/uvscan/uv.lock", "w") as f:
-            f.write(out)
-        PY
-        # PYSEC-2026-89: Markdown DoS, no fix released; salesagent does not
-        #   render untrusted Markdown so the attack surface doesn't apply.
-        # PYSEC-2025-183: PyJWT 2.12.1 (latest). CI's uv-secure DB still flags
-        #   this while local has dropped it — ``--allow-unused-ignores`` keeps
-        #   both environments green without thrashing the list.
-        uvx uv-secure --allow-unused-ignores --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183 /tmp/uvscan/uv.lock
+        uv audit --preview-features audit \
+          --ignore GHSA-5239-wwwm-4pmq \
+          --ignore PYSEC-2026-89 \
+          --ignore PYSEC-2025-183
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
