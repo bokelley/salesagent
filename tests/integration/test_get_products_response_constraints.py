@@ -168,8 +168,61 @@ class TestRelevanceThresholdIntegration:
             assert returned_ids == {"all_a", "all_b", "all_c"}
 
 
-# The CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01 obligation previously tested
-# ``_list_authorized_properties_impl`` here. AdCP v3 retired that wire tool
-# in favor of the portfolio fields on ``get_adcp_capabilities``; the impl
-# is gone, the schemas remain (admin UI uses them). Re-attach the obligation
-# to the capabilities portfolio path in a follow-up.
+# ---------------------------------------------------------------------------
+# Publisher Domains Portfolio (CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01)
+# ---------------------------------------------------------------------------
+#
+# AdCP v3 retired ``list_authorized_properties`` and moved the portfolio onto
+# ``get_adcp_capabilities``. ``core.platforms._capabilities_envelope`` injects
+# ``portfolio.publisher_domains`` from the per-tenant ``PublisherPartner``
+# table. These tests verify the end-to-end wire shape: factory data → DB →
+# capabilities patch → response dict.
+
+
+class TestPublisherDomainsPortfolioIntegration:
+    """Publisher domains portfolio assembly from real database."""
+
+    @pytest.mark.asyncio
+    async def test_publisher_domains_sorted_alphabetically(self, integration_db):
+        """``portfolio.publisher_domains`` is sorted alphabetically regardless
+        of insertion order.
+
+        Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
+        """
+        from unittest.mock import MagicMock
+
+        from core.platforms._capabilities_envelope import _publisher_domains_for_current_tenant
+
+        with ProductEnv(tenant_id="pub-dom-t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="pub-dom-t1", subdomain="pub-dom-t1")
+            for domain in ["zeta.com", "alpha.com", "mike.com"]:
+                PublisherPartnerFactory(tenant=tenant, publisher_domain=domain)
+
+            tenant_stub = MagicMock()
+            tenant_stub.id = "pub-dom-t1"
+            with patch("core.platforms._capabilities_envelope.current_tenant", return_value=tenant_stub):
+                domains = _publisher_domains_for_current_tenant()
+
+        assert domains == ["alpha.com", "mike.com", "zeta.com"]
+
+    @pytest.mark.asyncio
+    async def test_publisher_domains_empty_when_no_partners(self, integration_db):
+        """Tenant with zero ``PublisherPartner`` rows yields an empty list so
+        the capabilities patch omits the portfolio block (schema requires
+        ``min_length=1`` on ``publisher_domains``).
+
+        Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
+        """
+        from unittest.mock import MagicMock
+
+        from core.platforms._capabilities_envelope import _publisher_domains_for_current_tenant
+
+        with ProductEnv(tenant_id="pub-dom-t2", principal_id="p1") as env:
+            TenantFactory(tenant_id="pub-dom-t2", subdomain="pub-dom-t2")
+
+            tenant_stub = MagicMock()
+            tenant_stub.id = "pub-dom-t2"
+            with patch("core.platforms._capabilities_envelope.current_tenant", return_value=tenant_stub):
+                domains = _publisher_domains_for_current_tenant()
+
+        assert domains == []
