@@ -113,40 +113,20 @@ else
 fi
 
 # --- Security audit ---
-echo -e "${BLUE}Running security audit (uv audit)...${NC}"
-# GHSA-5239-wwwm-4pmq: Pygments ReDoS in AdlLexer — no fix released;
-#   local-access-only (AV:L, CVSS 3.3); ADL lexer not invoked by this app.
-# PYSEC-2026-89: Markdown DoS — no fix released; salesagent doesn't render
+echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
+# PYSEC-2026-89: Markdown DoS, no fix released; salesagent does not render
 #   untrusted Markdown so the attack surface doesn't apply.
-# PYSEC-2025-183: PyJWT 2.12.1 (latest). Re-evaluate when upstream ships a fix.
-AUDIT_ARGS=(--preview-features audit
-    --ignore GHSA-5239-wwwm-4pmq
-    --ignore PYSEC-2026-89
-    --ignore PYSEC-2025-183)
-# Exit-code policy:
-#   0 — no vulnerabilities (pass)
-#   1 — vulnerability found (fail)
-#   anything else — uv audit error (typically network: e.g. safe-chain
-#     blocks osv.dev under Conductor dev mode). Warn but don't block —
-#     CI has unfettered network access and is the canonical signal.
-# ``set -e`` is on at the top of the script; wrap in if/else so a non-zero
-# exit from ``uv audit`` doesn't kill the shell before the case below.
-if uv audit "${AUDIT_ARGS[@]}"; then
-    AUDIT_EXIT=0
+# PYSEC-2025-183: PyJWT 2.12.1 (latest). CI's uv-secure DB still flags this
+#   while the local DB has dropped it — ``--allow-unused-ignores`` keeps
+#   both environments green without thrashing the list.
+# Remove either when upstream ships a fix.
+IGNORED_VULNS="GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183"
+if uvx uv-secure --no-check-uv-tool --allow-unused-ignores --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
+    echo -e "${GREEN}Security audit passed${NC}"
 else
-    AUDIT_EXIT=$?
+    echo -e "${RED}Security audit FAILED — run: uvx uv-secure --ignore-vulns $IGNORED_VULNS${NC}"
+    FAILURES="${FAILURES:+$FAILURES }security"
 fi
-case $AUDIT_EXIT in
-    0) echo -e "${GREEN}Security audit passed${NC}" ;;
-    1)
-        echo -e "${RED}Security audit FAILED — vulnerabilities detected${NC}"
-        echo -e "${RED}Run: uv audit ${AUDIT_ARGS[*]}${NC}"
-        FAILURES="${FAILURES:+$FAILURES }security"
-        ;;
-    *)
-        echo -e "${BLUE}Security audit could not run locally (exit $AUDIT_EXIT — likely network); CI will run the canonical check${NC}"
-        ;;
-esac
 
 # --- Summary ---
 FAILURES="${FAILURES:-}"
