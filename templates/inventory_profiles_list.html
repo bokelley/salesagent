@@ -288,14 +288,11 @@
                                             Duplicate bundle
                                         </button>
                                     </form>
-                                    <div class="sep"></div>
-                                    <div class="head">Reuse</div>
-                                    <button class="item" role="menuitem"
-                                            data-action="reuse" data-id="{{ b.id }}"
-                                            aria-disabled="true" disabled
-                                            title="Coming soon — see issue #524">
-                                        Add inventory to other bundles…
-                                    </button>
+                                    {# The Reuse flow lives at the inventory-item level, not
+                                       the bundle level — operators reach it from the "What's
+                                       not bundled" rail or (when #542 ships) from per-item
+                                       actions inside the editor. Removed the disabled stub
+                                       that used to sit here. #}
                                     <div class="sep"></div>
                                     <button class="item danger" role="menuitem"
                                             data-action="delete" data-id="{{ b.id }}" data-name="{{ b.name }}">
