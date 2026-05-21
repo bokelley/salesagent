@@ -921,7 +921,17 @@ def duplicate_inventory_profile(tenant_id: str, profile_id: int):
         session.commit()
 
         flash(f"Duplicated '{source.name}' — editing the copy now.", "success")
-        return redirect(url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=new_id))
+        # ``duplicated=1`` lets the editor autofocus + select the name field
+        # so renaming is a single keystroke. User-engagement reviewer (#528)
+        # called this the highest-leverage friction fix on the page.
+        return redirect(
+            url_for(
+                "inventory_profiles.edit_inventory_profile",
+                tenant_id=tenant_id,
+                profile_id=new_id,
+                duplicated=1,
+            )
+        )
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/delete", methods=["DELETE", "POST"])
@@ -975,6 +985,17 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
         if not profile or profile.tenant_id != tenant_id:
             return jsonify({"error": "Inventory bundle not found"}), 404
 
+        # Derive property_mode from publisher_properties shape — the same
+        # logic the template uses (#528). Hardcoding "all" was a bug:
+        # agents pulling the API would mis-render bundles that were saved
+        # in tag or property-id mode.
+        property_tags: list[str] = []
+        property_id_count = 0
+        for prop in profile.publisher_properties or []:
+            property_tags.extend(prop.get("property_tags") or [])
+            property_id_count += len(prop.get("property_ids") or [])
+        property_mode = "tags" if property_tags or not property_id_count else "property_ids"
+
         return jsonify(
             {
                 "id": profile.id,
@@ -987,7 +1008,7 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
                 "include_descendants": profile.inventory_config.get("include_descendants", True),
                 "formats": profile.format_ids,
                 "publisher_properties": profile.publisher_properties,
-                "property_mode": "all",  # Default to "all" mode for now (no DB column yet)
+                "property_mode": property_mode,
                 "targeting_template": profile.targeting_template,
             }
         )

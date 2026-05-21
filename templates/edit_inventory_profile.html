@@ -138,8 +138,8 @@
                         {% else %}
                             <div class="usedby">
                                 <div class="usedby__empty">
-                                    Nothing in this bundle is reused yet. Use <strong>Reuse</strong> →
-                                    "Add inventory to other bundles…" from any placement to start sharing.
+                                    Nothing in this bundle is reused yet. That's fine — bundles share
+                                    placements freely once you start adding the same inventory to multiple bundles.
                                 </div>
                             </div>
                         {% endif %}
@@ -362,7 +362,10 @@
     <div class="formbar">
         <div class="formbar__inner">
             <div class="formbar__status">
-                Saving affects <strong>future</strong> media buys using this bundle. Existing campaigns are not modified.
+                {# Pre-save warnings create the anxiety they claim to soothe.
+                   The post-save flash already explains what changed. Keep
+                   this line as quiet help, not a caveat. #}
+                Changes apply to the next media buy that uses this bundle.
             </div>
             <div class="formbar__spacer"></div>
             <a class="btn btn-secondary"
@@ -405,6 +408,18 @@ document.addEventListener('DOMContentLoaded', function() {
         prePopulateData();
     });
     setupFormatSearch();
+
+    // When the page is opened from the duplicate flow, the most common next
+    // action is renaming the bundle. Autofocus + select the name so the
+    // operator can just start typing. (User-engagement reviewer flagged this
+    // as the highest-leverage friction fix on the page.)
+    if (new URLSearchParams(window.location.search).get('duplicated')) {
+        const nameInput = document.getElementById('name');
+        if (nameInput) {
+            nameInput.focus();
+            nameInput.select();
+        }
+    }
 });
 
 function prePopulateData() {
