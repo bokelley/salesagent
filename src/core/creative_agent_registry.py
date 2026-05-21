@@ -18,10 +18,48 @@ Testing:
 - This avoids timeouts in CI when external creative agents are unreachable
 """
 
+import asyncio
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+# Cap on the total wall time of a multi-agent format fetch. Tenants can have N
+# creative agents, and a slow/dead one can block a sync request long enough for
+# the upstream LB to return 503. With per-agent default timeout=30s and a raw-MCP
+# fallback that retries, a single bad agent could burn >90s. This cap is the
+# real backstop — agents that don't return inside the window become
+# AGENT_UNREACHABLE errors instead of failing the whole request.
+_DEFAULT_FETCH_TIMEOUT_SECONDS = 20.0
+_MIN_FETCH_TIMEOUT_SECONDS = 0.1
+
+
+def _resolve_fetch_timeout() -> float:
+    """Read CREATIVE_FORMAT_FETCH_TIMEOUT with safe fallback + minimum clamp.
+
+    Bad operator input (non-numeric, NaN, ≤0) falls back to the default rather
+    than 500ing the route or causing asyncio.wait to behave pathologically.
+    """
+    import logging
+    import math
+
+    raw = os.environ.get("CREATIVE_FORMAT_FETCH_TIMEOUT")
+    if raw is None:
+        return _DEFAULT_FETCH_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            f"Invalid CREATIVE_FORMAT_FETCH_TIMEOUT={raw!r}; using default {_DEFAULT_FETCH_TIMEOUT_SECONDS}s"
+        )
+        return _DEFAULT_FETCH_TIMEOUT_SECONDS
+    if math.isnan(value) or value < _MIN_FETCH_TIMEOUT_SECONDS:
+        logging.getLogger(__name__).warning(
+            f"CREATIVE_FORMAT_FETCH_TIMEOUT={raw!r} below minimum; clamping to {_MIN_FETCH_TIMEOUT_SECONDS}s"
+        )
+        return _MIN_FETCH_TIMEOUT_SECONDS
+    return value
+
 
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
@@ -378,9 +416,11 @@ class CreativeAgentRegistry:
             if auth_token:
                 headers[auth_header] = auth_token
 
-        import asyncio
-
-        max_retries = 3
+        # The outer list_all_formats_with_errors caps total wall time with
+        # asyncio.wait, so this fallback can stay tight: one attempt for connection
+        # errors, one extra retry on 429 (which honours Retry-After) to handle
+        # creative agents that always return 429 on cold cache.
+        max_retries = 2
         last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:
@@ -594,70 +634,137 @@ class CreativeAgentRegistry:
             return FormatFetchResult(formats=_get_mock_formats(), errors=[])
 
         agents = self._get_tenant_agents(tenant_id)
-        all_formats: list[Format] = []
-        errors: list[AdCPResponseError] = []
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
+
+        # asyncio.wait raises ValueError on an empty task list; a tenant with no
+        # enabled agents is a legitimate state, not an error.
+        if not agents:
+            return FormatFetchResult(formats=[], errors=[])
 
         # Build client for all agents
         client = self._build_adcp_client(agents)
 
-        for agent in agents:
-            logger.info(f"list_all_formats: Fetching from {agent.agent_url}")
-            try:
-                # Check cache first if no filters and not forcing refresh
-                has_filters = any(
-                    [
-                        max_width is not None,
-                        max_height is not None,
-                        min_width is not None,
-                        min_height is not None,
-                        is_responsive is not None,
-                        asset_types is not None,
-                        name_search is not None,
-                        type_filter is not None,
-                    ]
-                )
+        has_filters = any(
+            [
+                max_width is not None,
+                max_height is not None,
+                min_width is not None,
+                min_height is not None,
+                is_responsive is not None,
+                asset_types is not None,
+                name_search is not None,
+                type_filter is not None,
+            ]
+        )
 
-                cache_key = self._cache_key(agent.agent_url)
-                cached = self._format_cache.get(cache_key)
-                if cached and not cached.is_expired() and not force_refresh and not has_filters:
-                    formats = cached.formats
-                else:
-                    # Fetch from agent
-                    formats = await self._fetch_formats_from_agent(
-                        client,
-                        agent,
-                        max_width=max_width,
-                        max_height=max_height,
-                        min_width=min_width,
-                        min_height=min_height,
-                        is_responsive=is_responsive,
-                        asset_types=asset_types,
-                        name_search=name_search,
-                        type_filter=type_filter,
-                    )
+        # Fetch all agents in parallel via asyncio.wait so we keep partial
+        # results when the global timeout fires. (asyncio.gather + wait_for
+        # cancels everything on timeout — we'd lose the agents that already
+        # returned.) Any task still pending at the deadline is cancelled and
+        # surfaces as AGENT_UNREACHABLE for that agent.
+        tasks = [
+            asyncio.create_task(
+                self._fetch_for_agent_with_cache(
+                    client=client,
+                    agent=agent,
+                    force_refresh=force_refresh,
+                    has_filters=has_filters,
+                    max_width=max_width,
+                    max_height=max_height,
+                    min_width=min_width,
+                    min_height=min_height,
+                    is_responsive=is_responsive,
+                    asset_types=asset_types,
+                    name_search=name_search,
+                    type_filter=type_filter,
+                ),
+                name=f"creative_format_fetch:{agent.agent_url}",
+            )
+            for agent in agents
+        ]
 
-                    # Update cache only if no filtering parameters
-                    if not has_filters:
-                        self._format_cache[cache_key] = CachedFormats(
-                            formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
-                        )
+        timeout = _resolve_fetch_timeout()
+        _, pending = await asyncio.wait(tasks, timeout=timeout)
+        if pending:
+            logger.warning(
+                f"list_all_formats: global timeout {timeout}s exceeded; "
+                f"{len(pending)}/{len(tasks)} agents still pending — cancelling"
+            )
+            for task in pending:
+                task.cancel()
+            # Let cancellations propagate so each pending task settles with CancelledError.
+            await asyncio.gather(*pending, return_exceptions=True)
 
-                logger.info(f"list_all_formats: Got {len(formats)} formats from {agent.agent_url}")
-                all_formats.extend(formats)
-            except Exception as e:
-                logger.error(f"Failed to fetch formats from {agent.agent_url}: {e}", exc_info=True)
+        all_formats: list[Format] = []
+        errors: list[AdCPResponseError] = []
+        for agent, task in zip(agents, tasks, strict=True):
+            if task.cancelled():
+                logger.error(f"Agent {agent.agent_url} timed out after {timeout}s")
                 errors.append(
                     AdCPResponseError(
                         code="AGENT_UNREACHABLE",
-                        message=f"Creative agent at {agent.agent_url} is unreachable: {e}",
+                        message=f"Creative agent at {agent.agent_url} did not respond within {timeout}s",
                     )
                 )
                 continue
+            exc = task.exception()
+            if exc is not None:
+                logger.error(f"Failed to fetch formats from {agent.agent_url}: {exc}")
+                errors.append(
+                    AdCPResponseError(
+                        code="AGENT_UNREACHABLE",
+                        message=f"Creative agent at {agent.agent_url} is unreachable: {exc}",
+                    )
+                )
+                continue
+            formats = task.result()
+            logger.info(f"list_all_formats: Got {len(formats)} formats from {agent.agent_url}")
+            all_formats.extend(formats)
 
         logger.info(f"list_all_formats: Returning {len(all_formats)} formats, {len(errors)} errors")
         return FormatFetchResult(formats=all_formats, errors=errors)
+
+    async def _fetch_for_agent_with_cache(
+        self,
+        client: ADCPMultiAgentClient,
+        agent: CreativeAgent,
+        force_refresh: bool,
+        has_filters: bool,
+        max_width: int | None,
+        max_height: int | None,
+        min_width: int | None,
+        min_height: int | None,
+        is_responsive: bool | None,
+        asset_types: list[str] | None,
+        name_search: str | None,
+        type_filter: str | None,
+    ) -> list[Format]:
+        """Fetch formats for a single agent honoring cache. Used by parallel gather."""
+        cache_key = self._cache_key(agent.agent_url)
+        cached = self._format_cache.get(cache_key)
+        if cached and not cached.is_expired() and not force_refresh and not has_filters:
+            return cached.formats
+
+        formats = await self._fetch_formats_from_agent(
+            client,
+            agent,
+            max_width=max_width,
+            max_height=max_height,
+            min_width=min_width,
+            min_height=min_height,
+            is_responsive=is_responsive,
+            asset_types=asset_types,
+            name_search=name_search,
+            type_filter=type_filter,
+        )
+
+        if not has_filters:
+            self._format_cache[cache_key] = CachedFormats(
+                formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
+            )
+
+        return formats
 
     async def search_formats(
         self, query: str, tenant_id: str | None = None, type_filter: str | None = None
