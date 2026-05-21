@@ -44,6 +44,21 @@ class FormatFetchResult:
     errors: list[AdCPResponseError]
 
 
+@dataclass
+class CachedFetchResult:
+    """Result of a single-agent cached fetch.
+
+    `stale=True` means the live fetch failed and we fell back to an expired cache
+    entry. Callers that want to surface the staleness to clients should emit a
+    STALE_RESPONSE warning; callers that just need formats can ignore the flag.
+    """
+
+    formats: list[Format]
+    stale: bool = False
+    cause: Exception | None = None
+    cache_age_seconds: int | None = None
+
+
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
@@ -450,6 +465,75 @@ class CreativeAgentRegistry:
                 return formats
         raise AdCPAdapterError("No text content in MCP tool result")
 
+    async def _fetch_for_agent_with_cache(
+        self,
+        agent: CreativeAgent,
+        client: ADCPMultiAgentClient | None = None,
+        force_refresh: bool = False,
+        max_width: int | None = None,
+        max_height: int | None = None,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        is_responsive: bool | None = None,
+        asset_types: list[str] | None = None,
+        name_search: str | None = None,
+        type_filter: str | None = None,
+    ) -> CachedFetchResult:
+        """Fetch formats from one agent, with cache and stale-on-error fallback.
+
+        Cache rules:
+        - Fresh cache hit (not expired, no filters, no force_refresh) returns cached formats.
+        - Otherwise fetch live, refresh cache on success (when no filters).
+        - On fetch failure: if a cached entry exists and no filters are active, fall back
+          to the cached formats and mark `stale=True`. With no usable cache, re-raise.
+        """
+        has_filters = any(
+            v is not None
+            for v in (
+                max_width,
+                max_height,
+                min_width,
+                min_height,
+                is_responsive,
+                asset_types,
+                name_search,
+                type_filter,
+            )
+        )
+
+        cache_key = self._cache_key(agent.agent_url)
+        cached = self._format_cache.get(cache_key)
+        if cached and not cached.is_expired() and not force_refresh and not has_filters:
+            return CachedFetchResult(formats=cached.formats)
+
+        if client is None:
+            client = self._build_adcp_client([agent])
+
+        try:
+            formats = await self._fetch_formats_from_agent(
+                client,
+                agent,
+                max_width=max_width,
+                max_height=max_height,
+                min_width=min_width,
+                min_height=min_height,
+                is_responsive=is_responsive,
+                asset_types=asset_types,
+                name_search=name_search,
+                type_filter=type_filter,
+            )
+        except Exception as exc:
+            if cached is not None and not has_filters:
+                age = int((datetime.now(UTC) - cached.fetched_at).total_seconds())
+                return CachedFetchResult(formats=cached.formats, stale=True, cause=exc, cache_age_seconds=age)
+            raise
+
+        if not has_filters:
+            self._format_cache[cache_key] = CachedFormats(
+                formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
+            )
+        return CachedFetchResult(formats=formats)
+
     async def get_formats_for_agent(
         self,
         agent: CreativeAgent,
@@ -465,51 +549,17 @@ class CreativeAgentRegistry:
     ) -> list[Format]:
         """Get formats from agent with caching.
 
-        Args:
-            agent: CreativeAgent to query
-            force_refresh: Skip cache and fetch fresh data
-            max_width: Maximum width in pixels (inclusive)
-            max_height: Maximum height in pixels (inclusive)
-            min_width: Minimum width in pixels (inclusive)
-            min_height: Minimum height in pixels (inclusive)
-            is_responsive: Filter for responsive formats
-            asset_types: Filter by asset types
-            name_search: Search by name
-            type_filter: Filter by format type (display, video, audio)
-
-        Returns:
-            List of Format objects
+        Returns cached formats when fresh, otherwise fetches live. On fetch failure
+        with a usable cache, returns the (possibly expired) cached formats; the
+        stale flag is discarded by this entry point — use `list_all_formats_with_errors`
+        when you need to surface staleness.
         """
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
             return _get_mock_formats()
 
-        # Check cache - only use cache if no filtering parameters provided
-        has_filters = any(
-            [
-                max_width is not None,
-                max_height is not None,
-                min_width is not None,
-                min_height is not None,
-                is_responsive is not None,
-                asset_types is not None,
-                name_search is not None,
-                type_filter is not None,
-            ]
-        )
-
-        cache_key = self._cache_key(agent.agent_url)
-        cached = self._format_cache.get(cache_key)
-        if cached and not cached.is_expired() and not force_refresh and not has_filters:
-            return cached.formats
-
-        # Build client for this agent
-        client = self._build_adcp_client([agent])
-
-        # Fetch from agent
-        formats = await self._fetch_formats_from_agent(
-            client,
+        result = await self._fetch_for_agent_with_cache(
             agent,
+            force_refresh=force_refresh,
             max_width=max_width,
             max_height=max_height,
             min_width=min_width,
@@ -519,14 +569,7 @@ class CreativeAgentRegistry:
             name_search=name_search,
             type_filter=type_filter,
         )
-
-        # Update cache only if no filtering parameters (cache full result set)
-        if not has_filters:
-            self._format_cache[cache_key] = CachedFormats(
-                formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
-            )
-
-        return formats
+        return result.formats
 
     async def list_all_formats(
         self,
@@ -599,53 +642,24 @@ class CreativeAgentRegistry:
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 
-        # Build client for all agents
         client = self._build_adcp_client(agents)
 
         for agent in agents:
             logger.info(f"list_all_formats: Fetching from {agent.agent_url}")
             try:
-                # Check cache first if no filters and not forcing refresh
-                has_filters = any(
-                    [
-                        max_width is not None,
-                        max_height is not None,
-                        min_width is not None,
-                        min_height is not None,
-                        is_responsive is not None,
-                        asset_types is not None,
-                        name_search is not None,
-                        type_filter is not None,
-                    ]
+                fetch = await self._fetch_for_agent_with_cache(
+                    agent,
+                    client=client,
+                    force_refresh=force_refresh,
+                    max_width=max_width,
+                    max_height=max_height,
+                    min_width=min_width,
+                    min_height=min_height,
+                    is_responsive=is_responsive,
+                    asset_types=asset_types,
+                    name_search=name_search,
+                    type_filter=type_filter,
                 )
-
-                cache_key = self._cache_key(agent.agent_url)
-                cached = self._format_cache.get(cache_key)
-                if cached and not cached.is_expired() and not force_refresh and not has_filters:
-                    formats = cached.formats
-                else:
-                    # Fetch from agent
-                    formats = await self._fetch_formats_from_agent(
-                        client,
-                        agent,
-                        max_width=max_width,
-                        max_height=max_height,
-                        min_width=min_width,
-                        min_height=min_height,
-                        is_responsive=is_responsive,
-                        asset_types=asset_types,
-                        name_search=name_search,
-                        type_filter=type_filter,
-                    )
-
-                    # Update cache only if no filtering parameters
-                    if not has_filters:
-                        self._format_cache[cache_key] = CachedFormats(
-                            formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
-                        )
-
-                logger.info(f"list_all_formats: Got {len(formats)} formats from {agent.agent_url}")
-                all_formats.extend(formats)
             except Exception as e:
                 logger.error(f"Failed to fetch formats from {agent.agent_url}: {e}", exc_info=True)
                 errors.append(
@@ -655,6 +669,29 @@ class CreativeAgentRegistry:
                     )
                 )
                 continue
+
+            all_formats.extend(fetch.formats)
+            if fetch.stale:
+                logger.warning(
+                    f"Serving stale cache for {agent.agent_url} (age={fetch.cache_age_seconds}s, cause={fetch.cause})"
+                )
+                errors.append(
+                    AdCPResponseError(
+                        code="STALE_RESPONSE",
+                        message=(
+                            f"Creative agent at {agent.agent_url} is unreachable; "
+                            f"serving cached formats ({fetch.cache_age_seconds}s old): {fetch.cause}"
+                        ),
+                        details={
+                            "served_from_cache": True,
+                            "cache_age_seconds": fetch.cache_age_seconds,
+                            "agent_url": str(agent.agent_url),
+                        },
+                        recovery="transient",
+                    )
+                )
+            else:
+                logger.info(f"list_all_formats: Got {len(fetch.formats)} formats from {agent.agent_url}")
 
         logger.info(f"list_all_formats: Returning {len(all_formats)} formats, {len(errors)} errors")
         return FormatFetchResult(formats=all_formats, errors=errors)

@@ -319,3 +319,165 @@ class TestCreativeAgentRegistry:
         # Verify format was constructed as our local Format subclass
         assert len(formats) == 1
         assert formats[0].format_id.id == "display_300x250"
+
+
+class TestStaleCacheFallback:
+    """When a live fetch fails and a cached entry exists, serve the cache
+    instead of returning an empty list to the caller.
+
+    Issue: bokelley/salesagent#523
+    """
+
+    @pytest.fixture(autouse=True)
+    def _disable_testing_mode(self, monkeypatch):
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+
+    @staticmethod
+    def _agent() -> CreativeAgent:
+        return CreativeAgent(
+            agent_url="https://creative.example.com",
+            name="Test Agent",
+            enabled=True,
+            priority=1,
+        )
+
+    @staticmethod
+    def _seed_cache(registry: CreativeAgentRegistry, agent: CreativeAgent, *, age_seconds: int, formats):
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.creative_agent_registry import CachedFormats
+
+        key = registry._cache_key(agent.agent_url)
+        registry._format_cache[key] = CachedFormats(
+            formats=formats,
+            fetched_at=datetime.now(UTC) - timedelta(seconds=age_seconds),
+            ttl_seconds=3600,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_cache_hit_skips_fetch(self, monkeypatch):
+        """Fresh cache: no fetch, returns cached formats."""
+        registry = CreativeAgentRegistry()
+        agent = self._agent()
+        cached_formats = [Mock(name="cached_fmt")]
+        self._seed_cache(registry, agent, age_seconds=60, formats=cached_formats)
+
+        fetch_mock = AsyncMock(side_effect=AssertionError("should not be called on fresh cache"))
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", fetch_mock)
+
+        result = await registry._fetch_for_agent_with_cache(agent)
+
+        assert result.formats is cached_formats
+        assert result.stale is False
+        assert result.cause is None
+        fetch_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_expired_cache_with_fetch_failure_serves_stale(self, monkeypatch):
+        """Cache expired, fetch fails → stale cache served with cause + age."""
+        registry = CreativeAgentRegistry()
+        agent = self._agent()
+        cached_formats = [Mock(name="cached_fmt")]
+        # 2 hours old → expired (default TTL 3600s)
+        self._seed_cache(registry, agent, age_seconds=7200, formats=cached_formats)
+
+        boom = RuntimeError("agent flaky")
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))
+
+        result = await registry._fetch_for_agent_with_cache(agent)
+
+        assert result.formats is cached_formats
+        assert result.stale is True
+        assert result.cause is boom
+        assert result.cache_age_seconds is not None and result.cache_age_seconds >= 7200
+
+    @pytest.mark.asyncio
+    async def test_no_cache_fetch_failure_reraises(self, monkeypatch):
+        """No prior cache + fetch failure → re-raise (caller emits AGENT_UNREACHABLE)."""
+        registry = CreativeAgentRegistry()
+        agent = self._agent()
+
+        boom = RuntimeError("agent down")
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))
+
+        with pytest.raises(RuntimeError, match="agent down"):
+            await registry._fetch_for_agent_with_cache(agent)
+
+    @pytest.mark.asyncio
+    async def test_filtered_fetch_failure_skips_stale_fallback(self, monkeypatch):
+        """Filters are active → cache is not consulted on failure (re-raise).
+
+        Cache only stores the unfiltered full result; filtered results aren't cached,
+        so a filtered request with a stale fallback could return the wrong subset.
+        """
+        registry = CreativeAgentRegistry()
+        agent = self._agent()
+        cached_formats = [Mock(name="cached_fmt")]
+        self._seed_cache(registry, agent, age_seconds=7200, formats=cached_formats)
+
+        boom = RuntimeError("agent flaky")
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))
+
+        with pytest.raises(RuntimeError, match="agent flaky"):
+            await registry._fetch_for_agent_with_cache(agent, max_width=300)
+
+    @pytest.mark.asyncio
+    async def test_successful_fetch_refreshes_cache(self, monkeypatch):
+        """Successful fetch updates the cache for next call."""
+        registry = CreativeAgentRegistry()
+        agent = self._agent()
+        # Seed expired cache to force fetch
+        self._seed_cache(registry, agent, age_seconds=7200, formats=[Mock(name="old")])
+
+        fresh_formats = [Mock(name="fresh")]
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(return_value=fresh_formats))
+
+        result = await registry._fetch_for_agent_with_cache(agent)
+
+        assert result.formats == fresh_formats
+        assert result.stale is False
+        # Cache should now hold the fresh formats
+        key = registry._cache_key(agent.agent_url)
+        assert registry._format_cache[key].formats == fresh_formats
+
+    @pytest.mark.asyncio
+    async def test_list_all_formats_with_errors_emits_stale_response_warning(self, monkeypatch):
+        """list_all_formats_with_errors surfaces stale fallback as STALE_RESPONSE warning,
+        not AGENT_UNREACHABLE — and still includes the cached formats in the response.
+        """
+        registry = CreativeAgentRegistry()
+
+        # Only the default agent in scope (no tenant agents)
+        default_agent = registry.DEFAULT_AGENT
+        cached_formats = [Mock(name="cached_fmt", spec=[])]
+        self._seed_cache(registry, default_agent, age_seconds=7200, formats=cached_formats)
+
+        boom = RuntimeError("upstream 503")
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))
+
+        result = await registry.list_all_formats_with_errors(tenant_id=None)
+
+        assert result.formats == cached_formats, "stale cache must populate formats[]"
+        assert len(result.errors) == 1
+        err = result.errors[0]
+        assert err.code == "STALE_RESPONSE"
+        assert err.recovery.value == "transient"
+        assert err.details is not None
+        assert err.details["served_from_cache"] is True
+        assert err.details["cache_age_seconds"] >= 7200
+        assert err.details["agent_url"] == str(default_agent.agent_url)
+
+    @pytest.mark.asyncio
+    async def test_list_all_formats_with_errors_falls_back_to_agent_unreachable(self, monkeypatch):
+        """No usable cache + fetch failure → AGENT_UNREACHABLE (existing behavior preserved)."""
+        registry = CreativeAgentRegistry()
+        # No cache seeded.
+
+        boom = RuntimeError("upstream 503")
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))
+
+        result = await registry.list_all_formats_with_errors(tenant_id=None)
+
+        assert result.formats == []
+        assert len(result.errors) == 1
+        assert result.errors[0].code == "AGENT_UNREACHABLE"
