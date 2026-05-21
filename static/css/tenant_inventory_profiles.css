@@ -755,6 +755,11 @@
 .edit-sidebar {
     position: sticky;
     top: 24px;
+    /* Don't underlap the fixed formbar (~60px) — reviewer caught this overlap
+       at viewport heights below ~1100px. Sidebar scrolls internally if its
+       content exceeds the visible region. */
+    max-height: calc(100vh - 24px - 80px);
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -919,6 +924,41 @@
     line-height: 1.5;
 }
 
+/* Form inputs across the edit page — match the parchment palette. Bare
+   ``<input>`` / ``<textarea>`` here are NOT inside ``.form-group`` so they
+   don't inherit the global admin styling and would otherwise render with
+   browser defaults (white background, 2px inset border). */
+.edit-page .fieldgrid .field input[type="text"],
+.edit-page .fieldgrid .field input[type="search"],
+.edit-page .fieldgrid .field textarea,
+.edit-page .card__body input[type="text"],
+.edit-page .card__body input[type="search"],
+.edit-page .card__body textarea {
+    background: var(--sig-bg-page);
+    border: 1px solid var(--sig-bd-default);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 13.5px;
+    color: var(--sig-fg-primary);
+    width: 100%;
+    box-sizing: border-box;
+}
+.edit-page .fieldgrid .field input:focus,
+.edit-page .fieldgrid .field textarea:focus,
+.edit-page .card__body input:focus,
+.edit-page .card__body textarea:focus {
+    outline: none;
+    border-color: var(--sig-blue);
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15);
+}
+.edit-page .fieldgrid .field textarea,
+.edit-page .card__body textarea {
+    font-family: inherit;
+    resize: vertical;
+    min-height: 80px;
+}
+
 /* --------------------------------------------------------------
    Sticky form bar
    ----------------------------------------------------------- */
@@ -949,14 +989,6 @@
     gap: 8px;
 }
 .formbar__status strong { font-weight: 600; color: var(--sig-fg-primary); }
-.formbar__status .dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 999px;
-    background: var(--sig-amber, #d49b32);
-}
-.formbar__status.ready .dot { background: var(--sig-green, #2f9d56); }
 .formbar__spacer { flex: 1; }
 
 /* --------------------------------------------------------------

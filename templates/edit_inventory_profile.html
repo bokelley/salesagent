@@ -20,7 +20,7 @@
             <h1>Edit {{ profile.name }}</h1>
             <p class="lead">
                 Tweak the inventory shape, formats and properties that ship with this bundle.
-                <em>Authored against</em> <span class="pill-link">{{ s.adapter_label }}</span>.
+                {# Adapter is shown as a chip on the Basics card — don't repeat here. #}
             </p>
         </header>
 
@@ -98,10 +98,12 @@
                         </div>
                     </div>
 
-                    {# Blast radius card — informational, not a warning #}
+                    {# Shared-with card — same data as the design's "Blast radius"
+                       but the word "blast" reads as incident-response; this is
+                       informational context. Reviewer (internal-tools) called it. #}
                     <div class="card">
                         <div class="card__header">
-                            <h2 class="card__title">Blast radius</h2>
+                            <h2 class="card__title">Also in other bundles</h2>
                         </div>
                         {% if blast_radius %}
                             <div class="usedby">
@@ -141,33 +143,6 @@
                                 </div>
                             </div>
                         {% endif %}
-                    </div>
-
-                    {# Reuse-actions card #}
-                    <div class="card">
-                        <div class="card__header">
-                            <h2 class="card__title">Actions</h2>
-                        </div>
-                        <div class="usedby">
-                            <a class="usedby__row link"
-                               href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
-                                <span class="name">Preview resolved shape</span>
-                            </a>
-                            <form method="post"
-                                  action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}"
-                                  style="margin: 0;">
-                                <button type="submit" class="usedby__row link"
-                                        style="background: none; border: none; padding: 8px; width: 100%; text-align: left; cursor: pointer; font: inherit;">
-                                    <span class="name">Duplicate this bundle</span>
-                                </button>
-                            </form>
-                            <span class="usedby__row"
-                                  style="opacity: 0.6;"
-                                  title="Coming soon — see issue #524">
-                                <span class="name">Add inventory to other bundles…</span>
-                                <span class="meta">coming soon</span>
-                            </span>
-                        </div>
                     </div>
 
                 </aside>
@@ -387,10 +362,18 @@
     <div class="formbar">
         <div class="formbar__inner">
             <div class="formbar__status">
-                <span class="dot"></span>
-                Saving will affect future media buys using this bundle. Existing campaigns are not modified.
+                Saving affects <strong>future</strong> media buys using this bundle. Existing campaigns are not modified.
             </div>
             <div class="formbar__spacer"></div>
+            <a class="btn btn-secondary"
+               href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
+                Preview
+            </a>
+            <form method="post"
+                  action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}"
+                  style="margin: 0; display: inline;">
+                <button type="submit" class="btn btn-secondary">Duplicate</button>
+            </form>
             <a class="btn btn-secondary"
                href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
                 Cancel

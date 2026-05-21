@@ -248,13 +248,15 @@ class TestInventoryProfileEdit:
         html = response.data.decode()
         # Sidebar cards
         assert "Summary" in html
-        assert "Blast radius" in html
+        assert "Also in other bundles" in html
         # Section cards in main column
         assert "Basics" in html
         assert "Inventory" in html
         assert "Creative formats" in html
         # Sticky form bar
         assert "Save bundle" in html
+        assert "Preview" in html  # action moved into formbar
+        assert "Duplicate" in html  # action moved into formbar
         # Back link to list page
         assert "Back to Inventory bundles" in html
 

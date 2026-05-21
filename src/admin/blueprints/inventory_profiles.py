@@ -373,28 +373,42 @@ def _compute_blast_radius(session, tenant_id: str, profile: InventoryProfile) ->
     not a warning — bundles share placements, not state, so edits here are
     local. Returned as ``[{kind, external_id, others}]`` where ``others`` is
     the count of *other* bundles also referencing that external_id.
+
+    Builds a single ``{external_id -> set(bundle_ids)}`` index per entity type
+    so lookups are O(1). A naive double-loop is O(N · M) over bundles ×
+    placements, which gets expensive past a few hundred bundles.
     """
     from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 
     repo = InventoryProfileRepository(session, tenant_id)
     all_bundles = repo.list_all()
-    siblings = [b for b in all_bundles if b.id != profile.id]
-    if not siblings:
-        return []
 
     my_config = profile.inventory_config or {}
     my_placements = my_config.get("placements") or []
     my_ad_units = my_config.get("ad_units") or []
+    if not my_placements and not my_ad_units:
+        return []
+
+    placement_index: dict[str, set[int]] = {}
+    ad_unit_index: dict[str, set[int]] = {}
+    for b in all_bundles:
+        if b.id == profile.id:
+            continue
+        cfg = b.inventory_config or {}
+        for ext_id in cfg.get("placements") or []:
+            placement_index.setdefault(ext_id, set()).add(b.id)
+        for ext_id in cfg.get("ad_units") or []:
+            ad_unit_index.setdefault(ext_id, set()).add(b.id)
 
     reused: list[dict] = []
     for ext_id in my_placements:
-        sharing = sum(1 for b in siblings if ext_id in ((b.inventory_config or {}).get("placements") or []))
-        if sharing > 0:
-            reused.append({"kind": "placement", "external_id": ext_id, "others": sharing})
+        bundles = placement_index.get(ext_id)
+        if bundles:
+            reused.append({"kind": "placement", "external_id": ext_id, "others": len(bundles)})
     for ext_id in my_ad_units:
-        sharing = sum(1 for b in siblings if ext_id in ((b.inventory_config or {}).get("ad_units") or []))
-        if sharing > 0:
-            reused.append({"kind": "ad_unit", "external_id": ext_id, "others": sharing})
+        bundles = ad_unit_index.get(ext_id)
+        if bundles:
+            reused.append({"kind": "ad_unit", "external_id": ext_id, "others": len(bundles)})
 
     return reused
 
