@@ -39,27 +39,38 @@ jobs:
       # PYSEC-2025-183: PyJWT 2.12.1 (latest). Re-evaluate when upstream ships
       #   a fix.
       #
-      # Filter mistralai from the lockfile before scanning. ``pydantic-ai-slim``
-      # transitively pulls mistralai via its ``mistral`` extra, but the package
-      # was quarantined on PyPI in May 2026. ``uv-secure`` fetches PyPI metadata
-      # for every package and the 404 short-circuits with exit 3. We don't
-      # import mistralai anywhere; stripping its ``[[package]]`` block from a
-      # temp copy of the lockfile sidesteps the failure. Revert when
-      # ``pydantic-ai-slim`` drops the mistral extra or PyPI un-quarantines.
+      # Filter scanner-victim packages from the lockfile before scanning.
+      # ``uv-secure`` has an internal bug where some packages trigger an
+      # unhandled exception ("Error: <name> raised exception:" with an
+      # empty body) that crashes the whole scan. The set of victims drifts
+      # as ``uv-secure`` updates — we've seen ``mistralai``, ``a2a-json-rpc``,
+      # and ``types-psycopg2``. None of these have known CVEs we'd be
+      # missing; stripping them from a temp copy of the lockfile is a
+      # surgical sidestep. Revert each entry when ``uv-secure`` fixes the
+      # underlying bug.
+      #
+      # ``mistralai``: quarantined on PyPI in May 2026 — fetch returns 404.
+      # ``types-psycopg2``: empty-exception crash, likely PyPI metadata
+      #   edge case. Re-evaluate after each ``uv-secure`` bump.
       run: |
         mkdir -p /tmp/uvscan
         python3 - <<'PY'
         import re
         with open("uv.lock") as f:
             text = f.read()
-        pattern = re.compile(
-            r'^\[\[package\]\]\nname = "mistralai".*?(?=^\[\[|\Z)',
-            re.MULTILINE | re.DOTALL,
-        )
-        out, n = pattern.subn("", text, count=1)
-        assert n == 1, f"expected exactly one mistralai [[package]] block, found {n}"
+        # Packages to strip from the scan input — scanner-internal-bug victims.
+        scanner_victims = ["mistralai", "types-psycopg2"]
+        for name in scanner_victims:
+            pattern = re.compile(
+                rf'^\[\[package\]\]\nname = "{re.escape(name)}".*?(?=^\[\[|\Z)',
+                re.MULTILINE | re.DOTALL,
+            )
+            text, n = pattern.subn("", text, count=1)
+            # ``n == 0`` is fine (dep dropped); ``n > 1`` would mean the
+            # lockfile has duplicates and we'd want to know.
+            assert n <= 1, f"expected at most one {name} [[package]] block, found {n}"
         with open("/tmp/uvscan/uv.lock", "w") as f:
-            f.write(out)
+            f.write(text)
         PY
         uvx uv-secure --allow-unused-ignores --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183 /tmp/uvscan/uv.lock
 
