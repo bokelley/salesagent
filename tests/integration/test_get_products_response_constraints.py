@@ -18,6 +18,7 @@ from tests.factories import (
     PricingOptionFactory,
     PrincipalFactory,
     ProductFactory,
+    PublisherPartnerFactory,
     TenantFactory,
 )
 from tests.harness.product import ProductEnv
