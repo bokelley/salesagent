@@ -1081,6 +1081,43 @@
     gap: 8px;
 }
 .formbar__status strong { font-weight: 600; color: var(--sig-fg-primary); }
+
+/* Live-validation state on the formbar (#529). The Save button is rendered
+   primary by default; the bar's data-form-state tints the status line so
+   the operator knows at a glance whether saving will work. */
+.formbar[data-form-state="ready"] .formbar__status {
+    color: var(--sig-green, #1f7a3a);
+}
+.formbar[data-form-state="invalid"] .formbar__status {
+    color: var(--sig-amber, #b8861a);
+}
+/* When the user hits Save on an invalid form we draw the eye to the
+   focused field with a one-shot border flash. The earlier shake on the
+   whole formbar read as "computer is annoyed at me" — the field-level
+   flash is local to the action. (#529 UX review) */
+@keyframes field-flash {
+    0%   { box-shadow: 0 0 0 3px rgba(184, 134, 26, 0.0); border-color: var(--sig-bd-default); }
+    20%  { box-shadow: 0 0 0 3px rgba(184, 134, 26, 0.55); border-color: var(--sig-amber, #b8861a); }
+    100% { box-shadow: 0 0 0 3px rgba(184, 134, 26, 0.0); border-color: var(--sig-bd-default); }
+}
+.field--flash { animation: field-flash 720ms ease-out; }
+
+/* Summary card validators (#529): dot pinned to the row's label. Default
+   is neutral (informational rows like Adapter / Used by stay this way).
+   Required rows flip green/amber via data-validator + .valid/.invalid. */
+.summary-list__row .vd {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--sig-bd-default);
+    margin-left: 6px;
+    vertical-align: middle;
+    transition: background 120ms ease;
+}
+.summary-list__row.valid .vd { background: var(--sig-green, #1f7a3a); }
+.summary-list__row.invalid .vd { background: var(--sig-amber, #b8861a); }
+.summary-list__row.invalid .v { color: var(--sig-fg-secondary); }
 .formbar__spacer { flex: 1; }
 
 /* --------------------------------------------------------------

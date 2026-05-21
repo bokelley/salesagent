@@ -30,59 +30,74 @@
                 {# ===== Sidebar ===== #}
                 <aside class="edit-sidebar">
 
-                    {# Summary card #}
+                    {# Summary card — live validators (#529).
+                       Each row has a state dot (.vd) flipped by JS as the
+                       form changes. The Adapter + Used by rows are
+                       informational and stay neutral. #}
                     <div class="card">
                         <div class="card__header">
                             <h2 class="card__title">Summary</h2>
                         </div>
-                        <div class="summary-list">
+                        <div class="summary-list" id="summary-validators">
                             <div class="summary-list__row">
                                 <span class="k">Adapter</span>
                                 <span class="v">{{ s.adapter_label }}</span>
                             </div>
-                            <div class="summary-list__row">
-                                <span class="k">Inventory</span>
+                            <div class="summary-list__row" data-validator="name">
+                                <span class="k">Name <span class="vd" aria-hidden="true"></span></span>
                                 <span class="v">
-                                    {% if s.ad_unit_count == 0 and s.placement_count == 0 %}
-                                        <span class="muted">none yet</span>
-                                    {% else %}
-                                        {% if s.placement_count %}
-                                            {{ s.placement_count }} {{ 'placement' if s.placement_count == 1 else 'placements' }}
-                                        {% endif %}
-                                        {% if s.placement_count and s.ad_unit_count %} · {% endif %}
-                                        {% if s.ad_unit_count %}
-                                            {{ s.ad_unit_count }} {{ 'ad unit' if s.ad_unit_count == 1 else 'ad units' }}
-                                        {% endif %}
-                                    {% endif %}
+                                    <span data-validator-text="name">{{ profile.name or 'missing' }}</span>
                                 </span>
                             </div>
-                            <div class="summary-list__row">
-                                <span class="k">Formats</span>
+                            <div class="summary-list__row" data-validator="inventory">
+                                <span class="k">Inventory <span class="vd" aria-hidden="true"></span></span>
                                 <span class="v">
-                                    {% if s.format_count %}
-                                        {{ s.format_count }}
-                                    {% else %}
-                                        <span class="muted">none</span>
-                                    {% endif %}
+                                    <span data-validator-text="inventory">
+                                        {% if s.ad_unit_count == 0 and s.placement_count == 0 %}
+                                            <span class="muted">none yet</span>
+                                        {% else %}
+                                            {% if s.placement_count %}
+                                                {{ s.placement_count }} {{ 'placement' if s.placement_count == 1 else 'placements' }}
+                                            {% endif %}
+                                            {% if s.placement_count and s.ad_unit_count %} · {% endif %}
+                                            {% if s.ad_unit_count %}
+                                                {{ s.ad_unit_count }} {{ 'ad unit' if s.ad_unit_count == 1 else 'ad units' }}
+                                            {% endif %}
+                                        {% endif %}
+                                    </span>
                                 </span>
                             </div>
-                            <div class="summary-list__row">
-                                <span class="k">Properties</span>
+                            <div class="summary-list__row" data-validator="formats">
+                                <span class="k">Formats <span class="vd" aria-hidden="true"></span></span>
                                 <span class="v">
-                                    {% if s.property_mode == 'tags' %}
-                                        {% if s.property_tag_count %}
-                                            {{ s.property_tag_count }} {{ 'tag' if s.property_tag_count == 1 else 'tags' }}
+                                    <span data-validator-text="formats">
+                                        {% if s.format_count %}
+                                            {{ s.format_count }}
                                         {% else %}
                                             <span class="muted">none</span>
                                         {% endif %}
-                                    {% else %}
-                                        {% if s.property_id_count %}
-                                            {{ s.property_id_count }} specific
-                                            {{ 'property' if s.property_id_count == 1 else 'properties' }}
+                                    </span>
+                                </span>
+                            </div>
+                            <div class="summary-list__row" data-validator="properties">
+                                <span class="k">Properties <span class="vd" aria-hidden="true"></span></span>
+                                <span class="v">
+                                    <span data-validator-text="properties">
+                                        {% if s.property_mode == 'tags' %}
+                                            {% if s.property_tag_count %}
+                                                {{ s.property_tag_count }} {{ 'tag' if s.property_tag_count == 1 else 'tags' }}
+                                            {% else %}
+                                                <span class="muted">none</span>
+                                            {% endif %}
                                         {% else %}
-                                            <span class="muted">none</span>
+                                            {% if s.property_id_count %}
+                                                {{ s.property_id_count }} specific
+                                                {{ 'property' if s.property_id_count == 1 else 'properties' }}
+                                            {% else %}
+                                                <span class="muted">none</span>
+                                            {% endif %}
                                         {% endif %}
-                                    {% endif %}
+                                    </span>
                                 </span>
                             </div>
                             <div class="summary-list__row">
@@ -403,13 +418,14 @@
 
     </div>
 
-    {# Sticky form bar — Save / Cancel #}
-    <div class="formbar">
+    {# Sticky form bar — Save / Cancel.
+       The status line is the live validation surface (#529): the JS toggles
+       its inner text + the bar's `data-form-state` attribute as the operator
+       edits the form. When the user mashes Save with missing required
+       fields, the formbar pulses + focus jumps to the first invalid field. #}
+    <div class="formbar" id="formbar" data-form-state="">
         <div class="formbar__inner">
-            <div class="formbar__status">
-                {# Pre-save warnings create the anxiety they claim to soothe.
-                   The post-save flash already explains what changed. Keep
-                   this line as quiet help, not a caveat. #}
+            <div class="formbar__status" id="formbar-status" aria-live="polite">
                 Changes apply to the next media buy that uses this bundle.
             </div>
             <div class="formbar__spacer"></div>
@@ -426,7 +442,8 @@
                href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
                 Cancel
             </a>
-            <button type="submit" form="profile-form" class="btn btn-primary">
+            <button type="submit" form="profile-form" class="btn btn-primary"
+                    id="save-bundle-btn">
                 Save bundle
             </button>
         </div>
@@ -586,6 +603,13 @@ function prePopulateData() {
     // Pre-populate targeting template
     if (existingProfile.targeting_template) {
         document.getElementById('targeting_template').value = JSON.stringify(existingProfile.targeting_template, null, 2);
+    }
+
+    // Sync recompute so initial paint reflects the populated state — without
+    // this, the operator sees a one-frame flash of all-grey dots while the
+    // deferred (setTimeout) recompute waits its turn. (#529, UX review)
+    if (typeof recomputeValidity === 'function') {
+        recomputeValidity();
     }
 }
 
@@ -794,66 +818,286 @@ function openInventoryPicker(type) {
     alert(`Inventory picker for ${type} not yet implemented. Please enter IDs manually in the hidden field.`);
 }
 
-// Form validation
-document.getElementById('profile-form').addEventListener('submit', function(e) {
-    // Validate formats
-    if (selectedFormats.size === 0) {
-        e.preventDefault();
-        alert('Please select at least one creative format');
-        return false;
-    }
+// =====================================================================
+// Live validation (#529)
+//
+// Reads form state, updates Summary sidebar dots + formbar status + Save
+// button on every input/change event. The submit handler uses the same
+// computation: if any required validator fails, focus the first offending
+// field and surface a one-line reason in the formbar (no alert()).
+//
+// Validator names mirror the template's `data-validator` attributes.
+// =====================================================================
 
-    // Validate publisher properties based on property_mode
-    const mode = document.querySelector('input[name="property_mode"]:checked').value;
+// Match the AdCP `property_tag` spec exactly. The old regex enforced
+// `{2,50}` length bounds the spec doesn't carry — operators with
+// single-char channel codes or long network IDs would hit a wall our UI
+// invented. Spec: adcp.types.property_tag.PropertyTag.
+const TAG_PATTERN = /^[a-z0-9_]+$/;
 
+// Normalize "Premium Sports" → "premium_sports" so freetext tag entry doesn't
+// punish the operator for using natural spacing/case. Returns the normalized
+// string; an empty input returns ''.
+function _normalizeTag(raw) {
+    return (raw || '')
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+}
+
+function _tagsFromInput() {
+    return (document.getElementById('property_tags').value || '')
+        .split(',').map(t => t.trim()).filter(Boolean);
+}
+
+function _selectedPropertyIds() {
+    return document.querySelectorAll('input[name="selected_property_ids"]:checked').length;
+}
+
+function _propertyModeChecked() {
+    return document.querySelector('input[name="property_mode"]:checked').value;
+}
+
+function _adUnitIds() {
+    try {
+        return JSON.parse(document.getElementById('targeted_ad_unit_ids').value || '[]');
+    } catch { return []; }
+}
+function _placementIds() {
+    try {
+        return JSON.parse(document.getElementById('targeted_placement_ids').value || '[]');
+    } catch { return []; }
+}
+
+// Compute validity for each required field. Returns {valid, errors, by}
+// where `by` maps validator name -> {ok, text, message, focusId}.
+function computeValidity() {
+    const name = (document.getElementById('name').value || '').trim();
+
+    const adUnits = _adUnitIds();
+    const placements = _placementIds();
+    const invSize = adUnits.length + placements.length;
+    const invParts = [];
+    if (placements.length) invParts.push(placements.length + (placements.length === 1 ? ' placement' : ' placements'));
+    if (adUnits.length) invParts.push(adUnits.length + (adUnits.length === 1 ? ' ad unit' : ' ad units'));
+
+    const formatCount = selectedFormats.size;
+
+    const mode = _propertyModeChecked();
+    let propertyOk = false;
+    let propertyText = 'none';
+    let propertyMessage = '';
     if (mode === 'tags') {
-        const tags = document.getElementById('property_tags').value.trim();
-        if (!tags) {
-            e.preventDefault();
-            alert('Please enter at least one property tag');
-            return false;
-        }
-        // Validate tag format
-        const tagArray = tags.split(',').map(t => t.trim()).filter(t => t);
-        const tagPattern = /^[a-z0-9_]{2,50}$/;
-        for (const tag of tagArray) {
-            if (!tagPattern.test(tag.toLowerCase())) {
-                e.preventDefault();
-                alert(`Invalid tag format: "${tag}". Use lowercase letters, numbers, underscores (2-50 chars)`);
-                return false;
+        const tags = _tagsFromInput();
+        if (tags.length === 0) {
+            propertyMessage = 'Add at least one property tag to save.';
+        } else {
+            // Each tag is checked against the spec pattern. Operators rarely hit
+            // this in practice because the input auto-normalizes on blur (below).
+            const bad = tags.find(t => !TAG_PATTERN.test(t));
+            if (bad) {
+                propertyMessage = `Tag "${bad}" — use lowercase letters, numbers, and underscores only.`;
+            } else {
+                propertyOk = true;
+                propertyText = tags.length + (tags.length === 1 ? ' tag' : ' tags');
             }
         }
     } else if (mode === 'property_ids') {
-        const checked = document.querySelectorAll('input[name="selected_property_ids"]:checked');
-        if (checked.length === 0) {
-            e.preventDefault();
-            alert('Please select at least one property');
-            return false;
+        const checked = _selectedPropertyIds();
+        if (checked === 0) {
+            propertyMessage = 'Pick at least one specific property to save.';
+        } else {
+            propertyOk = true;
+            propertyText = checked + ' specific ' + (checked === 1 ? 'property' : 'properties');
         }
     } else if (mode === 'full') {
-        // Legacy full mode JSON validation
-        const propsJson = document.getElementById('publisher_properties').value.trim();
-        if (!propsJson) {
-            e.preventDefault();
-            alert('Please specify publisher properties');
-            return false;
-        }
-
-        try {
-            const props = JSON.parse(propsJson);
-            if (!Array.isArray(props) || props.length === 0) {
-                e.preventDefault();
-                alert('Publisher properties must be a non-empty array');
-                return false;
+        const propsRaw = (document.getElementById('publisher_properties').value || '').trim();
+        if (!propsRaw) {
+            propertyMessage = 'Add publisher properties JSON to save.';
+        } else {
+            try {
+                const parsed = JSON.parse(propsRaw);
+                if (!Array.isArray(parsed) || parsed.length === 0) {
+                    propertyMessage = 'Publisher properties must be a non-empty array.';
+                } else {
+                    propertyOk = true;
+                    propertyText = parsed.length + ' (legacy JSON)';
+                }
+            } catch (err) {
+                propertyMessage = 'Publisher properties JSON is malformed.';
             }
-        } catch (error) {
-            e.preventDefault();
-            alert('Invalid JSON in publisher properties: ' + error.message);
-            return false;
         }
     }
 
-    return true;
+    // Messages are full sentences. The formbar reads them verbatim — no
+    // suffix appending (an earlier draft glued " to save." onto each, which
+    // mangled multi-sentence tag-error messages).
+    const by = {
+        name: {
+            ok: name.length > 0,
+            text: name || 'missing',
+            message: 'Add a bundle name to save.',
+            focusId: 'name',
+        },
+        inventory: {
+            ok: invSize > 0,
+            text: invParts.length ? invParts.join(' · ') : 'none yet',
+            message: 'Add at least one placement or ad unit to save.',
+            focusId: 'placement-search',
+        },
+        formats: {
+            ok: formatCount > 0,
+            text: formatCount > 0 ? formatCount.toString() : 'none',
+            message: 'Pick at least one creative format to save.',
+            focusId: 'format-search-input',
+        },
+        properties: {
+            ok: propertyOk,
+            text: propertyText,
+            // propertyMessage is always set when !propertyOk; fall back is
+            // defensive only and uses the same sentence shape.
+            message: propertyMessage || 'Configure publisher properties to save.',
+            // For property_ids mode, focus the section wrapper so the eye
+            // lands somewhere even without a single specific input target.
+            focusId: mode === 'tags'
+                ? 'property_tags'
+                : (mode === 'property_ids' ? 'property-ids-section' : 'publisher_properties'),
+        },
+    };
+    const errors = Object.entries(by).filter(([, v]) => !v.ok);
+    return { valid: errors.length === 0, errors, by };
+}
+
+function recomputeValidity() {
+    const state = computeValidity();
+
+    Object.entries(state.by).forEach(([name, info]) => {
+        const row = document.querySelector(`.summary-list__row[data-validator="${name}"]`);
+        if (!row) return;
+        row.classList.toggle('invalid', !info.ok);
+        row.classList.toggle('valid', info.ok);
+        const textEl = row.querySelector(`[data-validator-text="${name}"]`);
+        if (textEl) textEl.textContent = info.text;
+    });
+
+    const status = document.getElementById('formbar-status');
+    const formbar = document.getElementById('formbar');
+    const saveBtn = document.getElementById('save-bundle-btn');
+    if (state.valid) {
+        // Once valid, the only new information is "Ready to save." The
+        // page-level caveat ("Changes apply to next media buy…") is already
+        // the default status text, so drop the redundant tail.
+        if (status) status.textContent = 'Ready to save.';
+        if (formbar) formbar.dataset.formState = 'ready';
+        if (saveBtn) saveBtn.disabled = false;
+    } else {
+        const first = state.errors[0][1];
+        // Messages are already complete sentences — render verbatim.
+        if (status) status.textContent = first.message;
+        if (formbar) formbar.dataset.formState = 'invalid';
+        // Keep the button clickable so the click→focus-jump pattern works;
+        // server-side validation backstops any sneaky submission.
+        if (saveBtn) saveBtn.disabled = false;
+    }
+    return state;
+}
+
+// Wire form-wide listeners. Text inputs run through a debounce so the
+// Summary card doesn't stutter on every keystroke; non-text events
+// (checkboxes, radios, programmatic mutations) fire instantly.
+const TEXT_DEBOUNCE_MS = 180;
+let _validateTimer = null;
+function recomputeValidityDebounced() {
+    clearTimeout(_validateTimer);
+    _validateTimer = setTimeout(recomputeValidity, TEXT_DEBOUNCE_MS);
+}
+
+// Normalize the tag input on blur — operators who type "Premium Sports"
+// shouldn't be punished for natural spacing. (#529, UX review)
+const tagsInputForNormalize = document.getElementById('property_tags');
+if (tagsInputForNormalize) {
+    tagsInputForNormalize.addEventListener('blur', () => {
+        const raw = tagsInputForNormalize.value;
+        const normalized = raw
+            .split(',')
+            .map(_normalizeTag)
+            .filter(Boolean)
+            .join(', ');
+        if (normalized !== raw.trim()) {
+            tagsInputForNormalize.value = normalized;
+            // Bubble so the chip picker (#532) catches it too.
+            tagsInputForNormalize.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        recomputeValidity();
+    });
+}
+
+const profileForm = document.getElementById('profile-form');
+if (profileForm) {
+    profileForm.addEventListener('input', (e) => {
+        // Text inputs get the debounce treatment; checkboxes/radios/etc fire
+        // 'change' events that we handle below instantly.
+        const tag = e.target.tagName;
+        if (tag === 'INPUT' && ['text', 'search'].includes(e.target.type)) {
+            recomputeValidityDebounced();
+        } else if (tag === 'TEXTAREA') {
+            recomputeValidityDebounced();
+        } else {
+            recomputeValidity();
+        }
+    });
+    profileForm.addEventListener('change', recomputeValidity);
+    profileForm.addEventListener('submit', (e) => {
+        const state = recomputeValidity();
+        if (!state.valid) {
+            e.preventDefault();
+            const first = state.errors[0][1];
+            if (first.focusId) {
+                const el = document.getElementById(first.focusId);
+                if (el) {
+                    // Some focusIds point at section wrappers (property_ids).
+                    // Prefer to focus a sensible input inside if so.
+                    const target =
+                        (el.matches('input, textarea, select') ? el : null) ||
+                        el.querySelector('input, textarea, select') ||
+                        el;
+                    if (typeof target.focus === 'function') target.focus();
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // One-shot border flash on the focused input (without a
+                    // page-wide shake — the UX review called the shake too
+                    // noisy when the formbar status + scroll already convey
+                    // intent).
+                    if (target !== el || target.matches('input, textarea, select')) {
+                        target.classList.add('field--flash');
+                        target.addEventListener(
+                            'animationend',
+                            () => target.classList.remove('field--flash'),
+                            { once: true },
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+// Format toggle doesn't bubble a native input event from `selectedFormats`,
+// so hook into the existing toggleFormat() — wrap it. (#529)
+const _origToggleFormat = window.toggleFormat;
+if (typeof _origToggleFormat === 'function') {
+    window.toggleFormat = function (...args) {
+        const result = _origToggleFormat.apply(this, args);
+        recomputeValidity();
+        return result;
+    };
+}
+
+// Initial paint after the DOM is wired up.
+window.addEventListener('DOMContentLoaded', () => {
+    // Defer one tick — prePopulateData runs on DOMContentLoaded too and
+    // we want to read the populated state, not the empty initial state.
+    setTimeout(recomputeValidity, 0);
 });
 </script>
 
