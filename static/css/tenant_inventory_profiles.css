@@ -482,6 +482,16 @@
 }
 .bundle-card__overflow-menu .item:hover { background: var(--sig-bg-row-hover); }
 .bundle-card__overflow-menu .item.danger { color: var(--sig-red, #dc3545); }
+.bundle-card__overflow-menu .item[disabled],
+.bundle-card__overflow-menu .item[aria-disabled="true"] {
+    color: var(--sig-fg-tertiary);
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+.bundle-card__overflow-menu .item[disabled]:hover,
+.bundle-card__overflow-menu .item[aria-disabled="true"]:hover {
+    background: transparent;
+}
 .bundle-card__overflow-menu .head {
     font-size: 10.5px;
     letter-spacing: 0.08em;

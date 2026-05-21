@@ -18,6 +18,7 @@ from src.admin.app import create_app
 from src.admin.blueprints.inventory_profiles import (
     _build_bundle_card,
     _build_coverage_summary,
+    _list_seed_suggestions,
     _list_unbundled_inventory,
 )
 from src.services.inventory_bundle_reference_sync import recompute_bundle_references
@@ -216,6 +217,66 @@ class TestUnbundledInventory:
         )
 
         rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=50)
+
+        assert rows == []
+
+
+class TestListSeedSuggestions:
+    """``_list_seed_suggestions`` surfaces synced GAM placements for the empty state."""
+
+    def test_returns_placements_only(self, factory_session):
+        """Ad units don't surface as seed candidates — only placements."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="P1",
+            name="Homepage Premium",
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="AU1",
+            name="homepage / top-banner",
+        )
+
+        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5)
+
+        assert len(rows) == 1
+        assert rows[0]["external_id"] == "P1"
+        assert rows[0]["name"] == "Homepage Premium"
+
+    def test_respects_limit(self, factory_session):
+        """Caller's limit caps the result set."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        for i in range(10):
+            GAMInventoryFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                inventory_type="placement",
+                inventory_id=f"P{i}",
+                name=f"Placement {i:02d}",
+            )
+
+        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5)
+
+        assert len(rows) == 5
+
+    def test_other_tenants_ignored(self, factory_session):
+        """Cross-tenant isolation — placements from other tenants don't leak in."""
+        tenant_a = TenantFactory(ad_server="google_ad_manager")
+        tenant_b = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant_b,
+            tenant_id=tenant_b.tenant_id,
+            inventory_type="placement",
+            inventory_id="OTHER",
+            name="Other tenant placement",
+        )
+
+        rows = _list_seed_suggestions(factory_session, tenant_a.tenant_id, limit=5)
 
         assert rows == []
 

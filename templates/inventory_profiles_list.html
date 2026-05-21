@@ -58,16 +58,26 @@
             </p>
         </header>
 
-        {% if bundles | length == 0 and not has_synced_inventory %}
-            {# ===== Onboarding empty state — no bundles, nothing synced ===== #}
+        {% if bundles | length == 0 %}
+            {# ===== Onboarding empty state ===== #}
+            {# Two flavors: no synced inventory yet (sync your adapter first) vs. #}
+            {# synced inventory present (surface real placements as seed bundles). #}
             <div class="onboard-card">
                 <div>
                     <h2 class="onboard-card__title">No bundles yet — that's expected.</h2>
-                    <p class="onboard-card__text">
-                        Bundles are the salable shapes buyers ask for. Start by promoting a few of your
-                        top-level placements into bundles, then peel off themed bundles from there
-                        ("premium news," "sports homepage," etc.).
-                    </p>
+                    {% if seed_suggestions %}
+                        <p class="onboard-card__text">
+                            You have synced inventory from <strong>{{ adapter_label }}</strong>. Operators usually
+                            start by promoting their top-level placements into bundles, then peel off themed
+                            bundles from there ("premium news," "sports homepage," etc.).
+                        </p>
+                    {% else %}
+                        <p class="onboard-card__text">
+                            Bundles are the salable shapes buyers ask for. Start by promoting a few of your
+                            top-level placements into bundles, then peel off themed bundles from there
+                            ("premium news," "sports homepage," etc.).
+                        </p>
+                    {% endif %}
                     <p class="onboard-card__text">
                         Bundles are <strong>reusable</strong> — the same placement can live in many bundles,
                         so you don't need to get the first one right.
@@ -84,12 +94,28 @@
                     </div>
                 </div>
                 <div class="onboard-suggestions">
-                    <h4>How to start</h4>
-                    <p class="onboard-card__text" style="margin: 0; font-size: 12.5px;">
-                        Sync your ad server first (Configure → Integrations), then come back here.
-                        Once synced inventory exists, this panel surfaces top-level placements as suggested
-                        starting bundles you can seed in one click.
-                    </p>
+                    {% if seed_suggestions %}
+                        <h4>Suggested starting bundles — from your top-level placements</h4>
+                        {% for s in seed_suggestions %}
+                            <a class="onboard-sug"
+                               href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id, seed_placement=s.external_id) }}">
+                                <div>
+                                    <div class="name">{{ s.name }}</div>
+                                    <div class="meta">Placement · {{ s.meta }}</div>
+                                </div>
+                                <span class="btn btn--outline btn--xs">
+                                    {{ icon_chev_right() }} Seed bundle
+                                </span>
+                            </a>
+                        {% endfor %}
+                    {% else %}
+                        <h4>How to start</h4>
+                        <p class="onboard-card__text" style="margin: 0; font-size: 12.5px;">
+                            Sync your ad server first (Configure → Integrations), then come back here.
+                            Once synced inventory exists, this panel surfaces top-level placements as suggested
+                            starting bundles you can seed in one click.
+                        </p>
+                    {% endif %}
                 </div>
             </div>
 
@@ -262,6 +288,14 @@
                                             Duplicate bundle
                                         </button>
                                     </form>
+                                    <div class="sep"></div>
+                                    <div class="head">Reuse</div>
+                                    <button class="item" role="menuitem"
+                                            data-action="reuse" data-id="{{ b.id }}"
+                                            aria-disabled="true" disabled
+                                            title="Coming soon — see issue #524">
+                                        Add inventory to other bundles…
+                                    </button>
                                     <div class="sep"></div>
                                     <button class="item danger" role="menuitem"
                                             data-action="delete" data-id="{{ b.id }}" data-name="{{ b.name }}">

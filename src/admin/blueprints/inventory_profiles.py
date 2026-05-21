@@ -174,6 +174,10 @@ def list_inventory_profiles(tenant_id: str):
             adapter_label = "Google Ad Manager"
             adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
             has_synced_inventory = (coverage["adUnitsTotal"] + coverage["placementsTotal"]) > 0
+            # Seed suggestions: surface synced placements as "promote into a bundle"
+            # candidates when the tenant has zero bundles. The list is a peek (5
+            # max) — operators with hundreds of placements use the full browser.
+            seed_suggestions = _list_seed_suggestions(session, tenant_id, limit=5) if len(bundles_data) == 0 else []
         else:
             coverage = None
             unbundled_items = []
@@ -182,6 +186,7 @@ def list_inventory_profiles(tenant_id: str):
             )
             adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
             has_synced_inventory = False
+            seed_suggestions = []
 
     return render_template(
         "inventory_profiles_list.html",
@@ -193,6 +198,7 @@ def list_inventory_profiles(tenant_id: str):
         adapter_label=adapter_label,
         adapter_vocab=adapter_vocab,
         has_synced_inventory=has_synced_inventory,
+        seed_suggestions=seed_suggestions,
     )
 
 
@@ -325,6 +331,28 @@ def _list_unbundled_inventory(session, tenant_id: str, limit: int) -> list[dict]
             "id": str(row.id),
             "adapter_id": row.inventory_id,
             "kind": row.inventory_type,
+            "name": row.name,
+            "meta": _format_inventory_meta(row),
+        }
+        for row in rows
+    ]
+
+
+def _list_seed_suggestions(session, tenant_id: str, limit: int) -> list[dict]:
+    """Synced GAM placements to surface as "promote into a bundle" candidates.
+
+    Empty-state UX (#481): a fresh tenant with thousands of synced ad units sees
+    a paralysing blank canvas. Promoting placements is the no-think starting
+    point. We show up to ``limit`` placements ordered by name; the heuristic can
+    grow more sophisticated (e.g. by descendant count) once we have ground-truth
+    data on which seeds operators actually accept.
+    """
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    rows = GAMSyncRepository(session, tenant_id).list_inventory("placement", limit=limit)
+    return [
+        {
+            "external_id": row.inventory_id,
             "name": row.name,
             "meta": _format_inventory_meta(row),
         }
