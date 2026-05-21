@@ -746,28 +746,49 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 publisher_domain = tenant_obj.primary_domain
 
                 if property_mode == "tags":
-                    # by_tag mode: Parse comma-separated tags
-                    property_tags_str = form_data.get("property_tags", "").strip()
-                    if not property_tags_str:
-                        flash("Property tags are required", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-
-                    # Validate tag format per AdCP spec
+                    # Multi-domain (#532): each row in the editor is a
+                    # ``(publisher_domain, tags)`` pair. Inputs arrive as
+                    # parallel ``domain[]`` + ``property_tags[]`` lists.
+                    # Falling back to the single ``property_tags`` field
+                    # keeps single-row callers (legacy POSTs, the GAM
+                    # product config form) working.
                     import re
 
-                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
-                    property_tags = []
-                    for tag in property_tags_str.split(","):
-                        tag = tag.strip().lower()
-                        if tag and TAG_PATTERN.match(tag):
-                            property_tags.append(tag)
-                        elif tag:
+                    TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
+                    rows_domains = request.form.getlist("publisher_domain[]")
+                    rows_tags_raw = request.form.getlist("property_tags[]")
+                    if not rows_domains:
+                        # Legacy single-row submission.
+                        rows_domains = [tenant_obj.primary_domain]
+                        rows_tags_raw = [form_data.get("property_tags", "")]
+
+                    publisher_props: list[dict] = []
+                    for row_idx, (domain, tag_str) in enumerate(zip(rows_domains, rows_tags_raw, strict=False)):
+                        domain = (domain or "").strip()
+                        if not domain:
+                            flash(f"Row {row_idx + 1}: publisher domain is required", "error")
+                            return redirect(
+                                url_for(
+                                    "inventory_profiles.edit_inventory_profile",
+                                    tenant_id=tenant_id,
+                                    profile_id=profile_id,
+                                )
+                            )
+                        tags_in = [t.strip().lower() for t in (tag_str or "").split(",")]
+                        tags_clean = [t for t in tags_in if t]
+                        if not tags_clean:
+                            flash(f"Row {row_idx + 1} ({domain}): add at least one property tag", "error")
+                            return redirect(
+                                url_for(
+                                    "inventory_profiles.edit_inventory_profile",
+                                    tenant_id=tenant_id,
+                                    profile_id=profile_id,
+                                )
+                            )
+                        bad = next((t for t in tags_clean if not TAG_PATTERN.match(t)), None)
+                        if bad:
                             flash(
-                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
+                                f"Row {row_idx + 1} ({domain}): tag '{bad}' must use lowercase, numbers, underscores.",
                                 "error",
                             )
                             return redirect(
@@ -777,22 +798,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                                     profile_id=profile_id,
                                 )
                             )
-
-                    if not property_tags:
-                        flash("At least one valid property tag is required", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
+                        publisher_props.append(
+                            {
+                                "publisher_domain": domain,
+                                "property_tags": tags_clean,
+                                "selection_type": "by_tag",
+                            }
                         )
-
-                    profile.publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_tags": property_tags,
-                            "selection_type": "by_tag",
-                        }
-                    ]
+                    profile.publisher_properties = publisher_props
 
                 elif property_mode == "property_ids":
                     # by_id mode: Parse selected_property_ids checkboxes
@@ -904,6 +917,32 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
+        # Distinct publisher_domains the tenant can author against (#532).
+        # AuthorizedProperty already enforces one row per (tenant, property)
+        # under a domain. We union with the tenant's primary_domain so newly
+        # provisioned tenants (no AuthorizedProperty rows yet) still see at
+        # least one valid option.
+        domain_rows = session.scalars(
+            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
+        ).all()
+        tenant_domains = sorted({tenant.primary_domain, *domain_rows})
+
+        # Initial tag-mode rows for progressive-enhancement render (#532).
+        # If the bundle is in tag mode, one row per existing publisher_properties
+        # entry; else a single row pinned to the primary domain so a brand-new
+        # bundle still ships with a sane default.
+        tag_rows: list[dict] = []
+        for prop in profile.publisher_properties or []:
+            if prop.get("property_tags"):
+                tag_rows.append(
+                    {
+                        "domain": prop.get("publisher_domain", tenant.primary_domain),
+                        "tags": ", ".join(prop.get("property_tags") or []),
+                    }
+                )
+        if not tag_rows:
+            tag_rows = [{"domain": tenant.primary_domain, "tags": ""}]
+
         product_count = (
             session.scalar(select(func.count()).select_from(Product).where(Product.inventory_profile_id == profile_id))
             or 0
@@ -936,6 +975,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             profile=profile,
             authorized_properties=authorized_properties,
             property_tags=property_tags_list,
+            tenant_domains=tenant_domains,
+            tag_rows=tag_rows,
             bundle_summary=bundle_summary,
             blast_radius=blast_radius,
             inventory_names=inventory_names,

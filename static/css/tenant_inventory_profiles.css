@@ -1019,6 +1019,71 @@
    Replaces typo-prone freetext-only entry. (#532)
    ----------------------------------------------------------- */
 
+/* Multi-domain publisher_properties rows (#532). Each row is one
+   {publisher_domain, tags} pair. The grid keeps the layout tidy on
+   wide viewports and stacks at narrow widths. */
+.edit-page .prop-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.edit-page .prop-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr) auto;
+    gap: 12px;
+    align-items: end;
+    padding: 12px;
+    border: 1px solid var(--sig-bd-hairline);
+    border-radius: 8px;
+    background: var(--sig-bg-page);
+}
+.edit-page .prop-row label {
+    display: block;
+    font-size: 12px;
+    color: var(--sig-fg-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.edit-page .prop-row select {
+    width: 100%;
+    background: var(--sig-bg-card);
+    border: 1px solid var(--sig-bd-default);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font: inherit;
+    font-size: 13.5px;
+    color: var(--sig-fg-primary);
+}
+.edit-page .prop-row__remove {
+    background: transparent;
+    border: 1px solid var(--sig-bd-default);
+    color: var(--sig-fg-tertiary);
+    padding: 7px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12.5px;
+    transition: background 80ms ease, color 80ms ease;
+    margin-bottom: 1px;  /* visually align with field bottoms */
+}
+.edit-page .prop-row__remove:hover {
+    background: var(--sig-bg-info);
+    color: var(--sig-red, #dc3545);
+    border-color: var(--sig-red, #dc3545);
+}
+#prop-rows-add {
+    margin-top: 4px;
+}
+@media (max-width: 720px) {
+    .edit-page .prop-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+    .edit-page .prop-row__remove { justify-self: end; }
+}
+
 .edit-page .tag-pick {
     display: flex;
     flex-wrap: wrap;

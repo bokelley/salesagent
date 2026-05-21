@@ -8,6 +8,7 @@ import json
 
 import pytest
 from sqlalchemy import delete, select
+from werkzeug.datastructures import MultiDict
 
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
@@ -314,6 +315,99 @@ class TestInventoryProfilePreview:
         response = client.get(f"/tenant/{test_tenant}/inventory-profiles/999999/api/preview")
         assert response.status_code == 404
         assert response.get_json()["error"]
+
+
+class TestInventoryProfileMultiDomain:
+    """Multi-row publisher_properties editor (#532)."""
+
+    def test_edit_post_with_multiple_domain_rows_persists_each(self, client, test_tenant):
+        """POST with N (domain, tags) rows builds N publisher_properties entries."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Multi", profile_id="multi_dom")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data=MultiDict(
+                [
+                    ("name", "Multi"),
+                    ("profile_id", "multi_dom"),
+                    ("description", "two-row"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", "[]"),
+                    ("formats", json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}])),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", f"{test_tenant}.example.com"),
+                    ("property_tags[]", "premium, news"),
+                    ("publisher_domain[]", "sports.example.com"),
+                    ("property_tags[]", "sports, premium"),
+                ]
+            ),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            domains = sorted(p["publisher_domain"] for p in saved.publisher_properties)
+            assert len(saved.publisher_properties) == 2
+            assert domains == sorted([f"{test_tenant}.example.com", "sports.example.com"])
+            by_domain = {p["publisher_domain"]: p for p in saved.publisher_properties}
+            assert sorted(by_domain[f"{test_tenant}.example.com"]["property_tags"]) == ["news", "premium"]
+            assert sorted(by_domain["sports.example.com"]["property_tags"]) == ["premium", "sports"]
+
+    def test_edit_post_back_compat_single_field(self, client, test_tenant):
+        """Legacy single `property_tags` field still works (no list submission)."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Compat", profile_id="compat")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data={
+                "name": "Compat",
+                "profile_id": "compat",
+                "targeted_ad_unit_ids": "[]",
+                "targeted_placement_ids": "[]",
+                "formats": json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}]),
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            assert len(saved.publisher_properties) == 1
+            assert saved.publisher_properties[0]["property_tags"] == ["all_inventory"]
+
+    def test_edit_post_rejects_row_missing_tags(self, client, test_tenant):
+        """An empty tags input on any row rejects the entire save."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Bad", profile_id="bad")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data=MultiDict(
+                [
+                    ("name", "Bad"),
+                    ("profile_id", "bad"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", "[]"),
+                    ("formats", json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}])),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", f"{test_tenant}.example.com"),
+                    ("property_tags[]", "premium"),
+                    ("publisher_domain[]", "empty.example.com"),
+                    ("property_tags[]", ""),
+                ]
+            ),
+            follow_redirects=False,
+        )
+        # Redirect back to the editor (flash error); bundle's properties unchanged.
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            # Sample-profile default: one tag entry under `inv_prof_test_tenant.example.com`.
+            assert saved.publisher_properties[0]["property_tags"] == ["all_inventory"]
 
 
 class TestInventoryProfileDuplicate:

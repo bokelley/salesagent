@@ -325,42 +325,98 @@
                             </div>
 
                             <div id="property-tags-section" style="margin-top: 12px;">
-                                <div class="field">
-                                    <label for="property_tags">Property tags *</label>
-                                    <input type="text" id="property_tags" name="property_tags"
-                                           placeholder="e.g., all_inventory, premium, sports"
-                                           autocomplete="off"
-                                           list="property_tags_suggestions">
-                                    {# Datalist enables native browser typeahead. Operators get
-                                       a dropdown of known tags as they type; per-tag suggestion
-                                       still requires the chip row below since datalist works on
-                                       the whole input value. (#532) #}
-                                    {% if property_tags %}
-                                        <datalist id="property_tags_suggestions">
-                                            {% for t in property_tags %}
-                                                <option value="{{ t.tag_id }}"></option>
-                                            {% endfor %}
-                                        </datalist>
-                                        <div class="tag-pick" id="tag-pick" aria-label="Available tags — click to add">
-                                            {% for t in property_tags %}
-                                                <button type="button" class="tag-pick__chip"
-                                                        data-tag="{{ t.tag_id }}">
-                                                    {{ t.tag_id }}
-                                                </button>
-                                            {% endfor %}
+                                {# Multi-domain editor (#532). One row per
+                                   ``publisher_properties`` entry. Each row =
+                                   {publisher_domain, tags}. Tenants with more
+                                   than one authorized domain can bundle them
+                                   independently. #}
+                                {% if property_tags %}
+                                    <datalist id="property_tags_suggestions">
+                                        {% for t in property_tags %}
+                                            <option value="{{ t.tag_id }}"></option>
+                                        {% endfor %}
+                                    </datalist>
+                                {% endif %}
+
+                                <div class="prop-rows" id="prop-rows">
+                                    {% for row in tag_rows %}
+                                        <div class="prop-row" data-prop-row>
+                                            <div class="prop-row__domain">
+                                                <label>Publisher domain *</label>
+                                                <select name="publisher_domain[]" required>
+                                                    {% for d in tenant_domains %}
+                                                        <option value="{{ d }}"
+                                                            {% if d == row.domain %}selected{% endif %}>{{ d }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div class="prop-row__tags">
+                                                <label>Property tags *</label>
+                                                <input type="text" name="property_tags[]"
+                                                       value="{{ row.tags }}"
+                                                       placeholder="e.g., all_inventory, premium, sports"
+                                                       autocomplete="off"
+                                                       {% if property_tags %}list="property_tags_suggestions"{% endif %}>
+                                            </div>
+                                            <button type="button" class="prop-row__remove"
+                                                    data-remove-row
+                                                    aria-label="Remove this publisher domain row"
+                                                    {% if loop.first and tag_rows | length == 1 %}hidden{% endif %}>
+                                                Remove
+                                            </button>
                                         </div>
-                                        <span class="hint">
-                                            Click a chip to add it, or type a new one. Comma-separated.
-                                            Operators can't make up tags that no property uses — these are
-                                            the known set.
-                                        </span>
-                                    {% else %}
-                                        <span class="hint">
-                                            Comma-separated list of tags. No known tags yet — once you
-                                            tag publisher properties, they'll suggest here.
-                                        </span>
-                                    {% endif %}
+                                    {% endfor %}
                                 </div>
+
+                                <button type="button" class="btn btn-secondary btn-sm" id="prop-rows-add">
+                                    + Add another publisher domain
+                                </button>
+
+                                {% if property_tags %}
+                                    <div class="tag-pick" id="tag-pick"
+                                         aria-label="Available tags — click to add to the focused row">
+                                        {% for t in property_tags %}
+                                            <button type="button" class="tag-pick__chip"
+                                                    data-tag="{{ t.tag_id }}">
+                                                {{ t.tag_id }}
+                                            </button>
+                                        {% endfor %}
+                                    </div>
+                                    <span class="hint">
+                                        Click a chip to add it to the active row's tags, or type a new one.
+                                        Tags are normalized on blur ("Premium Sports" → "premium_sports").
+                                    </span>
+                                {% else %}
+                                    <span class="hint">
+                                        Comma-separated tags per row. No known tags yet — once you tag
+                                        publisher properties, they'll suggest here.
+                                    </span>
+                                {% endif %}
+
+                                {# Template node cloned by JS when "+ Add another publisher domain" fires. #}
+                                <template id="prop-row-template">
+                                    <div class="prop-row" data-prop-row>
+                                        <div class="prop-row__domain">
+                                            <label>Publisher domain *</label>
+                                            <select name="publisher_domain[]" required>
+                                                {% for d in tenant_domains %}
+                                                    <option value="{{ d }}">{{ d }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                        <div class="prop-row__tags">
+                                            <label>Property tags *</label>
+                                            <input type="text" name="property_tags[]"
+                                                   placeholder="e.g., all_inventory, premium, sports"
+                                                   autocomplete="off"
+                                                   {% if property_tags %}list="property_tags_suggestions"{% endif %}>
+                                        </div>
+                                        <button type="button" class="prop-row__remove" data-remove-row
+                                                aria-label="Remove this publisher domain row">
+                                            Remove
+                                        </button>
+                                    </div>
+                                </template>
                             </div>
 
                             <div id="property-ids-section" style="margin-top: 12px; display: none;">
@@ -513,34 +569,87 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Tag-pick chip click handler: add the tag to the comma-separated input.
-    // Mirrors selected state both ways so typing and clicking stay in sync.
-    // (#532 — replaces freetext-only input that let operators typo tags.)
+    // Multi-domain row editor (#532). Each row is one
+    // `publisher_properties` entry: a domain select + a tags input.
+    // Operators can add more rows for tenants that serve multiple domains.
+    const rowsContainer = document.getElementById('prop-rows');
+    const addRowBtn = document.getElementById('prop-rows-add');
+    const rowTemplate = document.getElementById('prop-row-template');
+
+    function _updateRemoveButtons() {
+        const rows = rowsContainer.querySelectorAll('.prop-row');
+        rows.forEach((r, i) => {
+            const removeBtn = r.querySelector('[data-remove-row]');
+            if (!removeBtn) return;
+            removeBtn.hidden = rows.length === 1;
+        });
+    }
+
+    if (addRowBtn && rowTemplate && rowsContainer) {
+        addRowBtn.addEventListener('click', () => {
+            const fragment = rowTemplate.content.cloneNode(true);
+            rowsContainer.appendChild(fragment);
+            _updateRemoveButtons();
+            // Focus the new row's tags input so the operator can keep typing.
+            const newRow = rowsContainer.querySelector('.prop-row:last-child input[name="property_tags[]"]');
+            if (newRow) newRow.focus();
+        });
+
+        rowsContainer.addEventListener('click', (e) => {
+            const removeBtn = e.target.closest('[data-remove-row]');
+            if (!removeBtn) return;
+            const row = removeBtn.closest('.prop-row');
+            if (row) row.remove();
+            _updateRemoveButtons();
+        });
+
+        _updateRemoveButtons();
+    }
+
+    // Tag-pick chip click handler — appends to whichever tags input is the
+    // most-recently-focused row. (#532)
     const tagPick = document.getElementById('tag-pick');
-    const tagsInput = document.getElementById('property_tags');
-    if (tagPick && tagsInput) {
-        const parseTags = () =>
-            tagsInput.value.split(',').map(t => t.trim()).filter(Boolean);
-        const writeTags = (tags) => { tagsInput.value = tags.join(', '); };
+    if (tagPick && rowsContainer) {
+        let lastFocusedTagsInput = rowsContainer.querySelector('input[name="property_tags[]"]');
+        rowsContainer.addEventListener('focusin', (e) => {
+            if (e.target.matches('input[name="property_tags[]"]')) {
+                lastFocusedTagsInput = e.target;
+            }
+        });
+
+        const parseTags = (input) =>
+            (input.value || '').split(',').map(t => t.trim()).filter(Boolean);
+        const writeTags = (input, tags) => { input.value = tags.join(', '); };
         const syncChipStates = () => {
-            const selected = new Set(parseTags());
+            if (!lastFocusedTagsInput) return;
+            const selected = new Set(parseTags(lastFocusedTagsInput));
             tagPick.querySelectorAll('.tag-pick__chip').forEach(chip => {
                 chip.classList.toggle('selected', selected.has(chip.dataset.tag));
             });
         };
+
         tagPick.addEventListener('click', (e) => {
             const chip = e.target.closest('.tag-pick__chip');
             if (!chip) return;
+            if (!lastFocusedTagsInput) {
+                lastFocusedTagsInput = rowsContainer.querySelector('input[name="property_tags[]"]');
+            }
+            if (!lastFocusedTagsInput) return;
             const tag = chip.dataset.tag;
-            const tags = parseTags();
+            const tags = parseTags(lastFocusedTagsInput);
             const idx = tags.indexOf(tag);
             if (idx >= 0) tags.splice(idx, 1);
             else tags.push(tag);
-            writeTags(tags);
+            writeTags(lastFocusedTagsInput, tags);
             syncChipStates();
+            lastFocusedTagsInput.focus();
         });
-        tagsInput.addEventListener('input', syncChipStates);
-        syncChipStates();  // initial paint reflects any pre-populated value.
+
+        // Sync chip highlights as the operator types in any row.
+        rowsContainer.addEventListener('input', (e) => {
+            if (e.target.matches('input[name="property_tags[]"]')) syncChipStates();
+        });
+        syncChipStates();
     }
 });
 
@@ -568,34 +677,25 @@ function prePopulateData() {
         });
     }
 
-    // Pre-populate publisher properties - detect mode and populate appropriate field
+    // Pre-populate publisher properties — detect mode and switch the
+    // visible section. Tag-mode rows are pre-rendered server-side from
+    // ``tag_rows`` so we don't repopulate them here (#532).
     if (existingProfile.publisher_properties && existingProfile.publisher_properties.length > 0) {
         const firstProp = existingProfile.publisher_properties[0];
-
-        // Detect property selection mode based on fields present
         if (firstProp.property_ids && Array.isArray(firstProp.property_ids)) {
-            // by_id mode: has property_ids array
             document.querySelector('input[name="property_mode"][value="property_ids"]').checked = true;
             togglePropertyMode();
-
-            // Check the appropriate checkboxes
             firstProp.property_ids.forEach(propId => {
                 const checkbox = document.querySelector(`input[name="selected_property_ids"][value="${propId}"]`);
                 if (checkbox) checkbox.checked = true;
             });
         } else if (firstProp.property_tags && Array.isArray(firstProp.property_tags)) {
-            // by_tag mode: has property_tags array
             document.querySelector('input[name="property_mode"][value="tags"]').checked = true;
             togglePropertyMode();
-
-            // Populate tags input
-            document.getElementById('property_tags').value = firstProp.property_tags.join(', ');
+            // Server already rendered the rows from ``tag_rows`` — nothing to do here.
         } else {
-            // Legacy full mode: has other fields (like 'properties')
             document.querySelector('input[name="property_mode"][value="full"]').checked = true;
             togglePropertyMode();
-
-            // Populate JSON textarea
             document.getElementById('publisher_properties').value = JSON.stringify(existingProfile.publisher_properties, null, 2);
         }
     }
@@ -819,14 +919,15 @@ function openInventoryPicker(type) {
 }
 
 // =====================================================================
-// Live validation (#529)
+// Live validation (#529) + multi-domain row awareness (#532)
 //
 // Reads form state, updates Summary sidebar dots + formbar status + Save
 // button on every input/change event. The submit handler uses the same
 // computation: if any required validator fails, focus the first offending
 // field and surface a one-line reason in the formbar (no alert()).
 //
-// Validator names mirror the template's `data-validator` attributes.
+// Validator names mirror the template's `data-validator` attributes. The
+// `tags` validator walks every row of the multi-domain editor.
 // =====================================================================
 
 // Match the AdCP `property_tag` spec exactly. The old regex enforced
@@ -846,9 +947,17 @@ function _normalizeTag(raw) {
         .replace(/^_+|_+$/g, '');
 }
 
-function _tagsFromInput() {
-    return (document.getElementById('property_tags').value || '')
-        .split(',').map(t => t.trim()).filter(Boolean);
+// Walk every row in the multi-domain editor and return ``[[domain, tags[]], ...]``.
+// Rows with empty domain or empty tags are still surfaced so the validator
+// can flag them individually. (#532)
+function _tagRowsFromForm() {
+    const rows = document.querySelectorAll('#prop-rows .prop-row');
+    return Array.from(rows).map((row) => {
+        const domain = (row.querySelector('select[name="publisher_domain[]"]')?.value || '').trim();
+        const raw = row.querySelector('input[name="property_tags[]"]')?.value || '';
+        const tags = raw.split(',').map((t) => t.trim()).filter(Boolean);
+        return { domain, tags };
+    });
 }
 
 function _selectedPropertyIds() {
@@ -889,18 +998,34 @@ function computeValidity() {
     let propertyText = 'none';
     let propertyMessage = '';
     if (mode === 'tags') {
-        const tags = _tagsFromInput();
-        if (tags.length === 0) {
-            propertyMessage = 'Add at least one property tag to save.';
+        // Walk every row in the multi-domain editor (#532). A row is valid
+        // when it has a domain AND at least one spec-shaped tag. Validation
+        // surfaces the first offender — operators fix one thing at a time.
+        const rows = _tagRowsFromForm();
+        if (rows.length === 0) {
+            propertyMessage = 'Add at least one publisher-domain row to save.';
         } else {
-            // Each tag is checked against the spec pattern. Operators rarely hit
-            // this in practice because the input auto-normalizes on blur (below).
-            const bad = tags.find(t => !TAG_PATTERN.test(t));
-            if (bad) {
-                propertyMessage = `Tag "${bad}" — use lowercase letters, numbers, and underscores only.`;
+            let badIdx = -1;
+            let badReason = '';
+            for (let i = 0; i < rows.length; i++) {
+                const { domain, tags } = rows[i];
+                if (!domain) { badIdx = i; badReason = 'pick a publisher domain'; break; }
+                if (tags.length === 0) { badIdx = i; badReason = `(${domain}): add at least one tag`; break; }
+                const bad = tags.find(t => !TAG_PATTERN.test(t.toLowerCase()));
+                if (bad) {
+                    badIdx = i;
+                    badReason = `(${domain}): "${bad}" — use lowercase letters, numbers, and underscores only`;
+                    break;
+                }
+            }
+            if (badIdx >= 0) {
+                propertyMessage = `Row ${badIdx + 1} ${badReason}.`;
             } else {
                 propertyOk = true;
-                propertyText = tags.length + (tags.length === 1 ? ' tag' : ' tags');
+                const totalTags = rows.reduce((sum, r) => sum + r.tags.length, 0);
+                propertyText = rows.length === 1
+                    ? `${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`
+                    : `${rows.length} domains · ${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`;
             }
         }
     } else if (mode === 'property_ids') {
@@ -958,10 +1083,11 @@ function computeValidity() {
             // propertyMessage is always set when !propertyOk; fall back is
             // defensive only and uses the same sentence shape.
             message: propertyMessage || 'Configure publisher properties to save.',
-            // For property_ids mode, focus the section wrapper so the eye
-            // lands somewhere even without a single specific input target.
+            // The tags mode uses a multi-row editor (#532) — focus the first
+            // tag input on submit failure. For property_ids, focus the
+            // section wrapper so the eye lands somewhere.
             focusId: mode === 'tags'
-                ? 'property_tags'
+                ? null  // resolved at submit time by querying .prop-row inputs
                 : (mode === 'property_ids' ? 'property-ids-section' : 'publisher_properties'),
         },
     };
@@ -1053,29 +1179,40 @@ if (profileForm) {
         if (!state.valid) {
             e.preventDefault();
             const first = state.errors[0][1];
-            if (first.focusId) {
-                const el = document.getElementById(first.focusId);
-                if (el) {
-                    // Some focusIds point at section wrappers (property_ids).
-                    // Prefer to focus a sensible input inside if so.
-                    const target =
-                        (el.matches('input, textarea, select') ? el : null) ||
-                        el.querySelector('input, textarea, select') ||
-                        el;
-                    if (typeof target.focus === 'function') target.focus();
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    // One-shot border flash on the focused input (without a
-                    // page-wide shake — the UX review called the shake too
-                    // noisy when the formbar status + scroll already convey
-                    // intent).
-                    if (target !== el || target.matches('input, textarea, select')) {
-                        target.classList.add('field--flash');
-                        target.addEventListener(
-                            'animationend',
-                            () => target.classList.remove('field--flash'),
-                            { once: true },
-                        );
-                    }
+            // Multi-domain tags editor (#532): pick the first row whose tags
+            // input is empty or invalid.
+            const isTagsRowError =
+                document.querySelector('input[name="property_mode"]:checked').value === 'tags';
+            let el = null;
+            if (isTagsRowError) {
+                const rows = _tagRowsFromForm();
+                const badIdx = rows.findIndex((r) => !r.domain || r.tags.length === 0 ||
+                    r.tags.some(t => !TAG_PATTERN.test(t.toLowerCase())));
+                const rowNodes = document.querySelectorAll('#prop-rows .prop-row');
+                el = rowNodes[Math.max(badIdx, 0)]?.querySelector('input[name="property_tags[]"]') || null;
+            } else if (first.focusId) {
+                el = document.getElementById(first.focusId);
+            }
+            if (el) {
+                // Some focusIds point at section wrappers (property_ids).
+                // Prefer to focus a sensible input inside if so.
+                const target =
+                    (el.matches('input, textarea, select') ? el : null) ||
+                    el.querySelector('input, textarea, select') ||
+                    el;
+                if (typeof target.focus === 'function') target.focus();
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // One-shot border flash on the focused input (without a
+                // page-wide shake — the UX review called the shake too
+                // noisy when the formbar status + scroll already convey
+                // intent).
+                if (target !== el || target.matches('input, textarea, select')) {
+                    target.classList.add('field--flash');
+                    target.addEventListener(
+                        'animationend',
+                        () => target.classList.remove('field--flash'),
+                        { once: true },
+                    );
                 }
             }
         }
