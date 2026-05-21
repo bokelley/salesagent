@@ -3,231 +3,403 @@
 {% block title %}Edit Inventory Bundle - Sales Agent Admin{% endblock %}
 
 {% block content %}
-<div class="sa-card">
-    <div class="back-button-container">
-        <a href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}" class="btn btn-secondary btn-back">
-            ← Back to Inventory Bundles
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_signals.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_inventory_profiles.css') }}">
+
+{% set s = bundle_summary %}
+
+<div class="edit-page">
+    <div class="edit-container">
+
+        <a class="edit-back"
+           href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
+            ← Back to Inventory bundles
         </a>
+
+        <header class="edit-page-header">
+            <h1>Edit {{ profile.name }}</h1>
+            <p class="lead">
+                Tweak the inventory shape, formats and properties that ship with this bundle.
+                <em>Authored against</em> <span class="pill-link">{{ s.adapter_label }}</span>.
+            </p>
+        </header>
+
+        <form id="profile-form" method="POST">
+            <div class="edit-grid">
+
+                {# ===== Sidebar ===== #}
+                <aside class="edit-sidebar">
+
+                    {# Summary card #}
+                    <div class="card">
+                        <div class="card__header">
+                            <h2 class="card__title">Summary</h2>
+                        </div>
+                        <div class="summary-list">
+                            <div class="summary-list__row">
+                                <span class="k">Adapter</span>
+                                <span class="v">{{ s.adapter_label }}</span>
+                            </div>
+                            <div class="summary-list__row">
+                                <span class="k">Inventory</span>
+                                <span class="v">
+                                    {% if s.ad_unit_count == 0 and s.placement_count == 0 %}
+                                        <span class="muted">none yet</span>
+                                    {% else %}
+                                        {% if s.placement_count %}
+                                            {{ s.placement_count }} {{ 'placement' if s.placement_count == 1 else 'placements' }}
+                                        {% endif %}
+                                        {% if s.placement_count and s.ad_unit_count %} · {% endif %}
+                                        {% if s.ad_unit_count %}
+                                            {{ s.ad_unit_count }} {{ 'ad unit' if s.ad_unit_count == 1 else 'ad units' }}
+                                        {% endif %}
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="summary-list__row">
+                                <span class="k">Formats</span>
+                                <span class="v">
+                                    {% if s.format_count %}
+                                        {{ s.format_count }}
+                                    {% else %}
+                                        <span class="muted">none</span>
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="summary-list__row">
+                                <span class="k">Properties</span>
+                                <span class="v">
+                                    {% if s.property_mode == 'tags' %}
+                                        {% if s.property_tag_count %}
+                                            {{ s.property_tag_count }} {{ 'tag' if s.property_tag_count == 1 else 'tags' }}
+                                        {% else %}
+                                            <span class="muted">none</span>
+                                        {% endif %}
+                                    {% else %}
+                                        {% if s.property_id_count %}
+                                            {{ s.property_id_count }} specific
+                                            {{ 'property' if s.property_id_count == 1 else 'properties' }}
+                                        {% else %}
+                                            <span class="muted">none</span>
+                                        {% endif %}
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="summary-list__row">
+                                <span class="k">Used by</span>
+                                <span class="v">
+                                    {% if s.products_using %}
+                                        {{ s.products_using }} {{ 'product' if s.products_using == 1 else 'products' }}
+                                    {% else %}
+                                        <span class="muted">no products yet</span>
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Blast radius card — informational, not a warning #}
+                    <div class="card">
+                        <div class="card__header">
+                            <h2 class="card__title">Blast radius</h2>
+                        </div>
+                        {% if blast_radius %}
+                            <div class="usedby">
+                                <p class="usedby__intro">
+                                    {{ blast_radius | length }}
+                                    {{ 'item' if blast_radius | length == 1 else 'items' }}
+                                    in this bundle
+                                    {{ 'is' if blast_radius | length == 1 else 'are' }}
+                                    reused in other bundles. Edits to inventory <em>here</em> don't affect those —
+                                    bundles share placements, they don't share state.
+                                </p>
+                                {% for r in blast_radius[:5] %}
+                                    <div class="usedby__row">
+                                        <span class="name">
+                                            <code>{{ r.external_id }}</code>
+                                            <span class="meta">
+                                                {{ 'placement' if r.kind == 'placement' else 'ad unit' }}
+                                            </span>
+                                        </span>
+                                        <span class="meta">
+                                            in {{ r.others }} other
+                                            {{ 'bundle' if r.others == 1 else 'bundles' }}
+                                        </span>
+                                    </div>
+                                {% endfor %}
+                                {% if blast_radius | length > 5 %}
+                                    <div class="usedby__row">
+                                        <span class="meta">+ {{ blast_radius | length - 5 }} more</span>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% else %}
+                            <div class="usedby">
+                                <div class="usedby__empty">
+                                    Nothing in this bundle is reused yet. Use <strong>Reuse</strong> →
+                                    "Add inventory to other bundles…" from any placement to start sharing.
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    {# Reuse-actions card #}
+                    <div class="card">
+                        <div class="card__header">
+                            <h2 class="card__title">Actions</h2>
+                        </div>
+                        <div class="usedby">
+                            <a class="usedby__row link"
+                               href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
+                                <span class="name">Preview resolved shape</span>
+                            </a>
+                            <form method="post"
+                                  action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}"
+                                  style="margin: 0;">
+                                <button type="submit" class="usedby__row link"
+                                        style="background: none; border: none; padding: 8px; width: 100%; text-align: left; cursor: pointer; font: inherit;">
+                                    <span class="name">Duplicate this bundle</span>
+                                </button>
+                            </form>
+                            <span class="usedby__row"
+                                  style="opacity: 0.6;"
+                                  title="Coming soon — see issue #524">
+                                <span class="name">Add inventory to other bundles…</span>
+                                <span class="meta">coming soon</span>
+                            </span>
+                        </div>
+                    </div>
+
+                </aside>
+
+                {# ===== Main column ===== #}
+                <div class="edit-main">
+
+                    {# Basics card #}
+                    <div class="card">
+                        <div class="card__header">
+                            <h2 class="card__title">Basics</h2>
+                            <div class="card__controls">
+                                <span class="chip-adapter">{{ s.adapter_label }}</span>
+                            </div>
+                        </div>
+                        <div class="fieldgrid">
+                            <div class="field field--full">
+                                <label for="name">Bundle name *</label>
+                                <input type="text" id="name" name="name" required
+                                       placeholder="e.g., Homepage Premium Display"
+                                       value="{{ profile.name }}">
+                                <span class="hint">
+                                    Buyer-visible. Shows in <code>list_products</code>. Sentence case, no terminal punctuation.
+                                </span>
+                            </div>
+                            {# Profile ID is the internal slug — carried as hidden so POST validates. #}
+                            <input type="hidden" id="profile_id" name="profile_id" value="{{ profile.profile_id }}">
+                            <div class="field field--full">
+                                <label for="description">How buyers see this</label>
+                                <textarea id="description" name="description" rows="3"
+                                    placeholder='Tell buyers what they get. Be factual, but explain why it&apos;s worth buying.&#10;e.g. "Our homepage — 100% viewable, sub-1s load, no creative rotation."'>{{ profile.description if profile.description else '' }}</textarea>
+                                <span class="hint">
+                                    Shows in <code>list_products</code> when buyers discover your inventory. Treat it as merchandising copy.
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Inventory card #}
+                    <div class="card">
+                        <div class="card__header">
+                            <div>
+                                <h2 class="card__title">Inventory</h2>
+                                <p class="card__sub">
+                                    Pick placements or ad units from your synced {{ s.adapter_label }} inventory.
+                                    Placements wrap ad units — picking a placement covers all its children.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="card__body">
+                            <div class="field" style="margin-bottom: 14px;">
+                                <label for="ad-unit-search">Ad units</label>
+                                <div style="display: flex; gap: 8px; margin-top: 4px;">
+                                    <input type="text" id="ad-unit-search" placeholder="Search ad units…" style="flex: 1;">
+                                    <button type="button" onclick="openInventoryPicker('ad_unit')" class="btn btn-secondary">
+                                        Browse ad units
+                                    </button>
+                                </div>
+                                <div id="selected-ad-units" style="min-height: 60px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 8px; background: var(--sig-bg-page); margin-top: 6px;">
+                                    <span style="color: var(--sig-fg-muted); font-size: 12.5px;">No ad units selected</span>
+                                </div>
+                                <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
+                            </div>
+
+                            <div class="field" style="margin-bottom: 14px;">
+                                <label for="placement-search">Placements</label>
+                                <div style="display: flex; gap: 8px; margin-top: 4px;">
+                                    <input type="text" id="placement-search" placeholder="Search placements…" style="flex: 1;">
+                                    <button type="button" onclick="openInventoryPicker('placement')" class="btn btn-secondary">
+                                        Browse placements
+                                    </button>
+                                </div>
+                                <div id="selected-placements" style="min-height: 60px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 8px; background: var(--sig-bg-page); margin-top: 6px;">
+                                    <span style="color: var(--sig-fg-muted); font-size: 12.5px;">No placements selected</span>
+                                </div>
+                                <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
+                            </div>
+
+                            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sig-fg-secondary);">
+                                <input type="checkbox" name="include_descendants" checked>
+                                Include child ad units when a placement is picked
+                            </label>
+                        </div>
+                    </div>
+
+                    {# Formats card #}
+                    <div class="card">
+                        <div class="card__header">
+                            <div>
+                                <h2 class="card__title">Creative formats *</h2>
+                                <p class="card__sub">Which creative formats this bundle accepts. Buyers filter on this.</p>
+                            </div>
+                        </div>
+                        <div class="card__body">
+                            <div id="format-search-box" style="margin-bottom: 12px;">
+                                <input type="text" id="format-search-input" placeholder="Search formats by name, type, or size…"
+                                       style="width: 100%; padding: 6px 10px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px;">
+                            </div>
+
+                            <div id="selected-formats" style="margin-bottom: 12px; padding: 10px 12px; background: var(--sig-bg-info); border: 1px solid var(--sig-bd-default); border-radius: 6px; min-height: 44px; display: none;">
+                                <div style="font-weight: 600; margin-bottom: 6px; color: var(--sig-fg-primary); font-size: 12px;">Selected formats</div>
+                                <div id="selected-formats-list" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+                            </div>
+
+                            <div id="format-list">
+                                <div id="format-loading" style="text-align: center; padding: 24px; color: var(--sig-fg-tertiary);">
+                                    Loading formats from creative agents…
+                                </div>
+                                <div id="format-results" style="display: none;"></div>
+                            </div>
+
+                            <input type="hidden" id="formats-data" name="formats" value="[]">
+                        </div>
+                    </div>
+
+                    {# Properties card #}
+                    <div class="card">
+                        <div class="card__header">
+                            <div>
+                                <h2 class="card__title">Publisher properties *</h2>
+                                <p class="card__sub">
+                                    Which sites, apps or newsletters this inventory represents. Required —
+                                    buyers filter inventory by site and app.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="card__body">
+                            <div class="field" style="margin-bottom: 14px;">
+                                <label style="display: block; padding: 6px 0;">
+                                    <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
+                                    Use property tags (recommended)
+                                </label>
+                                <span class="hint" style="margin-left: 20px;">
+                                    Tags group related properties. Buyers fetch details via <code>list_authorized_properties</code>.
+                                </span>
+                                <label style="display: block; padding: 6px 0; margin-top: 6px;">
+                                    <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
+                                    Select specific properties (by ID)
+                                </label>
+                                <span class="hint" style="margin-left: 20px;">
+                                    Pin exact property IDs for precise control.
+                                </span>
+                                <label style="display: block; padding: 6px 0; margin-top: 6px;">
+                                    <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
+                                    Specify full properties (legacy)
+                                </label>
+                                <span class="hint" style="margin-left: 20px;">
+                                    Complete property objects — for backward compatibility only.
+                                </span>
+                            </div>
+
+                            <div id="property-tags-section" style="margin-top: 12px;">
+                                <div class="field">
+                                    <label for="property_tags">Property tags *</label>
+                                    <input type="text" id="property_tags" name="property_tags"
+                                           placeholder="e.g., all_inventory, premium, sports">
+                                    <span class="hint">Comma-separated list of tags. Example: <code>all_inventory, premium, homepage</code></span>
+                                </div>
+                            </div>
+
+                            <div id="property-ids-section" style="margin-top: 12px; display: none;">
+                                <div class="field">
+                                    <label>Select specific properties *</label>
+                                    <span class="hint" style="margin-bottom: 6px;">Pick one or more from your authorized inventory.</span>
+                                    {% if authorized_properties and authorized_properties|length > 0 %}
+                                        <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 6px; background: var(--sig-bg-page);">
+                                            {% for prop in authorized_properties %}
+                                                <label style="display: block; padding: 6px 8px; border-bottom: 1px solid var(--sig-bd-hairline); cursor: pointer;">
+                                                    <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 6px;">
+                                                    <strong>{{ prop.name or prop.property_id }}</strong>
+                                                    <span style="color: var(--sig-fg-tertiary); font-size: 12px;">({{ prop.property_type }})</span>
+                                                </label>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        <div style="background: var(--sig-bg-info); border: 1px solid var(--sig-bd-default); padding: 12px; border-radius: 6px; font-size: 13px;">
+                                            <strong>No publisher properties found.</strong>
+                                            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab">
+                                                Add publisher partnerships →
+                                            </a>
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div id="property-full-section" style="margin-top: 12px; display: none;">
+                                <div style="background: var(--sig-bg-info); border-left: 4px solid var(--sig-amber, #d49b32); padding: 10px 14px; margin-bottom: 12px; font-size: 13px;">
+                                    <strong>Legacy mode.</strong> Backward compatibility only. New bundles should use tags or property IDs.
+                                </div>
+                                <div class="field">
+                                    <label for="publisher_properties">Publisher properties (JSON) *</label>
+                                    <textarea id="publisher_properties" name="publisher_properties" rows="8"
+                                              placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
+                                              style="font-family: var(--sig-mono); font-size: 12.5px;"></textarea>
+                                    {% if tenant and tenant.primary_domain %}
+                                        <button type="button" class="btn btn-sm btn-secondary" style="margin-top: 6px;" onclick="setDefaultProperties()">
+                                            Use Default ({{ tenant.primary_domain }})
+                                        </button>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Default targeting was a raw-JSON field that operators got wrong more often
+                       than right. Hidden from the edit UX; products handle targeting at compose
+                       time. Carried as a hidden no-op so POST validates. #}
+                    <input type="hidden" id="targeting_template" name="targeting_template" value="">
+
+                </div>
+            </div>
+        </form>
+
     </div>
 
-    <header class="sa-page-header" style="margin-bottom: var(--sa-space-5);">
-        <div>
-            <h2 class="sa-page-header__title">Edit Inventory Bundle: {{ profile.name }}</h2>
-            <p class="sa-page-header__subtitle">Update this bundle's inventory and how buyers see it</p>
-        </div>
-    </header>
-
-    <form id="profile-form" method="POST">
-        <!-- Section 1: Basic Information -->
-        <h3 style="margin-top: 0; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Bundle Information</h3>
-        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Basic details about this inventory bundle</p>
-
-        <div class="form-group">
-            <label for="name">Bundle Name *</label>
-            <input type="text" id="name" name="name" required placeholder="e.g., Homepage Premium Display" value="{{ profile.name }}">
-            <small style="color: var(--sa-text-muted);">A short, descriptive name buyers will see in <code>list_products</code>.</small>
-        </div>
-
-        {# Profile ID is the internal slug — operators don't need it on edit.
-           Carried through the form as a hidden field so POST keeps working. #}
-        <input type="hidden" id="profile_id" name="profile_id" value="{{ profile.profile_id }}">
-
-        <div class="form-group">
-            <label for="description">How buyers see this</label>
-            <textarea id="description" name="description" rows="4"
-                placeholder='Tell buyers what they get. Be factual, but explain why it&apos;s worth buying.
-e.g. "Our homepage — 100% viewable, sub-1s load, no creative rotation."'>{{ profile.description if profile.description else '' }}</textarea>
-            <small style="color: var(--sa-text-muted);">
-                This shows in <code>list_products</code> when buyers discover your inventory. Treat it as merchandising copy.
-            </small>
-        </div>
-
-        <!-- Section 2: Inventory Selection -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Inventory (Ad Units & Placements)</h3>
-        <p style="color: var(--sa-text-muted); margin-bottom: 1.5rem;">Select ad units and placements from your ad server inventory</p>
-
-        <div class="form-group">
-            <label for="ad-unit-search">Ad Units</label>
-            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <input type="text" id="ad-unit-search" placeholder="Search ad units..." style="flex: 1;">
-                <button type="button" onclick="openInventoryPicker('ad_unit')" class="btn btn-secondary">
-                    Browse Ad Units
-                </button>
+    {# Sticky form bar — Save / Cancel #}
+    <div class="formbar">
+        <div class="formbar__inner">
+            <div class="formbar__status">
+                <span class="dot"></span>
+                Saving will affect future media buys using this bundle. Existing campaigns are not modified.
             </div>
-            <div id="selected-ad-units" style="min-height: 60px; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: var(--sa-gray-50);">
-                <span style="color: var(--sa-text-faint);">No ad units selected</span>
-            </div>
-            <textarea id="targeted_ad_unit_ids" name="targeted_ad_unit_ids" style="display: none;"></textarea>
+            <div class="formbar__spacer"></div>
+            <a class="btn btn-secondary"
+               href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
+                Cancel
+            </a>
+            <button type="submit" form="profile-form" class="btn btn-primary">
+                Save bundle
+            </button>
         </div>
-
-        <div class="form-group">
-            <label for="placement-search">Placements</label>
-            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <input type="text" id="placement-search" placeholder="Search placements..." style="flex: 1;">
-                <button type="button" onclick="openInventoryPicker('placement')" class="btn btn-secondary">
-                    Browse Placements
-                </button>
-            </div>
-            <div id="selected-placements" style="min-height: 60px; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: var(--sa-gray-50);">
-                <span style="color: var(--sa-text-faint);">No placements selected</span>
-            </div>
-            <textarea id="targeted_placement_ids" name="targeted_placement_ids" style="display: none;"></textarea>
-        </div>
-
-        <div class="form-group">
-            <label>
-                <input type="checkbox" name="include_descendants" checked>
-                Include child ad units in targeting
-            </label>
-        </div>
-
-        <!-- Section 3: Creative Formats -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Creative Formats *</h3>
-        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Select which creative formats are supported by this inventory</p>
-
-        <!-- Search box for formats -->
-        <div id="format-search-box" style="margin-bottom: 1rem;">
-            <input type="text" id="format-search-input" placeholder="Search formats by name, type, or size..."
-                   style="width: 100%; padding: 0.5rem; border: 1px solid var(--sa-border); border-radius: 4px;">
-        </div>
-
-        <!-- Selected formats (tags) -->
-        <div id="selected-formats" style="margin-bottom: 1rem; padding: 1rem; background: var(--sa-info-tint); border: 1px solid var(--sa-info-border); border-radius: 4px; min-height: 50px; display: none;">
-            <div style="font-weight: 600; margin-bottom: 0.5rem; color: var(--sa-info-text);">Selected Formats:</div>
-            <div id="selected-formats-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
-        </div>
-
-        <!-- Format list -->
-        <div id="format-list" style="margin-top: 1rem;">
-            <div id="format-loading" style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">
-                Loading formats from creative agents...
-            </div>
-            <div id="format-results" style="display: none;"></div>
-        </div>
-
-        <!-- Hidden input to store selected format data -->
-        <input type="hidden" id="formats-data" name="formats" value="[]">
-
-        <!-- Section 4: Publisher Properties -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Publisher Properties *</h3>
-        <p style="color: var(--sa-text-muted); margin-bottom: 1rem;">Specify which publisher properties (websites, apps, etc.) this inventory represents</p>
-
-        <div class="alert alert-info">
-            <strong>Required:</strong> Buyers filter inventory by site and app. Tell them which of yours this bundle covers.
-        </div>
-
-        <!-- Property Selection Mode -->
-        <div class="form-group">
-            <label>Property Selection Method *</label>
-            <div class="form-group">
-                <label>
-                    <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
-                    Use Property Tags (Recommended)
-                </label>
-                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
-            </div>
-
-            <div class="form-group" style="margin-top: 0.5rem;">
-                <label>
-                    <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
-                    Select Specific Properties (by ID)
-                </label>
-                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Choose exact properties from your authorized inventory. Provides precise property-level control.</small>
-            </div>
-
-            <div class="form-group" style="margin-top: 0.5rem;">
-                <label>
-                    <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
-                    Specify Full Properties (Legacy)
-                </label>
-                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Include complete property objects - for backward compatibility only.</small>
-            </div>
-        </div>
-
-        <!-- Property Tags Section (Default) -->
-        <div id="property-tags-section" style="margin-top: 1rem;">
-            <div class="form-group">
-                <label for="property_tags">Property Tags *</label>
-                <input type="text" id="property_tags" name="property_tags" placeholder="e.g., all_inventory, premium, sports">
-                <small style="color: var(--sa-text-muted);">Comma-separated list of tags. Example: all_inventory, premium, homepage</small>
-            </div>
-        </div>
-
-        <!-- Property IDs Section (NEW) -->
-        <div id="property-ids-section" style="margin-top: 1rem; display: none;">
-            <div class="form-group">
-                <label>Select Specific Properties *</label>
-                <small style="color: var(--sa-text-muted); display: block; margin-bottom: 0.5rem;">Select one or more properties from your authorized inventory.</small>
-                {% if authorized_properties and authorized_properties|length > 0 %}
-                <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--sa-border); border-radius: 4px; padding: 0.5rem; background: #fafafa;">
-                    {% for prop in authorized_properties %}
-                    <label style="display: block; padding: 0.5rem; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;"
-                           onmouseover="this.style.background='#f0f7ff'"
-                           onmouseout="this.style.background='transparent'">
-                        <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 0.5rem;">
-                        <strong>{{ prop.name or prop.property_id }}</strong>
-                        <span style="color: var(--sa-text-muted); font-size: 0.9em;">({{ prop.property_type }})</span>
-                        {% if prop.tags %}
-                        <div style="margin-left: 1.5rem; margin-top: 0.25rem;">
-                            {% for tag in prop.tags %}
-                            <span style="background: #e3f2fd; color: #1976d2; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.8em; margin-right: 0.25rem;">{{ tag }}</span>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                    </label>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <div class="alert" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 4px;">
-                    <strong>⚠️ No publisher properties found</strong><br>
-                    <small style="display: block; margin-top: 0.5rem;">
-                        You need to add publisher partnerships first.
-                        <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab" style="color: #856404; text-decoration: underline;">Go to Inventory → Publishers & Properties →</a>
-                    </small>
-                </div>
-                {% endif %}
-            </div>
-        </div>
-
-        <!-- Full Properties Section (Legacy) -->
-        <div id="property-full-section" style="margin-top: 1rem; display: none;">
-            <div class="alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin-bottom: 1rem;">
-                <strong>⚠️ Legacy Mode:</strong> This mode is for backward compatibility only. New bundles should use property tags or property IDs.
-            </div>
-            <div class="form-group">
-                <label for="publisher_properties">Publisher Properties (JSON) *</label>
-                <textarea id="publisher_properties" name="publisher_properties" rows="8"
-                          placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
-                          style="font-family: monospace; font-size: 0.9rem;"></textarea>
-                <small style="color: var(--sa-text-muted);">
-                    AdCP-compliant publisher properties structure. Each entry must include:
-                    <ul style="margin-top: 0.5rem; margin-bottom: 0;">
-                        <li><code>publisher_domain</code> (required): Domain where adagents.json is hosted</li>
-                        <li><code>property_ids</code> (array) OR <code>property_tags</code> (array): Specific properties or tags</li>
-                    </ul>
-                </small>
-
-                {% if tenant and tenant.primary_domain %}
-                <button type="button" class="btn btn-sm btn-secondary mt-2" onclick="setDefaultProperties()">
-                    Use Default ({{ tenant.primary_domain }})
-                </button>
-                {% endif %}
-            </div>
-        </div>
-
-        {# Default targeting was a raw-JSON field that operators got wrong
-           more often than right. Hidden from the edit UX; products handle
-           targeting at compose time. Carried as a hidden no-op so POST
-           validates. Re-introduce only with a structured editor. #}
-        <input type="hidden" id="targeting_template" name="targeting_template" value="">
-
-
-        <!-- Submit Buttons -->
-        <div style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd;">
-            <button type="submit" class="btn btn-primary">Update Bundle</button>
-            <a href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
-        </div>
-    </form>
+    </div>
 </div>
 
 <script>

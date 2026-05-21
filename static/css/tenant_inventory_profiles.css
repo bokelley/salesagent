@@ -695,6 +695,271 @@
 }
 
 /* --------------------------------------------------------------
+   Edit page — two-column layout (sidebar + main column)
+   ----------------------------------------------------------- */
+
+.edit-page {
+    background: var(--sig-bg-page, #f4f1ea);
+    color: var(--sig-fg-primary, #1a1815);
+    font-family: var(--sig-sans, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+    min-height: 100vh;
+    padding-bottom: 140px;
+}
+.edit-page a { color: var(--sig-blue, #0d6efd); text-decoration: none; }
+.edit-page a:hover { text-decoration: underline; }
+.edit-page code { font-family: var(--sig-mono, ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); font-size: 12.5px; }
+
+.edit-container {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 28px 32px 0;
+}
+
+.edit-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--sig-fg-secondary);
+}
+
+.edit-page-header { margin-bottom: 24px; }
+.edit-page-header h1 {
+    font-family: var(--sig-serif, "Iowan Old Style", "Georgia", serif);
+    font-weight: 500;
+    font-size: 30px;
+    letter-spacing: -0.015em;
+    margin: 0 0 8px;
+    color: var(--sig-fg-primary);
+}
+.edit-page-header .lead {
+    font-size: 14.5px;
+    color: var(--sig-fg-secondary);
+    line-height: 1.55;
+    margin: 0;
+    max-width: 760px;
+}
+.edit-page-header .lead em {
+    font-style: italic;
+    color: var(--sig-fg-tertiary);
+}
+
+.edit-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 24px;
+    align-items: start;
+}
+
+.edit-sidebar {
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.edit-main {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+/* --------------------------------------------------------------
+   Card primitive — used across sidebar and main column
+   ----------------------------------------------------------- */
+
+.edit-page .card {
+    background: var(--sig-bg-card, #fbf8f1);
+    border: 1px solid var(--sig-bd-hairline, #e3ddc9);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.edit-page .card__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--sig-bd-hairline);
+    background: var(--sig-bg-subhead, #f1ecd9);
+}
+
+.edit-page .card__title {
+    font-family: var(--sig-serif);
+    font-weight: 500;
+    font-size: 16px;
+    margin: 0;
+    color: var(--sig-fg-primary);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.edit-page .card__title .count {
+    font-family: var(--sig-sans);
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--sig-fg-tertiary);
+    background: var(--sig-bg-info, #ebe5d2);
+    padding: 1px 8px;
+    border-radius: 10px;
+    letter-spacing: 0.01em;
+}
+.edit-page .card__sub {
+    font-size: 12.5px;
+    color: var(--sig-fg-tertiary);
+    margin-top: 4px;
+    line-height: 1.5;
+}
+.edit-page .card__controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.edit-page .card__body { padding: 16px 18px; }
+.edit-page .card__body--tight { padding: 10px 18px; }
+
+/* Adapter chip on Basics card header */
+.edit-page .chip-adapter {
+    font-family: var(--sig-mono);
+    font-size: 11px;
+    color: var(--sig-fg-secondary);
+    background: var(--sig-bg-info);
+    border: 1px solid var(--sig-bd-default);
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.02em;
+}
+
+/* --------------------------------------------------------------
+   Sidebar — Summary, Blast radius, Reuse
+   ----------------------------------------------------------- */
+
+.summary-list { padding: 8px 16px 14px; }
+.summary-list__row {
+    display: grid;
+    grid-template-columns: 84px 1fr;
+    gap: 10px;
+    padding: 6px 0;
+    font-size: 13px;
+    align-items: baseline;
+}
+.summary-list__row .k {
+    color: var(--sig-fg-tertiary);
+    text-transform: uppercase;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    font-weight: 500;
+}
+.summary-list__row .v { color: var(--sig-fg-primary); }
+.summary-list__row .v .muted { color: var(--sig-fg-muted); font-style: italic; }
+
+.usedby { padding: 8px 16px 14px; }
+.usedby__row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--sig-fg-primary);
+}
+.usedby__row + .usedby__row { border-top: 1px solid var(--sig-bd-hairline); }
+.usedby__row .name { font-weight: 500; }
+.usedby__row .name code {
+    font-family: var(--sig-mono);
+    font-size: 11.5px;
+    color: var(--sig-fg-secondary);
+    font-weight: 400;
+}
+.usedby__row .meta { font-size: 11.5px; color: var(--sig-fg-tertiary); }
+.usedby__row.link { color: var(--sig-blue); cursor: pointer; }
+.usedby__row.link:hover { background: var(--sig-bg-row-hover); }
+.usedby__row.link .name { color: var(--sig-blue); display: flex; align-items: center; gap: 6px; }
+.usedby__intro {
+    font-size: 12px;
+    color: var(--sig-fg-tertiary);
+    line-height: 1.5;
+    padding: 0 8px 8px;
+}
+.usedby__empty {
+    padding: 12px 8px;
+    font-size: 12.5px;
+    color: var(--sig-fg-tertiary);
+    line-height: 1.55;
+    font-style: italic;
+}
+
+/* --------------------------------------------------------------
+   Form fields — match parchment palette
+   ----------------------------------------------------------- */
+
+.fieldgrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+    padding: 14px 18px 16px;
+}
+.fieldgrid .field--full { grid-column: 1 / -1; }
+.fieldgrid .field { display: flex; flex-direction: column; gap: 4px; }
+.fieldgrid .field label {
+    font-size: 12px;
+    color: var(--sig-fg-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 500;
+}
+.fieldgrid .field .hint {
+    font-size: 11.5px;
+    color: var(--sig-fg-tertiary);
+    line-height: 1.5;
+}
+
+/* --------------------------------------------------------------
+   Sticky form bar
+   ----------------------------------------------------------- */
+
+.formbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--sig-bg-card, #fbf8f1);
+    border-top: 1px solid var(--sig-bd-default, #d6cfb6);
+    padding: 12px 32px;
+    z-index: 50;
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.04);
+}
+.formbar__inner {
+    max-width: 1240px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.formbar__status {
+    font-size: 13px;
+    color: var(--sig-fg-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.formbar__status strong { font-weight: 600; color: var(--sig-fg-primary); }
+.formbar__status .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--sig-amber, #d49b32);
+}
+.formbar__status.ready .dot { background: var(--sig-green, #2f9d56); }
+.formbar__spacer { flex: 1; }
+
+/* --------------------------------------------------------------
    Responsive
    ----------------------------------------------------------- */
 
@@ -705,9 +970,14 @@
     .bundle-card { grid-template-columns: 1fr; gap: 14px; }
     .bundle-card__shape { border-left: none; border-top: 1px solid var(--sig-bd-hairline); padding-left: 0; padding-top: 14px; }
     .onboard-card { grid-template-columns: 1fr; }
+    .edit-grid { grid-template-columns: 1fr; }
+    .edit-sidebar { position: static; }
+    .fieldgrid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
     .bundles-container { padding: 24px 16px 120px; }
     .nb-row { grid-template-columns: 80px 1fr; row-gap: 6px; }
     .nb-row > :last-child { grid-column: 1 / -1; }
+    .edit-container { padding: 20px 16px 0; }
+    .formbar { padding: 10px 16px; }
 }

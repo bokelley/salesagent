@@ -17,7 +17,9 @@ import pytest
 from src.admin.app import create_app
 from src.admin.blueprints.inventory_profiles import (
     _build_bundle_card,
+    _build_bundle_summary,
     _build_coverage_summary,
+    _compute_blast_radius,
     _list_seed_suggestions,
     _list_unbundled_inventory,
 )
@@ -279,6 +281,106 @@ class TestListSeedSuggestions:
         rows = _list_seed_suggestions(factory_session, tenant_a.tenant_id, limit=5)
 
         assert rows == []
+
+
+class TestBuildBundleSummary:
+    """``_build_bundle_summary`` shapes one profile for the edit-page sidebar."""
+
+    def test_minimal_profile_summary(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": [], "include_descendants": True},
+            format_ids=[],
+            publisher_properties=[],
+        )
+
+        summary = _build_bundle_summary(profile, product_count=0, adapter_label="Google Ad Manager")
+
+        assert summary["adapter_label"] == "Google Ad Manager"
+        assert summary["ad_unit_count"] == 0
+        assert summary["placement_count"] == 0
+        assert summary["format_count"] == 0
+        assert summary["products_using"] == 0
+
+    def test_counts_reflect_inventory_and_properties(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": ["a", "b"], "placements": ["p1", "p2", "p3"]},
+            format_ids=[{"agent_url": "x", "id": "fmt1"}, {"agent_url": "x", "id": "fmt2"}],
+            publisher_properties=[
+                {"publisher_domain": "a.com", "property_tags": ["premium", "news"], "selection_type": "by_tag"},
+            ],
+        )
+
+        summary = _build_bundle_summary(profile, product_count=3, adapter_label="Google Ad Manager")
+
+        assert summary["ad_unit_count"] == 2
+        assert summary["placement_count"] == 3
+        assert summary["format_count"] == 2
+        assert summary["property_mode"] == "tags"
+        assert summary["property_tag_count"] == 2
+        assert summary["products_using"] == 3
+
+
+class TestComputeBlastRadius:
+    """``_compute_blast_radius`` flags placements/units this bundle shares with siblings."""
+
+    def test_no_siblings_returns_empty(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": ["a"], "placements": ["p1"]},
+        )
+
+        assert _compute_blast_radius(factory_session, tenant.tenant_id, profile) == []
+
+    def test_shared_placement_appears_in_blast_radius(self, factory_session):
+        tenant = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["p1", "p2"]},
+        )
+        # Two siblings include the same placement p1; one includes p2; none touch p3.
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["p1"]},
+        )
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["p1", "p2"]},
+        )
+
+        result = _compute_blast_radius(factory_session, tenant.tenant_id, profile)
+        by_id = {r["external_id"]: r for r in result}
+
+        assert by_id["p1"]["kind"] == "placement"
+        assert by_id["p1"]["others"] == 2
+        assert by_id["p2"]["others"] == 1
+
+    def test_other_tenants_dont_count(self, factory_session):
+        tenant_a = TenantFactory()
+        tenant_b = TenantFactory()
+        profile = InventoryProfileFactory(
+            tenant=tenant_a,
+            tenant_id=tenant_a.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["shared_id"]},
+        )
+        # Other tenant has a bundle with the same external_id — must NOT bleed in.
+        InventoryProfileFactory(
+            tenant=tenant_b,
+            tenant_id=tenant_b.tenant_id,
+            inventory_config={"ad_units": [], "placements": ["shared_id"]},
+        )
+
+        assert _compute_blast_radius(factory_session, tenant_a.tenant_id, profile) == []
 
 
 # End-to-end route auth setup in test_client is brittle (the auth check

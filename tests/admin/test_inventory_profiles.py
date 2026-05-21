@@ -235,6 +235,30 @@ class TestInventoryProfileDelete:
         assert response.status_code == 404
 
 
+class TestInventoryProfileEdit:
+    """Test the redesigned edit page renders with the new sidebar data."""
+
+    def test_edit_get_renders_with_summary_and_blast_radius(self, client, test_tenant):
+        """GET /<id>/edit returns 200 and includes the new sidebar cards."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Editable", profile_id="editable")
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit")
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        # Sidebar cards
+        assert "Summary" in html
+        assert "Blast radius" in html
+        # Section cards in main column
+        assert "Basics" in html
+        assert "Inventory" in html
+        assert "Creative formats" in html
+        # Sticky form bar
+        assert "Save bundle" in html
+        # Back link to list page
+        assert "Back to Inventory bundles" in html
+
+
 class TestInventoryProfileDuplicate:
     """Test inventory profile duplication."""
 
