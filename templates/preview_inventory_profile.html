@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Preview {{ profile.name }} — Sales Agent Admin{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_signals.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_inventory_profiles.css') }}">
+
+{#
+   Preview page (#531) — renders the bundle as a buyer's agent sees it via
+   ``list_products``. Replaces the old JSON-dumping endpoint with a real
+   page so "Preview" finally means preview, not "debug".
+#}
+
+<div class="edit-page">
+    <div class="edit-container">
+
+        <a class="edit-back"
+           href="{{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
+            ← Back to editing {{ profile.name }}
+        </a>
+
+        <header class="edit-page-header">
+            <h1>Preview</h1>
+            <p class="lead">
+                This is what a buyer's agent sees when it discovers your inventory via
+                <code>list_products</code> on <span class="pill-link">{{ adapter_label }}</span>.
+            </p>
+        </header>
+
+        <div class="preview-stack">
+
+            {# Buyer-facing card — what `list_products` actually returns. #}
+            <article class="preview-card">
+                <div class="preview-card__head">
+                    <h2 class="preview-card__name">{{ profile.name }}</h2>
+                    <code class="preview-card__id">{{ profile.profile_id }}</code>
+                </div>
+
+                {% if profile.description %}
+                    <p class="preview-card__desc">{{ profile.description }}</p>
+                {% else %}
+                    <p class="preview-card__desc preview-card__desc--missing">
+                        No description. Buyers see an empty string here — consider adding
+                        merchandising copy on the
+                        <a href="{{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">edit page</a>.
+                    </p>
+                {% endif %}
+
+                <div class="preview-card__grid">
+
+                    {# Properties (publisher_domains buyers can filter on) #}
+                    <section class="preview-section">
+                        <h3 class="preview-section__title">Publisher properties</h3>
+                        {% if publisher_properties %}
+                            {% for prop in publisher_properties %}
+                                <div class="preview-prop">
+                                    {% if prop.publisher_domain %}
+                                        <code class="preview-prop__domain">{{ prop.publisher_domain }}</code>
+                                    {% endif %}
+                                    {% if prop.property_tags %}
+                                        <div class="preview-prop__tags">
+                                            {% for tag in prop.property_tags %}
+                                                <span class="preview-tag">{{ tag }}</span>
+                                            {% endfor %}
+                                        </div>
+                                    {% elif prop.property_ids %}
+                                        <span class="preview-prop__ids">
+                                            {{ prop.property_ids | length }} specific
+                                            {{ 'property' if prop.property_ids | length == 1 else 'properties' }}
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="preview-empty">No properties set — buyers can't filter by site or app.</p>
+                        {% endif %}
+                    </section>
+
+                    {# Creative formats #}
+                    <section class="preview-section">
+                        <h3 class="preview-section__title">
+                            Accepted creative formats
+                            <span class="preview-section__count">{{ profile.format_ids | length }}</span>
+                        </h3>
+                        {% if profile.format_ids %}
+                            <div class="preview-formats">
+                                {% for fmt in profile.format_ids %}
+                                    <span class="preview-format">
+                                        <span class="preview-format__id">{{ fmt.id }}</span>
+                                        {% if fmt.agent_url %}
+                                            <span class="preview-format__src">{{ fmt.agent_url }}</span>
+                                        {% endif %}
+                                    </span>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <p class="preview-empty">No formats — buyers can't propose creatives.</p>
+                        {% endif %}
+                    </section>
+
+                    {# Inventory — names where we have them, IDs where we don't (#530) #}
+                    <section class="preview-section preview-section--wide">
+                        <h3 class="preview-section__title">
+                            Inventory
+                            <span class="preview-section__count">
+                                {% set ad_unit_count = (profile.inventory_config.get('ad_units') or []) | length %}
+                                {% set placement_count = (profile.inventory_config.get('placements') or []) | length %}
+                                {{ ad_unit_count + placement_count }}
+                                {{ 'item' if ad_unit_count + placement_count == 1 else 'items' }}
+                            </span>
+                        </h3>
+
+                        {% if placement_count %}
+                            <div class="preview-inv-group">
+                                <div class="preview-inv-group__label">Placements</div>
+                                <div class="preview-inv-group__chips">
+                                    {% for pid in profile.inventory_config.get('placements') or [] %}
+                                        {% set info = inventory_names.placements.get(pid) %}
+                                        <span class="inv-chip{% if not info %} inv-chip--unknown{% endif %}">
+                                            <span class="inv-chip__name">{{ info.name if info else pid }}</span>
+                                            <span class="inv-chip__id">{% if info %}#{{ info.id }}{% else %}unresolved{% endif %}</span>
+                                        </span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        {% if ad_unit_count %}
+                            <div class="preview-inv-group">
+                                <div class="preview-inv-group__label">Ad units</div>
+                                <div class="preview-inv-group__chips">
+                                    {% for aid in profile.inventory_config.get('ad_units') or [] %}
+                                        {% set info = inventory_names.ad_units.get(aid) %}
+                                        <span class="inv-chip{% if not info %} inv-chip--unknown{% endif %}">
+                                            <span class="inv-chip__name">{{ info.name if info else aid }}</span>
+                                            <span class="inv-chip__id">{% if info %}#{{ info.id }}{% else %}unresolved{% endif %}</span>
+                                        </span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        {% if not placement_count and not ad_unit_count %}
+                            <p class="preview-empty">No inventory — buyers can't target anything.</p>
+                        {% endif %}
+
+                        {% if profile.inventory_config.get('include_descendants') %}
+                            <p class="preview-inv-note">
+                                <strong>Include descendants:</strong> on — placements cascade to their child ad units.
+                            </p>
+                        {% endif %}
+                    </section>
+
+                </div>
+            </article>
+
+            <p class="preview-footer">
+                Want to change what buyers see? Edit the bundle's
+                <a href="{{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
+                    name, description, formats and properties
+                </a>.
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

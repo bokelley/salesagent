@@ -1076,9 +1076,72 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/preview")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def preview_inventory_profile(tenant_id: str, profile_id: int):
-    """Get inventory profile preview for product form (API endpoint)."""
+    """HTML preview of how a buyer's agent sees this bundle via ``list_products``.
+
+    The "shipped something" moment for operators (#531) — clicking Preview on
+    the edit page or the list-page overflow now lands on a real page that
+    renders the bundle's buyer-facing shape, not the JSON dump the route used
+    to return.
+
+    Old JSON consumers (the GAM product config form) go through the sibling
+    ``/api/preview`` route below.
+    """
+    with get_db_session() as session:
+        profile = session.get(InventoryProfile, profile_id)
+        if not profile or profile.tenant_id != tenant_id:
+            flash("Inventory bundle not found", "error")
+            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+        tenant = session.get(Tenant, tenant_id)
+        adapter_label = (
+            "Google Ad Manager"
+            if tenant and tenant.ad_server in {"google_ad_manager", "gam"}
+            else (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
+        )
+
+        # Resolve external IDs to human names so the buyer-shape preview
+        # mirrors what the chips on the editor now show (#530).
+        if tenant and tenant.ad_server in {"google_ad_manager", "gam"}:
+            inventory_names = _resolve_inventory_names(session, tenant_id, profile)
+        else:
+            inventory_names = {"ad_units": {}, "placements": {}}
+
+        # Property summary as a structured payload the template can render
+        # (vs the comma-separated string the JSON endpoint produces).
+        publisher_properties = profile.publisher_properties or []
+        property_tags: list[str] = []
+        property_id_count = 0
+        for prop in publisher_properties:
+            property_tags.extend(prop.get("property_tags") or [])
+            property_id_count += len(prop.get("property_ids") or [])
+        property_mode = "tags" if property_tags or not property_id_count else "ids"
+
+        return render_template(
+            "preview_inventory_profile.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            profile=profile,
+            adapter_label=adapter_label,
+            inventory_names=inventory_names,
+            property_mode=property_mode,
+            property_tags=sorted(set(property_tags)),
+            property_id_count=property_id_count,
+            publisher_properties=publisher_properties,
+            active_tab="inventory_profiles",
+        )
+
+
+@inventory_profiles_bp.route("/<int:profile_id>/api/preview")
+@require_tenant_access(api_mode=True)
+def preview_inventory_profile_api(tenant_id: str, profile_id: int):
+    """JSON preview payload for callers that need machine-readable shape.
+
+    Carved out of the original ``/preview`` route (#531) so the user-facing
+    URL can serve HTML. The GAM product-config JS still hits this; the
+    response shape is unchanged.
+    """
     with get_db_session() as session:
         profile = session.get(InventoryProfile, profile_id)
 

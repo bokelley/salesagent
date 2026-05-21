@@ -261,6 +261,61 @@ class TestInventoryProfileEdit:
         assert "Back to Inventory bundles" in html
 
 
+class TestInventoryProfilePreview:
+    """Preview surface — HTML at /preview, JSON at /api/preview (#531)."""
+
+    def test_html_preview_renders_buyer_facing_shape(self, client, test_tenant):
+        """GET /<id>/preview returns HTML rendering the bundle as a buyer sees it."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Buyer View Bundle", profile_id="buyer_view")
+
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/preview")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("text/html")
+        html = response.data.decode()
+        # The buyer-facing card surfaces the bundle's user-visible fields.
+        assert "Buyer View Bundle" in html
+        assert "Accepted creative formats" in html
+        assert "Publisher properties" in html
+        # Page framing makes the "as buyer sees it" intent clear.
+        assert "list_products" in html
+        # Back link to editor.
+        assert f"/inventory-profiles/{pk}/edit" in html
+
+    def test_html_preview_missing_bundle_redirects_to_list(self, client, test_tenant):
+        """A missing bundle PK flashes and redirects to the list page, not 404 JSON."""
+        _auth_session(client, test_tenant)
+        response = client.get(
+            f"/tenant/{test_tenant}/inventory-profiles/999999/preview",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        assert f"/tenant/{test_tenant}/inventory-profiles/" in response.headers.get("Location", "")
+
+    def test_json_preview_endpoint_still_works(self, client, test_tenant):
+        """/<id>/api/preview keeps returning JSON for machine callers (e.g. GAM product form)."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="JSON Caller Bundle", profile_id="json_caller")
+
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/{pk}/api/preview")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("application/json")
+        data = response.get_json()
+        assert data["name"] == "JSON Caller Bundle"
+        # Shape unchanged from the legacy endpoint.
+        for key in ("id", "profile_id", "ad_unit_count", "placement_count", "format_count"):
+            assert key in data
+
+    def test_json_preview_404s_for_missing_bundle(self, client, test_tenant):
+        """JSON endpoint preserves its 404-with-error-body contract."""
+        _auth_session(client, test_tenant)
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/999999/api/preview")
+        assert response.status_code == 404
+        assert response.get_json()["error"]
+
+
 class TestInventoryProfileDuplicate:
     """Test inventory profile duplication."""
 

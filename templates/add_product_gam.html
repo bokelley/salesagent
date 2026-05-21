@@ -1263,7 +1263,7 @@ function handleProfileChange(profileId) {
 // Load and display inventory profile preview
 async function loadProfilePreview(profileId) {
     try {
-        const url = `{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=0) }}`.replace('/0/', `/${profileId}/`);
+        const url = `{{ url_for('inventory_profiles.preview_inventory_profile_api', tenant_id=tenant_id, profile_id=0) }}`.replace('/0/', `/${profileId}/`);
         const response = await fetch(url, { credentials: 'same-origin' });
         const data = await response.json();
 
