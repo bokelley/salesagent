@@ -960,6 +960,43 @@
 }
 
 /* --------------------------------------------------------------
+   Tag picker — click-to-add chips next to the freetext tags input.
+   Replaces typo-prone freetext-only entry. (#532)
+   ----------------------------------------------------------- */
+
+.edit-page .tag-pick {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 0 4px;
+}
+.edit-page .tag-pick__chip {
+    font-family: var(--sig-mono);
+    font-size: 11.5px;
+    background: var(--sig-bg-page);
+    border: 1px solid var(--sig-bd-hairline);
+    color: var(--sig-fg-secondary);
+    padding: 3px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 60ms ease, color 60ms ease, border-color 60ms ease;
+}
+.edit-page .tag-pick__chip:hover {
+    background: var(--sig-bg-row-hover);
+    border-color: var(--sig-bd-default);
+    color: var(--sig-fg-primary);
+}
+.edit-page .tag-pick__chip.selected {
+    background: var(--sig-fg-primary);
+    color: #fff;
+    border-color: var(--sig-fg-primary);
+}
+.edit-page .tag-pick__chip:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.18);
+}
+
+/* --------------------------------------------------------------
    Sticky form bar
    ----------------------------------------------------------- */
 

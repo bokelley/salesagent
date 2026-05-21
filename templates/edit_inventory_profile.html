@@ -298,8 +298,38 @@
                                 <div class="field">
                                     <label for="property_tags">Property tags *</label>
                                     <input type="text" id="property_tags" name="property_tags"
-                                           placeholder="e.g., all_inventory, premium, sports">
-                                    <span class="hint">Comma-separated list of tags. Example: <code>all_inventory, premium, homepage</code></span>
+                                           placeholder="e.g., all_inventory, premium, sports"
+                                           autocomplete="off"
+                                           list="property_tags_suggestions">
+                                    {# Datalist enables native browser typeahead. Operators get
+                                       a dropdown of known tags as they type; per-tag suggestion
+                                       still requires the chip row below since datalist works on
+                                       the whole input value. (#532) #}
+                                    {% if property_tags %}
+                                        <datalist id="property_tags_suggestions">
+                                            {% for t in property_tags %}
+                                                <option value="{{ t.tag_id }}"></option>
+                                            {% endfor %}
+                                        </datalist>
+                                        <div class="tag-pick" id="tag-pick" aria-label="Available tags — click to add">
+                                            {% for t in property_tags %}
+                                                <button type="button" class="tag-pick__chip"
+                                                        data-tag="{{ t.tag_id }}">
+                                                    {{ t.tag_id }}
+                                                </button>
+                                            {% endfor %}
+                                        </div>
+                                        <span class="hint">
+                                            Click a chip to add it, or type a new one. Comma-separated.
+                                            Operators can't make up tags that no property uses — these are
+                                            the known set.
+                                        </span>
+                                    {% else %}
+                                        <span class="hint">
+                                            Comma-separated list of tags. No known tags yet — once you
+                                            tag publisher properties, they'll suggest here.
+                                        </span>
+                                    {% endif %}
                                 </div>
                             </div>
 
@@ -419,6 +449,36 @@ document.addEventListener('DOMContentLoaded', function() {
             nameInput.focus();
             nameInput.select();
         }
+    }
+
+    // Tag-pick chip click handler: add the tag to the comma-separated input.
+    // Mirrors selected state both ways so typing and clicking stay in sync.
+    // (#532 — replaces freetext-only input that let operators typo tags.)
+    const tagPick = document.getElementById('tag-pick');
+    const tagsInput = document.getElementById('property_tags');
+    if (tagPick && tagsInput) {
+        const parseTags = () =>
+            tagsInput.value.split(',').map(t => t.trim()).filter(Boolean);
+        const writeTags = (tags) => { tagsInput.value = tags.join(', '); };
+        const syncChipStates = () => {
+            const selected = new Set(parseTags());
+            tagPick.querySelectorAll('.tag-pick__chip').forEach(chip => {
+                chip.classList.toggle('selected', selected.has(chip.dataset.tag));
+            });
+        };
+        tagPick.addEventListener('click', (e) => {
+            const chip = e.target.closest('.tag-pick__chip');
+            if (!chip) return;
+            const tag = chip.dataset.tag;
+            const tags = parseTags();
+            const idx = tags.indexOf(tag);
+            if (idx >= 0) tags.splice(idx, 1);
+            else tags.push(tag);
+            writeTags(tags);
+            syncChipStates();
+        });
+        tagsInput.addEventListener('input', syncChipStates);
+        syncChipStates();  // initial paint reflects any pre-populated value.
     }
 });
 
