@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}Add to bundles — Sales Agent Admin{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_signals.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_inventory_profiles.css') }}">
+
+{#
+   Reverse-add (Reuse) page (#524). From one synced inventory item
+   (placement or ad unit), add it to many bundles in one save.
+   Sister to the bundle editor's tags-multi-row work — same operator
+   need, different starting point.
+#}
+
+<div class="edit-page">
+    <div class="edit-container">
+
+        <a class="edit-back"
+           href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
+            ← Back to Inventory bundles
+        </a>
+
+        <header class="edit-page-header">
+            <h1>Add to bundles</h1>
+            <p class="lead">
+                Reverse the usual flow: from one
+                {% if source.kind == 'placement' %}placement{% else %}ad unit{% endif %},
+                add it to as many bundles as you need in one save. The same
+                {{ 'placement' if source.kind == 'placement' else 'ad unit' }} can live in many bundles —
+                this is the fast path for multi-use authoring.
+                {# Adapter shown only on the source card to avoid redundancy. #}
+            </p>
+        </header>
+
+        {# Source card — what's being reused. #}
+        <div class="reuse-source {% if not source.found %}reuse-source--unresolved{% endif %}">
+            <div class="reuse-source__body">
+                <div class="reuse-source__kind">
+                    <span class="kindchip kindchip--{{ 'site' if source.kind == 'placement' else 'unit' }}">
+                        {{ 'PLACEMENT' if source.kind == 'placement' else 'AD UNIT' }}
+                    </span>
+                    <span class="reuse-source__adapter">{{ adapter_label }}</span>
+                </div>
+                <h2 class="reuse-source__title">
+                    {{ source.name }}
+                    <code class="reuse-source__id">#{{ source.external_id }}</code>
+                </h2>
+                <div class="reuse-source__meta">{{ source.meta }}</div>
+                {% if not source.found %}
+                    <div class="reuse-source__warn">
+                        Not in synced inventory — it may have been removed in {{ adapter_label }}.
+                        Saving will still add the raw id, but buyers won't match it until sync catches up.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <form id="reuse-form" method="post"
+              action="{{ url_for('inventory_profiles.reuse_inventory_bundles_save', tenant_id=tenant_id) }}">
+            <input type="hidden" name="item" value="{{ source.external_id }}">
+            <input type="hidden" name="kind" value="{{ source.kind }}">
+
+            {# Toolbar — search across bundles. #}
+            <div class="bundle-toolbar" style="margin-top: 16px;">
+                <label class="bundle-toolbar__search">
+                    <span class="ic">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="11" cy="11" r="8"/>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                    </span>
+                    <input type="search" id="bundle-search"
+                           placeholder="Filter bundles by name, tag, or description…"
+                           aria-label="Filter bundles">
+                </label>
+            </div>
+
+            {# Bundle picklist. Already-includes bundles render disabled at the top. #}
+            <div class="bundlepick-list" id="bundlepick-list">
+                {% for b in bundles %}
+                    <label class="bundlepick {% if b.already %}bundlepick--already{% endif %}"
+                           data-filter-key="{{ (b.name + ' ' + b.profile_id + ' ' + b.description) | lower }}">
+                        <span class="bundlepick__check">
+                            {% if b.already %}
+                                <input type="checkbox" checked disabled aria-label="Already in {{ b.name }}">
+                            {% else %}
+                                <input type="checkbox" name="bundle_ids" value="{{ b.id }}"
+                                       aria-label="Add to {{ b.name }}">
+                            {% endif %}
+                        </span>
+                        <span class="bundlepick__main">
+                            <span class="bundlepick__name">
+                                {{ b.name }}
+                                <code class="bundlepick__id">{{ b.profile_id }}</code>
+                            </span>
+                            {% if b.description %}
+                                <span class="bundlepick__desc">{{ b.description }}</span>
+                            {% endif %}
+                            <span class="bundlepick__shape">
+                                <span class="bundlepick__pair">
+                                    <span class="k">Inventory</span> {{ b.summary }}
+                                </span>
+                                <span class="bundlepick__pair">
+                                    <span class="k">Formats</span> {{ b.format_count }}
+                                </span>
+                                <span class="bundlepick__pair">
+                                    <span class="k">Products</span>
+                                    {% if b.products_using %}
+                                        {{ b.products_using }}
+                                    {% else %}
+                                        <span class="muted">none yet</span>
+                                    {% endif %}
+                                </span>
+                            </span>
+                        </span>
+                        {% if b.already %}
+                            <span class="bundlepick__status bundlepick__status--already">
+                                Already includes this
+                            </span>
+                        {% endif %}
+                    </label>
+                {% endfor %}
+                {% if not bundles %}
+                    <div class="bundlepick__empty">
+                        No bundles yet — create one first, then come back here.
+                    </div>
+                {% endif %}
+                <div class="bundlepick__empty" id="bundlepick-empty-filter" hidden>
+                    No bundles match your filter.
+                </div>
+            </div>
+        </form>
+
+    </div>
+
+    {# Sticky form bar — Add to N bundles · Save. #}
+    <div class="formbar" id="formbar" data-form-state="">
+        <div class="formbar__inner">
+            <div class="formbar__status" id="reuse-status" aria-live="polite">
+                Pick the bundles to add this {{ 'placement' if source.kind == 'placement' else 'ad unit' }} to.
+            </div>
+            <div class="formbar__spacer"></div>
+            <a class="btn btn-secondary"
+               href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
+                Cancel
+            </a>
+            <button type="submit" form="reuse-form" class="btn btn-primary" id="reuse-save">
+                Add to bundles
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const form = document.getElementById('reuse-form');
+    if (!form) return;
+
+    const status = document.getElementById('reuse-status');
+    const saveBtn = document.getElementById('reuse-save');
+    const formbar = document.getElementById('formbar');
+    const list = document.getElementById('bundlepick-list');
+    const search = document.getElementById('bundle-search');
+    const emptyFilter = document.getElementById('bundlepick-empty-filter');
+
+    // Live status: how many bundles are currently picked. Bundles with the
+    // disabled "already" checkbox are not counted (they're locked).
+    function refreshStatus() {
+        const checked = form.querySelectorAll('input[name="bundle_ids"]:checked').length;
+        if (checked === 0) {
+            status.textContent = 'Pick the bundles to add this to.';
+            formbar.dataset.formState = '';
+            saveBtn.disabled = true;
+        } else {
+            status.textContent = `Adding to ${checked} ${checked === 1 ? 'bundle' : 'bundles'}.`;
+            formbar.dataset.formState = 'ready';
+            saveBtn.disabled = false;
+        }
+    }
+    form.addEventListener('change', refreshStatus);
+    refreshStatus();
+
+    // Local filter — narrows the list as the operator types.
+    if (search) {
+        search.addEventListener('input', () => {
+            const q = search.value.trim().toLowerCase();
+            const items = list.querySelectorAll('.bundlepick');
+            let visible = 0;
+            items.forEach((row) => {
+                const key = row.dataset.filterKey || '';
+                const hit = !q || key.includes(q);
+                row.hidden = !hit;
+                if (hit) visible += 1;
+            });
+            emptyFilter.hidden = visible > 0 || items.length === 0;
+        });
+    }
+})();
+</script>
+{% endblock %}

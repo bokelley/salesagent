@@ -317,6 +317,132 @@ class TestInventoryProfilePreview:
         assert response.get_json()["error"]
 
 
+class TestInventoryReuseFlow:
+    """Reverse-add Reuse page (#524) — one item → many bundles in one save."""
+
+    def test_get_reuse_renders_picklist_with_membership(self, client, test_tenant):
+        """GET /reuse?item=...&kind=... renders picklist with already-includes marker."""
+        _auth_session(client, test_tenant)
+        # Two bundles: one already contains au_1, one doesn't.
+        _create_sample_profile(test_tenant, name="Already Has It", profile_id="has_it")
+        with get_db_session() as session:
+            already = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == test_tenant,
+                    InventoryProfile.profile_id == "has_it",
+                )
+            ).first()
+            already.inventory_config = {"ad_units": ["au_1"], "placements": [], "include_descendants": True}
+            session.commit()
+        _create_sample_profile(test_tenant, name="Empty Bundle", profile_id="empty")
+
+        response = client.get(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse?item=au_1&kind=ad_unit"
+        )
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "Add to bundles" in html
+        assert "Already Has It" in html
+        assert "Empty Bundle" in html
+        assert "Already includes this" in html
+
+    def test_get_reuse_missing_params_redirects_to_list(self, client, test_tenant):
+        """Missing item/kind flashes + redirects to the list page."""
+        _auth_session(client, test_tenant)
+        response = client.get(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        assert f"/tenant/{test_tenant}/inventory-profiles/" in response.headers.get("Location", "")
+
+    def test_post_reuse_adds_item_to_selected_bundles(self, client, test_tenant):
+        """POST adds the item to each selected bundle's inventory_config.ad_units."""
+        _auth_session(client, test_tenant)
+        a = _create_sample_profile(test_tenant, name="Bundle A", profile_id="a")
+        b = _create_sample_profile(test_tenant, name="Bundle B", profile_id="b")
+        _create_sample_profile(test_tenant, name="Bundle C (not picked)", profile_id="c")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data=MultiDict(
+                [
+                    ("item", "new_au"),
+                    ("kind", "ad_unit"),
+                    ("bundle_ids", str(a)),
+                    ("bundle_ids", str(b)),
+                ]
+            ),
+            follow_redirects=False,
+        )
+
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            for pk in (a, b):
+                bundle = session.get(InventoryProfile, pk)
+                assert "new_au" in bundle.inventory_config["ad_units"]
+            # Unselected bundle stays as-is.
+            unselected = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == test_tenant,
+                    InventoryProfile.profile_id == "c",
+                )
+            ).first()
+            assert "new_au" not in unselected.inventory_config.get("ad_units", [])
+
+    def test_post_reuse_no_selection_redirects_back_to_reuse_page(self, client, test_tenant):
+        """Submitting with no bundles picked round-trips back, no DB writes."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Unchanged", profile_id="unchanged")
+        before = client.get(f"/tenant/{test_tenant}/inventory-profiles/reuse?item=x&kind=ad_unit")
+        assert before.status_code == 200
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data={"item": "x", "kind": "ad_unit"},
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        assert "/reuse" in response.headers.get("Location", "")
+
+        with get_db_session() as session:
+            bundle = session.get(InventoryProfile, pk)
+            assert "x" not in bundle.inventory_config.get("ad_units", [])
+
+    def test_post_reuse_skips_bundles_that_already_have_the_item(self, client, test_tenant):
+        """If a selected bundle already has the item, it's silently skipped."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Already Has", profile_id="already")
+        with get_db_session() as session:
+            bundle = session.get(InventoryProfile, pk)
+            bundle.inventory_config = {"ad_units": ["dup"], "placements": [], "include_descendants": True}
+            session.commit()
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data=MultiDict([("item", "dup"), ("kind", "ad_unit"), ("bundle_ids", str(pk))]),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            bundle = session.get(InventoryProfile, pk)
+            # No duplication.
+            assert bundle.inventory_config["ad_units"].count("dup") == 1
+
+    def test_post_reuse_cross_tenant_ids_silently_dropped(self, client, test_tenant):
+        """Selecting a bundle id from another tenant is ignored, not a 500."""
+        _auth_session(client, test_tenant)
+        # Bundle id from a fictional other-tenant scope. The repository's
+        # get_by_pk filters by tenant_id and will return None.
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/reuse",
+            data=MultiDict([("item", "x"), ("kind", "ad_unit"), ("bundle_ids", "999999")]),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+
 class TestInventoryProfileMultiDomain:
     """Multi-row publisher_properties editor (#532)."""
 

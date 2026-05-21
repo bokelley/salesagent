@@ -341,8 +341,11 @@
                                     <div class="nb-row__meta">{{ it.meta }}</div>
                                 </div>
                                 <div>
+                                    {# Routes to the Reuse page (#524) so the operator can
+                                       multi-select bundles in a single save — much faster than
+                                       creating a new bundle for one orphan item. #}
                                     <a class="btn btn--outline btn--sm"
-                                       href="{{ url_for('inventory_profiles.add_inventory_profile', tenant_id=tenant_id) }}?seed_kind={{ it.kind }}&seed_id={{ it.adapter_id }}">
+                                       href="{{ url_for('inventory_profiles.reuse_inventory_bundles', tenant_id=tenant_id, item=it.adapter_id, kind=it.kind) }}">
                                         {{ icon_plus() }} Add to bundles…
                                     </a>
                                 </div>

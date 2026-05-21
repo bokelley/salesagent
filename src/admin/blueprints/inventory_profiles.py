@@ -985,6 +985,188 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         )
 
 
+def _resolve_reuse_source(session, tenant_id: str, external_id: str, kind: str) -> dict | None:
+    """Look up the ad_unit or placement being reused (#524).
+
+    Returns a dict the template can render directly: ``{name, external_id,
+    kind, meta, found}``. When the entity isn't in the synced GAM inventory
+    table (e.g., deleted upstream), ``found=False`` and ``name`` falls back
+    to the raw id so the operator can still see what they clicked.
+    """
+    if kind not in {"placement", "ad_unit"}:
+        return None
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    row = GAMSyncRepository(session, tenant_id).find_inventory_item(kind, external_id)
+    if row is None:
+        return {
+            "external_id": external_id,
+            "kind": kind,
+            "name": external_id,
+            "meta": "Not found in synced inventory",
+            "found": False,
+        }
+    return {
+        "external_id": row.inventory_id,
+        "kind": row.inventory_type,
+        "name": row.name,
+        "meta": _format_inventory_meta(row),
+        "found": True,
+    }
+
+
+def _bundle_membership_picklist(session, tenant_id: str, external_id: str, kind: str) -> list[dict]:
+    """Per-bundle picklist payload for the Reuse page (#524).
+
+    Each entry: ``{id, name, description, profile_id, already, summary,
+    products_using}``. ``already`` is true when this bundle already contains
+    the entity — those rows render as "already includes" in the template.
+    """
+    from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+
+    bundles = InventoryProfileRepository(session, tenant_id).list_all()
+
+    # Product counts in a single query to avoid N+1.
+    product_counts = dict(
+        session.execute(
+            select(Product.inventory_profile_id, func.count(Product.product_id))
+            .where(Product.tenant_id == tenant_id)
+            .group_by(Product.inventory_profile_id)
+        ).all()
+    )
+
+    config_key = "ad_units" if kind == "ad_unit" else "placements"
+    out: list[dict] = []
+    for b in bundles:
+        cfg = b.inventory_config or {}
+        ids_in_bundle = cfg.get(config_key) or []
+        already = external_id in ids_in_bundle
+        au_count = len(cfg.get("ad_units") or [])
+        pl_count = len(cfg.get("placements") or [])
+        fmt_count = len(b.format_ids or [])
+        shape_parts = []
+        if pl_count:
+            shape_parts.append(f"{pl_count} {'placement' if pl_count == 1 else 'placements'}")
+        if au_count:
+            shape_parts.append(f"{au_count} {'ad unit' if au_count == 1 else 'ad units'}")
+        out.append(
+            {
+                "id": b.id,
+                "name": b.name,
+                "description": b.description or "",
+                "profile_id": b.profile_id,
+                "already": already,
+                "summary": ", ".join(shape_parts) if shape_parts else "no inventory",
+                "format_count": fmt_count,
+                "products_using": int(product_counts.get(b.id, 0)),
+            }
+        )
+    # Already-includes at the top so the operator sees what's done first.
+    out.sort(key=lambda r: (not r["already"], r["name"].lower()))
+    return out
+
+
+@inventory_profiles_bp.route("/reuse")
+@require_tenant_access()
+def reuse_inventory_bundles(tenant_id: str):
+    """Render the reverse-add picker: one inventory item → many bundles (#524).
+
+    Query params:
+        item: external_id of the ad_unit or placement being reused.
+        kind: ``placement`` | ``ad_unit``.
+    """
+    external_id = (request.args.get("item") or "").strip()
+    kind = (request.args.get("kind") or "").strip()
+    if not external_id or kind not in {"placement", "ad_unit"}:
+        flash("Missing item or kind for Reuse — pick a row from the bundles list.", "error")
+        return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+    with get_db_session() as session:
+        tenant = session.get(Tenant, tenant_id)
+        source = _resolve_reuse_source(session, tenant_id, external_id, kind)
+        bundles = _bundle_membership_picklist(session, tenant_id, external_id, kind)
+        adapter_label = (
+            "Google Ad Manager"
+            if tenant and tenant.ad_server in {"google_ad_manager", "gam"}
+            else (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
+        )
+
+        return render_template(
+            "reuse_inventory_bundles.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            adapter_label=adapter_label,
+            source=source,
+            bundles=bundles,
+            active_tab="inventory_profiles",
+        )
+
+
+@inventory_profiles_bp.route("/reuse", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("reuse_inventory_to_bundles")
+def reuse_inventory_bundles_save(tenant_id: str):
+    """Apply the reverse-add diff: insert the item into selected bundles (#524).
+
+    Only adds — never removes. The operator who wants to remove an item
+    from a bundle does so from that bundle's editor. This avoids accidental
+    bulk-deletes from the reuse page.
+    """
+    from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+
+    external_id = (request.form.get("item") or "").strip()
+    kind = (request.form.get("kind") or "").strip()
+    if not external_id or kind not in {"placement", "ad_unit"}:
+        flash("Missing item or kind on Reuse submission.", "error")
+        return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+    selected_ids = [int(b) for b in request.form.getlist("bundle_ids") if b.strip().isdigit()]
+    if not selected_ids:
+        flash("Pick at least one bundle to add this to.", "warning")
+        return redirect(
+            url_for(
+                "inventory_profiles.reuse_inventory_bundles",
+                tenant_id=tenant_id,
+                item=external_id,
+                kind=kind,
+            )
+        )
+
+    config_key = "ad_units" if kind == "ad_unit" else "placements"
+    added_to: list[str] = []
+    skipped_count = 0
+    with get_db_session() as session:
+        repo = InventoryProfileRepository(session, tenant_id)
+        for pk in selected_ids:
+            bundle = repo.get_by_pk(pk)
+            if bundle is None:
+                # Cross-tenant or stale id — silently skip; nothing to log.
+                continue
+            cfg = dict(bundle.inventory_config or {})
+            current = list(cfg.get(config_key) or [])
+            if external_id in current:
+                skipped_count += 1
+                continue
+            current.append(external_id)
+            cfg[config_key] = current
+            bundle.inventory_config = cfg
+            added_to.append(bundle.name)
+        recompute_bundle_references(session, tenant_id)
+        session.commit()
+
+    if added_to:
+        flash(
+            f"Added to {len(added_to)} {'bundle' if len(added_to) == 1 else 'bundles'}: {', '.join(added_to)}.",
+            "success",
+        )
+    if skipped_count:
+        flash(
+            f"{skipped_count} {'bundle' if skipped_count == 1 else 'bundles'} already had this item — left alone.",
+            "info",
+        )
+    return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+
+
 @inventory_profiles_bp.route("/<int:profile_id>/duplicate", methods=["POST"])
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 @log_admin_action("duplicate_inventory_profile")
