@@ -187,6 +187,25 @@ class GAMSyncRepository:
             )
         ).first()
 
+    def list_inventory_by_ids(self, inventory_type: str, inventory_ids: list[str]) -> list[GAMInventory]:
+        """Batch lookup: rows matching ``(inventory_type, inventory_id IN ...)``.
+
+        Used by the bundle editor (#530) to resolve external IDs from
+        ``inventory_config.ad_units`` / ``placements`` into human-readable
+        names in a single query instead of N round-trips.
+        """
+        if not inventory_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(GAMInventory).where(
+                    GAMInventory.tenant_id == self._tenant_id,
+                    GAMInventory.inventory_type == inventory_type,
+                    GAMInventory.inventory_id.in_(inventory_ids),
+                )
+            ).all()
+        )
+
     def add(self, item: GAMInventory) -> None:
         """Add a new GAMInventory row. Caller commits.
 

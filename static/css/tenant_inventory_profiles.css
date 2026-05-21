@@ -863,6 +863,61 @@
 .summary-list__row .v { color: var(--sig-fg-primary); }
 .summary-list__row .v .muted { color: var(--sig-fg-muted); font-style: italic; }
 
+/* Product list under the "Used by" row — expanded view per #530. */
+.summary-list__products {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0 6px 92px;  /* aligns under the "v" column above */
+    margin-top: -4px;
+}
+.summary-list__product {
+    font-size: 12.5px;
+    color: var(--sig-blue);
+    padding: 2px 0;
+    text-decoration: none;
+}
+.summary-list__product:hover { text-decoration: underline; }
+.summary-list__more {
+    font-size: 11.5px;
+    color: var(--sig-fg-tertiary);
+    padding: 2px 0;
+    font-style: italic;
+}
+
+/* Inventory chip — name + raw external id, used by the bundle's own inventory
+   chip list and (eventually) the picker. (#530) */
+.inv-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 8px;
+    margin: 2px 4px 2px 0;
+    background: var(--sig-bg-card);
+    border: 1px solid var(--sig-bd-hairline);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--sig-fg-primary);
+    max-width: 100%;
+}
+.inv-chip__name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 320px;
+}
+.inv-chip__id {
+    font-family: var(--sig-mono);
+    font-size: 10.5px;
+    color: var(--sig-fg-tertiary);
+}
+.inv-chip--unknown {
+    background: var(--sig-bg-info);
+    border-color: var(--sig-bd-default);
+}
+.inv-chip--unknown .inv-chip__id { color: var(--sig-amber, #b8861a); font-style: italic; }
+
 .usedby { padding: 8px 16px 14px; }
 .usedby__row {
     display: flex;

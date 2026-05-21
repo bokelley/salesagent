@@ -88,13 +88,28 @@
                             <div class="summary-list__row">
                                 <span class="k">Used by</span>
                                 <span class="v">
-                                    {% if s.products_using %}
-                                        {{ s.products_using }} {{ 'product' if s.products_using == 1 else 'products' }}
+                                    {% if products_using %}
+                                        {{ products_using | length }} {{ 'product' if products_using | length == 1 else 'products' }}
                                     {% else %}
                                         <span class="muted">no products yet</span>
                                     {% endif %}
                                 </span>
                             </div>
+                            {% if products_using %}
+                                <div class="summary-list__products">
+                                    {% for p in products_using[:5] %}
+                                        <a class="summary-list__product"
+                                           href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=p.product_id) }}">
+                                            {{ p.name }}
+                                        </a>
+                                    {% endfor %}
+                                    {% if products_using | length > 5 %}
+                                        <span class="summary-list__more">
+                                            + {{ products_using | length - 5 }} more
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
                         </div>
                     </div>
 
@@ -401,6 +416,36 @@ const existingProfile = {
     targeting_template: {{ profile.targeting_template | tojson | safe if profile.targeting_template else 'null' }}
 };
 
+// Server-resolved external_id -> {name, id} maps. Missing IDs (e.g. entity
+// deleted in GAM after the bundle saved) won't have entries here — fall back
+// to bare ID so the operator still sees something. (#530)
+const INVENTORY_NAMES = {
+    ad_units: {{ inventory_names.ad_units | tojson | safe }},
+    placements: {{ inventory_names.placements | tojson | safe }}
+};
+
+function renderInventoryChips(containerId, ids, namesByExtId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (!ids || ids.length === 0) {
+        return;  // template default ("No ad units selected", etc.) already shows.
+    }
+    container.innerHTML = ids.map(id => {
+        const info = namesByExtId[id];
+        if (info) {
+            return `<span class="inv-chip" title="${info.id}">`
+                + `<span class="inv-chip__name">${info.name}</span>`
+                + `<span class="inv-chip__id">#${info.id}</span>`
+                + `</span>`;
+        }
+        // Fallback: entity not in sync table — show raw ID with an unknown marker.
+        return `<span class="inv-chip inv-chip--unknown" title="Not found in synced inventory">`
+            + `<span class="inv-chip__name">${id}</span>`
+            + `<span class="inv-chip__id">unresolved</span>`
+            + `</span>`;
+    }).join('');
+}
+
 // Load formats from API on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadFormats().then(() => {
@@ -425,14 +470,15 @@ document.addEventListener('DOMContentLoaded', function() {
 function prePopulateData() {
     // Pre-populate inventory config
     if (existingProfile.inventory_config) {
-        if (existingProfile.inventory_config.ad_units) {
-            document.getElementById('targeted_ad_unit_ids').value = JSON.stringify(existingProfile.inventory_config.ad_units);
-            // TODO: Display ad unit names
-        }
-        if (existingProfile.inventory_config.placements) {
-            document.getElementById('targeted_placement_ids').value = JSON.stringify(existingProfile.inventory_config.placements);
-            // TODO: Display placement names
-        }
+        const adUnitIds = existingProfile.inventory_config.ad_units || [];
+        const placementIds = existingProfile.inventory_config.placements || [];
+
+        document.getElementById('targeted_ad_unit_ids').value = JSON.stringify(adUnitIds);
+        document.getElementById('targeted_placement_ids').value = JSON.stringify(placementIds);
+
+        renderInventoryChips('selected-ad-units', adUnitIds, INVENTORY_NAMES.ad_units);
+        renderInventoryChips('selected-placements', placementIds, INVENTORY_NAMES.placements);
+
         if (existingProfile.inventory_config.include_descendants !== undefined) {
             document.querySelector('input[name="include_descendants"]').checked = existingProfile.inventory_config.include_descendants;
         }

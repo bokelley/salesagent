@@ -413,6 +413,57 @@ def _compute_blast_radius(session, tenant_id: str, profile: InventoryProfile) ->
     return reused
 
 
+def _resolve_inventory_names(
+    session, tenant_id: str, profile: InventoryProfile
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Map external IDs in the bundle's inventory_config to human-readable names.
+
+    Solves the editor's "raw GAM IDs are unverifiable" problem (#530).
+    Operators editing a bundle see chips labelled
+    ``"tribune.com / home / top-banner (#21801001)"`` instead of bare IDs.
+
+    Returns shape::
+
+        {
+            "ad_units": { external_id: {"name": ..., "id": external_id}, ... },
+            "placements": { external_id: {"name": ..., "id": external_id}, ... },
+        }
+
+    Missing IDs (e.g., the entity was deleted in GAM after the bundle saved)
+    don't appear in the map — the template falls back to showing the raw ID.
+    GAM-only today; FW/SS land when their syncs participate.
+    """
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    config = profile.inventory_config or {}
+    ad_unit_ids = list(config.get("ad_units") or [])
+    placement_ids = list(config.get("placements") or [])
+    if not ad_unit_ids and not placement_ids:
+        return {"ad_units": {}, "placements": {}}
+
+    repo = GAMSyncRepository(session, tenant_id)
+    ad_unit_rows = repo.list_inventory_by_ids("ad_unit", ad_unit_ids)
+    placement_rows = repo.list_inventory_by_ids("placement", placement_ids)
+
+    return {
+        "ad_units": {row.inventory_id: {"name": row.name, "id": row.inventory_id} for row in ad_unit_rows},
+        "placements": {row.inventory_id: {"name": row.name, "id": row.inventory_id} for row in placement_rows},
+    }
+
+
+def _list_products_using(session, tenant_id: str, profile_id: int) -> list[dict]:
+    """Products that reference this bundle, with name + id for sidebar rendering.
+
+    Tenant-scoped via the repository. Used by the edit page's Summary card to
+    expand the bare "Used by N products" count into linkable product names
+    (#530). Capped client-side to top-5 + "+N more" overflow.
+    """
+    from src.core.database.repositories.product import ProductRepository
+
+    rows = ProductRepository(session, tenant_id).list_by_inventory_profile(profile_id)
+    return [{"product_id": r.product_id, "name": r.name} for r in rows]
+
+
 def _list_seed_suggestions(session, tenant_id: str, limit: int) -> list[dict]:
     """Synced GAM placements to surface as "promote into a bundle" candidates.
 
@@ -865,6 +916,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         bundle_summary = _build_bundle_summary(profile, product_count, adapter_label)
         blast_radius = _compute_blast_radius(session, tenant_id, profile)
 
+        # GAM-only resolution. Other adapters fall back to raw IDs until their
+        # sync surfaces (mock has no inventory table so we skip the lookup).
+        if tenant.ad_server in {"google_ad_manager", "gam"}:
+            inventory_names = _resolve_inventory_names(session, tenant_id, profile)
+        else:
+            inventory_names = {"ad_units": {}, "placements": {}}
+        products_using = _list_products_using(session, tenant_id, profile_id)
+
         # Render inside the session so JSON columns (``profile.format_ids``,
         # ``profile.inventory_config``, etc.) are accessible from the template.
         # Outside the ``with`` the instance is detached and SQLAlchemy raises
@@ -879,6 +938,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             property_tags=property_tags_list,
             bundle_summary=bundle_summary,
             blast_radius=blast_radius,
+            inventory_names=inventory_names,
+            products_using=products_using,
             active_tab="inventory_profiles",
         )
 

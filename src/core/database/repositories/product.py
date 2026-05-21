@@ -117,6 +117,23 @@ class ProductRepository:
         )
         return list(self._session.execute(stmt).unique().scalars().all())
 
+    def list_by_inventory_profile(self, inventory_profile_id: int) -> list[Product]:
+        """Products that reference a given inventory bundle, ordered by name.
+
+        Used by the bundle editor's "Used by N products" expansion (#530) so
+        operators can see *which* products will be affected by future media
+        buys, not just the count.
+        """
+        stmt = (
+            select(Product)
+            .where(
+                Product.tenant_id == self._tenant_id,
+                Product.inventory_profile_id == inventory_profile_id,
+            )
+            .order_by(Product.name)
+        )
+        return list(self._session.scalars(stmt).all())
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
