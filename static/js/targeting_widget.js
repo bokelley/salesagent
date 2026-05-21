@@ -859,7 +859,7 @@ class TargetingWidget {
                     key_value_pairs: { groups: nonEmptyGroups }
                 });
             } else {
-                hiddenField.value = '';
+                hiddenField.value = '{}';
             }
         }
     }

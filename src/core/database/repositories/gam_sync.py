@@ -136,21 +136,26 @@ class GAMSyncRepository:
         stmt = stmt.order_by(GAMInventory.inventory_type, GAMInventory.name).limit(limit)
         return list(self._session.scalars(stmt).all())
 
-    def list_inventory(self, inventory_type: str) -> list[GAMInventory]:
+    def list_inventory(self, inventory_type: str, limit: int | None = None) -> list[GAMInventory]:
         """Return synced GAM inventory rows of one type
         (``audience_segment``, ``custom_targeting_key``, …) ordered by
         name. Empty when the tenant hasn't synced.
+
+        ``limit`` caps the result set — used by the bundle list page's
+        seed-suggestions peek (#481) where a fresh tenant with thousands
+        of placements just needs the first few.
         """
-        return list(
-            self._session.scalars(
-                select(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == self._tenant_id,
-                    GAMInventory.inventory_type == inventory_type,
-                )
-                .order_by(GAMInventory.name)
-            ).all()
+        stmt = (
+            select(GAMInventory)
+            .where(
+                GAMInventory.tenant_id == self._tenant_id,
+                GAMInventory.inventory_type == inventory_type,
+            )
+            .order_by(GAMInventory.name)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.scalars(stmt).all())
 
     def list_values_for_key(self, key_id: str) -> list[GAMInventory]:
         """Custom-targeting-value rows for one key, ordered by name.
