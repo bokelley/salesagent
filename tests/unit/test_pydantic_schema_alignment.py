@@ -79,6 +79,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-products-request.json": {
         "if_catalog_version",
         "if_pricing_version",
+        "if_wholesale_feed_version",
     },
     # Same pattern: the live spec adds purge + webhook-activity flags to
     # ``ListCreativesRequest`` but the installed ``adcp`` Python library
