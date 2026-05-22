@@ -16,9 +16,11 @@ import pytest
 
 from src.admin.app import create_app
 from src.admin.blueprints.inventory_profiles import (
+    _attach_bundle_card_coverage,
     _build_bundle_card,
     _build_bundle_summary,
     _build_coverage_summary,
+    _build_inventory_picker_payload,
     _compute_blast_radius,
     _list_products_using,
     _list_seed_suggestions,
@@ -119,6 +121,109 @@ class TestBuildBundleCard:
         card = _build_bundle_card(profile, product_count=4)
 
         assert card["products_using"] == 4
+
+
+class TestBundleCardCoverage:
+    """Per-card coverage expands placements to their synced descendant ad units (#549)."""
+
+    def test_gam_adapter_counts_direct_and_placement_covered_ad_units(self, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        placement = GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="pl_sports",
+            name="Sports",
+            path=["Sports"],
+            inventory_metadata={"ad_unit_ids": ["au_child_1", "au_child_2"]},
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_direct",
+            name="Direct Unit",
+            path=["Network", "Direct"],
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_child_1",
+            name="Sports Top",
+            path=["Network", "Sports", "Top"],
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_child_2",
+            name="Sports Rail",
+            path=["Network", "Sports", "Rail"],
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_outside",
+            name="Outside Unit",
+            path=["Network", "Outside"],
+        )
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_config={
+                "ad_units": ["au_direct"],
+                "placements": [placement.inventory_id],
+                "include_descendants": True,
+            },
+        )
+        card = _build_bundle_card(profile, product_count=0)
+
+        _attach_bundle_card_coverage(
+            card,
+            factory_session,
+            tenant.tenant_id,
+            profile,
+            GAM_ADAPTER,
+            ad_units_total=GAM_ADAPTER.count_inventory(factory_session, tenant.tenant_id, "ad_unit"),
+        )
+
+        assert card["coverage"] == {"covered": 3, "total": 4}
+
+
+class TestInventoryPickerPayload:
+    """The in-page picker payload is bounded for large synced inventories."""
+
+    def test_caps_default_rows_but_keeps_selected_inventory(self, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        for idx in range(5):
+            GAMInventoryFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                inventory_type="ad_unit",
+                inventory_id=f"au_{idx}",
+                name=f"Ad Unit {idx}",
+            )
+        selected = GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="zz_selected",
+            name="Selected Unit",
+        )
+
+        payload = _build_inventory_picker_payload(
+            factory_session,
+            tenant.tenant_id,
+            GAM_ADAPTER,
+            inventory_config={"ad_units": [selected.inventory_id], "placements": [], "include_descendants": True},
+            limit=2,
+        )
+
+        assert len(payload["ad_units"]) == 3
+        assert [row["id"] for row in payload["ad_units"][:2]] == ["au_0", "au_1"]
+        assert payload["ad_units"][2]["id"] == "zz_selected"
 
 
 class TestBuildCoverageSummary:

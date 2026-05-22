@@ -31,14 +31,10 @@ class TestInventoryPageLoads:
         assert page.js_errors == [], f"JS errors on inventory unified: {page.js_errors}"
 
     def test_inventory_browser_tree_loads_if_gam(self, authenticated_page: Page, base_url):
-        """On GAM tenants, the Browse Inventory tab renders the ad unit tree."""
+        """On GAM tenants, the Browse Inventory page renders the ad unit tree."""
         page = authenticated_page
-        page.goto(f"{base_url}/tenant/default/inventory")
+        page.goto(f"{base_url}/tenant/default/inventory/browse")
         page.wait_for_load_state("networkidle")
-
-        browser_tab = page.locator("#browser-tab")
-        browser_tab.click()
-        page.wait_for_timeout(500)
 
         # Tree container should exist and get populated by initInventoryTree
         tree = page.locator("#adUnitTree")
@@ -89,3 +85,33 @@ class TestInventoryPickerTree:
         page.wait_for_timeout(1000)
 
         assert page.js_errors == [], f"JS errors on inventory picker: {page.js_errors}"
+
+
+class TestInventoryBundleEditor:
+    """Inventory bundle editor smoke tests."""
+
+    def test_add_bundle_picker_opens_without_js_errors(self, authenticated_page: Page, base_url):
+        """The redesigned add-bundle page opens its in-page pickers without alerts or JS errors."""
+        page = authenticated_page
+
+        page.goto(f"{base_url}/tenant/default/inventory-profiles/add")
+        page.wait_for_load_state("networkidle")
+
+        expect(page.get_by_role("heading", name="Create inventory bundle")).to_be_visible(timeout=5000)
+
+        page.get_by_role("button", name="Pick ad units").click()
+        picker = page.locator("#inventory-picker")
+        expect(picker).to_be_visible(timeout=5000)
+        expect(page.locator("#inventory-picker-title")).to_contain_text("Pick ad units")
+        expect(page.locator("#inventory-picker-list")).to_contain_text("Smoke Test Ad Unit", timeout=5000)
+        page.locator("#inventory-picker input[data-inventory-id='smoke-au-001']").check()
+        page.get_by_role("button", name="Apply selection").click()
+        expect(picker).to_be_hidden(timeout=5000)
+        expect(page.locator("#selected-ad-units")).to_contain_text("Smoke Test Ad Unit", timeout=5000)
+
+        page.get_by_role("button", name="Pick placements").click()
+        expect(picker).to_be_visible(timeout=5000)
+        expect(page.locator("#inventory-picker-title")).to_contain_text("Pick placements")
+        expect(page.locator("#inventory-picker-list")).to_contain_text("Smoke Test Placement", timeout=5000)
+
+        assert page.js_errors == [], f"JS errors on bundle picker: {page.js_errors}"

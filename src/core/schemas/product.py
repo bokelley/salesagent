@@ -82,9 +82,26 @@ class ProductFilters(LibraryFilters):
         return _upgrade_legacy_format_ids(values)
 
 
-# Wire-shape GetProductsRequest is the AdCP library type. Callers must provide
-# buying_mode ('brief' or 'wholesale') per spec — no widening or local fields.
-GetProductsRequest = LibraryGetProductsRequest
+class GetProductsRequest(LibraryGetProductsRequest):
+    """Extends library GetProductsRequest with live-spec cache precondition fields.
+
+    The installed adcp 5.6.0 library is behind the published JSON schema for
+    conditional wholesale feed reads, so bind these fields locally until the
+    library catches up. All inherited fields remain library-owned.
+    """
+
+    if_catalog_version: str | None = Field(
+        None,
+        description=("Deprecated catalog_version token accepted for compatibility with earlier v3.1 schema revisions."),
+    )
+    if_wholesale_feed_version: str | None = Field(
+        None,
+        description="Opaque wholesale_feed_version token from a prior wholesale get_products response.",
+    )
+    if_pricing_version: str | None = Field(
+        None,
+        description="Opaque pricing_version token from a prior get_products response.",
+    )
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

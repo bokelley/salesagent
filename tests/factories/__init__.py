@@ -16,6 +16,7 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.audit_log import AuditLogFactory
 from tests.factories.core import (
     AdapterConfigFactory,
+    AuthorizedPropertyFactory,
     CurrencyLimitFactory,
     GamAdvertiserFactory,
     GAMInventoryFactory,
@@ -54,6 +55,7 @@ ALL_FACTORIES = [
     AccountFactory,
     AgentAccountAccessFactory,
     AdapterConfigFactory,
+    AuthorizedPropertyFactory,
     AuditLogFactory,
     ContextFactory,
     CurrencyLimitFactory,
@@ -92,6 +94,7 @@ __all__ = [
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
     "AuditLogFactory",
+    "AuthorizedPropertyFactory",
     "ContextFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",

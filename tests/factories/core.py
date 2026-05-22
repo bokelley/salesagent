@@ -13,6 +13,7 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import (
     AdapterConfig,
+    AuthorizedProperty,
     CurrencyLimit,
     GamAdvertiser,
     GAMInventory,
@@ -124,6 +125,23 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
             if session is not None:
                 session.commit()
         return instance
+
+
+class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = AuthorizedProperty
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    property_id = Sequence(lambda n: f"property_{n:04d}")
+    property_type = "website"
+    name = LazyAttribute(lambda o: f"Property {o.property_id}")
+    identifiers = LazyAttribute(lambda o: [{"type": "domain", "value": o.publisher_domain}])
+    tags = factory.LazyFunction(lambda: ["all_inventory"])
+    publisher_domain = LazyAttribute(lambda o: o.tenant.primary_domain or f"{o.tenant.subdomain}.example.com")
+    verification_status = "verified"
 
 
 class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
