@@ -89,10 +89,10 @@ async def test_get_products_request_validation():
 @pytest.mark.asyncio
 async def test_offline_mode():
     """Test that offline mode works with cached schemas."""
-    # AdCP 3.1+ requires the protocol-envelope ``status`` field and
-    # ``cache_scope`` on every get-products response; ``public`` is correct
-    # when the (empty) request did not include an ``account``.
-    minimal_response = {"status": "completed", "products": [], "cache_scope": "public"}
+    # AdCP 3.1+ requires ``cache_scope`` on every get-products response;
+    # ``public`` is correct when the (empty) request did not include an
+    # ``account``. Current schemas also require the task status envelope.
+    minimal_response = {"products": [], "cache_scope": "public", "status": "completed"}
     # First, ensure schemas are cached by using online mode
     async with AdCPSchemaValidator() as validator:
         await validator.validate_response("get-products", minimal_response)

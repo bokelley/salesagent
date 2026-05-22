@@ -89,6 +89,42 @@ def _is_terminal_media_buy_state(status: str | None) -> bool:
     return status in MEDIA_BUY_TRANSITIONS and not MEDIA_BUY_TRANSITIONS[status]
 
 
+def _is_explicit_cancel_request(req: UpdateMediaBuyRequest) -> bool:
+    """Return True only when the buyer explicitly sent ``canceled=True``.
+
+    The AdCP-generated request type historically defaulted ``canceled`` to
+    true, so cancellation decisions must be based on fields supplied by the
+    buyer, not just the attribute value.
+    """
+    return "canceled" in getattr(req, "model_fields_set", set()) and req.canceled is True
+
+
+def _add_media_buy_update_workflow_mapping(session: Any, step_id: str, media_buy_id: str) -> None:
+    """Link an update workflow step to its media buy before completion/webhooks."""
+    # FIXME(salesagent-9f2): workflow mapping should use a repository method
+    from src.core.database.models import ObjectWorkflowMapping
+
+    session.add(
+        ObjectWorkflowMapping(
+            step_id=step_id,
+            object_type="media_buy",
+            object_id=media_buy_id,
+            action="update",
+        )
+    )
+
+
+def _has_media_buy_update_workflow_mapping(step: Any, media_buy_id: str) -> bool:
+    for mapping in getattr(step, "object_mappings", None) or []:
+        if (
+            getattr(mapping, "object_type", None) == "media_buy"
+            and getattr(mapping, "object_id", None) == media_buy_id
+            and getattr(mapping, "action", None) == "update"
+        ):
+            return True
+    return False
+
+
 class _MaterializationAuditCtx:
     """Fires ``log_materialization_audit`` on context exit when a payload is set.
 
@@ -399,6 +435,10 @@ def _update_media_buy_impl(
 
         # Extract testing context early (needed for dry_run check)
         testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
+        # Cancellation is a terminal buyer-side control; routing it through
+        # manual approval returns a deferred success without actually canceling.
+        cancel_requested = _is_explicit_cancel_request(req)
+        deferred_cancel_step = None
 
         # Idempotency replay (defence-in-depth on the SDK's post-hoc
         # IdempotencyStore.wrap): if a prior call with this idempotency_key
@@ -418,14 +458,22 @@ def _update_media_buy_impl(
                 tool_name="update_media_buy",
             )
             if existing_step is not None and existing_step.response_data:
-                logger.info(
-                    f"[IDEMPOTENCY] update_media_buy replaying step {existing_step.step_id} "
-                    f"for key={req.idempotency_key[:8]}..."
-                )
-                cached = {k: v for k, v in existing_step.response_data.items() if k != "request_data"}
-                if cached.get("errors"):
-                    return UpdateMediaBuyError.model_validate(cached)
-                return UpdateMediaBuySuccess.model_validate(cached)
+                if cancel_requested and existing_step.status == "requires_approval":
+                    logger.warning(
+                        "[IDEMPOTENCY] update_media_buy repairing deferred cancel step %s for key=%s...",
+                        existing_step.step_id,
+                        req.idempotency_key[:8],
+                    )
+                    deferred_cancel_step = existing_step
+                else:
+                    logger.info(
+                        f"[IDEMPOTENCY] update_media_buy replaying step {existing_step.step_id} "
+                        f"for key={req.idempotency_key[:8]}..."
+                    )
+                    cached = {k: v for k, v in existing_step.response_data.items() if k != "request_data"}
+                    if cached.get("errors"):
+                        return UpdateMediaBuyError.model_validate(cached)
+                    return UpdateMediaBuySuccess.model_validate(cached)
 
         # Pre-flight: every referenced package_id must exist on this media
         # buy. Run before the manual-approval gate, workflow-step writes,
@@ -457,27 +505,30 @@ def _update_media_buy_impl(
         step = None
 
         if not testing_ctx.dry_run:
-            persistent_ctx = ctx_manager.get_or_create_context(
-                tenant_id=tenant["tenant_id"],
-                principal_id=principal_id,  # Now guaranteed to be str
-                context_id=ctx_id,
-                is_async=True,
-            )
+            if deferred_cancel_step is not None:
+                step = deferred_cancel_step
+            else:
+                persistent_ctx = ctx_manager.get_or_create_context(
+                    tenant_id=tenant["tenant_id"],
+                    principal_id=principal_id,  # Now guaranteed to be str
+                    context_id=ctx_id,
+                    is_async=True,
+                )
 
-            # Verify persistent_ctx is not None
-            if persistent_ctx is None:
-                raise ValueError("Failed to create or get persistent context")
+                # Verify persistent_ctx is not None
+                if persistent_ctx is None:
+                    raise ValueError("Failed to create or get persistent context")
 
-            # Create workflow step for this tool call
-            step = ctx_manager.create_workflow_step(
-                context_id=persistent_ctx.context_id,  # Now safe to access
-                step_type="tool_call",
-                owner="principal",
-                status="in_progress",
-                tool_name="update_media_buy",
-                request_data=req,
-                request_metadata={"protocol": identity.protocol},
-            )
+                # Create workflow step for this tool call
+                step = ctx_manager.create_workflow_step(
+                    context_id=persistent_ctx.context_id,  # Now safe to access
+                    step_type="tool_call",
+                    owner="principal",
+                    status="in_progress",
+                    tool_name="update_media_buy",
+                    request_data=req,
+                    request_metadata={"protocol": identity.protocol},
+                )
 
         principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)  # Now guaranteed to be str
         if not principal:
@@ -525,9 +576,8 @@ def _update_media_buy_impl(
 
             return dry_run_response
 
-        # Type narrowing: after dry_run early return, step and persistent_ctx are guaranteed to exist
+        # Type narrowing: after dry_run early return, a workflow step is guaranteed to exist
         assert step is not None, "step should be created when not in dry_run mode"
-        assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
 
         # Pre-flight: GAM rejects reservation-affecting mutations on guaranteed
         # line items after approval. Refusing here avoids ~3min of doomed
@@ -547,7 +597,12 @@ def _update_media_buy_impl(
         manual_approval_required = adapter.manual_approval_required
         manual_approval_operations = adapter.manual_approval_operations
 
-        if manual_approval_required and "update_media_buy" in manual_approval_operations and not bypass_manual_approval:
+        if (
+            manual_approval_required
+            and "update_media_buy" in manual_approval_operations
+            and not bypass_manual_approval
+            and not cancel_requested
+        ):
             # Store the original request alongside the response so the approval
             # execution path can re-execute the update after human approval.
             # This mirrors create_media_buy's raw_request pattern.
@@ -597,15 +652,7 @@ def _update_media_buy_impl(
 
             # Create ObjectWorkflowMapping so the admin approval flow can find
             # this update and execute it after human approval (#1041).
-            from src.core.database.models import ObjectWorkflowMapping
-
-            mapping = ObjectWorkflowMapping(
-                step_id=step.step_id,
-                object_type="media_buy",
-                object_id=req.media_buy_id,
-                action="update",
-            )
-            session.add(mapping)
+            _add_media_buy_update_workflow_mapping(session, step.step_id, media_buy_id_to_use)
 
             return approval_response
 
@@ -719,8 +766,7 @@ def _update_media_buy_impl(
         # EVERY update (pause, budget, packages, etc.), preempting their
         # branches. Gate on ``model_fields_set`` so only an explicit
         # ``canceled=True`` from the buyer triggers cancellation.
-        canceled_in_request = "canceled" in getattr(req, "model_fields_set", set())
-        if canceled_in_request and req.canceled is True:
+        if cancel_requested:
             current_mb = uow.media_buys.get_by_id(req.media_buy_id)
             if current_mb and str(current_mb.status) == "canceled":
                 # Pre-validation: re-cancel of a terminal buy raises the typed
@@ -754,6 +800,8 @@ def _update_media_buy_impl(
                 affected_packages=[],
                 context=req.context,
             )
+            if deferred_cancel_step is None or not _has_media_buy_update_workflow_mapping(step, media_buy_id_to_use):
+                _add_media_buy_update_workflow_mapping(session, step.step_id, media_buy_id_to_use)
             ctx_manager.update_workflow_step(
                 step.step_id,
                 status="completed",
@@ -1681,17 +1729,9 @@ def _update_media_buy_impl(
                             f"GAM date sync FAILED for {req.media_buy_id} (Order {gam_order_id}); DB updated, GAM stale"
                         )
 
-        # Create ObjectWorkflowMapping to link media buy update to workflow step
-        # This enables webhook delivery when the update completes
-        from src.core.database.models import ObjectWorkflowMapping
-
-        mapping = ObjectWorkflowMapping(
-            step_id=step.step_id,
-            object_type="media_buy",
-            object_id=req.media_buy_id,
-            action="update",
-        )
-        session.add(mapping)
+        # Create ObjectWorkflowMapping to link media buy update to workflow step.
+        # This enables webhook delivery when the update completes.
+        _add_media_buy_update_workflow_mapping(session, step.step_id, media_buy_id_to_use)
 
         # Build final response first
         logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")
