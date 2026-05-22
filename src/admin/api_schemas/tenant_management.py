@@ -12,7 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator, model_validator
 
 from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
@@ -368,8 +368,8 @@ class ProvisionTenantResponse(BaseModel):
     created_at: datetime
 
     # Surfaces — URLs the upstream platform needs to know about.
-    mcp_url: str
-    a2a_url: str
+    mcp_url: AnyHttpUrl
+    a2a_url: AnyHttpUrl
     admin_url_path: str
 
     adapter: AdapterStatusResponse

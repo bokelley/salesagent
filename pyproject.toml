@@ -64,6 +64,7 @@ dependencies = [
     "python-multipart>=0.0.27",  # GHSA-wp53-j4wj-2cfg + GHSA-mj87-hwqh-73pj + GHSA-pp6c-gr5w-3c5g
     "pyasn1>=0.6.3",  # GHSA-jr27-m4p2-rc6r
     "spectree>=1.4.0",  # OpenAPI generation for Tenant Management API
+    "starlette>=1.0.1",  # PYSEC-2026-161 (transitive via FastAPI / SSE)
     "mako>=1.3.12",  # GHSA-2h4p-vjrc-8xpq (transitive via alembic)
     "idna>=3.15",  # GHSA-65pc-fj4g-8rjx (transitive via httpx/anyio/requests)
     # Transitive via pydantic-ai → pydantic-ai-slim[temporal]. We don't import
@@ -255,4 +256,3 @@ ignore-imports = true
 ignore-docstrings = true
 ignore-comments = true
 ignore-signatures = true
-

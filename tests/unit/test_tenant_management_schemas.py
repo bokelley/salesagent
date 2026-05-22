@@ -253,8 +253,8 @@ def test_provision_response_managed_externally_is_locked_to_true():
         "is_embedded": True,
         "managed_externally": True,
         "created_at": datetime.now().isoformat(),
-        "mcp_url": "/mcp/",
-        "a2a_url": "/a2a",
+        "mcp_url": "https://tenant-x.sales-agent.example.com/mcp/",
+        "a2a_url": "https://tenant-x.sales-agent.example.com/a2a",
         "admin_url_path": "/tenant/tenant_x",
         "adapter": AdapterStatusResponse(type="mock", configured=True, connection_test_passed=True).model_dump(),
     }
@@ -265,6 +265,23 @@ def test_provision_response_managed_externally_is_locked_to_true():
 
     # Setting it to False must be rejected (Literal[True]).
     payload["managed_externally"] = False
+    with pytest.raises(ValidationError):
+        ProvisionTenantResponse.model_validate(payload)
+
+
+def test_provision_response_rejects_relative_buyer_protocol_urls():
+    payload = {
+        "tenant_id": "tenant_x",
+        "name": "Acme",
+        "external_org_id": "org_x",
+        "external_source": "scope3",
+        "created_at": datetime.now().isoformat(),
+        "mcp_url": "/mcp/",
+        "a2a_url": "/a2a",
+        "admin_url_path": "/tenant/tenant_x",
+        "adapter": AdapterStatusResponse(type="mock", configured=True, connection_test_passed=True).model_dump(),
+    }
+
     with pytest.raises(ValidationError):
         ProvisionTenantResponse.model_validate(payload)
 

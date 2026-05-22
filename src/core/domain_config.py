@@ -245,19 +245,22 @@ def extract_subdomain_from_host(host: str) -> str | None:
     return None
 
 
-def get_tenant_url(subdomain: str, protocol: str = "https") -> str | None:
+def get_tenant_url(subdomain: str, protocol: str | None = "https") -> str | None:
     """
     Get the URL for a specific tenant subdomain.
 
     Args:
         subdomain: The tenant subdomain
-        protocol: The protocol (http or https)
+        protocol: The protocol (http or https). Pass None to auto-detect
+                  http for local development domains and https otherwise.
 
     Returns:
         The full tenant URL (e.g., https://tenant.sales-agent.example.com)
         or None if SALES_AGENT_DOMAIN is not configured.
     """
     if sales_domain := get_sales_agent_domain():
+        if protocol is None:
+            protocol = _get_protocol_for_domain(sales_domain)
         return f"{protocol}://{subdomain}.{sales_domain}"
     return None
 

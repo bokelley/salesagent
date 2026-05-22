@@ -105,6 +105,7 @@ from src.core.database.models import (
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.domain_config import get_tenant_url
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
 
@@ -404,16 +405,19 @@ def _build_adapter_config_response(adapter: AdapterConfig | None) -> AdapterConf
     return AdapterConfigResponse(type=adapter.adapter_type, configured=True)
 
 
-def _surface_urls(tenant_id: str) -> tuple[str, str, str]:
+def _surface_urls(tenant_id: str, tenant_subdomain: str, request_base_url: str | None = None) -> tuple[str, str, str]:
     """Return ``(mcp_url, a2a_url, admin_url_path)`` for a tenant.
 
-    Only the path component is stable in v1 — the host comes from the deployment env.
+    Prefer tenant-subdomain URLs so callers can persist a buyer-protocol
+    endpoint without duplicating salesagent routing rules.
     """
     base = os.environ.get("ADCP_BASE_URL", "").rstrip("/")
-    mcp = f"{base}/mcp/" if base else "/mcp/"
-    a2a = f"{base}/a2a" if base else "/a2a"
+    if not base and os.environ.get("SALES_AGENT_DOMAIN"):
+        base = get_tenant_url(tenant_subdomain, protocol=None) or ""
+    if not base:
+        base = (request_base_url or "").rstrip("/")
     admin_path = f"/tenant/{tenant_id}"
-    return mcp, a2a, admin_path
+    return f"{base}/mcp/", f"{base}/a2a", admin_path
 
 
 @tenant_management_api.route("/health", methods=["GET"])
@@ -1241,7 +1245,7 @@ def provision_tenant():
             tenant_id,
         )
 
-    mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id)
+    mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id, subdomain, request.url_root)
     response = ProvisionTenantResponse(
         tenant_id=tenant_id,
         name=req.name,

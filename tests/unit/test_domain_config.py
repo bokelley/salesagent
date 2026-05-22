@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.core.domain_config import _resolve_single_tenant_virtual_host, get_sales_agent_domain
+from src.core.domain_config import _resolve_single_tenant_virtual_host, get_sales_agent_domain, get_tenant_url
 
 
 @pytest.fixture(autouse=True)
@@ -86,3 +86,15 @@ class TestNormalizeHost:
         from src.core.domain_config import _normalize_host
 
         assert _normalize_host(raw) == expected
+
+
+class TestGetTenantUrl:
+    """Tenant URL construction for buyer-protocol surfaces."""
+
+    def test_auto_protocol_uses_http_for_local_aliases(self):
+        with patch.dict("os.environ", {"SALES_AGENT_DOMAIN": "localtest.me:3091"}, clear=True):
+            assert get_tenant_url("tenant-acme", protocol=None) == "http://tenant-acme.localtest.me:3091"
+
+    def test_auto_protocol_uses_https_for_public_domains(self):
+        with patch.dict("os.environ", {"SALES_AGENT_DOMAIN": "sales-agent.example.com"}, clear=True):
+            assert get_tenant_url("tenant-acme", protocol=None) == "https://tenant-acme.sales-agent.example.com"

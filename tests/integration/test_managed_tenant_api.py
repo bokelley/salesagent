@@ -213,6 +213,21 @@ class TestProvision:
             assert adapter.gam_auth_method == "service_account"
             assert adapter.gam_refresh_token is None
 
+    def test_provision_returns_absolute_tenant_surface_urls(self, client, auth_headers, cleanup_tenants, monkeypatch):
+        monkeypatch.setenv("SALES_AGENT_DOMAIN", "localtest.me:3091")
+        monkeypatch.delenv("ADCP_BASE_URL", raising=False)
+
+        payload = _provision_payload(external_org_id="org_surface_urls")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert response.status_code == 201, response.get_data(as_text=True)
+
+        body = response.get_json()
+        cleanup_tenants.append(body["tenant_id"])
+        tenant_subdomain = f"org-surface-urls-{body['tenant_id'][-8:]}"
+        expected_base = f"http://{tenant_subdomain}.localtest.me:3091"
+        assert body["mcp_url"] == f"{expected_base}/mcp/"
+        assert body["a2a_url"] == f"{expected_base}/a2a"
+
     def test_provision_with_initial_principal(self, client, auth_headers, cleanup_tenants):
         payload = _provision_payload(
             external_org_id="org_with_principal",

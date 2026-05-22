@@ -3345,6 +3345,8 @@
         "description": "Response body for ``POST /tenants/provision``.",
         "properties": {
           "a2a_url": {
+            "format": "uri",
+            "minLength": 1,
             "title": "A2A Url",
             "type": "string"
           },
@@ -3392,6 +3394,8 @@
             "type": "boolean"
           },
           "mcp_url": {
+            "format": "uri",
+            "minLength": 1,
             "title": "Mcp Url",
             "type": "string"
           },
