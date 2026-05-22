@@ -114,6 +114,45 @@ class TestIdempotencyReplaySuccess:
         # No new workflow step was created
         patches["ctx_manager"].create_workflow_step.assert_not_called()
 
+    def test_deferred_cancel_cache_is_repaired_not_replayed(self, patches):
+        uow = _make_uow(_make_buy())
+        cached = {
+            "media_buy_id": "mb_1",
+            "affected_packages": [],
+            "workflow_step_id": "step_first",
+            "request_data": {"media_buy_id": "mb_1", "canceled": True},
+        }
+        existing_step = MagicMock(step_id="step_first", status="requires_approval", response_data=cached)
+        existing_step.object_mappings = []
+
+        with (
+            patch(f"{MODULE}.MediaBuyUoW", return_value=uow),
+            patch("src.core.database.repositories.workflow.WorkflowRepository") as m_repo,
+        ):
+            m_repo.return_value.find_by_idempotency_key.return_value = existing_step
+
+            req = UpdateMediaBuyRequest(
+                **required_request_kwargs(idempotency_key="key-abc-123xxxxx"),
+                media_buy_id="mb_1",
+                canceled=True,
+            )
+            result = _update_media_buy_impl(req=req, identity=_make_identity())
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert getattr(result.status, "value", result.status) == "canceled"
+        uow.media_buys.update_fields.assert_called_once_with("mb_1", status="canceled")
+        assert uow.session.add.call_count == 1
+        patches["ctx_manager"].create_workflow_step.assert_not_called()
+        patches["ctx_manager"].update_workflow_step.assert_called_once_with(
+            "step_first",
+            status="completed",
+            response_data={
+                "media_buy_id": "mb_1",
+                "status": "canceled",
+                "affected_packages": [],
+            },
+        )
+
 
 class TestIdempotencyReplayError:
     def test_cached_error_replayed_as_update_media_buy_error(self, patches):

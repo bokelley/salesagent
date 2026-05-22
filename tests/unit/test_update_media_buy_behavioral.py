@@ -84,6 +84,12 @@ def _make_mock_currency_limit(max_daily=None):
     return cl
 
 
+def _media_buy_workflow_mapping_adds(mock_session):
+    from src.core.database.models import ObjectWorkflowMapping
+
+    return [call.args[0] for call in mock_session.add.call_args_list if isinstance(call.args[0], ObjectWorkflowMapping)]
+
+
 def _setup_db_session(standard_mocks):
     """Create a fresh DB session mock and wire it into the fixture.
 
@@ -660,6 +666,65 @@ def test_cancel_response_includes_status_canceled(standard_mocks):
     assert getattr(result.status, "value", result.status) == "canceled"
 
 
+def test_cancel_bypasses_manual_approval_gate_and_persists_status(standard_mocks):
+    """Cancellation must execute immediately even when updates require manual approval (#324)."""
+    standard_mocks["adapter_instance"].manual_approval_required = True
+    standard_mocks["adapter_instance"].manual_approval_operations = ["update_media_buy"]
+
+    mock_buy = MagicMock()
+    mock_buy.status = "active"
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_buy
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(**required_request_kwargs(), media_buy_id="mb_cancel_manual", canceled=True)
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.status is not None
+    assert getattr(result.status, "value", result.status) == "canceled"
+    standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
+        "mb_cancel_manual", status="canceled"
+    )
+
+    update_statuses = [
+        call.kwargs["status"]
+        for call in standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args_list
+        if "status" in call.kwargs
+    ]
+    assert update_statuses == ["completed"]
+
+    mapping_adds = _media_buy_workflow_mapping_adds(standard_mocks["db_session"])
+    assert len(mapping_adds) == 1
+    mapping = mapping_adds[0]
+    assert mapping.step_id == "step_001"
+    assert mapping.object_id == "mb_cancel_manual"
+    assert mapping.object_type == "media_buy"
+    assert mapping.action == "update"
+
+
+def test_cancel_dominates_mixed_payload_and_skips_other_mutations(standard_mocks):
+    """When canceled=true is mixed with other fields, cancel is the terminal operation."""
+    mock_buy = MagicMock()
+    mock_buy.status = "active"
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_buy
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_cancel_mixed",
+        canceled=True,
+        paused=True,
+    )
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert getattr(result.status, "value", result.status) == "canceled"
+    standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
+        "mb_cancel_mixed", status="canceled"
+    )
+    standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
+
+
 def test_manual_approval_response_coerces_non_wire_db_status_to_none(standard_mocks):
     """Manual-approval response MUST NOT emit a persisted-only DB status
     that the wire enum rejects (#374).
@@ -737,9 +802,7 @@ def test_manual_approval_creates_object_workflow_mapping(standard_mocks):
     add_calls = mock_session.add.call_args_list
 
     # Find ObjectWorkflowMapping among session.add() calls
-    from src.core.database.models import ObjectWorkflowMapping
-
-    mapping_adds = [call for call in add_calls if isinstance(call[0][0], ObjectWorkflowMapping)]
+    mapping_adds = _media_buy_workflow_mapping_adds(mock_session)
 
     assert len(mapping_adds) >= 1, (
         f"No ObjectWorkflowMapping was added to the DB session during manual approval. "
@@ -749,7 +812,7 @@ def test_manual_approval_creates_object_workflow_mapping(standard_mocks):
     )
 
     # Verify the mapping links the workflow step to the media buy update
-    mapping = mapping_adds[0][0][0]
+    mapping = mapping_adds[0]
     assert mapping.step_id == "step_001"
     assert mapping.object_id == "mb_approval_mapping"
     assert mapping.object_type == "media_buy"

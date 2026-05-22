@@ -91,8 +91,8 @@ async def test_offline_mode():
     """Test that offline mode works with cached schemas."""
     # AdCP 3.1+ requires ``cache_scope`` on every get-products response;
     # ``public`` is correct when the (empty) request did not include an
-    # ``account``.
-    minimal_response = {"products": [], "cache_scope": "public"}
+    # ``account``. Current schemas also require the task status envelope.
+    minimal_response = {"products": [], "cache_scope": "public", "status": "completed"}
     # First, ensure schemas are cached by using online mode
     async with AdCPSchemaValidator() as validator:
         await validator.validate_response("get-products", minimal_response)
