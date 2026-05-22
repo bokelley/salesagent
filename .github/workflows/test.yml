@@ -157,7 +157,7 @@ jobs:
   integration-tests:
     name: Integration (${{ matrix.group }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -456,7 +456,23 @@ jobs:
     steps:
     - name: Check test results
       run: |
-        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
+        failed=0
+        for check in \
+          "security-audit:${{ needs.security-audit.result }}" \
+          "smoke-tests:${{ needs.smoke-tests.result }}" \
+          "unit-tests:${{ needs.unit-tests.result }}" \
+          "integration-tests:${{ needs.integration-tests.result }}" \
+          "quickstart-test:${{ needs.quickstart-test.result }}" \
+          "e2e-tests:${{ needs.e2e-tests.result }}" \
+          "lint:${{ needs.lint.result }}"; do
+          name="${check%%:*}"
+          result="${check#*:}"
+          if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+            echo "❌ $name ended with result: $result"
+            failed=1
+          fi
+        done
+        if [ "$failed" -ne 0 ]; then
           echo "❌ Tests failed"
           exit 1
         else
