@@ -72,14 +72,6 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "time_granularity",
         "include_window_breakdown",
     },
-    # AdCP spec exposes catalog/pricing version preconditions on
-    # ``GetProductsRequest`` but the installed ``adcp`` Python library (5.6.0)
-    # doesn't surface them on ``LibraryGetProductsRequest`` yet. Remove when
-    # the library catches up.
-    "/schemas/latest/media-buy/get-products-request.json": {
-        "if_catalog_version",
-        "if_pricing_version",
-    },
     # Same pattern: the live spec adds purge + webhook-activity flags to
     # ``ListCreativesRequest`` but the installed ``adcp`` Python library
     # (5.5.0) doesn't expose them on ``LibraryListCreativesRequest``.
@@ -651,6 +643,16 @@ class TestSpecificFieldValidation:
         )
         assert request.brand is not None
         assert request.brief is None
+
+    def test_get_products_accepts_wholesale_feed_version_preconditions(self):
+        """GetProductsRequest binds live-spec conditional feed version fields."""
+        request = GetProductsRequest(
+            buying_mode="wholesale",
+            if_wholesale_feed_version="feed-v1",
+            if_pricing_version="pricing-v1",
+        )
+        assert request.if_wholesale_feed_version == "feed-v1"
+        assert request.if_pricing_version == "pricing-v1"
 
 
 class TestFieldNameConsistency:

@@ -117,11 +117,18 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LocalSyncCreativesRequest,
         )
 
-        # GetProductsRequest is now a plain alias for the library type (slice 7)
-        # — fields must match exactly, no local extensions.
+        # GetProductsRequest extends the library only for published JSON schema
+        # fields that adcp 5.6.0 does not expose yet.
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        assert lib_fields == local_fields, f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
+        get_products_extensions = {
+            "if_catalog_version",
+            "if_wholesale_feed_version",
+            "if_pricing_version",
+        }
+        assert lib_fields == local_fields - get_products_extensions, (
+            f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
