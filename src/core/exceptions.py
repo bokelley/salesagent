@@ -65,6 +65,14 @@ class AdCPValidationError(AdCPError):
     recovery: RecoveryHint = "correctable"
 
 
+class AdCPInvalidRequestError(AdCPError):
+    """Spec-level invalid request payload (400, INVALID_REQUEST)."""
+
+    status_code = 400
+    error_code = "INVALID_REQUEST"
+    recovery: RecoveryHint = "correctable"
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401)."""
 

@@ -49,8 +49,10 @@ class TestMCPToolRoundtripMinimal:
             yield client
 
     async def test_get_products_minimal(self, mcp_client):
-        """Test get_products with only required parameter (promoted_offering)."""
-        result = await mcp_client.call_tool("get_products", {"brand": {"domain": "testbrand.com"}})
+        """Test get_products with a minimal explicit wholesale request."""
+        result = await mcp_client.call_tool(
+            "get_products", {"buying_mode": "wholesale", "brand": {"domain": "testbrand.com"}}
+        )
 
         assert result is not None
         # FastMCP call_tool returns structured_content

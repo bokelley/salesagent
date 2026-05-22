@@ -113,7 +113,7 @@ class TestGetProductsFilterBehavior:
     @pytest.mark.asyncio
     async def test_filter_by_delivery_type_guaranteed(self, env):
         """Test filtering for guaranteed delivery products only."""
-        result = await env.call_impl(brief="")
+        result = await env.call_impl(buying_mode="wholesale", brief="")
 
         assert len(result.products) > 0
 
@@ -126,7 +126,7 @@ class TestGetProductsFilterBehavior:
     @pytest.mark.asyncio
     async def test_no_filter_returns_all_products(self, env):
         """Test that calling without filters returns all products."""
-        result = await env.call_impl(brief="")
+        result = await env.call_impl(buying_mode="wholesale", brief="")
 
         assert len(result.products) == 5
 
@@ -140,7 +140,7 @@ class TestGetProductsFilterBehavior:
     @pytest.mark.asyncio
     async def test_products_have_correct_structure(self, env):
         """Test that returned products have all required AdCP fields."""
-        result = await env.call_impl(brief="")
+        result = await env.call_impl(buying_mode="wholesale", brief="")
 
         product = result.products[0]
         assert hasattr(product, "product_id")
@@ -243,7 +243,7 @@ class TestNewGetProductsFilters:
     @pytest.mark.asyncio
     async def test_filter_by_countries_single_country(self, env):
         """Test filtering products by a single country."""
-        result = await env.call_impl(brief="", filters={"countries": ["US"]})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"countries": ["US"]})
 
         product_ids = {p.product_id for p in result.products}
         assert "us_display" in product_ids
@@ -256,7 +256,7 @@ class TestNewGetProductsFilters:
     @pytest.mark.asyncio
     async def test_filter_by_countries_multiple_countries(self, env):
         """Test filtering products by multiple countries."""
-        result = await env.call_impl(brief="", filters={"countries": ["CA", "GB"]})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"countries": ["CA", "GB"]})
 
         product_ids = {p.product_id for p in result.products}
         assert "us_ca_video" in product_ids
@@ -269,7 +269,7 @@ class TestNewGetProductsFilters:
     @pytest.mark.asyncio
     async def test_filter_by_channels_display(self, env):
         """Test filtering products by display channel."""
-        result = await env.call_impl(brief="", filters={"channels": ["display"]})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"channels": ["display"]})
 
         product_ids = {p.product_id for p in result.products}
         assert "us_display" in product_ids
@@ -282,7 +282,7 @@ class TestNewGetProductsFilters:
     @pytest.mark.asyncio
     async def test_filter_by_channels_video(self, env):
         """Test filtering products by olv (online video) channel."""
-        result = await env.call_impl(brief="", filters={"channels": ["olv"]})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"channels": ["olv"]})
 
         product_ids = {p.product_id for p in result.products}
         assert "us_ca_video" in product_ids
@@ -291,7 +291,9 @@ class TestNewGetProductsFilters:
     @pytest.mark.asyncio
     async def test_filter_by_channels_multiple(self, env):
         """Test filtering products by multiple channels."""
-        result = await env.call_impl(brief="", filters={"channels": ["streaming_audio", "social"]})
+        result = await env.call_impl(
+            buying_mode="wholesale", brief="", filters={"channels": ["streaming_audio", "social"]}
+        )
 
         product_ids = {p.product_id for p in result.products}
         assert "global_audio" in product_ids
@@ -301,7 +303,7 @@ class TestNewGetProductsFilters:
     @pytest.mark.asyncio
     async def test_filter_by_channels_retail_excludes_mock_products(self, env):
         """Test that retail_media channel filter excludes products without explicit retail channel."""
-        result = await env.call_impl(brief="", filters={"channels": ["retail_media"]})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"channels": ["retail_media"]})
 
         product_ids = {p.product_id for p in result.products}
         assert "global_no_channel" not in product_ids
@@ -310,6 +312,7 @@ class TestNewGetProductsFilters:
     async def test_combined_filters_country_and_channel(self, env):
         """Test combining country and channel filters."""
         result = await env.call_impl(
+            buying_mode="wholesale",
             brief="",
             filters={"countries": ["US"], "channels": ["display"]},
         )
@@ -324,6 +327,7 @@ class TestNewGetProductsFilters:
     async def test_combined_filters_strict_match(self, env):
         """Test combining country and channel filters with strict matching."""
         result = await env.call_impl(
+            buying_mode="wholesale",
             brief="",
             filters={"countries": ["CA"], "channels": ["olv"]},
         )

@@ -98,7 +98,7 @@ def create_get_products_request(
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
-    buying_mode: Literal["wholesale", "brief"] = "wholesale",
+    buying_mode: Literal["wholesale", "brief"] | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
@@ -110,9 +110,9 @@ def create_get_products_request(
         property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
         buying_mode: Buyer mode per AdCP spec — "wholesale" (buyer applies own
-            audiences) or "brief" (publisher curates). Required by spec; defaults
-            to "wholesale" for ergonomic callers but is now no longer optional
-            on the wire.
+            audiences) or "brief" (publisher curates). Required by spec; when
+            omitted, the helper infers "brief" for non-empty briefs and
+            "wholesale" otherwise.
 
     Returns:
         GetProductsRequest
@@ -131,8 +131,10 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
+    effective_buying_mode = buying_mode or "brief"
+
     return GetProductsRequest(
-        buying_mode=buying_mode,
+        buying_mode=effective_buying_mode,
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,

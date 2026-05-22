@@ -54,6 +54,7 @@ def _adcp_error_from_code(
         AdCPBudgetExhaustedError,
         AdCPConflictError,
         AdCPError,
+        AdCPInvalidRequestError,
         AdCPNotFoundError,
         AdCPRateLimitError,
         AdCPServiceUnavailableError,
@@ -64,6 +65,7 @@ def _adcp_error_from_code(
         cls.error_code: cls
         for cls in (
             AdCPValidationError,
+            AdCPInvalidRequestError,
             AdCPAuthenticationError,
             AdCPAuthorizationError,
             AdCPNotFoundError,

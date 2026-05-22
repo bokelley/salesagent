@@ -81,7 +81,7 @@ class TestStandardFormatsOnlyFilter:
     @pytest.mark.asyncio
     async def test_standard_formats_only_true_excludes_custom(self, env):
         """standard_formats_only=true excludes products with only custom formats."""
-        result = await env.call_impl(brief="", filters={"standard_formats_only": True})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"standard_formats_only": True})
 
         product_ids = {p.product_id for p in result.products}
         # Products with ALL standard formats pass
@@ -95,7 +95,7 @@ class TestStandardFormatsOnlyFilter:
     @pytest.mark.asyncio
     async def test_standard_formats_only_false_includes_all(self, env):
         """standard_formats_only=false returns all products (no filter effect)."""
-        result = await env.call_impl(brief="", filters={"standard_formats_only": False})
+        result = await env.call_impl(buying_mode="wholesale", brief="", filters={"standard_formats_only": False})
 
         product_ids = {p.product_id for p in result.products}
         assert "standard_product" in product_ids
@@ -106,6 +106,6 @@ class TestStandardFormatsOnlyFilter:
     @pytest.mark.asyncio
     async def test_no_standard_formats_filter_returns_all(self, env):
         """Without standard_formats_only, all products are returned."""
-        result = await env.call_impl(brief="")
+        result = await env.call_impl(buying_mode="wholesale", brief="")
 
         assert len(result.products) == 4

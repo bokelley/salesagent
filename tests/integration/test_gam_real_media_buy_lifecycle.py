@@ -36,6 +36,7 @@ from tests.factories import (
     ProductFactory,
     ProductInventoryMappingFactory,
     PropertyTagFactory,
+    PublisherPartnerFactory,
     TenantAuthConfigFactory,
     TenantFactory,
 )
@@ -199,6 +200,11 @@ def _seed_gam_tenant(wonderstruck_creds: str):
         name="All",
         description="All inventory",
     )
+    PublisherPartnerFactory(
+        tenant=tenant,
+        publisher_domain="wonderstruck.example.com",
+        display_name="Wonderstruck",
+    )
 
     AdapterConfigFactory(
         tenant=tenant,
@@ -305,7 +311,7 @@ class TestGAMRealMediaBuyLifecycle:
 
             # ───── Phase 1: get_products ─────
             products_resp = await _get_products_impl(
-                GetProductsRequest(buying_mode="wholesale", brand={"domain": "testbrand.com"}, brief="display"),
+                GetProductsRequest(buying_mode="brief", brand={"domain": "testbrand.com"}, brief="display"),
                 identity,
             )
             product_ids = [p.product_id for p in products_resp.products]

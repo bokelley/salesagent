@@ -152,9 +152,9 @@ async def _get_products_impl(
     """
     start_time = time.time()
 
-    # Require at least one search criterion (brief, brand, or filters)
-    if not req.brief and not req.brand and not req.filters:
-        raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
+    # Buying-mode invariants live in the AdCP SDK.
+    # Keep this check before auth so request-shape errors win.
+    validate_get_products_buying_mode(req)
 
     # Extract identity fields
     if identity is None:
@@ -773,6 +773,29 @@ async def _get_products_impl(
     )
 
     return resp
+
+
+def validate_get_products_buying_mode(req: GetProductsRequestGenerated) -> None:
+    """Validate get_products buying-mode invariants through the AdCP SDK."""
+    from adcp.decisioning.refine import assert_buying_mode_consistent
+    from adcp.decisioning.types import AdcpError as SdkAdcpError
+
+    from src.core.exceptions import AdCPInvalidRequestError
+
+    try:
+        assert_buying_mode_consistent(req)
+    except SdkAdcpError as exc:
+        details: dict[str, Any] = {"sdk_error_code": exc.code}
+        if exc.field:
+            details["field"] = exc.field
+        raise AdCPInvalidRequestError(str(exc), details=details) from exc
+
+    buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
+    if buying_mode == "brief" and not req.brief:
+        raise AdCPInvalidRequestError(
+            "'brief' is required when buying_mode='brief'",
+            details={"field": "brief"},
+        )
 
 
 def get_product_catalog(tenant_id: str | None = None) -> list[ResolvedProduct]:

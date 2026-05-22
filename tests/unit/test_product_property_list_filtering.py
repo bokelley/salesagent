@@ -299,6 +299,19 @@ class TestCreateGetProductsRequestWithPropertyList:
         req = create_get_products_request(brief="test")
         assert req.property_list is None
 
+    def test_omitted_buying_mode_defaults_to_brief(self):
+        from src.core.schema_helpers import create_get_products_request
+
+        req = create_get_products_request()
+        assert getattr(req.buying_mode, "value", req.buying_mode) == "brief"
+
+    def test_explicit_wholesale_is_not_rewritten_when_brief_present(self):
+        from src.core.schema_helpers import create_get_products_request
+
+        req = create_get_products_request(buying_mode="wholesale", brief="test")
+        assert getattr(req.buying_mode, "value", req.buying_mode) == "wholesale"
+        assert req.brief == "test"
+
 
 class TestCapabilitiesPropertyListFiltering:
     """Capabilities does NOT advertise ``property_list_filtering`` on the wire.

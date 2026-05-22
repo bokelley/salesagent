@@ -233,6 +233,27 @@ def test_pydantic_validation_error_translates_to_invalid_request(transport: str)
     )
 
 
+@pytest.mark.parametrize("transport", ["mcp", "a2a"])
+def test_get_products_sdk_invalid_request_translates_to_wire_invalid_request(transport: str) -> None:
+    """SDK get_products request-shape rejections must keep INVALID_REQUEST on the wire."""
+    from core.platforms import _delegate
+
+    bad_req = {
+        "buying_mode": "wholesale",
+        "brief": "display ads",
+    }
+    fake_ctx = object()
+
+    with patch("core.platforms._delegate.current_transport", MagicMock(get=MagicMock(return_value=transport))):
+        with patch.object(_delegate, "_build_identity", return_value=_identity_stub()):
+            with pytest.raises(WireAdcpError) as exc_info:
+                asyncio.run(_delegate._delegate_get_products(bad_req, fake_ctx))
+
+    assert exc_info.value.code == "INVALID_REQUEST"
+    assert exc_info.value.recovery == "correctable"
+    assert exc_info.value.field == "brief"
+
+
 def test_every_delegate_is_decorated_with_translate_adcp_errors() -> None:
     """Architectural guard: any new ``_delegate_*`` function added to
     ``core.platforms._delegate`` MUST be wrapped with

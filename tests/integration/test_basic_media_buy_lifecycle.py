@@ -70,7 +70,7 @@ class TestBasicMediaBuyLifecycle:
 
         # ───────── Phase 1: get_products ─────────
         products_req = GetProductsRequest(
-            buying_mode="wholesale",
+            buying_mode="brief",
             brand={"domain": "testbrand.com"},
             brief="display advertising",
         )

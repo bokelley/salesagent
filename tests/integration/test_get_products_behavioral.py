@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPInvalidRequestError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
@@ -661,7 +661,7 @@ class TestNoBriefSkipsRanking:
             PricingOptionFactory(product=p2)
 
             with patch("src.services.ai.factory.get_factory") as mock_factory:
-                response = await env.call_impl(brief="")
+                response = await env.call_impl(buying_mode="wholesale", brief="")
                 mock_factory.assert_not_called()
 
         assert len(response.products) == 2
@@ -677,7 +677,7 @@ class TestNoBriefSkipsRanking:
             p = ProductFactory(tenant=tenant, product_id="p1")
             PricingOptionFactory(product=p)
 
-            response = await env.call_impl(brief="")
+            response = await env.call_impl(buying_mode="wholesale", brief="")
 
         for p in response.products:
             assert getattr(p, "brief_relevance", None) is None
@@ -855,105 +855,114 @@ class TestProductConversionNegativeCardinality:
 
 
 # ---------------------------------------------------------------------------
-# Search criteria validation (salesagent-k13e)
+# Buying mode validation (salesagent-k13e, issue 538)
 # ---------------------------------------------------------------------------
 
 
-class TestSearchCriteriaValidation:
-    """_get_products_impl requires at least one search criterion (brief, brand, or filters).
+class TestBuyingModeValidation:
+    """_get_products_impl enforces mode-specific request requirements."""
 
-    Enforced uniformly across all transports (MCP, A2A, REST).
-
-    Note: These tests call _get_products_impl directly because ProductEnv.call_impl
-    always provides a default brand={"domain": "test.com"}, which would satisfy the
-    search criteria requirement. Direct calls are needed to test with brand=None.
-    """
-
-    @pytest.mark.asyncio
-    async def test_no_search_criteria_raises_validation_error(self, integration_db):
-        """When brief, brand, and filters are all empty/None, _impl raises AdCPValidationError."""
+    @staticmethod
+    async def _call_get_products(env: ProductEnv, **kwargs):
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
         from src.core.tools.products import _get_products_impl
 
-        with ProductEnv(tenant_id="no-crit", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="no-crit", subdomain="no-crit")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
+        req = GetProductsRequestGenerated(**kwargs)
+        return await _get_products_impl(req, env.identity)
 
-            req = GetProductsRequestGenerated(buying_mode="wholesale", brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
-                await _get_products_impl(req, env.identity)
+    @staticmethod
+    def _seed_tenant_principal(tenant_id: str):
+        tenant = TenantFactory(tenant_id=tenant_id, subdomain=tenant_id)
+        PrincipalFactory(tenant=tenant, principal_id="p1")
+        return tenant
 
-    @pytest.mark.asyncio
-    async def test_empty_string_brief_counts_as_no_criteria(self, integration_db):
-        """An empty string brief is equivalent to None for search criteria validation."""
-        from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
-
-        with ProductEnv(tenant_id="empty-br", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="empty-br", subdomain="empty-br")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-
-            req = GetProductsRequestGenerated(buying_mode="wholesale", brief="", brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
-                await _get_products_impl(req, env.identity)
+    def _seed_catalog_product(self, tenant_id: str, product_id: str):
+        tenant = self._seed_tenant_principal(tenant_id)
+        product = ProductFactory(tenant=tenant, product_id=product_id)
+        PricingOptionFactory(product=product)
 
     @pytest.mark.asyncio
-    async def test_brief_alone_satisfies_search_criteria(self, integration_db):
-        """A non-empty brief is sufficient search criteria."""
-        from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
+    async def test_wholesale_without_search_criteria_returns_catalog(self, integration_db):
+        """Wholesale mode can request raw inventory without brief, brand, or filters."""
+        with ProductEnv(tenant_id="whole-empty", principal_id="p1") as env:
+            self._seed_catalog_product("whole-empty", "p_wholesale")
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
 
+        assert [p.product_id for p in response.products] == ["p_wholesale"]
+
+    @pytest.mark.asyncio
+    async def test_wholesale_with_empty_string_brief_returns_catalog(self, integration_db):
+        """An empty brief does not turn wholesale mode into a narrowed search."""
+        with ProductEnv(tenant_id="whole-empty-brief", principal_id="p1") as env:
+            self._seed_catalog_product("whole-empty-brief", "p_wholesale_empty")
+            response = await self._call_get_products(env, buying_mode="wholesale", brief="", brand=None, filters=None)
+
+        assert [p.product_id for p in response.products] == ["p_wholesale_empty"]
+
+    @pytest.mark.asyncio
+    async def test_wholesale_with_brief_uses_sdk_validation(self, integration_db):
+        """The production path rejects wholesale + brief using the SDK invariant."""
+        with ProductEnv(tenant_id="whole-brief", principal_id="p1") as env:
+            self._seed_tenant_principal("whole-brief")
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
+                await self._call_get_products(
+                    env, buying_mode="wholesale", brief="Athletic footwear", brand=None, filters=None
+                )
+
+        assert "buying_mode='wholesale' must not be combined with brief" in str(exc_info.value)
+        assert exc_info.value.details == {"sdk_error_code": "INVALID_REQUEST", "field": "brief"}
+
+    @pytest.mark.asyncio
+    async def test_brief_mode_requires_brief(self, integration_db):
+        """Brief mode requires a non-empty brief."""
+        with ProductEnv(tenant_id="brief-missing", principal_id="p1") as env:
+            self._seed_tenant_principal("brief-missing")
+            with pytest.raises(AdCPInvalidRequestError, match="'brief' is required when buying_mode='brief'"):
+                await self._call_get_products(env, buying_mode="brief", brief=None, brand=None, filters=None)
+
+    @pytest.mark.asyncio
+    async def test_empty_string_brief_invalid_for_brief_mode(self, integration_db):
+        """An empty string is not a usable brief for brief mode."""
+        with ProductEnv(tenant_id="brief-empty", principal_id="p1") as env:
+            self._seed_tenant_principal("brief-empty")
+            with pytest.raises(AdCPInvalidRequestError, match="'brief' is required when buying_mode='brief'"):
+                await self._call_get_products(env, buying_mode="brief", brief="", brand=None, filters=None)
+
+    @pytest.mark.asyncio
+    async def test_brief_mode_with_brief_returns_catalog(self, integration_db):
+        """A non-empty brief is sufficient for brief mode."""
         with ProductEnv(tenant_id="brief-ok", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="brief-ok", subdomain="brief-ok")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p)
-
-            req = GetProductsRequestGenerated(
-                buying_mode="wholesale", brief="Athletic footwear", brand=None, filters=None
+            self._seed_catalog_product("brief-ok", "p_brief")
+            response = await self._call_get_products(
+                env, buying_mode="brief", brief="Athletic footwear", brand=None, filters=None
             )
-            response = await _get_products_impl(req, env.identity)
 
-        assert response.products is not None
+        assert [p.product_id for p in response.products] == ["p_brief"]
 
     @pytest.mark.asyncio
-    async def test_brand_alone_satisfies_search_criteria(self, integration_db):
-        """A brand reference is sufficient search criteria."""
+    async def test_wholesale_with_brand_returns_catalog(self, integration_db):
+        """Wholesale mode still accepts a brand reference."""
         with ProductEnv(tenant_id="brand-ok", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="brand-ok", subdomain="brand-ok")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p)
+            self._seed_catalog_product("brand-ok", "p_brand")
+            response = await env.call_impl(buying_mode="wholesale", brief=None, brand={"domain": "nike.com"})
 
-            response = await env.call_impl(brief=None, brand={"domain": "nike.com"})
-
-        assert response.products is not None
+        assert [p.product_id for p in response.products] == ["p_brand"]
 
     @pytest.mark.asyncio
-    async def test_filters_alone_satisfies_search_criteria(self, integration_db):
-        """A filters object is sufficient search criteria."""
+    async def test_wholesale_with_filters_returns_catalog(self, integration_db):
+        """Wholesale mode still accepts filters."""
         with ProductEnv(tenant_id="filt-ok", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="filt-ok", subdomain="filt-ok")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p)
+            self._seed_catalog_product("filt-ok", "p_filters")
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters={})
 
-            response = await env.call_impl(brief=None, filters={})
-
-        assert response.products is not None
+        assert [p.product_id for p in response.products] == ["p_filters"]
 
     @pytest.mark.asyncio
-    async def test_validation_error_has_correct_error_code(self, integration_db):
-        """AdCPValidationError has error_code='VALIDATION_ERROR'."""
-        from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
-
+    async def test_brief_mode_validation_error_has_correct_error_code(self, integration_db):
+        """Brief-mode request validation uses the spec INVALID_REQUEST code."""
         with ProductEnv(tenant_id="err-code", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="err-code", subdomain="err-code")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
+            self._seed_tenant_principal("err-code")
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
+                await self._call_get_products(env, buying_mode="brief", brief=None, brand=None, filters=None)
 
-            req = GetProductsRequestGenerated(buying_mode="wholesale", brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError) as exc_info:
-                await _get_products_impl(req, env.identity)
-
-        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        assert exc_info.value.error_code == "INVALID_REQUEST"
