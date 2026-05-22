@@ -377,7 +377,6 @@ class TestInventoryProfileCreate:
             (fmt["min_width"], fmt["max_width"], fmt["min_height"], fmt["max_height"]) for fmt in profile.format_ids
         } == {(320, 1280, 50, 600)}
 
-
     def test_create_profile_missing_name_redirects_without_creation(self, client, test_tenant):
         """POST without a name redirects back without creating a profile."""
         _auth_session(client, test_tenant)

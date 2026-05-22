@@ -1506,7 +1506,9 @@ def get_inventory_list(tenant_id):
                                 "path": item.path or [],
                                 "status": item.status,
                                 "metadata": metadata,
-                                "capabilities": metadata.get("adcp_capabilities", {}) if isinstance(metadata, dict) else {},
+                                "capabilities": metadata.get("adcp_capabilities", {})
+                                if isinstance(metadata, dict)
+                                else {},
                             }
                         )
 

@@ -178,7 +178,12 @@ def _responsive_display_formats(metadata: dict) -> list[dict]:
 
 def _selected_gam_ad_units(session, tenant_id: str, inventory_config: dict) -> list:
     """Resolve selected ad units plus placement children from synced GAM inventory."""
-    return [row for row, _capability_metadata in _selected_gam_ad_units_with_capability_metadata(session, tenant_id, inventory_config)]
+    return [
+        row
+        for row, _capability_metadata in _selected_gam_ad_units_with_capability_metadata(
+            session, tenant_id, inventory_config
+        )
+    ]
 
 
 def _selected_gam_ad_units_with_capability_metadata(session, tenant_id: str, inventory_config: dict) -> list[tuple]:
@@ -228,7 +233,9 @@ def _responsive_format_key(fmt: dict) -> tuple:
 def _unclassified_gam_special_size_units(session, tenant_id: str, inventory_config: dict) -> list[dict]:
     """Selected synced ad units with GAM ``1x1`` special sizes needing setup."""
     unclassified = []
-    for ad_unit, capability_metadata in _selected_gam_ad_units_with_capability_metadata(session, tenant_id, inventory_config):
+    for ad_unit, capability_metadata in _selected_gam_ad_units_with_capability_metadata(
+        session, tenant_id, inventory_config
+    ):
         metadata = ad_unit.inventory_metadata if isinstance(ad_unit.inventory_metadata, dict) else {}
         if _metadata_has_special_size(metadata) and not _special_size_is_classified(capability_metadata):
             unclassified.append(
@@ -345,7 +352,7 @@ def _authorized_publisher_domains(session, tenant_id: str, tenant: Tenant) -> se
 
 def _bundle_property_domains(tenant: Tenant, discovered_domains: Sequence[str]) -> list[str]:
     """Domains worth showing in the bundle editor."""
-    domains = sorted({tenant.primary_domain, *discovered_domains})
+    domains = sorted({domain for domain in [tenant.primary_domain, *discovered_domains] if domain})
     non_local = [domain for domain in domains if domain and domain != "localhost" and not domain.endswith(".localhost")]
     if non_local:
         return non_local
