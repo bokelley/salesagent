@@ -76,6 +76,10 @@ class BundleInventoryAdapter(Protocol):
         self, session: Session, tenant_id: str, entity_type: str, ids: list[str]
     ) -> list[BundleInventoryRow]: ...
 
+    def list_inventory(
+        self, session: Session, tenant_id: str, entity_type: str, limit: int | None = None
+    ) -> list[BundleInventoryRow]: ...
+
     def list_unbundled(
         self,
         session: Session,
@@ -89,6 +93,8 @@ class BundleInventoryAdapter(Protocol):
     def find_inventory_item(
         self, session: Session, tenant_id: str, entity_type: str, external_id: str
     ) -> BundleInventoryRow | None: ...
+
+    def coverage_for_bundle(self, session: Session, tenant_id: str, inventory_config: dict) -> int: ...
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +192,14 @@ class _GAMAdapter:
         rows = GAMSyncRepository(session, tenant_id).list_inventory_by_ids(entity_type, ids)
         return [self._row_from_gam_inventory(r) for r in rows]
 
+    def list_inventory(
+        self, session: Session, tenant_id: str, entity_type: str, limit: int | None = None
+    ) -> list[BundleInventoryRow]:
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+        rows = GAMSyncRepository(session, tenant_id).list_inventory(entity_type, limit=limit)
+        return [self._row_from_gam_inventory(r) for r in rows]
+
     def list_unbundled(
         self,
         session: Session,
@@ -215,6 +229,25 @@ class _GAMAdapter:
 
         row = GAMSyncRepository(session, tenant_id).find_inventory_item(entity_type, external_id)
         return self._row_from_gam_inventory(row) if row else None
+
+    def coverage_for_bundle(self, session: Session, tenant_id: str, inventory_config: dict) -> int:
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+        repo = GAMSyncRepository(session, tenant_id)
+        direct_ad_unit_ids = set(inventory_config.get("ad_units") or [])
+        placement_ids = list(inventory_config.get("placements") or [])
+        covered = set(direct_ad_unit_ids)
+
+        placements = repo.list_inventory_by_ids("placement", placement_ids)
+        for placement in placements:
+            metadata = placement.inventory_metadata or {}
+            covered.update(str(ad_unit_id) for ad_unit_id in metadata.get("ad_unit_ids", []) if ad_unit_id)
+
+        if not covered:
+            return 0
+
+        synced_ad_unit_ids = {row.inventory_id for row in repo.list_inventory("ad_unit")}
+        return len(covered.intersection(synced_ad_unit_ids))
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +283,11 @@ class _NullInventoryAdapter:
     ) -> list[BundleInventoryRow]:
         return []
 
+    def list_inventory(
+        self, session: Session, tenant_id: str, entity_type: str, limit: int | None = None
+    ) -> list[BundleInventoryRow]:
+        return []
+
     def list_unbundled(
         self,
         session: Session,
@@ -266,6 +304,9 @@ class _NullInventoryAdapter:
         self, session: Session, tenant_id: str, entity_type: str, external_id: str
     ) -> BundleInventoryRow | None:
         return None
+
+    def coverage_for_bundle(self, session: Session, tenant_id: str, inventory_config: dict) -> int:
+        return 0
 
 
 # ---------------------------------------------------------------------------

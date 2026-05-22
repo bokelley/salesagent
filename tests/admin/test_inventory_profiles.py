@@ -13,6 +13,7 @@ from werkzeug.datastructures import MultiDict
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Tenant
+from tests.factories import AuthorizedPropertyFactory, GAMInventoryFactory, InventoryProfileFactory, TenantFactory
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 app = create_app()
@@ -123,6 +124,10 @@ class TestInventoryProfileCreate:
         _auth_session(client, test_tenant)
         response = client.get(f"/tenant/{test_tenant}/inventory-profiles/add")
         assert response.status_code == 200
+        html = response.data.decode()
+        assert "Create inventory bundle" in html
+        assert "Create bundle" in html
+        assert "Summary" in html
 
     def test_create_profile_with_tags_saves_to_db(self, client, test_tenant):
         """POST with valid tag-based config creates a profile."""
@@ -198,6 +203,108 @@ class TestInventoryProfileCreate:
             ).first()
         assert prop is None
 
+    def test_create_form_seed_placement_prefills_picker_and_chip(self, client, factory_session):
+        """GET /add?seed_placement=... preloads the placement selection (#546)."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="pl_seed",
+            name="Seed Placement",
+            path=["Network", "Seed"],
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.get(f"/tenant/{tenant.tenant_id}/inventory-profiles/add?seed_placement=pl_seed")
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "Create inventory bundle" in html
+        assert "Seed Placement" in html
+        assert "pl_seed" in html
+        assert "INVENTORY_PICKER" in html
+
+    def test_create_profile_with_multiple_domain_rows_saves_to_db(self, client, factory_session):
+        """Add page supports the same multi-domain tag rows as edit (#546)."""
+        tenant = TenantFactory()
+        AuthorizedPropertyFactory(tenant=tenant, tenant_id=tenant.tenant_id, publisher_domain="sports.example.com")
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data=MultiDict(
+                [
+                    ("name", "New Multi Domain"),
+                    ("profile_id", "new_multi_domain"),
+                    ("description", "Created via redesigned add page"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", '["pl_1"]'),
+                    (
+                        "formats",
+                        json.dumps([{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}]),
+                    ),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", tenant.primary_domain),
+                    ("property_tags[]", "premium, news"),
+                    ("publisher_domain[]", "sports.example.com"),
+                    ("property_tags[]", "sports"),
+                ]
+            ),
+            follow_redirects=False,
+        )
+
+        assert response.status_code in (302, 303)
+        saved = factory_session.scalars(
+            select(InventoryProfile).where(
+                InventoryProfile.tenant_id == tenant.tenant_id,
+                InventoryProfile.profile_id == "new_multi_domain",
+            )
+        ).first()
+        assert saved is not None
+        assert saved.inventory_config["placements"] == ["pl_1"]
+        assert [p["publisher_domain"] for p in saved.publisher_properties] == [
+            tenant.primary_domain,
+            "sports.example.com",
+        ]
+
+    def test_create_profile_rejects_unauthorized_domain_row(self, client, factory_session):
+        """Tampered add POST cannot persist an unowned publisher domain."""
+        tenant = TenantFactory()
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data=MultiDict(
+                [
+                    ("name", "Bad Domain"),
+                    ("profile_id", "bad_domain"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", "[]"),
+                    (
+                        "formats",
+                        json.dumps([{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}]),
+                    ),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", "attacker.example.com"),
+                    ("property_tags[]", "premium"),
+                ]
+            ),
+            follow_redirects=False,
+        )
+
+        assert response.status_code in (302, 303)
+        saved = factory_session.scalars(
+            select(InventoryProfile).where(
+                InventoryProfile.tenant_id == tenant.tenant_id,
+                InventoryProfile.profile_id == "bad_domain",
+            )
+        ).first()
+        assert saved is None
+
 
 class TestInventoryProfileDelete:
     """Test inventory profile deletion."""
@@ -249,6 +356,7 @@ class TestInventoryProfileEdit:
         html = response.data.decode()
         # Sidebar cards
         assert "Summary" in html
+        assert 'data-validator="description"' in html
         assert "Also in other bundles" in html
         # Section cards in main column
         assert "Basics" in html
@@ -256,6 +364,9 @@ class TestInventoryProfileEdit:
         assert "Creative formats" in html
         # Sticky form bar
         assert "Save bundle" in html
+        assert "beforeunload" in html
+        assert "Saving..." in html
+        assert "KNOWN_PROPERTY_TAGS" in html
         assert "Preview" in html  # action moved into formbar
         assert "Duplicate" in html  # action moved into formbar
         # Back link to list page
@@ -275,6 +386,54 @@ class TestInventoryProfileEdit:
         html = response.data.decode()
         assert "REUSE_BASE_URL" in html
         assert f"/tenant/{test_tenant}/inventory-profiles/reuse" in html
+
+    def test_edit_get_embeds_inventory_picker_payload(self, client, factory_session):
+        """The in-page picker (#545) renders synced GAM ad units + placements."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        profile = InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            name="Picker Bundle",
+            inventory_config={"ad_units": [], "placements": [], "include_descendants": True},
+            publisher_properties=[
+                {
+                    "publisher_domain": tenant.primary_domain,
+                    "property_tags": ["all_inventory"],
+                    "selection_type": "by_tag",
+                }
+            ],
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="ad_unit",
+            inventory_id="au_picker",
+            name="Homepage Top",
+            path=["Network", "Homepage", "Top"],
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="pl_picker",
+            name="Homepage Placement",
+            path=["Network", "Homepage"],
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.get(f"/tenant/{tenant.tenant_id}/inventory-profiles/{profile.id}/edit")
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'id="inventory-picker"' in html
+        assert "Pick ad units" in html
+        assert "Pick placements" in html
+        assert "INVENTORY_PICKER" in html
+        assert "Homepage Top" in html
+        assert "au_picker" in html
+        assert "Homepage Placement" in html
+        assert "pl_picker" in html
 
 
 class TestInventoryProfilePreview:
@@ -459,10 +618,13 @@ class TestInventoryReuseFlow:
 class TestInventoryProfileMultiDomain:
     """Multi-row publisher_properties editor (#532)."""
 
-    def test_edit_post_with_multiple_domain_rows_persists_each(self, client, test_tenant):
+    def test_edit_post_with_multiple_domain_rows_persists_each(self, client, test_tenant, factory_session):
         """POST with N (domain, tags) rows builds N publisher_properties entries."""
         _auth_session(client, test_tenant)
         pk = _create_sample_profile(test_tenant, name="Multi", profile_id="multi_dom")
+        tenant = factory_session.get(Tenant, test_tenant)
+        AuthorizedPropertyFactory(tenant=tenant, tenant_id=test_tenant, publisher_domain="sports.example.com")
+        factory_session.commit()
 
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
@@ -475,7 +637,7 @@ class TestInventoryProfileMultiDomain:
                     ("targeted_placement_ids", "[]"),
                     ("formats", json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}])),
                     ("property_mode", "tags"),
-                    ("publisher_domain[]", f"{test_tenant}.example.com"),
+                    ("publisher_domain[]", tenant.primary_domain),
                     ("property_tags[]", "premium, news"),
                     ("publisher_domain[]", "sports.example.com"),
                     ("property_tags[]", "sports, premium"),
@@ -489,10 +651,37 @@ class TestInventoryProfileMultiDomain:
             saved = session.get(InventoryProfile, pk)
             domains = sorted(p["publisher_domain"] for p in saved.publisher_properties)
             assert len(saved.publisher_properties) == 2
-            assert domains == sorted([f"{test_tenant}.example.com", "sports.example.com"])
+            assert domains == sorted([tenant.primary_domain, "sports.example.com"])
             by_domain = {p["publisher_domain"]: p for p in saved.publisher_properties}
-            assert sorted(by_domain[f"{test_tenant}.example.com"]["property_tags"]) == ["news", "premium"]
+            assert sorted(by_domain[tenant.primary_domain]["property_tags"]) == ["news", "premium"]
             assert sorted(by_domain["sports.example.com"]["property_tags"]) == ["premium", "sports"]
+
+    def test_edit_post_rejects_unauthorized_domain_row(self, client, test_tenant):
+        """Tampered edit POST cannot persist an unowned publisher domain."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Bad Domain", profile_id="bad_domain")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data=MultiDict(
+                [
+                    ("name", "Bad Domain"),
+                    ("profile_id", "bad_domain"),
+                    ("targeted_ad_unit_ids", "[]"),
+                    ("targeted_placement_ids", "[]"),
+                    ("formats", json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}])),
+                    ("property_mode", "tags"),
+                    ("publisher_domain[]", "attacker.example.com"),
+                    ("property_tags[]", "premium"),
+                ]
+            ),
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            assert saved.publisher_properties[0]["property_tags"] == ["all_inventory"]
 
     def test_edit_post_back_compat_single_field(self, client, test_tenant):
         """Legacy single `property_tags` field still works (no list submission)."""

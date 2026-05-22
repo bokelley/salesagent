@@ -33,6 +33,8 @@ from src.services.inventory_bundle_reference_sync import recompute_bundle_refere
 logger = logging.getLogger(__name__)
 
 inventory_profiles_bp = Blueprint("inventory_profiles", __name__)
+TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
+INVENTORY_PICKER_LIMIT = 200
 
 
 def _generate_profile_id(name: str) -> str:
@@ -65,6 +67,54 @@ def _unique_profile_id(session, tenant_id: str, base: str) -> str:
         if candidate not in existing:
             return candidate
     raise RuntimeError(f"Could not find unique profile_id for {base}")
+
+
+def _authorized_publisher_domains(session, tenant_id: str, tenant: Tenant) -> set[str]:
+    """Publisher domains this tenant can author into buyer-visible bundles."""
+    domains = {tenant.primary_domain} if tenant.primary_domain else set()
+    domains.update(
+        d
+        for d in session.scalars(
+            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
+        ).all()
+        if d
+    )
+    return domains
+
+
+def _parse_tag_publisher_properties(form, default_domain: str, allowed_domains: set[str]) -> list[dict]:
+    """Parse one or more publisher-domain/tag rows from bundle forms."""
+    rows_domains = form.getlist("publisher_domain[]")
+    rows_tags_raw = form.getlist("property_tags[]")
+    if not rows_domains:
+        rows_domains = [default_domain]
+        rows_tags_raw = [form.get("property_tags", "")]
+
+    publisher_props: list[dict] = []
+    for row_idx, (domain, tag_str) in enumerate(zip(rows_domains, rows_tags_raw, strict=False)):
+        domain = (domain or "").strip()
+        if not domain:
+            raise ValueError(f"Row {row_idx + 1}: publisher domain is required")
+        if domain not in allowed_domains:
+            raise ValueError(f"Row {row_idx + 1}: publisher domain '{domain}' is not authorized for this tenant")
+
+        tags_in = [t.strip().lower() for t in (tag_str or "").split(",")]
+        tags_clean = [t for t in tags_in if t]
+        if not tags_clean:
+            raise ValueError(f"Row {row_idx + 1} ({domain}): add at least one property tag")
+
+        bad = next((t for t in tags_clean if not TAG_PATTERN.match(t)), None)
+        if bad:
+            raise ValueError(f"Row {row_idx + 1} ({domain}): tag '{bad}' must use lowercase, numbers, underscores.")
+
+        publisher_props.append(
+            {
+                "publisher_domain": domain,
+                "property_tags": tags_clean,
+                "selection_type": "by_tag",
+            }
+        )
+    return publisher_props
 
 
 def _get_inventory_summary(inventory_config: dict) -> str:
@@ -174,6 +224,8 @@ def list_inventory_profiles(tenant_id: str):
         adapter = adapter_for_tenant(tenant.ad_server) if tenant else None
         if adapter is not None:
             coverage = _build_coverage_summary(session, tenant_id, bundles_data, adapter)
+            for card, (profile, _) in zip(bundles_data, results, strict=True):
+                _attach_bundle_card_coverage(card, session, tenant_id, profile, adapter, coverage["adUnitsTotal"])
             unbundled_items = _list_unbundled_inventory(session, tenant_id, limit=50, adapter=adapter)
             adapter_label = adapter.label
             adapter_vocab = {
@@ -192,6 +244,8 @@ def list_inventory_profiles(tenant_id: str):
             # Tenant on an ad server with no registered adapter — keep the
             # page renderable but minimal.
             coverage = None
+            for card in bundles_data:
+                card["coverage"] = None
             unbundled_items = []
             adapter_label = (
                 (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
@@ -249,6 +303,20 @@ def _build_bundle_card(profile: InventoryProfile, product_count: int) -> dict:
         "property_id_count": property_id_count,
         "products_using": product_count,
         "updated_at": profile.updated_at,
+        "coverage": None,
+    }
+
+
+def _attach_bundle_card_coverage(
+    card: dict, session, tenant_id: str, profile: InventoryProfile, adapter, ad_units_total: int
+) -> None:
+    """Attach per-bundle synced ad-unit coverage to a list-card payload (#549)."""
+    if ad_units_total <= 0:
+        card["coverage"] = None
+        return
+    card["coverage"] = {
+        "covered": adapter.coverage_for_bundle(session, tenant_id, profile.inventory_config or {}),
+        "total": ad_units_total,
     }
 
 
@@ -330,7 +398,9 @@ def _list_unbundled_inventory(session, tenant_id: str, limit: int, adapter) -> l
     ]
 
 
-def _build_bundle_summary(profile: InventoryProfile, product_count: int, adapter_label: str) -> dict:
+def _build_bundle_summary(
+    profile: InventoryProfile, product_count: int, adapter_label: str, adapter_id: str | None = None
+) -> dict:
     """Sidebar summary payload for the edit page.
 
     Shapes the bundle for at-a-glance review: inventory totals, format count,
@@ -348,6 +418,7 @@ def _build_bundle_summary(profile: InventoryProfile, product_count: int, adapter
 
     return {
         "adapter_label": adapter_label,
+        "adapter_id": adapter_id,
         "ad_unit_count": len(config.get("ad_units") or []),
         "placement_count": len(config.get("placements") or []),
         "format_count": len(profile.format_ids or []),
@@ -440,6 +511,54 @@ def _resolve_inventory_names(
     }
 
 
+def _inventory_picker_row(row) -> dict:
+    return {
+        "id": row.external_id,
+        "name": row.name,
+        "kind": row.entity_type,
+        "meta": row.meta,
+        "path": row.raw.get("path") or [],
+        "status": row.raw.get("status") or "",
+    }
+
+
+def _merge_picker_rows(base_rows: list, selected_rows: list) -> list:
+    """Keep the bounded default list, plus any currently selected rows."""
+    merged = list(base_rows)
+    seen = {row.external_id for row in merged}
+    for row in selected_rows:
+        if row.external_id not in seen:
+            merged.append(row)
+            seen.add(row.external_id)
+    return merged
+
+
+def _build_inventory_picker_payload(
+    session,
+    tenant_id: str,
+    adapter,
+    inventory_config: dict | None = None,
+    limit: int = INVENTORY_PICKER_LIMIT,
+) -> dict[str, list[dict]]:
+    """Synced inventory rows exposed to the in-page bundle picker (#545).
+
+    The editor keeps the save path unchanged: the modal writes selected
+    external IDs into the existing hidden textareas. This payload only gives
+    the browser enough metadata to search, display a tree-ish path, and render
+    chips with human-readable labels before POST.
+    """
+    if adapter is None:
+        return {"ad_units": [], "placements": []}
+
+    payload: dict[str, list[dict]] = {}
+    for entity_type, key in (("ad_unit", "ad_units"), ("placement", "placements")):
+        rows = adapter.list_inventory(session, tenant_id, entity_type, limit=limit)
+        selected_ids = list((inventory_config or {}).get(key) or [])
+        selected_rows = adapter.list_inventory_by_ids(session, tenant_id, entity_type, selected_ids)
+        payload[key] = [_inventory_picker_row(row) for row in _merge_picker_rows(rows, selected_rows)]
+    return payload
+
+
 def _list_products_using(session, tenant_id: str, profile_id: int) -> list[dict]:
     """Products that reference this bundle, with name + id for sidebar rendering.
 
@@ -518,41 +637,16 @@ def add_inventory_profile(tenant_id: str):
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
                 publisher_domain = tenant.primary_domain
+                allowed_domains = _authorized_publisher_domains(prop_session, tenant_id, tenant)
 
                 if property_mode == "tags":
-                    # by_tag mode: Parse comma-separated tags
-                    property_tags_str = form_data.get("property_tags", "").strip()
-                    if not property_tags_str:
-                        flash("Property tags are required", "error")
+                    try:
+                        publisher_properties = _parse_tag_publisher_properties(
+                            request.form, publisher_domain, allowed_domains
+                        )
+                    except ValueError as exc:
+                        flash(str(exc), "error")
                         return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    # Validate tag format per AdCP spec
-                    import re
-
-                    TAG_PATTERN = re.compile(r"^[a-z0-9_]{2,50}$")
-                    property_tags = []
-                    for tag in property_tags_str.split(","):
-                        tag = tag.strip().lower()
-                        if tag and TAG_PATTERN.match(tag):
-                            property_tags.append(tag)
-                        elif tag:
-                            flash(
-                                f"Invalid tag format: '{tag}'. Use lowercase letters, numbers, underscores (2-50 chars)",
-                                "error",
-                            )
-                            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    if not property_tags:
-                        flash("At least one valid property tag is required", "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
-                    publisher_properties = [
-                        {
-                            "publisher_domain": publisher_domain,
-                            "property_tags": property_tags,
-                            "selection_type": "by_tag",
-                        }
-                    ]
 
                 elif property_mode == "property_ids":
                     # by_id mode: Parse selected_property_ids checkboxes
@@ -661,12 +755,61 @@ def add_inventory_profile(tenant_id: str):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
+        domain_rows = session.scalars(
+            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
+        ).all()
+        tenant_domains = sorted({tenant.primary_domain, *domain_rows})
+
+        seed_placement = (request.args.get("seed_placement") or "").strip()
+        profile = InventoryProfile(
+            tenant_id=tenant_id,
+            profile_id="",
+            name="",
+            description="",
+            inventory_config={
+                "ad_units": [],
+                "placements": [seed_placement] if seed_placement else [],
+                "include_descendants": True,
+            },
+            format_ids=[],
+            publisher_properties=[],
+            targeting_template=None,
+        )
+
+        adapter = adapter_for_tenant(tenant.ad_server)
+        adapter_label = (
+            adapter.label if adapter is not None else (tenant.ad_server or "your ad server").replace("_", " ").title()
+        )
+        bundle_summary = _build_bundle_summary(
+            profile,
+            product_count=0,
+            adapter_label=adapter_label,
+            adapter_id=adapter.adapter_id if adapter is not None else None,
+        )
+        inventory_names = (
+            _resolve_inventory_names(session, tenant_id, profile, adapter)
+            if adapter is not None
+            else {"ad_units": {}, "placements": {}}
+        )
+        inventory_picker = _build_inventory_picker_payload(session, tenant_id, adapter, profile.inventory_config)
+        known_property_tags = sorted({tag for prop in authorized_properties for tag in (prop.tags or [])})
+
     return render_template(
-        "add_inventory_profile.html",
+        "edit_inventory_profile.html",
         tenant_id=tenant_id,
         tenant=tenant,
+        profile=profile,
         authorized_properties=authorized_properties,
         property_tags=property_tags_list,
+        tenant_domains=tenant_domains,
+        tag_rows=[{"domain": tenant.primary_domain, "tags": ""}],
+        bundle_summary=bundle_summary,
+        blast_radius=[],
+        inventory_names=inventory_names,
+        inventory_picker=inventory_picker,
+        known_property_tags=known_property_tags,
+        products_using=[],
+        form_mode="create",
         active_tab="inventory_profiles",
     )
 
@@ -720,6 +863,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                     )
 
                 publisher_domain = tenant_obj.primary_domain
+                allowed_domains = _authorized_publisher_domains(session, tenant_id, tenant_obj)
 
                 if property_mode == "tags":
                     # Multi-domain (#532): each row in the editor is a
@@ -728,60 +872,17 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                     # Falling back to the single ``property_tags`` field
                     # keeps single-row callers (legacy POSTs, the GAM
                     # product config form) working.
-                    import re
-
-                    TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
-                    rows_domains = request.form.getlist("publisher_domain[]")
-                    rows_tags_raw = request.form.getlist("property_tags[]")
-                    if not rows_domains:
-                        # Legacy single-row submission.
-                        rows_domains = [tenant_obj.primary_domain]
-                        rows_tags_raw = [form_data.get("property_tags", "")]
-
-                    publisher_props: list[dict] = []
-                    for row_idx, (domain, tag_str) in enumerate(zip(rows_domains, rows_tags_raw, strict=False)):
-                        domain = (domain or "").strip()
-                        if not domain:
-                            flash(f"Row {row_idx + 1}: publisher domain is required", "error")
-                            return redirect(
-                                url_for(
-                                    "inventory_profiles.edit_inventory_profile",
-                                    tenant_id=tenant_id,
-                                    profile_id=profile_id,
-                                )
-                            )
-                        tags_in = [t.strip().lower() for t in (tag_str or "").split(",")]
-                        tags_clean = [t for t in tags_in if t]
-                        if not tags_clean:
-                            flash(f"Row {row_idx + 1} ({domain}): add at least one property tag", "error")
-                            return redirect(
-                                url_for(
-                                    "inventory_profiles.edit_inventory_profile",
-                                    tenant_id=tenant_id,
-                                    profile_id=profile_id,
-                                )
-                            )
-                        bad = next((t for t in tags_clean if not TAG_PATTERN.match(t)), None)
-                        if bad:
-                            flash(
-                                f"Row {row_idx + 1} ({domain}): tag '{bad}' must use lowercase, numbers, underscores.",
-                                "error",
-                            )
-                            return redirect(
-                                url_for(
-                                    "inventory_profiles.edit_inventory_profile",
-                                    tenant_id=tenant_id,
-                                    profile_id=profile_id,
-                                )
-                            )
-                        publisher_props.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_tags": tags_clean,
-                                "selection_type": "by_tag",
-                            }
+                    try:
+                        profile.publisher_properties = _parse_tag_publisher_properties(
+                            request.form, publisher_domain, allowed_domains
                         )
-                    profile.publisher_properties = publisher_props
+                    except ValueError as exc:
+                        flash(str(exc), "error")
+                        return redirect(
+                            url_for(
+                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
+                            )
+                        )
 
                 elif property_mode == "property_ids":
                     # by_id mode: Parse selected_property_ids checkboxes
@@ -929,7 +1030,12 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         adapter_label = (
             adapter.label if adapter is not None else (tenant.ad_server or "your ad server").replace("_", " ").title()
         )
-        bundle_summary = _build_bundle_summary(profile, product_count, adapter_label)
+        bundle_summary = _build_bundle_summary(
+            profile,
+            product_count,
+            adapter_label,
+            adapter_id=adapter.adapter_id if adapter is not None else None,
+        )
         blast_radius = _compute_blast_radius(session, tenant_id, profile)
 
         inventory_names = (
@@ -937,6 +1043,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             if adapter is not None
             else {"ad_units": {}, "placements": {}}
         )
+        inventory_picker = _build_inventory_picker_payload(session, tenant_id, adapter, profile.inventory_config)
+        known_property_tags = sorted({tag for prop in authorized_properties for tag in (prop.tags or [])})
         products_using = _list_products_using(session, tenant_id, profile_id)
 
         # Render inside the session so JSON columns (``profile.format_ids``,
@@ -956,6 +1064,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             bundle_summary=bundle_summary,
             blast_radius=blast_radius,
             inventory_names=inventory_names,
+            inventory_picker=inventory_picker,
+            known_property_tags=known_property_tags,
             products_using=products_using,
             active_tab="inventory_profiles",
         )

@@ -241,6 +241,14 @@
                                     {% endif %}
                                 </span>
                             </div>
+                            {% if b.coverage %}
+                                <div class="line">
+                                    <span class="k">Coverage</span>
+                                    <span class="v">
+                                        {{ b.coverage.covered }} of {{ b.coverage.total }} ad units covered
+                                    </span>
+                                </div>
+                            {% endif %}
                             <div class="line">
                                 <span class="k">Formats</span>
                                 <span class="v">

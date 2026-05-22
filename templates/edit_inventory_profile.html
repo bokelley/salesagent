@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Edit Inventory Bundle - Sales Agent Admin{% endblock %}
+{% block title %}{{ 'Create' if form_mode|default('edit') == 'create' else 'Edit' }} Inventory Bundle - Sales Agent Admin{% endblock %}
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_signals.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_inventory_profiles.css') }}">
 
+{% set is_create = form_mode|default('edit') == 'create' %}
 {% set s = bundle_summary %}
 
 <div class="edit-page">
@@ -17,9 +18,13 @@
         </a>
 
         <header class="edit-page-header">
-            <h1>Edit {{ profile.name }}</h1>
+            <h1>{% if is_create %}Create inventory bundle{% else %}Edit {{ profile.name }}{% endif %}</h1>
             <p class="lead">
-                Tweak the inventory shape, formats and properties that ship with this bundle.
+                {% if is_create %}
+                    Shape synced inventory, formats and properties into a buyer-visible bundle.
+                {% else %}
+                    Tweak the inventory shape, formats and properties that ship with this bundle.
+                {% endif %}
                 {# Adapter is shown as a chip on the Basics card — don't repeat here. #}
             </p>
         </header>
@@ -47,6 +52,12 @@
                                 <span class="k">Name <span class="vd" aria-hidden="true"></span></span>
                                 <span class="v">
                                     <span data-validator-text="name">{{ profile.name or 'missing' }}</span>
+                                </span>
+                            </div>
+                            <div class="summary-list__row" data-validator="description">
+                                <span class="k">Desc <span class="vd" aria-hidden="true"></span></span>
+                                <span class="v">
+                                    <span data-validator-text="description">{{ 'present' if profile.description else 'missing' }}</span>
                                 </span>
                             </div>
                             <div class="summary-list__row" data-validator="inventory">
@@ -105,8 +116,10 @@
                                 <span class="v">
                                     {% if products_using %}
                                         {{ products_using | length }} {{ 'product' if products_using | length == 1 else 'products' }}
-                                    {% else %}
+                                    {% elif not is_create %}
                                         <span class="muted">no products yet</span>
+                                    {% else %}
+                                        <span class="muted">new bundle</span>
                                     {% endif %}
                                 </span>
                             </div>
@@ -128,52 +141,54 @@
                         </div>
                     </div>
 
-                    {# Shared-with card — same data as the design's "Blast radius"
-                       but the word "blast" reads as incident-response; this is
-                       informational context. Reviewer (internal-tools) called it. #}
-                    <div class="card">
-                        <div class="card__header">
-                            <h2 class="card__title">Also in other bundles</h2>
-                        </div>
-                        {% if blast_radius %}
-                            <div class="usedby">
-                                <p class="usedby__intro">
-                                    {{ blast_radius | length }}
-                                    {{ 'item' if blast_radius | length == 1 else 'items' }}
-                                    in this bundle
-                                    {{ 'is' if blast_radius | length == 1 else 'are' }}
-                                    reused in other bundles. Edits to inventory <em>here</em> don't affect those —
-                                    bundles share placements, they don't share state.
-                                </p>
-                                {% for r in blast_radius[:5] %}
-                                    <div class="usedby__row">
-                                        <span class="name">
-                                            <code>{{ r.external_id }}</code>
-                                            <span class="meta">
-                                                {{ 'placement' if r.kind == 'placement' else 'ad unit' }}
+                    {% if not is_create %}
+                        {# Shared-with card — same data as the design's "Blast radius"
+                           but the word "blast" reads as incident-response; this is
+                           informational context. Reviewer (internal-tools) called it. #}
+                        <div class="card">
+                            <div class="card__header">
+                                <h2 class="card__title">Also in other bundles</h2>
+                            </div>
+                            {% if blast_radius %}
+                                <div class="usedby">
+                                    <p class="usedby__intro">
+                                        {{ blast_radius | length }}
+                                        {{ 'item' if blast_radius | length == 1 else 'items' }}
+                                        in this bundle
+                                        {{ 'is' if blast_radius | length == 1 else 'are' }}
+                                        reused in other bundles. Edits to inventory <em>here</em> don't affect those —
+                                        bundles share placements, they don't share state.
+                                    </p>
+                                    {% for r in blast_radius[:5] %}
+                                        <div class="usedby__row">
+                                            <span class="name">
+                                                <code>{{ r.external_id }}</code>
+                                                <span class="meta">
+                                                    {{ 'placement' if r.kind == 'placement' else 'ad unit' }}
+                                                </span>
                                             </span>
-                                        </span>
-                                        <span class="meta">
-                                            in {{ r.others }} other
-                                            {{ 'bundle' if r.others == 1 else 'bundles' }}
-                                        </span>
-                                    </div>
-                                {% endfor %}
-                                {% if blast_radius | length > 5 %}
-                                    <div class="usedby__row">
-                                        <span class="meta">+ {{ blast_radius | length - 5 }} more</span>
-                                    </div>
-                                {% endif %}
-                            </div>
-                        {% else %}
-                            <div class="usedby">
-                                <div class="usedby__empty">
-                                    Nothing in this bundle is reused yet. That's fine — bundles share
-                                    placements freely once you start adding the same inventory to multiple bundles.
+                                            <span class="meta">
+                                                in {{ r.others }} other
+                                                {{ 'bundle' if r.others == 1 else 'bundles' }}
+                                            </span>
+                                        </div>
+                                    {% endfor %}
+                                    {% if blast_radius | length > 5 %}
+                                        <div class="usedby__row">
+                                            <span class="meta">+ {{ blast_radius | length - 5 }} more</span>
+                                        </div>
+                                    {% endif %}
                                 </div>
-                            </div>
-                        {% endif %}
-                    </div>
+                            {% else %}
+                                <div class="usedby">
+                                    <div class="usedby__empty">
+                                        Nothing in this bundle is reused yet. That's fine — bundles share
+                                        placements freely once you start adding the same inventory to multiple bundles.
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
 
                 </aside>
 
@@ -221,19 +236,23 @@
                                     Placements wrap ad units — picking a placement covers all its children.
                                 </p>
                             </div>
+                            <div class="card__controls">
+                                <button type="button" class="btn btn-secondary btn-sm"
+                                        onclick="openInventoryPicker('ad_unit')">
+                                    Pick ad units
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm"
+                                        onclick="openInventoryPicker('placement')">
+                                    Pick placements
+                                </button>
+                            </div>
                         </div>
                         <div class="card__body">
-                            {# Until the in-page picker ships (filed as a separate issue),
-                               the "Browse" buttons used to pop a "not yet implemented"
-                               alert. We surface the inventory browser as the canonical
-                               place to look up IDs, and the chip lists below render the
-                               bundle's current selection with name + ID. The hidden
-                               textareas carry the JSON-serialized id arrays for POST. #}
                             <p class="card__sub" style="margin: 0 0 12px;">
-                                Pick IDs from your synced inventory via the
+                                Search synced inventory here, or open the
                                 <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">
-                                    Inventory browser</a>, then paste them below.
-                                Use Reuse in the browser to bring IDs back here.
+                                    Inventory browser</a>
+                                for the full sync surface.
                             </p>
 
                             <div class="field" style="margin-bottom: 14px;">
@@ -483,28 +502,62 @@
     <div class="formbar" id="formbar" data-form-state="">
         <div class="formbar__inner">
             <div class="formbar__status" id="formbar-status" aria-live="polite">
-                Changes apply to the next media buy that uses this bundle.
+                {% if is_create %}
+                    New bundle will be available to products after creation.
+                {% else %}
+                    Changes apply to the next media buy that uses this bundle.
+                {% endif %}
             </div>
             <div class="formbar__spacer"></div>
-            <a class="btn btn-secondary"
-               href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
-                Preview
-            </a>
-            <form method="post"
-                  action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}"
-                  style="margin: 0; display: inline;">
-                <button type="submit" class="btn btn-secondary">Duplicate</button>
-            </form>
+            {% if not is_create %}
+                <a class="btn btn-secondary"
+                   href="{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}">
+                    Preview
+                </a>
+                <form method="post"
+                      action="{{ url_for('inventory_profiles.duplicate_inventory_profile', tenant_id=tenant_id, profile_id=profile.id) }}"
+                      style="margin: 0; display: inline;">
+                    <button type="submit" class="btn btn-secondary">Duplicate</button>
+                </form>
+            {% endif %}
             <a class="btn btn-secondary"
                href="{{ url_for('inventory_profiles.list_inventory_profiles', tenant_id=tenant_id) }}">
                 Cancel
             </a>
             <button type="submit" form="profile-form" class="btn btn-primary"
                     id="save-bundle-btn">
-                Save bundle
+                {{ 'Create bundle' if is_create else 'Save bundle' }}
             </button>
         </div>
     </div>
+</div>
+
+<div class="inventory-picker" id="inventory-picker" hidden>
+    <div class="inventory-picker__scrim" data-picker-close></div>
+    <section class="inventory-picker__dialog" role="dialog" aria-modal="true" aria-labelledby="inventory-picker-title">
+        <div class="inventory-picker__head">
+            <div>
+                <h2 id="inventory-picker-title">Pick inventory</h2>
+                <p id="inventory-picker-subtitle">Select synced inventory to include in this bundle.</p>
+            </div>
+            <button type="button" class="inventory-picker__close" data-picker-close aria-label="Close inventory picker">
+                ×
+            </button>
+        </div>
+        <div class="inventory-picker__tools">
+            <input type="search" id="inventory-picker-search" placeholder="Search by name, ID, or path">
+            <label class="inventory-picker__toggle">
+                <input type="checkbox" id="inventory-picker-include-descendants">
+                Include child ad units for selected placements
+            </label>
+        </div>
+        <div class="inventory-picker__status" id="inventory-picker-status" aria-live="polite"></div>
+        <div class="inventory-picker__list" id="inventory-picker-list"></div>
+        <div class="inventory-picker__foot">
+            <button type="button" class="btn btn-secondary" data-picker-close>Cancel</button>
+            <button type="button" class="btn btn-primary" id="inventory-picker-apply">Apply selection</button>
+        </div>
+    </section>
 </div>
 
 <script>
@@ -528,6 +581,11 @@ const INVENTORY_NAMES = {
     placements: {{ inventory_names.placements | tojson | safe }}
 };
 
+const INVENTORY_PICKER = {{ inventory_picker | tojson | safe }};
+const INVENTORY_CHIP_REUSE_ENABLED = {{ (not is_create) | tojson }};
+const BUNDLE_ADAPTER_ID = {{ (s.adapter_id or '') | tojson }};
+const KNOWN_PROPERTY_TAGS = new Set({{ known_property_tags | tojson | safe }});
+
 // Base path for the Reuse page; ``renderInventoryChips`` builds per-chip
 // "Add to other bundles…" links by appending ``?item=<id>&kind=<kind>``.
 // (#542)
@@ -543,12 +601,14 @@ function renderInventoryChips(containerId, ids, namesByExtId, kind) {
     const container = document.getElementById(containerId);
     if (!container) return;
     if (!ids || ids.length === 0) {
-        return;  // template default ("No ad units selected", etc.) already shows.
+        const label = kind === 'ad_unit' ? 'ad units' : 'placements';
+        container.innerHTML = `<span style="color: var(--sig-fg-muted); font-size: 12.5px;">No ${label} selected</span>`;
+        return;
     }
     container.innerHTML = ids.map(id => {
         const info = namesByExtId[id];
         const reuseHref = `${REUSE_BASE_URL}?item=${encodeURIComponent(id)}&kind=${encodeURIComponent(kind)}`;
-        const reuseLink = `<a class="inv-chip__reuse" href="${_escAttr(reuseHref)}"`
+        const reuseLink = INVENTORY_CHIP_REUSE_ENABLED ? `<a class="inv-chip__reuse" href="${_escAttr(reuseHref)}"`
             + ` aria-label="Add this ${kind === 'ad_unit' ? 'ad unit' : 'placement'} to other bundles"`
             + ` title="Add to other bundles…"`
             + ` onclick="event.stopPropagation();">`
@@ -559,7 +619,7 @@ function renderInventoryChips(containerId, ids, namesByExtId, kind) {
             + `<polyline points="21 16 21 21 16 21"/>`
             + `<line x1="15" y1="15" x2="21" y2="21"/>`
             + `<line x1="4" y1="4" x2="9" y2="9"/></svg>`
-            + `</a>`;
+            + `</a>` : '';
         if (info) {
             return `<span class="inv-chip" title="${_escAttr(info.id)}">`
                 + `<span class="inv-chip__name">${_escAttr(info.name)}</span>`
@@ -577,6 +637,212 @@ function renderInventoryChips(containerId, ids, namesByExtId, kind) {
             + `</span>`;
     }).join('');
 }
+
+function inventoryKeyForKind(kind) {
+    return kind === 'placement' ? 'placements' : 'ad_units';
+}
+
+function inventoryContainerForKind(kind) {
+    return kind === 'placement' ? 'selected-placements' : 'selected-ad-units';
+}
+
+function inventoryHiddenForKind(kind) {
+    return kind === 'placement' ? 'targeted_placement_ids' : 'targeted_ad_unit_ids';
+}
+
+function inventoryLabelForKind(kind) {
+    return kind === 'placement' ? 'placements' : 'ad units';
+}
+
+function seedInventoryNameMaps() {
+    Object.entries(INVENTORY_PICKER || {}).forEach(([key, rows]) => {
+        if (!INVENTORY_NAMES[key]) INVENTORY_NAMES[key] = {};
+        (rows || []).forEach(row => {
+            INVENTORY_NAMES[key][row.id] = { name: row.name, id: row.id };
+        });
+    });
+}
+
+function selectedInventoryIds(kind) {
+    try {
+        return JSON.parse(document.getElementById(inventoryHiddenForKind(kind)).value || '[]');
+    } catch {
+        return [];
+    }
+}
+
+function writeSelectedInventory(kind, ids) {
+    const uniqueIds = Array.from(new Set(ids));
+    const key = inventoryKeyForKind(kind);
+    const hidden = document.getElementById(inventoryHiddenForKind(kind));
+    hidden.value = JSON.stringify(uniqueIds);
+    renderInventoryChips(inventoryContainerForKind(kind), uniqueIds, INVENTORY_NAMES[key], kind);
+    hidden.dispatchEvent(new Event('input', { bubbles: true }));
+    if (typeof recomputeValidity === 'function') {
+        recomputeValidity();
+    }
+}
+
+let inventoryPickerKind = 'ad_unit';
+let inventoryPickerDraft = new Set();
+let inventoryPickerLastFocus = null;
+let inventoryConfigPrepopulated = false;
+
+function isInventoryPickerOpen() {
+    const picker = document.getElementById('inventory-picker');
+    return !!picker && !picker.hidden;
+}
+
+function openInventoryPicker(kind) {
+    inventoryPickerKind = kind === 'placement' ? 'placement' : 'ad_unit';
+    inventoryPickerDraft = new Set(selectedInventoryIds(inventoryPickerKind));
+
+    const picker = document.getElementById('inventory-picker');
+    const title = document.getElementById('inventory-picker-title');
+    const subtitle = document.getElementById('inventory-picker-subtitle');
+    const search = document.getElementById('inventory-picker-search');
+    const includeDesc = document.getElementById('inventory-picker-include-descendants');
+    const includeDescSource = document.querySelector('input[name="include_descendants"]');
+
+    inventoryPickerLastFocus = document.activeElement;
+    title.textContent = `Pick ${inventoryLabelForKind(inventoryPickerKind)}`;
+    subtitle.textContent = `Select synced ${inventoryLabelForKind(inventoryPickerKind)} to include in this bundle.`;
+    if (search) search.value = '';
+    if (includeDesc && includeDescSource) {
+        includeDesc.checked = includeDescSource.checked;
+        includeDesc.closest('.inventory-picker__toggle').hidden = inventoryPickerKind !== 'placement';
+    }
+    picker.hidden = false;
+    renderInventoryPickerRows();
+    if (search) search.focus();
+}
+
+function closeInventoryPicker() {
+    const picker = document.getElementById('inventory-picker');
+    if (picker) picker.hidden = true;
+    if (inventoryPickerLastFocus && typeof inventoryPickerLastFocus.focus === 'function') {
+        inventoryPickerLastFocus.focus();
+    }
+}
+
+function _inventoryPickerRows() {
+    const key = inventoryKeyForKind(inventoryPickerKind);
+    const rows = INVENTORY_PICKER[key] || [];
+    const query = (document.getElementById('inventory-picker-search')?.value || '').toLowerCase().trim();
+    if (!query) return rows;
+    return rows.filter(row => {
+        const haystack = [row.name, row.id, row.meta, ...(row.path || [])].join(' ').toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function renderInventoryPickerRows() {
+    const rows = _inventoryPickerRows();
+    const list = document.getElementById('inventory-picker-list');
+    if (!list) return;
+
+    renderInventoryPickerStatus(rows.length);
+
+    if (!rows.length) {
+        list.innerHTML = '<div class="inventory-picker__empty">No matching inventory.</div>';
+        return;
+    }
+
+    list.innerHTML = rows.map(row => {
+        const path = Array.isArray(row.path) ? row.path : [];
+        const depth = Math.max(0, Math.min(path.length - 1, 5));
+        const checked = inventoryPickerDraft.has(row.id) ? 'checked' : '';
+        const pathText = path.length ? path.join(' › ') : row.meta;
+        return `
+            <label class="inventory-picker__row" style="--picker-depth: ${depth};">
+                <input type="checkbox" data-inventory-id="${_escAttr(row.id)}" ${checked}>
+                <span class="inventory-picker__node">
+                    <span class="inventory-picker__name">${_escAttr(row.name)}</span>
+                    <span class="inventory-picker__meta">${_escAttr(pathText || '—')}</span>
+                </span>
+                <span class="inventory-picker__id">#${_escAttr(row.id)}</span>
+            </label>
+        `;
+    }).join('');
+}
+
+function renderInventoryPickerStatus(visibleCount = _inventoryPickerRows().length) {
+    const status = document.getElementById('inventory-picker-status');
+    if (!status) return;
+    const total = (INVENTORY_PICKER[inventoryKeyForKind(inventoryPickerKind)] || []).length;
+    const selectedCount = inventoryPickerDraft.size;
+    status.textContent = total
+        ? `${selectedCount} selected · ${visibleCount} of ${total} ${inventoryLabelForKind(inventoryPickerKind)} shown`
+        : `No synced ${inventoryLabelForKind(inventoryPickerKind)} found.`;
+}
+
+function trapInventoryPickerFocus(e) {
+    if (e.key !== 'Tab' || !isInventoryPickerOpen()) return;
+    const dialog = document.querySelector('#inventory-picker .inventory-picker__dialog');
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null);
+    if (!focusable.length) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    seedInventoryNameMaps();
+    prePopulateInventoryConfig();
+
+    const picker = document.getElementById('inventory-picker');
+    const pickerList = document.getElementById('inventory-picker-list');
+    const pickerSearch = document.getElementById('inventory-picker-search');
+    const pickerApply = document.getElementById('inventory-picker-apply');
+    const pickerIncludeDesc = document.getElementById('inventory-picker-include-descendants');
+    const includeDescSource = document.querySelector('input[name="include_descendants"]');
+
+    if (pickerList) {
+        pickerList.addEventListener('change', (e) => {
+            const checkbox = e.target.closest('input[type="checkbox"][data-inventory-id]');
+            if (!checkbox) return;
+            if (checkbox.checked) inventoryPickerDraft.add(checkbox.dataset.inventoryId);
+            else inventoryPickerDraft.delete(checkbox.dataset.inventoryId);
+            renderInventoryPickerStatus();
+        });
+    }
+    if (pickerSearch) pickerSearch.addEventListener('input', renderInventoryPickerRows);
+    if (pickerApply) {
+        pickerApply.addEventListener('click', () => {
+            const rows = INVENTORY_PICKER[inventoryKeyForKind(inventoryPickerKind)] || [];
+            const rowOrder = rows.map(row => row.id);
+            const sorted = rowOrder.filter(id => inventoryPickerDraft.has(id));
+            for (const id of inventoryPickerDraft) {
+                if (!sorted.includes(id)) sorted.push(id);
+            }
+            writeSelectedInventory(inventoryPickerKind, sorted);
+            if (inventoryPickerKind === 'placement' && pickerIncludeDesc && includeDescSource) {
+                includeDescSource.checked = pickerIncludeDesc.checked;
+                includeDescSource.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            closeInventoryPicker();
+        });
+    }
+    document.querySelectorAll('[data-picker-close]').forEach(el => {
+        el.addEventListener('click', closeInventoryPicker);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && picker && !picker.hidden) {
+            closeInventoryPicker();
+        }
+        trapInventoryPickerFocus(e);
+    });
+});
 
 // Load formats from API on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -682,8 +948,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-function prePopulateData() {
+function prePopulateInventoryConfig() {
     // Pre-populate inventory config
+    if (inventoryConfigPrepopulated) return;
     if (existingProfile.inventory_config) {
         const adUnitIds = existingProfile.inventory_config.ad_units || [];
         const placementIds = existingProfile.inventory_config.placements || [];
@@ -698,12 +965,20 @@ function prePopulateData() {
             document.querySelector('input[name="include_descendants"]').checked = existingProfile.inventory_config.include_descendants;
         }
     }
+    inventoryConfigPrepopulated = true;
+}
+
+function prePopulateData() {
+    prePopulateInventoryConfig();
 
     // Pre-populate formats (will be selected after formats load)
     if (existingProfile.formats && existingProfile.formats.length > 0) {
         existingProfile.formats.forEach(fmt => {
             selectedFormats.add(fmt.id);
         });
+        updateSelectedFormatsDisplay();
+        updateHiddenInput();
+        displayFormats(allFormats);
     }
 
     // Pre-populate publisher properties — detect mode and switch the
@@ -739,6 +1014,9 @@ function prePopulateData() {
     // deferred (setTimeout) recompute waits its turn. (#529, UX review)
     if (typeof recomputeValidity === 'function') {
         recomputeValidity();
+    }
+    if (typeof markFormClean === 'function') {
+        markFormClean();
     }
 }
 
@@ -1006,6 +1284,7 @@ function _placementIds() {
 // where `by` maps validator name -> {ok, text, message, focusId}.
 function computeValidity() {
     const name = (document.getElementById('name').value || '').trim();
+    const description = (document.getElementById('description').value || '').trim();
 
     const adUnits = _adUnitIds();
     const placements = _placementIds();
@@ -1015,11 +1294,17 @@ function computeValidity() {
     if (adUnits.length) invParts.push(adUnits.length + (adUnits.length === 1 ? ' ad unit' : ' ad units'));
 
     const formatCount = selectedFormats.size;
+    const selectedFormatIds = Array.from(selectedFormats);
+    const formatWarning = selectedFormatIds.some(id => id.toLowerCase().includes('video')) &&
+        ['freewheel', 'springserve'].includes(BUNDLE_ADAPTER_ID)
+        ? 'Bundle saves OK, but this adapter may not deliver the selected video format.'
+        : '';
 
     const mode = _propertyModeChecked();
     let propertyOk = false;
     let propertyText = 'none';
     let propertyMessage = '';
+    let propertyWarning = '';
     if (mode === 'tags') {
         // Walk every row in the multi-domain editor (#532). A row is valid
         // when it has a domain AND at least one spec-shaped tag. Validation
@@ -1049,6 +1334,12 @@ function computeValidity() {
                 propertyText = rows.length === 1
                     ? `${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`
                     : `${rows.length} domains · ${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`;
+                const unknownTag = rows
+                    .flatMap(r => r.tags.map(t => t.toLowerCase()))
+                    .find(t => !KNOWN_PROPERTY_TAGS.has(t));
+                if (unknownTag) {
+                    propertyWarning = `Bundle saves OK, but property tag "${unknownTag}" is not attached to any authorized property.`;
+                }
             }
         }
     } else if (mode === 'property_ids') {
@@ -1081,41 +1372,60 @@ function computeValidity() {
     // Messages are full sentences. The formbar reads them verbatim — no
     // suffix appending (an earlier draft glued " to save." onto each, which
     // mangled multi-sentence tag-error messages).
+    const item = ({ ok = true, warning = '', text, message = '', focusId = null }) => ({
+        ok,
+        warning,
+        text,
+        message,
+        focusId,
+        state: !ok ? 'invalid' : (warning ? 'warning' : 'valid'),
+    });
+
     const by = {
-        name: {
+        name: item({
             ok: name.length > 0,
             text: name || 'missing',
             message: 'Add a bundle name to save.',
             focusId: 'name',
-        },
-        inventory: {
+        }),
+        description: item({
+            text: description ? 'present' : 'missing',
+            warning: description
+                ? ''
+                : 'Bundle saves OK, but agents may skip it because the description is empty.',
+            focusId: 'description',
+        }),
+        inventory: item({
             ok: invSize > 0,
             text: invParts.length ? invParts.join(' · ') : 'none yet',
             message: 'Add at least one placement or ad unit to save.',
             focusId: 'placement-search',
-        },
-        formats: {
+        }),
+        formats: item({
             ok: formatCount > 0,
+            warning: formatWarning,
             text: formatCount > 0 ? formatCount.toString() : 'none',
-            message: 'Pick at least one creative format to save.',
+            message: formatWarning || 'Pick at least one creative format to save.',
             focusId: 'format-search-input',
-        },
-        properties: {
+        }),
+        properties: item({
             ok: propertyOk,
+            warning: propertyWarning,
             text: propertyText,
             // propertyMessage is always set when !propertyOk; fall back is
             // defensive only and uses the same sentence shape.
-            message: propertyMessage || 'Configure publisher properties to save.',
+            message: propertyWarning || propertyMessage || 'Configure publisher properties to save.',
             // The tags mode uses a multi-row editor (#532) — focus the first
             // tag input on submit failure. For property_ids, focus the
             // section wrapper so the eye lands somewhere.
             focusId: mode === 'tags'
                 ? null  // resolved at submit time by querying .prop-row inputs
                 : (mode === 'property_ids' ? 'property-ids-section' : 'publisher_properties'),
-        },
+        }),
     };
     const errors = Object.entries(by).filter(([, v]) => !v.ok);
-    return { valid: errors.length === 0, errors, by };
+    const warnings = Object.entries(by).filter(([, v]) => v.ok && v.warning);
+    return { valid: errors.length === 0, errors, warnings, by };
 }
 
 function recomputeValidity() {
@@ -1124,8 +1434,10 @@ function recomputeValidity() {
     Object.entries(state.by).forEach(([name, info]) => {
         const row = document.querySelector(`.summary-list__row[data-validator="${name}"]`);
         if (!row) return;
-        row.classList.toggle('invalid', !info.ok);
-        row.classList.toggle('valid', info.ok);
+        row.classList.toggle('invalid', info.state === 'invalid');
+        row.classList.toggle('warning', info.state === 'warning');
+        row.classList.toggle('valid', info.state === 'valid');
+        row.title = info.warning || '';
         const textEl = row.querySelector(`[data-validator-text="${name}"]`);
         if (textEl) textEl.textContent = info.text;
     });
@@ -1133,12 +1445,17 @@ function recomputeValidity() {
     const status = document.getElementById('formbar-status');
     const formbar = document.getElementById('formbar');
     const saveBtn = document.getElementById('save-bundle-btn');
-    if (state.valid) {
+    if (state.valid && state.warnings.length === 0) {
         // Once valid, the only new information is "Ready to save." The
         // page-level caveat ("Changes apply to next media buy…") is already
         // the default status text, so drop the redundant tail.
         if (status) status.textContent = 'Ready to save.';
         if (formbar) formbar.dataset.formState = 'ready';
+        if (saveBtn) saveBtn.disabled = false;
+    } else if (state.valid) {
+        const first = state.warnings[0][1];
+        if (status) status.textContent = first.warning;
+        if (formbar) formbar.dataset.formState = 'warning';
         if (saveBtn) saveBtn.disabled = false;
     } else {
         const first = state.errors[0][1];
@@ -1157,10 +1474,41 @@ function recomputeValidity() {
 // (checkboxes, radios, programmatic mutations) fire instantly.
 const TEXT_DEBOUNCE_MS = 180;
 let _validateTimer = null;
+let _initialFormSignature = null;
+let _isSubmitting = false;
+
 function recomputeValidityDebounced() {
     clearTimeout(_validateTimer);
     _validateTimer = setTimeout(recomputeValidity, TEXT_DEBOUNCE_MS);
 }
+
+function currentFormSignature() {
+    if (!profileForm) return '';
+    const entries = Array.from(new FormData(profileForm).entries())
+        .map(([key, value]) => [key, String(value)])
+        .sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1]));
+    return JSON.stringify(entries);
+}
+
+function markFormClean() {
+    _initialFormSignature = currentFormSignature();
+    if (profileForm) profileForm.dataset.dirty = 'false';
+}
+
+function isFormDirty() {
+    return _initialFormSignature !== null && currentFormSignature() !== _initialFormSignature;
+}
+
+function updateDirtyState() {
+    if (!profileForm) return;
+    profileForm.dataset.dirty = isFormDirty() ? 'true' : 'false';
+}
+
+window.addEventListener('beforeunload', (e) => {
+    if (_isSubmitting || !isFormDirty()) return;
+    e.preventDefault();
+    e.returnValue = '';
+});
 
 // Normalize the tag input on blur — operators who type "Premium Sports"
 // shouldn't be punished for natural spacing. (#529, UX review)
@@ -1195,8 +1543,12 @@ if (profileForm) {
         } else {
             recomputeValidity();
         }
+        updateDirtyState();
     });
-    profileForm.addEventListener('change', recomputeValidity);
+    profileForm.addEventListener('change', () => {
+        recomputeValidity();
+        updateDirtyState();
+    });
     profileForm.addEventListener('submit', (e) => {
         const state = recomputeValidity();
         if (!state.valid) {
@@ -1207,7 +1559,7 @@ if (profileForm) {
             const isTagsRowError =
                 document.querySelector('input[name="property_mode"]:checked').value === 'tags';
             let el = null;
-            if (isTagsRowError) {
+            if (isTagsRowError && first.focusId === null) {
                 const rows = _tagRowsFromForm();
                 const badIdx = rows.findIndex((r) => !r.domain || r.tags.length === 0 ||
                     r.tags.some(t => !TAG_PATTERN.test(t.toLowerCase())));
@@ -1238,7 +1590,18 @@ if (profileForm) {
                     );
                 }
             }
+            return;
         }
+
+        _isSubmitting = true;
+        const saveBtn = document.getElementById('save-bundle-btn');
+        const status = document.getElementById('formbar-status');
+        if (saveBtn) {
+            saveBtn.dataset.originalText = saveBtn.textContent.trim();
+            saveBtn.textContent = 'Saving...';
+            saveBtn.disabled = true;
+        }
+        if (status) status.textContent = 'Saving bundle...';
     });
 }
 
@@ -1249,15 +1612,29 @@ if (typeof _origToggleFormat === 'function') {
     window.toggleFormat = function (...args) {
         const result = _origToggleFormat.apply(this, args);
         recomputeValidity();
+        updateDirtyState();
         return result;
     };
 }
+
+document.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 's') return;
+    e.preventDefault();
+    if (isInventoryPickerOpen()) return;
+    const saveBtn = document.getElementById('save-bundle-btn');
+    if (profileForm && !saveBtn?.disabled) {
+        profileForm.requestSubmit(saveBtn || undefined);
+    }
+});
 
 // Initial paint after the DOM is wired up.
 window.addEventListener('DOMContentLoaded', () => {
     // Defer one tick — prePopulateData runs on DOMContentLoaded too and
     // we want to read the populated state, not the empty initial state.
-    setTimeout(recomputeValidity, 0);
+    setTimeout(() => {
+        recomputeValidity();
+        if (_initialFormSignature === null) markFormClean();
+    }, 0);
 });
 </script>
 
