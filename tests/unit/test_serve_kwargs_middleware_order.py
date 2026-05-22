@@ -14,11 +14,13 @@ middleware can catch.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from core.middleware.admin_mount import AdminWSGIMount
+from core.middleware.origin_guard import BuyerProtocolOriginGuardMiddleware
 from src.core.signing import SigningVerifyMiddleware
 
 
@@ -75,6 +77,15 @@ def test_public_url_resolver_is_callable():
     )
 
 
+def test_buyer_protocol_origin_guard_wired_before_signing(middleware_classes):
+    """Routed deployments disable FastMCP Host validation, but must keep
+    Origin validation before requests enter buyer-protocol handlers."""
+    guard_index = middleware_classes.index(BuyerProtocolOriginGuardMiddleware)
+    signing_index = middleware_classes.index(SigningVerifyMiddleware)
+    assert middleware_classes[guard_index] is BuyerProtocolOriginGuardMiddleware
+    assert guard_index < signing_index
+
+
 def test_pre_validation_hooks_wired():
     """Heuristic backfills for pre-v3 / pre-4.4 buyers must stay wired.
 
@@ -124,6 +135,47 @@ def _kwargs_with(env: dict[str, str]) -> dict:
         patch.dict("os.environ", env, clear=False),
     ):
         return core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
+
+
+def _kwargs_with_dns_rebinding_env(value: str | None, *, include_subdomain_routing: bool) -> dict:
+    """Build ``_serve_kwargs`` with isolated DNS-rebinding env state."""
+    from core import main as core_main
+
+    with (
+        patch.object(core_main, "build_router", return_value=MagicMock()),
+        patch("src.admin.app.create_app", return_value=MagicMock()),
+        patch("core.main.build_subdomain_router", return_value=MagicMock()),
+        patch.dict(os.environ, {}, clear=False),
+    ):
+        if value is None:
+            os.environ.pop("ADCP_DNS_REBINDING_PROTECTION", None)
+        else:
+            os.environ["ADCP_DNS_REBINDING_PROTECTION"] = value
+        return core_main._serve_kwargs(
+            include_scheduler=False,
+            include_subdomain_routing=include_subdomain_routing,
+        )
+
+
+def test_dns_rebinding_defaults_off_when_subdomain_router_validates_hosts():
+    """Dynamic tenant hosts cannot be represented in FastMCP's exact
+    allowlist, so routed production lets SubdomainTenantMiddleware own Host
+    validation by default."""
+    kwargs = _kwargs_with_dns_rebinding_env(None, include_subdomain_routing=True)
+    assert kwargs["enable_dns_rebinding_protection"] is False
+
+
+def test_dns_rebinding_defaults_on_without_subdomain_router():
+    """Non-routed setups keep FastMCP's DNS-rebinding check by default."""
+    kwargs = _kwargs_with_dns_rebinding_env(None, include_subdomain_routing=False)
+    assert kwargs["enable_dns_rebinding_protection"] is True
+
+
+@pytest.mark.parametrize(("value", "expected"), [("true", True), ("false", False)])
+def test_dns_rebinding_env_override_wins(value, expected):
+    """Operators can still force FastMCP host validation either way."""
+    kwargs = _kwargs_with_dns_rebinding_env(value, include_subdomain_routing=True)
+    assert kwargs["enable_dns_rebinding_protection"] is expected
 
 
 @pytest.mark.parametrize("value", ["true", "TRUE", "True"])

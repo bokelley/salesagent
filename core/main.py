@@ -76,6 +76,7 @@ import src.services.webhook_signing  # noqa: F401
 from core.decisioning.proposal_store import close_proposal_store, get_proposal_store
 from core.middleware.admin_mount import AdminWSGIMount
 from core.middleware.dual_credential_audit import DualCredentialAuditMiddleware
+from core.middleware.origin_guard import BuyerProtocolOriginGuardMiddleware
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
 from core.proposal.manager import SalesAgentProposalManager
@@ -558,6 +559,31 @@ def _allowed_hosts() -> list[str]:
     return base
 
 
+def _allowed_origins() -> list[str]:
+    """FastMCP-compatible Origin allowlist for browser protocol requests."""
+    return [origin.strip() for origin in os.environ.get("ALLOWED_ORIGINS", "http://localhost:8000").split(",")]
+
+
+def _enable_dns_rebinding_protection(*, include_subdomain_routing: bool) -> bool:
+    """Return the MCP-layer DNS rebinding setting for this process.
+
+    When the SDK subdomain tenant router is enabled, it validates the
+    normalized Host header against the tenant table before requests reach
+    the MCP transport. FastMCP's own host validator only supports exact
+    hostnames plus ``host:*`` port wildcards, so it cannot represent the
+    dynamic ``<tenant>.<SALES_AGENT_DOMAIN>`` hosts that provisioning
+    returns. In that routed mode, default the inner MCP check off and let
+    the tenant router be the host allowlist.
+
+    Operators can still force the FastMCP check on or off explicitly with
+    ``ADCP_DNS_REBINDING_PROTECTION``.
+    """
+    explicit = os.environ.get("ADCP_DNS_REBINDING_PROTECTION")
+    if explicit is not None:
+        return explicit.lower() == "true"
+    return not include_subdomain_routing
+
+
 def _serve_kwargs(
     *,
     include_scheduler: bool,
@@ -589,6 +615,7 @@ def _serve_kwargs(
     from src.admin.app import create_app as _create_admin_app
 
     admin_wsgi = WSGIMiddleware(_create_admin_app())
+    allowed_origins = _allowed_origins()
 
     asgi_middleware: list = [
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
@@ -599,6 +626,12 @@ def _serve_kwargs(
         # emit (per #194 follow-up). Never logs token values; only
         # SHA-256 fingerprints for log correlation.
         (DualCredentialAuditMiddleware, {}),
+        # FastMCP's DNS-rebinding switch controls both Host and Origin
+        # validation. Routed deployments disable the inner Host check
+        # because dynamic tenant hosts cannot be represented in its exact
+        # allowlist, but SubdomainTenantMiddleware only validates Host.
+        # Preserve the Origin half for browser-driven MCP/A2A requests.
+        (BuyerProtocolOriginGuardMiddleware, {"allowed_origins": allowed_origins}),
     ]
     if include_subdomain_routing:
         subdomain_router = build_subdomain_router()
@@ -657,10 +690,12 @@ def _serve_kwargs(
         "asgi_middleware": asgi_middleware,
         "context_factory": auth_context_factory_with_discovery_fallback,
         "allowed_hosts": _allowed_hosts(),
-        "allowed_origins": [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:8000").split(",")],
+        "allowed_origins": allowed_origins,
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
-        "enable_dns_rebinding_protection": (os.environ.get("ADCP_DNS_REBINDING_PROTECTION", "true").lower() == "true"),
+        "enable_dns_rebinding_protection": _enable_dns_rebinding_protection(
+            include_subdomain_routing=include_subdomain_routing
+        ),
         # MCP streamable-HTTP session mode (adcp>=5.0). Stateful (default)
         # keeps ``StreamableHTTPSessionManager._server_instances`` alive
         # across requests for session-reuse perf, but the dict is process-
