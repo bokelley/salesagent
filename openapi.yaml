@@ -2499,6 +2499,21 @@ components:
       - notes
       title: RejectWorkflowRequest
       type: object
+    TargetingValuesRefreshResponse.f44f287:
+      additionalProperties: false
+      description: '``POST /tenants/{tid}/targeting/values/{key_id}/refresh`` response.'
+      properties:
+        key_id:
+          title: Key Id
+          type: string
+        synced:
+          title: Synced
+          type: integer
+      required:
+      - key_id
+      - synced
+      title: TargetingValuesRefreshResponse
+      type: object
     TenantDetail.f44f287:
       additionalProperties: false
       description: Full tenant detail returned from ``GET /tenants/{id}`` and lifecycle
@@ -3449,6 +3464,11 @@ components:
       - decided_by_source
       title: WorkflowDecision
       type: object
+  securitySchemes:
+    TenantManagementApiKey:
+      in: header
+      name: X-Tenant-Management-API-Key
+      type: apiKey
 info:
   title: "Sales Agent \u2014 Tenant Management API"
   version: v1
@@ -4501,6 +4521,59 @@ paths:
           description: Unprocessable Content
       summary: List historical sync runs for a tenant.
       tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/targeting/values/{key_id}/refresh:
+    post:
+      description: Embedded storefronts call this when the publisher UI reports ``needs_sync``
+        for a key. The regular UI endpoint remains cache-first; this management endpoint
+        is the server-to-server path that is allowed to talk to GAM and populate ``gam_inventory``
+        lazily per key.
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_targeting_values_{key_id}_refresh
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: key_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TargetingValuesRefreshResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Gateway
+      summary: Refresh one custom-targeting key's values into the local cache.
+      tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/webhooks:
     get:
       description: "Secrets are NEVER returned \u2014 they were surfaced exactly once\
@@ -4879,5 +4952,6 @@ paths:
       summary: Reject a workflow. Notes are required. Idempotent re-rejection returns
         200 with existing state; conflicting decision returns 409.
       tags: []
-security: []
+security:
+- TenantManagementApiKey: []
 tags: []

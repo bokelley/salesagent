@@ -66,11 +66,14 @@ def test_health_check_works_under_path_prefix(proxied_client, install_api_key):
     assert resp.get_json()["status"] == "healthy"
 
 
-def test_openapi_spec_loads_under_path_prefix(proxied_client):
+def test_openapi_spec_loads_under_path_prefix(proxied_client, install_api_key):
     """Swagger / OpenAPI endpoints must work under the path prefix too."""
     resp = proxied_client.get(
         "/api/v1/tenant-management/docs/openapi.json",
-        headers={"X-Forwarded-Prefix": SCRIPT_NAME},
+        headers={
+            "X-Tenant-Management-API-Key": install_api_key,
+            "X-Forwarded-Prefix": SCRIPT_NAME,
+        },
         environ_overrides={"SCRIPT_NAME": SCRIPT_NAME},
     )
     assert resp.status_code == 200

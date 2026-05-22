@@ -177,6 +177,20 @@ class GAMSyncRepository:
             ).all()
         )
 
+    def delete_values_for_key_except(self, key_id: str, keep_ids: set[str]) -> int:
+        """Delete cached custom-targeting values for ``key_id`` not in ``keep_ids``.
+
+        Per-key refreshes are replacement syncs: values removed upstream in
+        GAM must disappear from the local cache too.
+        """
+        deleted = 0
+        for row in self.list_values_for_key(key_id):
+            if row.inventory_id in keep_ids:
+                continue
+            self._session.delete(row)
+            deleted += 1
+        return deleted
+
     def find_inventory_item(self, inventory_type: str, inventory_id: str) -> GAMInventory | None:
         """One inventory row by ``(inventory_type, inventory_id)``, or None."""
         return self._session.scalars(

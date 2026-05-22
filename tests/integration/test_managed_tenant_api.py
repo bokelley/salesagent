@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 from flask import Flask
@@ -826,21 +827,31 @@ class TestEndToEnd:
 
 
 class TestOpenAPI:
-    def test_swagger_ui_loads(self, client):
-        resp = client.get("/api/v1/tenant-management/docs/swagger/")
+    def test_swagger_ui_loads(self, client, auth_headers):
+        resp = client.get("/api/v1/tenant-management/docs/swagger/", headers=auth_headers)
         assert resp.status_code == 200
         # Swagger UI HTML uses the swagger-ui CSS + JS bundle.
         body = resp.get_data(as_text=True)
         assert "swagger" in body.lower()
 
-    def test_openapi_spec_validates_as_openapi3(self, client):
+    def test_openapi_spec_requires_api_key(self, client):
         resp = client.get("/api/v1/tenant-management/docs/openapi.json")
+        assert resp.status_code == 401
+
+    def test_openapi_spec_validates_as_openapi3(self, client, auth_headers):
+        resp = client.get("/api/v1/tenant-management/docs/openapi.json", headers=auth_headers)
         assert resp.status_code == 200
         spec_doc = resp.get_json()
 
         # Minimal OpenAPI 3 sanity
         assert spec_doc.get("openapi", "").startswith("3.")
         assert "info" in spec_doc and "paths" in spec_doc
+        assert spec_doc["security"] == [{"TenantManagementApiKey": []}]
+        assert spec_doc["components"]["securitySchemes"]["TenantManagementApiKey"] == {
+            "type": "apiKey",
+            "name": "X-Tenant-Management-API-Key",
+            "in": "header",
+        }
 
         # Sprint-1 endpoints must appear in the spec.
         paths = spec_doc["paths"]
@@ -2435,3 +2446,168 @@ class TestRefresh:
         # Same sync_run_id is reused — caller's repeat refresh doesn't
         # double-spawn the work that just started.
         assert resp.get_json()["sync_run_ids"]["inventory"] == pending_sync_id
+
+
+# ---------------------------------------------------------------------------
+# Targeting value lazy refresh
+# ---------------------------------------------------------------------------
+
+
+class TestTargetingValueRefresh:
+    @staticmethod
+    def _create_refreshable_tenant(bound_factories, *, tenant_id: str, key_id: str = "17304123"):
+        from tests.factories import AdapterConfigFactory, TenantFactory
+        from tests.helpers.targeting_values import create_custom_targeting_key_row
+
+        bound_factories.info["management_api_caller"] = True
+        tenant = TenantFactory(
+            tenant_id=tenant_id,
+            ad_server="google_ad_manager",
+            is_embedded=True,
+        )
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type="google_ad_manager",
+            gam_network_code="123456",
+            gam_refresh_token="test-refresh-token",
+        )
+        create_custom_targeting_key_row(tenant, key_id)
+        bound_factories.commit()
+        return tenant, key_id
+
+    def test_refresh_populates_cache_and_is_idempotent(self, client, auth_headers, bound_factories, monkeypatch):
+        from src.adapters.gam_inventory_discovery import CustomTargetingValue
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import GAMInventoryFactory
+
+        tenant, key_id = self._create_refreshable_tenant(
+            bound_factories,
+            tenant_id="tenant_targeting_value_refresh",
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="custom_targeting_value",
+            inventory_id="stale",
+            name="removed",
+            inventory_metadata={
+                "custom_targeting_key_id": key_id,
+                "display_name": "Removed Upstream",
+                "match_type": "EXACT",
+            },
+        )
+        bound_factories.commit()
+
+        discovery = MagicMock()
+        discovery.discover_custom_targeting_values_for_key.return_value = [
+            CustomTargetingValue(
+                id="v1",
+                custom_targeting_key_id=key_id,
+                name="sports",
+                display_name="Sports Fans",
+                match_type="EXACT",
+                status="ACTIVE",
+            ),
+            CustomTargetingValue(
+                id="v2",
+                custom_targeting_key_id=key_id,
+                name="news",
+                display_name="News Readers",
+                match_type="BROAD",
+                status="ACTIVE",
+            ),
+        ]
+
+        import src.admin.tenant_management_api as api_module
+
+        monkeypatch.setattr(api_module, "build_gam_inventory_discovery", lambda *_args, **_kw: discovery)
+
+        url = f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/targeting/values/{key_id}/refresh"
+        first = client.post(url, headers=auth_headers)
+        second = client.post(url, headers=auth_headers)
+
+        assert first.status_code == 200, first.get_data(as_text=True)
+        assert second.status_code == 200, second.get_data(as_text=True)
+        assert first.get_json() == {"key_id": key_id, "synced": 2}
+        assert second.get_json() == {"key_id": key_id, "synced": 2}
+
+        bound_factories.expire_all()
+        rows = GAMSyncRepository(bound_factories, tenant.tenant_id).list_values_for_key(key_id)
+        key_row = GAMSyncRepository(bound_factories, tenant.tenant_id).find_inventory_item(
+            "custom_targeting_key", key_id
+        )
+
+        assert len(rows) == 2
+        assert sorted(row.inventory_id for row in rows) == ["v1", "v2"]
+        assert {row.inventory_metadata["display_name"] for row in rows} == {"News Readers", "Sports Fans"}
+        assert key_row is not None
+        assert key_row.inventory_metadata["values_synced_empty"] is False
+        assert key_row.inventory_metadata["values_last_synced_at"]
+        discovery.discover_custom_targeting_values_for_key.assert_called_with(key_id, max_values=1000)
+
+    def test_refresh_records_empty_cache_state(self, client, auth_headers, bound_factories, monkeypatch):
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+        from tests.factories import GAMInventoryFactory
+
+        tenant, key_id = self._create_refreshable_tenant(
+            bound_factories,
+            tenant_id="tenant_targeting_value_refresh_empty",
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="custom_targeting_value",
+            inventory_id="stale_empty",
+            name="removed",
+            inventory_metadata={
+                "custom_targeting_key_id": key_id,
+                "display_name": "Removed Upstream",
+                "match_type": "EXACT",
+            },
+        )
+        bound_factories.commit()
+
+        discovery = MagicMock()
+        discovery.discover_custom_targeting_values_for_key.return_value = []
+
+        import src.admin.tenant_management_api as api_module
+
+        monkeypatch.setattr(api_module, "build_gam_inventory_discovery", lambda *_args, **_kw: discovery)
+
+        url = f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/targeting/values/{key_id}/refresh"
+        response = client.post(url, headers=auth_headers)
+
+        assert response.status_code == 200, response.get_data(as_text=True)
+        assert response.get_json() == {"key_id": key_id, "synced": 0}
+
+        bound_factories.expire_all()
+        repo = GAMSyncRepository(bound_factories, tenant.tenant_id)
+        rows = repo.list_values_for_key(key_id)
+        key_row = repo.find_inventory_item("custom_targeting_key", key_id)
+
+        assert rows == []
+        assert key_row is not None
+        assert key_row.inventory_metadata["values_synced_empty"] is True
+        assert key_row.inventory_metadata["values_last_synced_at"]
+
+    def test_refresh_returns_api_error_when_gam_fetch_fails(self, client, auth_headers, bound_factories, monkeypatch):
+        tenant, key_id = self._create_refreshable_tenant(
+            bound_factories,
+            tenant_id="tenant_targeting_value_refresh_failure",
+        )
+
+        import src.admin.tenant_management_api as api_module
+
+        def _raise_discovery_error(*_args, **_kwargs):
+            raise RuntimeError("gam unavailable")
+
+        monkeypatch.setattr(api_module, "build_gam_inventory_discovery", _raise_discovery_error)
+
+        url = f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/targeting/values/{key_id}/refresh"
+        response = client.post(url, headers=auth_headers)
+
+        assert response.status_code == 502, response.get_data(as_text=True)
+        body = response.get_json()
+        assert body["error"] == "targeting_values_refresh_failed"
+        assert body["message"] == f"Failed to refresh targeting values for key {key_id!r}"
+        assert body["details"]["tenant_id"] == tenant.tenant_id
+        assert body["details"]["key_id"] == key_id
+        assert body["details"]["error"] == "gam unavailable"

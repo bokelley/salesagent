@@ -35,6 +35,7 @@ class TargetingWidget {
         this.keyMetadata = {};        // { keyId: { name, display_name } }
         this.valueMetadata = {};      // { keyId: { valueId: displayName } }
         this.loadedValuesByKey = {};  // { keyId: [values] }
+        this.valuesNeedSyncByKey = {}; // { keyId: true }
         this.editingCriterion = null; // { groupIndex, criterionIndex }
         this.loadedSuccessfully = false; // Track if existing targeting loaded OK
 
@@ -198,6 +199,7 @@ class TargetingWidget {
                 const data = await response.json();
 
                 this.loadedValuesByKey[keyId] = data.values || [];
+                this.valuesNeedSyncByKey[keyId] = Boolean(data.needs_sync);
 
                 // Cache value metadata (id -> display_name mapping)
                 if (!this.valueMetadata[keyId]) {
@@ -670,14 +672,16 @@ class TargetingWidget {
         valuesList.innerHTML = '<div class="loading">Loading values...</div>';
 
         try {
-            // Check cache first
-            if (!this.loadedValuesByKey[keyId]) {
+            // Check cache first, but retry keys that previously returned the
+            // embedded-mode "host refresh required" marker.
+            if (!this.loadedValuesByKey[keyId] || this.valuesNeedSyncByKey[keyId]) {
                 const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
                 const response = await fetch(url, { credentials: 'same-origin' });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
 
                 this.loadedValuesByKey[keyId] = data.values || [];
+                this.valuesNeedSyncByKey[keyId] = Boolean(data.needs_sync);
 
                 // Cache value metadata
                 if (!this.valueMetadata[keyId]) {
@@ -691,6 +695,10 @@ class TargetingWidget {
             const values = this.loadedValuesByKey[keyId];
 
             if (values.length === 0) {
+                if (this.valuesNeedSyncByKey[keyId]) {
+                    valuesList.innerHTML = '<div class="empty-state">Values are not synced yet</div>';
+                    return;
+                }
                 valuesList.innerHTML = '<div class="empty-state">No values available for this key</div>';
                 return;
             }
@@ -705,20 +713,34 @@ class TargetingWidget {
                 }
             }
 
-            valuesList.innerHTML = values.map(val => `
-                <label class="value-option">
-                    <input type="checkbox" class="value-checkbox"
-                           value="${val.id}"
-                           data-name="${val.display_name || val.name}"
-                           ${selectedValues.has(val.id) ? 'checked' : ''}>
-                    <span class="value-label">${val.display_name || val.name}</span>
-                </label>
-            `).join('');
+            const fragment = document.createDocumentFragment();
+            values.forEach(val => {
+                const label = document.createElement('label');
+                label.className = 'value-option';
+
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.className = 'value-checkbox';
+                input.value = val.id;
+                input.dataset.name = val.display_name || val.name || val.id;
+                input.checked = selectedValues.has(val.id);
+
+                const span = document.createElement('span');
+                span.className = 'value-label';
+                span.textContent = val.display_name || val.name || val.id;
+
+                label.append(input, span);
+                fragment.append(label);
+            });
+            valuesList.replaceChildren(fragment);
 
             this.updateApplyButton();
 
         } catch (error) {
-            valuesList.innerHTML = `<div class="error-state">Failed to load values: ${error.message}</div>`;
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error-state';
+            errorDiv.textContent = `Failed to load values: ${error.message}`;
+            valuesList.replaceChildren(errorDiv);
         }
     }
 

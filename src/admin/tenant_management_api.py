@@ -17,6 +17,7 @@ from typing import Any
 
 from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
+from spectree.models import InType, SecureType, SecurityScheme, SecuritySchemeData
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import attributes
@@ -61,6 +62,7 @@ from src.admin.api_schemas.tenant_management import (
     RefreshResponse,
     RejectWorkflowRequest,
     SpringServeAdapterConfig,
+    TargetingValuesRefreshResponse,
     TenantDetail,
     TenantStatusResponse,
     TenantSummary,
@@ -100,7 +102,11 @@ from src.core.database.models import (
     SyncJob,
     Tenant,
 )
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
+from src.core.database.repositories.gam_sync import GAMSyncRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.recent_buyers_service import compute_recent_buyers
+from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
 
 logger = logging.getLogger(__name__)
 
@@ -114,16 +120,27 @@ tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix=
 # In production the admin app is WSGI-mounted under /admin/, so the public URLs are
 # /admin/api/v1/tenant-management/docs/{openapi.json,swagger,redoc}.
 #
-# The spec endpoint is intentionally unauthenticated — it describes shapes,
-# not data. Every endpoint below is gated by ``require_tenant_management_api_key``
-# (``X-Tenant-Management-API-Key`` header). If you ever mount additional routes
-# on this blueprint without that decorator, revisit this assumption.
+# Every endpoint below, including the generated docs/spec surface, is gated by
+# ``require_tenant_management_api_key`` (``X-Tenant-Management-API-Key`` header).
+# If you ever mount additional routes on this blueprint without that decorator,
+# revisit this assumption.
 spec = SpecTree(
     "flask",
     title="Sales Agent — Tenant Management API",
     version="v1",
     path="docs",
     openapi_url_prefix="",
+    security_schemes=[
+        SecurityScheme(
+            name="TenantManagementApiKey",
+            data=SecuritySchemeData(
+                type=SecureType.API_KEY,
+                name="X-Tenant-Management-API-Key",
+                **{"in": InType.HEADER},
+            ),
+        )
+    ],
+    security={"TenantManagementApiKey": []},
 )
 
 
@@ -132,6 +149,19 @@ require_tenant_management_api_key = require_api_key_auth(
     config_key="tenant_management_api_key",
     header="X-Tenant-Management-API-Key",
 )
+
+
+@tenant_management_api.before_request
+def protect_tenant_management_docs():
+    """Apply management API-key auth to the generated OpenAPI docs."""
+    if "/docs/" not in request.path:
+        return None
+
+    @require_tenant_management_api_key
+    def _authorized():
+        return None
+
+    return _authorized()
 
 
 # ---------------------------------------------------------------------------
@@ -2438,6 +2468,79 @@ def refresh_tenant(tenant_id: str):
 
     response = RefreshResponse(sync_run_ids=sync_run_ids, started_at=started_at)
     return jsonify(response.model_dump(mode="json")), 202
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/targeting/values/<key_id>/refresh", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    resp=Response(HTTP_200=TargetingValuesRefreshResponse, HTTP_400=ApiError, HTTP_404=ApiError, HTTP_502=ApiError)
+)
+def refresh_targeting_values(tenant_id: str, key_id: str):
+    """Refresh one custom-targeting key's values into the local cache.
+
+    Embedded storefronts call this when the publisher UI reports
+    ``needs_sync`` for a key. The regular UI endpoint remains cache-first;
+    this management endpoint is the server-to-server path that is allowed to
+    talk to GAM and populate ``gam_inventory`` lazily per key.
+    """
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant_config = TenantConfigRepository(session, tenant_id)
+        tenant = tenant_config.get_tenant()
+        if tenant is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        gam_sync_repo = GAMSyncRepository(session, tenant_id)
+        key_row = gam_sync_repo.find_inventory_item("custom_targeting_key", key_id)
+        if key_row is None:
+            return _api_error("targeting_key_not_found", f"Custom targeting key {key_id!r} does not exist", 404)
+
+        adapter_config = tenant_config.get_adapter_config()
+        if (
+            adapter_config is None
+            or adapter_config.adapter_type != "google_ad_manager"
+            or not adapter_config.gam_network_code
+        ):
+            return _api_error(
+                "gam_not_configured",
+                f"Tenant {tenant_id!r} is not configured for Google Ad Manager targeting refresh",
+                400,
+            )
+
+        if not AdapterConfigRepository.has_gam_credentials(adapter_config):
+            return _api_error(
+                "gam_credentials_unavailable",
+                f"Tenant {tenant_id!r} has no GAM credentials available for targeting refresh",
+                400,
+            )
+
+        try:
+            discovery = build_gam_inventory_discovery(adapter_config, tenant_id)
+            values = sync_targeting_values_for_key(
+                gam_sync_repo,
+                key_id=key_id,
+                key_row=key_row,
+                discovery=discovery,
+                max_values=1000,
+            )
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.exception(
+                "Targeting value refresh failed for tenant_id=%s key_id=%s",
+                tenant_id,
+                key_id,
+            )
+            return _api_error(
+                "targeting_values_refresh_failed",
+                f"Failed to refresh targeting values for key {key_id!r}",
+                502,
+                details={"tenant_id": tenant_id, "key_id": key_id, "error": str(exc)},
+            )
+
+    response = TargetingValuesRefreshResponse(key_id=key_id, synced=len(values))
+    return jsonify(response.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------

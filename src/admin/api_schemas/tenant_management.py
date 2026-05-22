@@ -945,6 +945,15 @@ class RefreshConflictResponse(BaseModel):
     running_sync_types: list[str] = Field(default_factory=list)
 
 
+class TargetingValuesRefreshResponse(BaseModel):
+    """``POST /tenants/{tid}/targeting/values/{key_id}/refresh`` response."""
+
+    model_config = _config()
+
+    key_id: str
+    synced: int
+
+
 # ---------------------------------------------------------------------------
 # Sprint 5 piece D — GAM advertisers cache
 # ---------------------------------------------------------------------------

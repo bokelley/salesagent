@@ -79,7 +79,8 @@ def main() -> int:
     spec_dict = build_spec()
 
     json_text = json.dumps(spec_dict, indent=2, sort_keys=True) + "\n"
-    yaml_text = yaml.safe_dump(spec_dict, sort_keys=True, default_flow_style=False)
+    yaml_spec = json.loads(json_text)
+    yaml_text = yaml.safe_dump(yaml_spec, sort_keys=True, default_flow_style=False)
 
     for path in (JSON_PATH, ROOT_JSON_PATH):
         path.write_text(json_text, encoding="utf-8")
