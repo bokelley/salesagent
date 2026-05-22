@@ -70,7 +70,7 @@ class ProtocolWebhookService:
     async def send_notification(
         self,
         push_notification_config: PushNotificationConfig,
-        payload: Task | TaskStatusUpdateEvent | McpWebhookPayload,
+        payload: Task | TaskStatusUpdateEvent | McpWebhookPayload | dict[str, Any],
         metadata: dict[str, Any],
     ) -> bool:
         """

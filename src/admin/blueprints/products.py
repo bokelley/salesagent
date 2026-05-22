@@ -20,6 +20,7 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import Format
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
+from src.services.protocol_change_webhooks import notify_product_catalog_changed
 
 logger = logging.getLogger(__name__)
 
@@ -1316,6 +1317,13 @@ def add_product(tenant_id):
                     "product.created",
                     {"product_id": product.product_id, "name": product.name},
                 )
+                notify_product_catalog_changed(
+                    tenant_id=tenant_id,
+                    action="created",
+                    product_id=product.product_id,
+                    data={"name": product.name},
+                    principal_ids=product.allowed_principal_ids or None,
+                )
 
                 flash(f"Product '{product.name}' created successfully!", "success")
                 # Redirect to products list
@@ -1901,6 +1909,13 @@ def edit_product(tenant_id, product_id):
                     "product.updated",
                     {"product_id": product.product_id, "name": product.name},
                 )
+                notify_product_catalog_changed(
+                    tenant_id=tenant_id,
+                    action="updated",
+                    product_id=product.product_id,
+                    data={"name": product.name},
+                    principal_ids=product.allowed_principal_ids or None,
+                )
 
                 flash(f"Product '{product.name}' updated successfully", "success")
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
@@ -2150,6 +2165,7 @@ def delete_product(tenant_id, product_id):
 
             # Store product name for response
             product_name = product.name
+            allowed_principal_ids = product.allowed_principal_ids or None
 
             # Check if product is used in any active media buys
             mb_repo = MediaBuyRepository(db_session, tenant_id)
@@ -2187,6 +2203,13 @@ def delete_product(tenant_id, product_id):
             db_session.commit()
 
             logger.info(f"Product {product_id} ({product_name}) deleted by tenant {tenant_id}")
+            notify_product_catalog_changed(
+                tenant_id=tenant_id,
+                action="deleted",
+                product_id=product_id,
+                data={"name": product_name},
+                principal_ids=allowed_principal_ids,
+            )
 
             return jsonify({"success": True, "message": f"Product '{product_name}' deleted successfully"})
 

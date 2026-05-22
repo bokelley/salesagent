@@ -8,12 +8,10 @@ from uuid import uuid4
 
 from adcp.types import BrandReference, CreditLimit, Setup
 
-# adcp 4.4+ canonicalised the top-level ``GovernanceAgent`` to the request-side
-# variant (``authentication`` required). For storage we want the response-side
-# shape (URL-only) — sellers don't always have credentials at the time the
-# Account row is created. Pin the storage type to the response variant; auth
-# tracking gets its own column when we wire ``check_governance``.
-from adcp.types.generated_poc.account.sync_governance_response import (
+# For storage we want the account response/core shape (URL-only), not the
+# sync_governance request shape where ``authentication`` is required. Sellers
+# don't always have credentials at the time the Account row is created.
+from adcp.types.generated_poc.core.account import (
     GovernanceAgent,
 )
 from sqlalchemy import (
@@ -408,6 +406,12 @@ class Product(Base, JSONValidatorMixin):
     data_provider_signals: Mapped[list | None] = mapped_column(JSONType, nullable=True)
     # Type hint: DeliveryForecast object (delivery predictions)
     forecast: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of ProductAction enum values allowed for this product
+    allowed_actions: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of FormatOption objects advertised by the product
+    format_options: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: vendor metric optimization metadata
+    vendor_metric_optimization: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
     # Dynamic product fields
     # Type hint: whether this product is a dynamic template that generates variants
@@ -2696,10 +2700,14 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
     session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     url: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     authentication_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     authentication_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    purpose: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="async_task", server_default=text("'async_task'")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -2734,6 +2742,8 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
             f"principal_id='{self.principal_id}', "
             f"session_id='{self.session_id}', "
             f"url='{self.url}', "
+            f"operation_id='{self.operation_id}', "
+            f"purpose='{self.purpose}', "
             f"authentication_type='{self.authentication_type}', "
             f"authentication_token='***', "
             f"validation_token='***', "

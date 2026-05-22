@@ -5,13 +5,29 @@ implementation pattern from CLAUDE.md.
 """
 
 import logging
+import re
 import time
 import uuid
+from typing import Any
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 
 logger = logging.getLogger(__name__)
 
+_SIGNAL_SPEC_STOPWORDS = {
+    "adult",
+    "adults",
+    "audience",
+    "for",
+    "interested",
+    "people",
+    "targeting",
+    "the",
+    "users",
+    "with",
+}
+
+from adcp.types import PaginationResponse
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
 from adcp.types.generated_poc.signals.get_signals_response import Range
 
@@ -79,7 +95,7 @@ def _tenant_signal_to_adcp(
         },
         "signal_agent_segment_id": wire_id,
         "name": ts.name,
-        "description": ts.description or "",
+        "description": ts.description or f"{ts.name} signal",
         # Operator-declared signals are the publisher's first-party data
         # by default. Distinguishing marketplace / custom variants would
         # warrant a column on TenantSignal — keep the default simple.
@@ -130,6 +146,92 @@ def _load_tenant_signals(
         assert uow.tenant_signals is not None
         rows = uow.tenant_signals.list_all()
         return [_tenant_signal_to_adcp(ts, ad_server=ad_server, agent_url=agent_url) for ts in rows]
+
+
+def _dump_model(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _signal_id_matches(requested: Any, signal: Signal) -> bool:
+    requested_dump = _dump_model(requested)
+    actual_dump = _dump_model(signal.signal_id)
+    if not requested_dump or not actual_dump:
+        return False
+    if requested_dump.get("id") != actual_dump.get("id"):
+        return False
+    for discriminator in ("source", "agent_url", "data_provider_domain"):
+        if requested_dump.get(discriminator) and requested_dump.get(discriminator) != actual_dump.get(discriminator):
+            return False
+    return True
+
+
+def _signal_matches_destination(signal: Signal, requested_destinations: list[Any] | None) -> bool:
+    if not requested_destinations:
+        return True
+    requested = {_dump_model(dest).get("platform") for dest in requested_destinations}
+    requested.discard(None)
+    if not requested:
+        return True
+    return any(deployment.platform in requested for deployment in signal.deployments if deployment.type == "platform")
+
+
+def _signal_matches_spec(signal: Signal, signal_spec: str | None) -> bool:
+    """Loose natural-language matching for discovery prompts."""
+    if not signal_spec:
+        return True
+
+    spec_lower = signal_spec.lower()
+    searchable_text = " ".join(
+        [
+            signal.name,
+            signal.description,
+            signal.signal_type.value,
+            signal.data_provider,
+        ]
+    ).lower()
+    if spec_lower in searchable_text:
+        return True
+
+    spec_tokens = _signal_search_tokens(spec_lower)
+    if not spec_tokens:
+        return False
+    signal_tokens = _signal_search_tokens(searchable_text)
+    return bool(spec_tokens & signal_tokens)
+
+
+def _signal_search_tokens(value: str) -> set[str]:
+    tokens = {token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1}
+    normalized = {_normalize_signal_token(token) for token in tokens}
+    return {token for token in normalized if token not in _SIGNAL_SPEC_STOPWORDS}
+
+
+def _normalize_signal_token(token: str) -> str:
+    if token in {"autos", "automotive", "cars", "ev", "evs", "vehicle", "vehicles"}:
+        return "auto"
+    if token.endswith("s") and len(token) > 4:
+        return token[:-1]
+    return token
+
+
+def _pagination_window(total: int, cursor: str | None, limit: int | None) -> tuple[int, int, PaginationResponse | None]:
+    if limit is None:
+        return 0, total, None
+    try:
+        offset = int(cursor or "0")
+    except ValueError:
+        offset = 0
+    offset = max(offset, 0)
+    next_offset = offset + limit
+    has_more = next_offset < total
+    return (
+        offset,
+        next_offset,
+        PaginationResponse(has_more=has_more, cursor=str(next_offset) if has_more else None, total_count=total),
+    )
 
 
 async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
@@ -270,15 +372,15 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
     # Filter based on request parameters using AdCP-compliant fields
     for signal in sample_signals:
+        if req.signal_ids and not any(_signal_id_matches(signal_id, signal) for signal_id in req.signal_ids):
+            continue
+
+        if not _signal_matches_destination(signal, req.destinations):
+            continue
+
         # Apply signal_spec filter (natural language description matching)
-        if req.signal_spec:
-            spec_lower = req.signal_spec.lower()
-            if (
-                spec_lower not in signal.name.lower()
-                and spec_lower not in signal.description.lower()
-                and spec_lower not in signal.signal_type.value.lower()
-            ):
-                continue
+        if not _signal_matches_spec(signal, req.signal_spec):
+            continue
 
         # Apply filters if provided
         if req.filters:
@@ -308,13 +410,19 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
         signals.append(signal)
 
-    # Apply max_results limit (AdCP-compliant field name)
-    if req.max_results:
-        signals = signals[: req.max_results]
+    # Apply pagination first-class when provided. ``max_results`` remains
+    # supported for callers using the older flat field.
+    limit = req.__dict__.get("max_results")
+    cursor = None
+    if req.pagination is not None:
+        limit = req.pagination.max_results or limit
+        cursor = req.pagination.cursor
+    start, end, pagination = _pagination_window(len(signals), cursor, limit)
+    signals = signals[start:end]
 
     # Signals are already constructed as local types (extending library types),
     # so no conversion needed — pass directly to response.
-    return GetSignalsResponse(signals=signals, errors=None, context=req.context)
+    return GetSignalsResponse(signals=signals, errors=None, pagination=pagination, context=req.context)
 
 
 async def _activate_signal_impl(

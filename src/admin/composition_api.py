@@ -79,6 +79,7 @@ from src.core.database.repositories.advertiser_mapping import (
 )
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
+from src.services.protocol_change_webhooks import notify_signal_catalog_changed
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +391,12 @@ def create_signal(tenant_id: str):
         session.flush()
         _refresh_signal_etag(signal)
         session.commit()
+        notify_signal_catalog_changed(
+            tenant_id=tenant_id,
+            action="created",
+            signal_id=signal.signal_id,
+            data={"name": signal.name},
+        )
         return jsonify(_signal_to_read(signal)), 201, {"ETag": f'"{signal.etag}"'}
 
 
@@ -427,6 +434,12 @@ def update_signal(tenant_id: str, signal_id: str):
             signal.targeting_dimension = payload.targeting_dimension
         _refresh_signal_etag(signal)
         session.commit()
+        notify_signal_catalog_changed(
+            tenant_id=tenant_id,
+            action="updated",
+            signal_id=signal.signal_id,
+            data={"name": signal.name},
+        )
         return jsonify(_signal_to_read(signal)), 200, {"ETag": f'"{signal.etag}"'}
 
 
@@ -440,8 +453,15 @@ def delete_signal(tenant_id: str, signal_id: str):
         signal = repo.get_by_id(signal_id)
         if signal is None:
             return _api_error("signal_not_found", f"Signal {signal_id!r} not found.", 404)
+        signal_name = signal.name
         repo.delete(signal)
         session.commit()
+        notify_signal_catalog_changed(
+            tenant_id=tenant_id,
+            action="deleted",
+            signal_id=signal_id,
+            data={"name": signal_name},
+        )
         return "", 204
 
 

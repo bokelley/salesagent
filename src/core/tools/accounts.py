@@ -22,15 +22,6 @@ from typing import Any
 
 from adcp.types import PaginationRequest, PaginationResponse
 
-# Pin to the sync-accounts-response variant of Account. The top-level
-# ``adcp.types.Account`` resolves to the listing variant since 4.4 — same
-# name, different Pydantic class — and the SyncAccountsSuccessResponse's
-# ``accounts: list[Account]`` field rejects cross-module instances even
-# though the shapes are identical.
-from adcp.types.generated_poc.account.sync_accounts_response import (
-    Account as SyncResponseAccount,
-)
-
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
@@ -42,6 +33,12 @@ from src.core.schemas.account import (
     ListAccountsResponse,
     SyncAccountsRequest,
     SyncAccountsResponse,
+    SyncResponseAccount,
+)
+from src.services.protocol_change_webhooks import notify_account_status_changed_async
+from src.services.push_notification_registration import (
+    normalize_push_notification_config,
+    register_push_notification_config_in_repo,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,7 +226,7 @@ def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
     Both dict and model inputs are normalized through model_dump(mode="json")
     to ensure consistent comparison (e.g., AnyUrl → str).
     """
-    from adcp.types import GovernanceAgent
+    from adcp.types.generated_poc.core.account import GovernanceAgent
 
     if agents is None:
         return None
@@ -487,10 +484,20 @@ async def _sync_accounts_impl(
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
     seen_account_ids: set[str] = set()
+    status_changes: list[tuple[str, str, str]] = []
+    webhook_registration = normalize_push_notification_config(req.push_notification_config)
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
+        assert uow.push_notifications is not None
         repo = uow.accounts
+
+        if webhook_registration is not None and not dry_run:
+            register_push_notification_config_in_repo(
+                uow.push_notifications,
+                principal_id=principal_id,
+                registration=webhook_registration,
+            )
 
         for entry in req.accounts:
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
@@ -663,7 +670,9 @@ async def _sync_accounts_impl(
             agent_accounts = repo.list_by_principal(principal_id)
             for db_acct in agent_accounts:
                 if db_acct.account_id not in seen_account_ids:
+                    old_status = db_acct.status
                     repo.update_status(db_acct.account_id, "closed")
+                    status_changes.append((db_acct.account_id, old_status, "closed"))
                     results.append(
                         _build_sync_result(
                             account_id=db_acct.account_id,
@@ -684,6 +693,15 @@ async def _sync_accounts_impl(
         act = _enum_to_str(r.action) or "unknown"
         action_counts[act] = action_counts.get(act, 0) + 1
     audit_logger.log_info(f"sync_accounts completed: {action_counts} (dry_run={dry_run}, principal={principal_id})")
+
+    for account_id, from_status, to_status in status_changes:
+        await notify_account_status_changed_async(
+            tenant_id=tenant_id,
+            account_id=account_id,
+            from_status=from_status,
+            to_status=to_status,
+            principal_id=principal_id,
+        )
 
     return SyncAccountsResponse(
         accounts=results,
