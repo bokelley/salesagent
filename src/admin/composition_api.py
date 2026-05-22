@@ -42,6 +42,7 @@ import json
 import logging
 import secrets
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -59,6 +60,11 @@ from src.admin.api_schemas.composition import (
     InventoryProfileListResponse,
     InventoryProfileRead,
     InventoryProfileUpdate,
+    ProductCreate,
+    ProductListResponse,
+    ProductPricingOptionWrite,
+    ProductRead,
+    ProductUpdate,
     SignalRange,
     TenantSignalCreate,
     TenantSignalListResponse,
@@ -70,6 +76,8 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdvertiserRoutingRule,
     InventoryProfile,
+    PricingOption,
+    Product,
     Tenant,
     TenantSignal,
 )
@@ -78,6 +86,7 @@ from src.core.database.repositories.advertiser_mapping import (
     GamAdvertiserRepository,
 )
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 
 logger = logging.getLogger(__name__)
@@ -283,6 +292,228 @@ def delete_inventory_profile(tenant_id: str, profile_id: str):
                 404,
             )
         repo.delete(profile)
+        session.commit()
+        return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Products (profile-backed wholesale catalog entries)
+# ---------------------------------------------------------------------------
+
+
+def _pricing_option_id(option: PricingOption) -> str:
+    fixed_suffix = "fixed" if option.is_fixed else "auction"
+    return f"{option.pricing_model.lower()}_{option.currency.lower()}_{fixed_suffix}"
+
+
+def _pricing_option_to_read(option: PricingOption) -> dict:
+    return {
+        "pricing_option_id": _pricing_option_id(option),
+        "pricing_model": option.pricing_model,
+        "currency": option.currency,
+        "is_fixed": option.is_fixed,
+        "rate": option.rate,
+        "price_guidance": option.price_guidance,
+        "parameters": option.parameters,
+        "min_spend_per_package": option.min_spend_per_package,
+    }
+
+
+def _product_to_read(product: Product) -> dict:
+    profile = product.inventory_profile
+    return ProductRead(
+        product_id=product.product_id,
+        name=product.name,
+        description=product.description,
+        inventory_profile_id=profile.profile_id if profile else None,
+        delivery_type=product.delivery_type,
+        pricing_options=[_pricing_option_to_read(po) for po in product.pricing_options],
+        countries=product.countries,
+        channels=product.channels,
+        property_targeting_allowed=product.property_targeting_allowed,
+        signal_targeting_allowed=product.signal_targeting_allowed,
+        allowed_principal_ids=product.allowed_principal_ids,
+        catalog_match=product.catalog_match,
+        catalog_types=product.catalog_types,
+        data_provider_signals=product.data_provider_signals,
+        forecast=product.forecast,
+    ).model_dump(mode="json")
+
+
+def _pricing_options_from_payload(
+    tenant_id: str, product_id: str, payload_options: list[ProductPricingOptionWrite]
+) -> list[PricingOption]:
+    return [
+        PricingOption(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            pricing_model=option.pricing_model,
+            rate=Decimal(option.rate) if option.rate is not None else None,
+            currency=option.currency.upper(),
+            is_fixed=option.is_fixed,
+            price_guidance=option.price_guidance,
+            parameters=option.parameters,
+            min_spend_per_package=(
+                Decimal(option.min_spend_per_package) if option.min_spend_per_package is not None else None
+            ),
+        )
+        for option in payload_options
+    ]
+
+
+def _get_required_inventory_profile(session, tenant_id: str, profile_id: str):
+    profile = InventoryProfileRepository(session, tenant_id).get_by_id(profile_id)
+    if profile is None:
+        return None, _api_error(
+            "inventory_profile_not_found",
+            f"Inventory profile {profile_id!r} not found.",
+            404,
+        )
+    return profile, None
+
+
+@composition_api.route("/tenants/<tenant_id>/products", methods=["GET"])
+@require_composition_api_key
+def list_products(tenant_id: str):
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        products = ProductRepository(session, tenant_id).list_all()
+        return jsonify(
+            ProductListResponse(products=[_product_to_read(p) for p in products]).model_dump(mode="json")
+        ), 200
+
+
+@composition_api.route("/tenants/<tenant_id>/products/<product_id>", methods=["GET"])
+@require_composition_api_key
+def get_product(tenant_id: str, product_id: str):
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        product = ProductRepository(session, tenant_id).get_by_id_with_pricing(product_id)
+        if product is None:
+            return _api_error("product_not_found", f"Product {product_id!r} not found.", 404)
+        return jsonify(_product_to_read(product)), 200
+
+
+@composition_api.route("/tenants/<tenant_id>/products", methods=["POST"])
+@require_composition_api_key
+def create_product(tenant_id: str):
+    try:
+        payload = ProductCreate.model_validate(request.get_json() or {})
+    except Exception as exc:
+        return _api_error("invalid_request", str(exc), 400)
+
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = ProductRepository(session, tenant_id)
+        if repo.get_by_id(payload.product_id) is not None:
+            return _api_error("conflict", f"Product {payload.product_id!r} already exists.", 409)
+        profile, error = _get_required_inventory_profile(session, tenant_id, payload.inventory_profile_id)
+        if error is not None:
+            return error
+        assert profile is not None
+
+        product = Product(
+            tenant_id=tenant_id,
+            product_id=payload.product_id,
+            name=payload.name,
+            description=payload.description,
+            format_ids=[],
+            targeting_template={},
+            delivery_type=payload.delivery_type,
+            property_tags=["all_inventory"],
+            inventory_profile_id=profile.id,
+            delivery_measurement={"provider": "publisher"},
+            property_targeting_allowed=payload.property_targeting_allowed,
+            signal_targeting_allowed=payload.signal_targeting_allowed,
+            countries=payload.countries,
+            channels=payload.channels,
+            allowed_principal_ids=payload.allowed_principal_ids,
+            catalog_match=payload.catalog_match,
+            catalog_types=payload.catalog_types,
+            data_provider_signals=payload.data_provider_signals,
+            forecast=payload.forecast,
+        )
+        repo.create(product)
+        repo.replace_pricing_options(
+            product,
+            _pricing_options_from_payload(tenant_id, payload.product_id, payload.pricing_options),
+        )
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            return _api_error("conflict", str(exc), 409)
+        return jsonify(_product_to_read(product)), 201
+
+
+@composition_api.route("/tenants/<tenant_id>/products/<product_id>", methods=["PUT"])
+@require_composition_api_key
+def update_product(tenant_id: str, product_id: str):
+    try:
+        payload = ProductUpdate.model_validate(request.get_json() or {})
+    except Exception as exc:
+        return _api_error("invalid_request", str(exc), 400)
+
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = ProductRepository(session, tenant_id)
+        product = repo.get_by_id_with_pricing(product_id)
+        if product is None:
+            return _api_error("product_not_found", f"Product {product_id!r} not found.", 404)
+
+        fields_set = payload.model_fields_set
+        for field in (
+            "name",
+            "description",
+            "delivery_type",
+            "countries",
+            "channels",
+            "property_targeting_allowed",
+            "signal_targeting_allowed",
+            "allowed_principal_ids",
+            "catalog_match",
+            "catalog_types",
+            "data_provider_signals",
+            "forecast",
+        ):
+            if field in fields_set:
+                setattr(product, field, getattr(payload, field))
+        if "inventory_profile_id" in fields_set:
+            if payload.inventory_profile_id is None:
+                return _api_error(
+                    "invalid_request",
+                    "inventory_profile_id cannot be null for profile-backed products.",
+                    400,
+                )
+            profile, error = _get_required_inventory_profile(session, tenant_id, payload.inventory_profile_id)
+            if error is not None:
+                return error
+            assert profile is not None
+            product.inventory_profile_id = profile.id
+        if payload.pricing_options is not None:
+            repo.replace_pricing_options(
+                product,
+                _pricing_options_from_payload(tenant_id, product.product_id, payload.pricing_options),
+            )
+        session.commit()
+        return jsonify(_product_to_read(product)), 200
+
+
+@composition_api.route("/tenants/<tenant_id>/products/<product_id>", methods=["DELETE"])
+@require_composition_api_key
+def delete_product(tenant_id: str, product_id: str):
+    with get_db_session() as session:
+        if session.get(Tenant, tenant_id) is None:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} not found.", 404)
+        repo = ProductRepository(session, tenant_id)
+        product = repo.get_by_id(product_id)
+        if product is None:
+            return _api_error("product_not_found", f"Product {product_id!r} not found.", 404)
+        repo.delete(product)
         session.commit()
         return "", 204
 

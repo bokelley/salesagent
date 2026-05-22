@@ -33,7 +33,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -130,6 +130,122 @@ class InventoryProfileRead(BaseModel):
 class InventoryProfileListResponse(BaseModel):
     model_config = _config()
     inventory_profiles: list[InventoryProfileRead]
+
+
+# ---------------------------------------------------------------------------
+# Products — profile-backed wholesale catalog entries
+# ---------------------------------------------------------------------------
+
+
+_DELIVERY_TYPE = Literal["guaranteed", "non_guaranteed"]
+_PRICING_MODEL = Literal["cpm"]
+
+
+class ProductPricingOptionWrite(BaseModel):
+    """Pricing option persisted with a profile-backed product."""
+
+    model_config = _config()
+
+    pricing_model: _PRICING_MODEL = "cpm"
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    is_fixed: bool = False
+    rate: Decimal | None = Field(
+        default=None,
+        description="Fixed price for fixed options. Optional for auction CPM with price_guidance.",
+    )
+    price_guidance: dict | None = Field(
+        default=None,
+        description="Auction guidance; CPM auction options require this, e.g. {floor, p50, p75}.",
+    )
+    parameters: dict | None = None
+    min_spend_per_package: Decimal | None = None
+
+    @model_validator(mode="after")
+    def _validate_price_shape(self) -> ProductPricingOptionWrite:
+        if self.is_fixed and self.rate is None:
+            raise ValueError("fixed pricing options require rate")
+        if not self.is_fixed and self.pricing_model == "cpm" and not self.price_guidance:
+            raise ValueError("auction cpm pricing options require price_guidance")
+        return self
+
+
+class ProductCreate(BaseModel):
+    """Create a profile-backed wholesale product."""
+
+    model_config = _config()
+
+    product_id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str | None = None
+    inventory_profile_id: str = Field(..., min_length=1, max_length=100)
+    delivery_type: _DELIVERY_TYPE = "non_guaranteed"
+    pricing_options: list[ProductPricingOptionWrite] = Field(..., min_length=1)
+    countries: list[str] | None = None
+    channels: list[str] | None = None
+    property_targeting_allowed: bool = False
+    signal_targeting_allowed: bool = True
+    allowed_principal_ids: list[str] | None = None
+    catalog_match: dict | None = None
+    catalog_types: list[str] | None = None
+    data_provider_signals: list[dict] | None = None
+    forecast: dict | None = None
+
+
+class ProductUpdate(BaseModel):
+    model_config = _config()
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    inventory_profile_id: str | None = Field(default=None, min_length=1, max_length=100)
+    delivery_type: _DELIVERY_TYPE | None = None
+    pricing_options: list[ProductPricingOptionWrite] | None = Field(default=None, min_length=1)
+    countries: list[str] | None = None
+    channels: list[str] | None = None
+    property_targeting_allowed: bool | None = None
+    signal_targeting_allowed: bool | None = None
+    allowed_principal_ids: list[str] | None = None
+    catalog_match: dict | None = None
+    catalog_types: list[str] | None = None
+    data_provider_signals: list[dict] | None = None
+    forecast: dict | None = None
+
+
+class ProductPricingOptionRead(BaseModel):
+    model_config = _config()
+
+    pricing_option_id: str
+    pricing_model: str
+    currency: str
+    is_fixed: bool
+    rate: Decimal | None
+    price_guidance: dict | None
+    parameters: dict | None
+    min_spend_per_package: Decimal | None
+
+
+class ProductRead(BaseModel):
+    model_config = _config()
+
+    product_id: str
+    name: str
+    description: str | None
+    inventory_profile_id: str | None
+    delivery_type: str
+    pricing_options: list[ProductPricingOptionRead]
+    countries: list[str] | None
+    channels: list[str] | None
+    property_targeting_allowed: bool
+    signal_targeting_allowed: bool | None
+    allowed_principal_ids: list[str] | None
+    catalog_match: dict | None
+    catalog_types: list[str] | None
+    data_provider_signals: list[dict] | None
+    forecast: dict | None
+
+
+class ProductListResponse(BaseModel):
+    model_config = _config()
+    products: list[ProductRead]
 
 
 # ---------------------------------------------------------------------------
