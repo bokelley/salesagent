@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 inventory_profiles_bp = Blueprint("inventory_profiles", __name__)
 TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
 INVENTORY_PICKER_LIMIT = 200
+DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+GAM_CANONICAL_DISPLAY_FORMAT_IDS = ("display_image", "display_html", "display_js")
+GAM_CANONICAL_DISPLAY_FORMAT_LABELS = {
+    "display_image": "image",
+    "display_html": "HTML5",
+    "display_js": "JS",
+}
+GAM_SPECIAL_SIZE = (1, 1)
 
 
 def _generate_profile_id(name: str) -> str:
@@ -69,6 +77,259 @@ def _unique_profile_id(session, tenant_id: str, base: str) -> str:
     raise RuntimeError(f"Could not find unique profile_id for {base}")
 
 
+def _size_to_tuple(size) -> tuple[int, int] | None:
+    """Normalize synced GAM size metadata to ``(width, height)``."""
+    if isinstance(size, dict) and size.get("width") and size.get("height"):
+        try:
+            return int(size["width"]), int(size["height"])
+        except (TypeError, ValueError):
+            return None
+    if isinstance(size, dict):
+        format_id = str(size.get("id") or size.get("format_id") or "")
+        match = re.search(r"(\d+)x(\d+)", format_id)
+        if match:
+            try:
+                return int(match.group(1)), int(match.group(2))
+            except (TypeError, ValueError):
+                return None
+    if isinstance(size, str) and "x" in size:
+        try:
+            width, height = size.lower().split("x", 1)
+            return int(width), int(height)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _is_gam_special_size(size: tuple[int, int] | None) -> bool:
+    return size == GAM_SPECIAL_SIZE
+
+
+def _adcp_inventory_capabilities(metadata: dict) -> dict:
+    capabilities = metadata.get("adcp_capabilities") if isinstance(metadata, dict) else None
+    return capabilities if isinstance(capabilities, dict) else {}
+
+
+def _capability_slot_kind(metadata: dict) -> str:
+    capabilities = _adcp_inventory_capabilities(metadata)
+    slot_kind = capabilities.get("slot_kind")
+    if isinstance(slot_kind, str) and slot_kind:
+        return slot_kind
+    special = capabilities.get("special_size")
+    if isinstance(special, dict) and special.get("kind"):
+        return str(special["kind"])
+    return ""
+
+
+def _special_size_is_classified(metadata: dict) -> bool:
+    return bool(_capability_slot_kind(metadata))
+
+
+def _display_format_ids_for_capabilities(metadata: dict) -> list[str]:
+    capabilities = _adcp_inventory_capabilities(metadata)
+    render_modes = capabilities.get("render_modes")
+    if not isinstance(render_modes, dict):
+        return list(GAM_CANONICAL_DISPLAY_FORMAT_IDS)
+
+    format_ids = []
+    if render_modes.get("image"):
+        format_ids.append("display_image")
+    if render_modes.get("html"):
+        format_ids.append("display_html")
+    if render_modes.get("js"):
+        format_ids.append("display_js")
+    return format_ids or list(GAM_CANONICAL_DISPLAY_FORMAT_IDS)
+
+
+def _fixed_display_format_ids_for_capabilities(metadata: dict) -> list[str]:
+    slot_kind = _capability_slot_kind(metadata)
+    if slot_kind and slot_kind not in {"fixed_display", "responsive_display", "rich_media"}:
+        return []
+    return _display_format_ids_for_capabilities(metadata)
+
+
+def _responsive_display_formats(metadata: dict) -> list[dict]:
+    capabilities = _adcp_inventory_capabilities(metadata)
+    slot_kind = _capability_slot_kind(metadata)
+    if slot_kind not in {"responsive_display", "rich_media", "fixed_display"}:
+        return []
+
+    dimensions = capabilities.get("dimensions")
+    if not isinstance(dimensions, dict):
+        dimensions = {}
+
+    format_params = {
+        key: int(dimensions[key])
+        for key in ("min_width", "max_width", "min_height", "max_height")
+        if dimensions.get(key) is not None
+    }
+    if not format_params:
+        return []
+
+    return [
+        {
+            "agent_url": DEFAULT_CREATIVE_AGENT_URL,
+            "id": format_id,
+            **format_params,
+        }
+        for format_id in _display_format_ids_for_capabilities(metadata)
+    ]
+
+
+def _selected_gam_ad_units(session, tenant_id: str, inventory_config: dict) -> list:
+    """Resolve selected ad units plus placement children from synced GAM inventory."""
+    return [row for row, _capability_metadata in _selected_gam_ad_units_with_capability_metadata(session, tenant_id, inventory_config)]
+
+
+def _selected_gam_ad_units_with_capability_metadata(session, tenant_id: str, inventory_config: dict) -> list[tuple]:
+    """Resolve selected GAM ad units plus placement-level capability fallbacks."""
+    from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+    repo = GAMSyncRepository(session, tenant_id)
+    ad_unit_ids = {str(i) for i in (inventory_config.get("ad_units") or []) if i}
+    capability_metadata_by_ad_unit: dict[str, dict] = {}
+
+    placement_ids = [str(i) for i in (inventory_config.get("placements") or []) if i]
+    placements = repo.list_inventory_by_ids("placement", placement_ids)
+    for placement in placements:
+        metadata = placement.inventory_metadata if isinstance(placement.inventory_metadata, dict) else {}
+        placement_ad_unit_ids = [str(i) for i in metadata.get("ad_unit_ids", []) if i]
+        ad_unit_ids.update(placement_ad_unit_ids)
+        if _adcp_inventory_capabilities(metadata):
+            for ad_unit_id in placement_ad_unit_ids:
+                capability_metadata_by_ad_unit.setdefault(ad_unit_id, metadata)
+
+    if not ad_unit_ids:
+        return []
+    rows = repo.list_inventory_by_ids("ad_unit", sorted(ad_unit_ids))
+    resolved = []
+    for row in rows:
+        metadata = row.inventory_metadata if isinstance(row.inventory_metadata, dict) else {}
+        if not _adcp_inventory_capabilities(metadata):
+            metadata = capability_metadata_by_ad_unit.get(str(row.inventory_id), metadata)
+        resolved.append((row, metadata))
+    return resolved
+
+
+def _metadata_has_special_size(metadata: dict) -> bool:
+    return any(_is_gam_special_size(_size_to_tuple(raw_size)) for raw_size in metadata.get("sizes") or [])
+
+
+def _responsive_format_key(fmt: dict) -> tuple:
+    return (
+        fmt.get("id"),
+        fmt.get("min_width"),
+        fmt.get("max_width"),
+        fmt.get("min_height"),
+        fmt.get("max_height"),
+    )
+
+
+def _unclassified_gam_special_size_units(session, tenant_id: str, inventory_config: dict) -> list[dict]:
+    """Selected synced ad units with GAM ``1x1`` special sizes needing setup."""
+    unclassified = []
+    for ad_unit, capability_metadata in _selected_gam_ad_units_with_capability_metadata(session, tenant_id, inventory_config):
+        metadata = ad_unit.inventory_metadata if isinstance(ad_unit.inventory_metadata, dict) else {}
+        if _metadata_has_special_size(metadata) and not _special_size_is_classified(capability_metadata):
+            unclassified.append(
+                {
+                    "id": ad_unit.inventory_id,
+                    "name": ad_unit.name,
+                }
+            )
+    return unclassified
+
+
+def _derive_canonical_format_ids_from_inventory(session, tenant_id: str, inventory_config: dict) -> list[dict]:
+    """Derive AdCP v2 canonical display formats from selected synced GAM inventory.
+
+    GAM inventory sync stores concrete creative sizes on ad-unit metadata.
+    Products should expose fixed sizes through canonical parameterized format
+    IDs (``display_image``, ``display_html``, ``display_js``) instead of the
+    legacy fixed-size IDs (``display_300x250_image`` etc.).
+
+    GAM ``1x1`` is a special placeholder for fluid/native/interstitial/etc.,
+    not a literal display slot. It is intentionally skipped until the
+    placement/ad-unit capability is classified.
+    """
+
+    selected_ad_units = _selected_gam_ad_units_with_capability_metadata(session, tenant_id, inventory_config)
+    fixed_formats: set[tuple[str, int, int]] = set()
+    responsive_formats_by_key: dict[tuple, dict] = {}
+
+    for ad_unit, capability_metadata in selected_ad_units:
+        metadata = ad_unit.inventory_metadata if isinstance(ad_unit.inventory_metadata, dict) else {}
+        for raw_size in metadata.get("sizes") or []:
+            parsed = _size_to_tuple(raw_size)
+            if not parsed:
+                continue
+            if _is_gam_special_size(parsed):
+                for fmt in _responsive_display_formats(capability_metadata):
+                    responsive_formats_by_key.setdefault(_responsive_format_key(fmt), fmt)
+                continue
+            for format_id in _fixed_display_format_ids_for_capabilities(capability_metadata):
+                fixed_formats.add((format_id, parsed[0], parsed[1]))
+
+    formats = [
+        {
+            "agent_url": DEFAULT_CREATIVE_AGENT_URL,
+            "id": format_id,
+            "width": width,
+            "height": height,
+        }
+        for format_id, width, height in sorted(fixed_formats, key=lambda item: (item[1], item[2], item[0]))
+    ]
+    formats.extend(responsive_formats_by_key[key] for key in sorted(responsive_formats_by_key))
+    return formats
+
+
+def _format_type_label(format_id: str) -> str:
+    if format_id in GAM_CANONICAL_DISPLAY_FORMAT_LABELS:
+        return GAM_CANONICAL_DISPLAY_FORMAT_LABELS[format_id]
+    legacy_display = re.match(r"display_\d+x\d+_(image|html|js)$", format_id)
+    if legacy_display:
+        return GAM_CANONICAL_DISPLAY_FORMAT_LABELS.get(f"display_{legacy_display.group(1)}", legacy_display.group(1))
+    return format_id.replace("_", " ")
+
+
+def _format_display_groups(formats: list[dict]) -> list[dict]:
+    """Group parameterized creative formats into human-readable size rows."""
+    grouped: dict[tuple[int, int], set[str]] = {}
+    standalone: list[dict] = []
+
+    for fmt in formats or []:
+        format_id = fmt.get("id") or fmt.get("format_id") or ""
+        label = _format_type_label(format_id)
+        size = _size_to_tuple(fmt)
+        if size:
+            grouped.setdefault(size, set()).add(label)
+        elif label:
+            standalone.append({"label": label})
+
+    ordered = []
+    label_order = {label: i for i, label in enumerate(GAM_CANONICAL_DISPLAY_FORMAT_LABELS.values())}
+    for width, height in sorted(grouped):
+        labels = sorted(grouped[(width, height)], key=lambda item: label_order.get(item, len(label_order)))
+        ordered.append({"size": f"{width}x{height}", "types": labels})
+
+    ordered.extend(standalone)
+    return ordered
+
+
+def _format_display_summary_for_groups(groups: list[dict], limit: int = 2) -> list[str]:
+    summary = []
+    for group in groups:
+        if group.get("size"):
+            summary.append(f"{group['size']} {'/'.join(group['types'])}")
+        elif group.get("label"):
+            summary.append(group["label"])
+    return summary[:limit]
+
+
+def _format_display_summary(formats: list[dict], limit: int = 2) -> list[str]:
+    return _format_display_summary_for_groups(_format_display_groups(formats), limit)
+
+
 def _authorized_publisher_domains(session, tenant_id: str, tenant: Tenant) -> set[str]:
     """Publisher domains this tenant can author into buyer-visible bundles."""
     domains = {tenant.primary_domain} if tenant.primary_domain else set()
@@ -80,6 +341,19 @@ def _authorized_publisher_domains(session, tenant_id: str, tenant: Tenant) -> se
         if d
     )
     return domains
+
+
+def _bundle_property_domains(tenant: Tenant, discovered_domains: Sequence[str]) -> list[str]:
+    """Domains worth showing in the bundle editor."""
+    domains = sorted({tenant.primary_domain, *discovered_domains})
+    non_local = [domain for domain in domains if domain and domain != "localhost" and not domain.endswith(".localhost")]
+    if non_local:
+        return non_local
+    return [tenant.primary_domain] if tenant.primary_domain else []
+
+
+def _default_property_tag_rows(tenant_domains: Sequence[str]) -> list[dict[str, str]]:
+    return [{"domain": domain, "tags": "all_inventory"} for domain in tenant_domains if domain]
 
 
 def _parse_tag_publisher_properties(form, default_domain: str, allowed_domains: set[str]) -> list[dict]:
@@ -151,14 +425,12 @@ def _get_format_summary(formats: list[dict], tenant_id: str) -> str:
     if not formats:
         return "No formats"
 
-    # Group by type for simpler display
-    format_names = []
-    for fmt in formats[:5]:  # Limit to first 5
-        format_names.append(fmt.get("id", "Unknown"))
+    groups = _format_display_groups(formats)
+    format_names = _format_display_summary_for_groups(groups, limit=5)
 
     summary = ", ".join(format_names)
-    if len(formats) > 5:
-        summary += f" (+{len(formats) - 5} more)"
+    if len(groups) > 5:
+        summary += f" (+{len(groups) - 5} more)"
 
     return summary
 
@@ -277,6 +549,7 @@ def _build_bundle_card(profile: InventoryProfile, product_count: int) -> dict:
     ad_units = config.get("ad_units") or []
     placements = config.get("placements") or []
     formats = profile.format_ids or []
+    format_groups = _format_display_groups(formats)
     publisher_properties = profile.publisher_properties or []
 
     # Property tags vs property_ids — both shapes are valid; the design
@@ -298,6 +571,8 @@ def _build_bundle_card(profile: InventoryProfile, product_count: int) -> dict:
         "placement_count": len(placements),
         "format_count": len(formats),
         "format_ids": [f.get("id", "") for f in formats][:4],
+        "format_group_count": len(format_groups),
+        "format_labels": _format_display_summary_for_groups(format_groups),
         "property_mode": property_mode,
         "property_tags": sorted(set(property_tags)),
         "property_id_count": property_id_count,
@@ -537,6 +812,19 @@ def _format_ad_unit_sizes(row) -> list[str]:
     return formatted
 
 
+def _format_inventory_capabilities(row) -> dict:
+    metadata = (row.raw or {}).get("metadata") or {}
+    return _adcp_inventory_capabilities(metadata)
+
+
+def _has_unclassified_special_size(row) -> bool:
+    metadata = (row.raw or {}).get("metadata") or {}
+    sizes = metadata.get("sizes") or []
+    return any(_is_gam_special_size(_size_to_tuple(size)) for size in sizes) and not _special_size_is_classified(
+        metadata
+    )
+
+
 def _bundle_membership_counts(session, tenant_id: str, ids_by_key: dict[str, set[str]]) -> dict[str, dict[str, int]]:
     """Return direct bundle membership counts for picker row badges."""
     counts: dict[str, dict[str, int]] = {"ad_units": {}, "placements": {}}
@@ -575,6 +863,8 @@ def _inventory_picker_row(row, bundle_count: int = 0) -> dict:
         "child_count": len(child_ids),
         "parent_id": str(metadata.get("parent_id") or "") if row.entity_type == "ad_unit" else "",
         "sizes": _format_ad_unit_sizes(row) if row.entity_type == "ad_unit" else [],
+        "capabilities": _format_inventory_capabilities(row),
+        "needs_capability_setup": _has_unclassified_special_size(row) if row.entity_type == "ad_unit" else False,
         "bundle_count": bundle_count,
     }
 
@@ -699,11 +989,7 @@ def add_inventory_profile(tenant_id: str):
                 "include_descendants": form_data.get("include_descendants") == "on",
             }
 
-            # Parse formats
-            formats = json.loads(form_data.get("formats", "[]"))
-            if not formats:
-                flash("At least one creative format is required", "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            submitted_formats = json.loads(form_data.get("formats", "[]"))
 
             # Parse publisher properties based on property_mode
             # NOTE: New unified inventory page sends either:
@@ -794,6 +1080,18 @@ def add_inventory_profile(tenant_id: str):
                     flash(f"Inventory bundle with ID '{profile_id}' already exists", "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
+                unclassified_special_units = _unclassified_gam_special_size_units(session, tenant_id, inventory_config)
+                if unclassified_special_units:
+                    flash("Classify GAM 1x1 special inventory before saving this bundle.", "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                formats = _derive_canonical_format_ids_from_inventory(session, tenant_id, inventory_config)
+                if not formats:
+                    formats = submitted_formats
+                if not formats:
+                    flash("Pick inventory with synced creative sizes before saving this bundle.", "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
                 profile = InventoryProfile(
                     tenant_id=tenant_id,
                     profile_id=profile_id,
@@ -840,7 +1138,7 @@ def add_inventory_profile(tenant_id: str):
         domain_rows = session.scalars(
             select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
         ).all()
-        tenant_domains = sorted({tenant.primary_domain, *domain_rows})
+        tenant_domains = _bundle_property_domains(tenant, domain_rows)
 
         seed_placement = (request.args.get("seed_placement") or "").strip()
         profile = InventoryProfile(
@@ -884,7 +1182,7 @@ def add_inventory_profile(tenant_id: str):
         authorized_properties=authorized_properties,
         property_tags=property_tags_list,
         tenant_domains=tenant_domains,
-        tag_rows=[{"domain": tenant.primary_domain, "tags": ""}],
+        tag_rows=_default_property_tag_rows(tenant_domains),
         bundle_summary=bundle_summary,
         blast_radius=[],
         inventory_names=inventory_names,
@@ -930,10 +1228,23 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 }
                 profile.inventory_config = inventory_config
 
-                # Update formats
-                formats = json.loads(form_data.get("formats", "[]"))
-                if formats:
-                    profile.format_ids = formats
+                submitted_formats = json.loads(form_data.get("formats", "[]"))
+                unclassified_special_units = _unclassified_gam_special_size_units(session, tenant_id, inventory_config)
+                if unclassified_special_units:
+                    flash("Classify GAM 1x1 special inventory before saving this bundle.", "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
+
+                formats = _derive_canonical_format_ids_from_inventory(session, tenant_id, inventory_config)
+                if not formats:
+                    formats = submitted_formats
+                if not formats:
+                    flash("Pick inventory with synced creative sizes before saving this bundle.", "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
+                profile.format_ids = formats
 
                 # Update publisher properties based on property_mode
                 property_mode = form_data.get("property_mode", "tags")
@@ -1085,7 +1396,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         domain_rows = session.scalars(
             select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
         ).all()
-        tenant_domains = sorted({tenant.primary_domain, *domain_rows})
+        tenant_domains = _bundle_property_domains(tenant, domain_rows)
 
         # Initial tag-mode rows for progressive-enhancement render (#532).
         # If the bundle is in tag mode, one row per existing publisher_properties
@@ -1101,7 +1412,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                     }
                 )
         if not tag_rows:
-            tag_rows = [{"domain": tenant.primary_domain, "tags": ""}]
+            tag_rows = _default_property_tag_rows(tenant_domains)
 
         product_count = (
             session.scalar(select(func.count()).select_from(Product).where(Product.inventory_profile_id == profile_id))
@@ -1247,7 +1558,7 @@ def reuse_inventory_bundles(tenant_id: str):
     external_id = (request.args.get("item") or "").strip()
     kind = (request.args.get("kind") or "").strip()
     if not external_id or kind not in {"placement", "ad_unit"}:
-        flash("Missing item or kind for Reuse — pick a row from the bundles list.", "error")
+        flash("Missing item or kind — pick a row from the bundles list.", "error")
         return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
     with get_db_session() as session:
@@ -1297,7 +1608,7 @@ def reuse_inventory_bundles_save(tenant_id: str):
     external_id = (request.form.get("item") or "").strip()
     kind = (request.form.get("kind") or "").strip()
     if not external_id or kind not in {"placement", "ad_unit"}:
-        flash("Missing item or kind on Reuse submission.", "error")
+        flash("Missing item or kind on add-to-bundles submission.", "error")
         return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
     selected_ids = [int(b) for b in request.form.getlist("bundle_ids") if b.strip().isdigit()]
@@ -1481,7 +1792,7 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
 @inventory_profiles_bp.route("/<int:profile_id>/preview")
 @require_tenant_access()
 def preview_inventory_profile(tenant_id: str, profile_id: int):
-    """HTML preview of how a buyer's agent sees this bundle via ``list_products``.
+    """HTML preview of the buyer-facing bundle card.
 
     The "shipped something" moment for operators (#531) — clicking Preview on
     the edit page or the list-page overflow now lands on a real page that
@@ -1535,6 +1846,7 @@ def preview_inventory_profile(tenant_id: str, profile_id: int):
             property_tags=sorted(set(property_tags)),
             property_id_count=property_id_count,
             publisher_properties=publisher_properties,
+            format_groups=_format_display_groups(profile.format_ids or []),
             active_tab="inventory_profiles",
         )
 

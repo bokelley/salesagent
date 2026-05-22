@@ -156,7 +156,7 @@
                                         {{ 'item' if blast_radius | length == 1 else 'items' }}
                                         in this bundle
                                         {{ 'is' if blast_radius | length == 1 else 'are' }}
-                                        reused in other bundles. Edits to inventory <em>here</em> don't affect those —
+                                        also in other bundles. Edits to inventory <em>here</em> don't affect those —
                                         bundles share placements, they don't share state.
                                     </p>
                                     {% for r in blast_radius[:5] %}
@@ -182,8 +182,8 @@
                             {% else %}
                                 <div class="usedby">
                                     <div class="usedby__empty">
-                                        Nothing in this bundle is reused yet. That's fine — bundles share
-                                        placements freely once you start adding the same inventory to multiple bundles.
+                                        No inventory in this bundle appears in another bundle yet. That's fine —
+                                        bundles can share placements freely.
                                     </div>
                                 </div>
                             {% endif %}
@@ -210,7 +210,7 @@
                                        placeholder="e.g., Homepage Premium Display"
                                        value="{{ profile.name }}">
                                 <span class="hint">
-                                    Buyer-visible. Shows in <code>list_products</code>. Sentence case, no terminal punctuation.
+                                    Buyer-facing name. Use sentence case with no terminal punctuation
                                 </span>
                             </div>
                             {# Profile ID is the internal slug — carried as hidden so POST validates. #}
@@ -220,7 +220,7 @@
                                 <textarea id="description" name="description" rows="3"
                                     placeholder='Tell buyers what they get. Be factual, but explain why it&apos;s worth buying.&#10;e.g. "Our homepage — 100% viewable, sub-1s load, no creative rotation."'>{{ profile.description if profile.description else '' }}</textarea>
                                 <span class="hint">
-                                    Shows in <code>list_products</code> when buyers discover your inventory. Treat it as merchandising copy.
+                                    Shown to buyers when they discover your inventory. Treat it as merchandising copy
                                 </span>
                             </div>
                         </div>
@@ -283,26 +283,18 @@
                     <div class="card">
                         <div class="card__header">
                             <div>
-                                <h2 class="card__title">Creative formats *</h2>
-                                <p class="card__sub">Which creative formats this bundle accepts. Buyers filter on this.</p>
+                                <h2 class="card__title">Creative formats</h2>
+                                <p class="card__sub">
+                                    Automatically derived from selected GAM inventory sizes and rendering settings.
+                                </p>
                             </div>
                         </div>
                         <div class="card__body">
-                            <div id="format-search-box" style="margin-bottom: 12px;">
-                                <input type="text" id="format-search-input" placeholder="Search formats by name, type, or size…"
-                                       style="width: 100%; padding: 6px 10px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px;">
-                            </div>
-
-                            <div id="selected-formats" style="margin-bottom: 12px; padding: 10px 12px; background: var(--sig-bg-info); border: 1px solid var(--sig-bd-default); border-radius: 6px; min-height: 44px; display: none;">
-                                <div style="font-weight: 600; margin-bottom: 6px; color: var(--sig-fg-primary); font-size: 12px;">Selected formats</div>
-                                <div id="selected-formats-list" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
-                            </div>
-
-                            <div id="format-list">
-                                <div id="format-loading" style="text-align: center; padding: 24px; color: var(--sig-fg-tertiary);">
-                                    Loading formats from creative agents…
+                            <div id="format-derived-panel" style="padding: 12px 14px; background: var(--sig-bg-info); border: 1px solid var(--sig-bd-default); border-radius: 6px;">
+                                <div id="format-derived-status" style="color: var(--sig-fg-secondary); font-size: 13px;">
+                                    Pick inventory to detect creative formats.
                                 </div>
-                                <div id="format-results" style="display: none;"></div>
+                                <div id="format-derived-list" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;"></div>
                             </div>
 
                             <input type="hidden" id="formats-data" name="formats" value="[]">
@@ -313,173 +305,29 @@
                     <div class="card">
                         <div class="card__header">
                             <div>
-                                <h2 class="card__title">Publisher properties *</h2>
+                                <h2 class="card__title">Properties</h2>
                                 <p class="card__sub">
-                                    Which sites, apps or newsletters this inventory represents. Required —
-                                    buyers filter inventory by site and app.
+                                    This bundle is available across all authorized properties by default.
+                                    Map properties to placements in inventory setup when a bundle needs narrower scope.
                                 </p>
                             </div>
                         </div>
                         <div class="card__body">
-                            <div class="field" style="margin-bottom: 14px;">
-                                <label style="display: block; padding: 6px 0;">
-                                    <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
-                                    Use property tags (recommended)
-                                </label>
-                                <span class="hint" style="margin-left: 20px;">
-                                    Tags group related properties. Buyers fetch details via <code>list_authorized_properties</code>.
-                                </span>
-                                <label style="display: block; padding: 6px 0; margin-top: 6px;">
-                                    <input type="radio" name="property_mode" value="property_ids" onchange="togglePropertyMode()">
-                                    Select specific properties (by ID)
-                                </label>
-                                <span class="hint" style="margin-left: 20px;">
-                                    Pin exact property IDs for precise control.
-                                </span>
-                                <label style="display: block; padding: 6px 0; margin-top: 6px;">
-                                    <input type="radio" name="property_mode" value="full" onchange="togglePropertyMode()">
-                                    Specify full properties (legacy)
-                                </label>
-                                <span class="hint" style="margin-left: 20px;">
-                                    Complete property objects — for backward compatibility only.
-                                </span>
-                            </div>
-
-                            <div id="property-tags-section" style="margin-top: 12px;">
-                                {# Multi-domain editor (#532). One row per
-                                   ``publisher_properties`` entry. Each row =
-                                   {publisher_domain, tags}. Tenants with more
-                                   than one authorized domain can bundle them
-                                   independently. #}
-                                {% if property_tags %}
-                                    <datalist id="property_tags_suggestions">
-                                        {% for t in property_tags %}
-                                            <option value="{{ t.tag_id }}"></option>
-                                        {% endfor %}
-                                    </datalist>
-                                {% endif %}
-
-                                <div class="prop-rows" id="prop-rows">
-                                    {% for row in tag_rows %}
-                                        <div class="prop-row" data-prop-row>
-                                            <div class="prop-row__domain">
-                                                <label>Publisher domain *</label>
-                                                <select name="publisher_domain[]" required>
-                                                    {% for d in tenant_domains %}
-                                                        <option value="{{ d }}"
-                                                            {% if d == row.domain %}selected{% endif %}>{{ d }}</option>
-                                                    {% endfor %}
-                                                </select>
-                                            </div>
-                                            <div class="prop-row__tags">
-                                                <label>Property tags *</label>
-                                                <input type="text" name="property_tags[]"
-                                                       value="{{ row.tags }}"
-                                                       placeholder="e.g., all_inventory, premium, sports"
-                                                       autocomplete="off"
-                                                       {% if property_tags %}list="property_tags_suggestions"{% endif %}>
-                                            </div>
-                                            <button type="button" class="prop-row__remove"
-                                                    data-remove-row
-                                                    aria-label="Remove this publisher domain row"
-                                                    {% if loop.first and tag_rows | length == 1 %}hidden{% endif %}>
-                                                Remove
-                                            </button>
-                                        </div>
-                                    {% endfor %}
-                                </div>
-
-                                <button type="button" class="btn btn-secondary btn-sm" id="prop-rows-add">
-                                    + Add another publisher domain
-                                </button>
-
-                                {% if property_tags %}
-                                    <div class="tag-pick" id="tag-pick"
-                                         aria-label="Available tags — click to add to the focused row">
-                                        {% for t in property_tags %}
-                                            <button type="button" class="tag-pick__chip"
-                                                    data-tag="{{ t.tag_id }}">
-                                                {{ t.tag_id }}
-                                            </button>
-                                        {% endfor %}
-                                    </div>
-                                    <span class="hint">
-                                        Click a chip to add it to the active row's tags, or type a new one.
-                                        Tags are normalized on blur ("Premium Sports" → "premium_sports").
-                                    </span>
-                                {% else %}
-                                    <span class="hint">
-                                        Comma-separated tags per row. No known tags yet — once you tag
-                                        publisher properties, they'll suggest here.
-                                    </span>
-                                {% endif %}
-
-                                {# Template node cloned by JS when "+ Add another publisher domain" fires. #}
-                                <template id="prop-row-template">
+                            <input type="hidden" name="property_mode" value="tags">
+                            <div class="prop-rows" id="prop-rows" hidden>
+                                {% for row in tag_rows %}
                                     <div class="prop-row" data-prop-row>
-                                        <div class="prop-row__domain">
-                                            <label>Publisher domain *</label>
-                                            <select name="publisher_domain[]" required>
-                                                {% for d in tenant_domains %}
-                                                    <option value="{{ d }}">{{ d }}</option>
-                                                {% endfor %}
-                                            </select>
-                                        </div>
-                                        <div class="prop-row__tags">
-                                            <label>Property tags *</label>
-                                            <input type="text" name="property_tags[]"
-                                                   placeholder="e.g., all_inventory, premium, sports"
-                                                   autocomplete="off"
-                                                   {% if property_tags %}list="property_tags_suggestions"{% endif %}>
-                                        </div>
-                                        <button type="button" class="prop-row__remove" data-remove-row
-                                                aria-label="Remove this publisher domain row">
-                                            Remove
-                                        </button>
+                                        <input type="hidden" name="publisher_domain[]" value="{{ row.domain or tenant.primary_domain }}">
+                                        <input type="hidden" name="property_tags[]" value="{{ row.tags or 'all_inventory' }}">
                                     </div>
-                                </template>
+                                {% endfor %}
                             </div>
-
-                            <div id="property-ids-section" style="margin-top: 12px; display: none;">
-                                <div class="field">
-                                    <label>Select specific properties *</label>
-                                    <span class="hint" style="margin-bottom: 6px;">Pick one or more from your authorized inventory.</span>
-                                    {% if authorized_properties and authorized_properties|length > 0 %}
-                                        <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 6px; background: var(--sig-bg-page);">
-                                            {% for prop in authorized_properties %}
-                                                <label style="display: block; padding: 6px 8px; border-bottom: 1px solid var(--sig-bd-hairline); cursor: pointer;">
-                                                    <input type="checkbox" name="selected_property_ids" value="{{ prop.property_id }}" style="margin-right: 6px;">
-                                                    <strong>{{ prop.name or prop.property_id }}</strong>
-                                                    <span style="color: var(--sig-fg-tertiary); font-size: 12px;">({{ prop.property_type }})</span>
-                                                </label>
-                                            {% endfor %}
-                                        </div>
-                                    {% else %}
-                                        <div style="background: var(--sig-bg-info); border: 1px solid var(--sig-bd-default); padding: 12px; border-radius: 6px; font-size: 13px;">
-                                            <strong>No publisher properties found.</strong>
-                                            <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab">
-                                                Add publisher partnerships →
-                                            </a>
-                                        </div>
-                                    {% endif %}
-                                </div>
-                            </div>
-
-                            <div id="property-full-section" style="margin-top: 12px; display: none;">
-                                <div style="background: var(--sig-bg-info); border-left: 4px solid var(--sig-amber, #d49b32); padding: 10px 14px; margin-bottom: 12px; font-size: 13px;">
-                                    <strong>Legacy mode.</strong> Backward compatibility only. New bundles should use tags or property IDs.
-                                </div>
-                                <div class="field">
-                                    <label for="publisher_properties">Publisher properties (JSON) *</label>
-                                    <textarea id="publisher_properties" name="publisher_properties" rows="8"
-                                              placeholder='[{"publisher_domain": "example.com", "property_tags": ["all_inventory"]}]'
-                                              style="font-family: var(--sig-mono); font-size: 12.5px;"></textarea>
-                                    {% if tenant and tenant.primary_domain %}
-                                        <button type="button" class="btn btn-sm btn-secondary" style="margin-top: 6px;" onclick="setDefaultProperties()">
-                                            Use Default ({{ tenant.primary_domain }})
-                                        </button>
-                                    {% endif %}
-                                </div>
+                            <div class="reuse-strip">
+                                <span class="reuse-strip__icon" aria-hidden="true">▦</span>
+                                <span>
+                                    <strong>All authorized properties</strong>
+                                    are included. Property-to-placement mapping belongs in inventory setup.
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -534,9 +382,8 @@
 </div>
 
 <script>
-// Format selection state
-let selectedFormats = new Set();
 let allFormats = [];
+let derivedFormats = [];
 
 // Pre-populate existing data
 const existingProfile = {
@@ -559,6 +406,8 @@ const INVENTORY_PICKER_LIMIT = {{ inventory_picker_limit | tojson }};
 const INVENTORY_CHIP_REUSE_ENABLED = {{ (not is_create) | tojson }};
 const BUNDLE_ADAPTER_ID = {{ (s.adapter_id or '') | tojson }};
 const KNOWN_PROPERTY_TAGS = new Set({{ known_property_tags | tojson | safe }});
+const DEFAULT_CREATIVE_AGENT_URL = 'https://creative.adcontextprotocol.org';
+const GAM_CANONICAL_DISPLAY_FORMAT_IDS = ['display_image', 'display_html', 'display_js'];
 
 // Base path for the Reuse page; picker rows and selected chips append
 // ``?item=<id>&kind=<kind>``. (#542)
@@ -612,6 +461,12 @@ function inventoryBundleBadge(row, cascade = false) {
     return 'not yet bundled';
 }
 
+function inventoryRowSecondaryAction(row, cascade = false) {
+    if (!INVENTORY_CHIP_REUSE_ENABLED) return '';
+    return `<a class="tree__use ${row.bundle_count ? '' : 'solo'}" href="${_escAttr(inventoryReuseHref(row))}">`
+        + `${_escAttr(inventoryBundleBadge(row, cascade))}<span class="tree__reuse-arrow">Add elsewhere →</span></a>`;
+}
+
 function seedInventoryNameMaps() {
     Object.entries(INVENTORY_PICKER || {}).forEach(([key, rows]) => {
         if (!INVENTORY_NAMES[key]) INVENTORY_NAMES[key] = {};
@@ -635,6 +490,7 @@ function syncInventorySelection() {
     writeInventoryHidden('ad_units');
     renderSelectedInventoryStrip();
     renderInventoryPicker(focusSelector);
+    updateDerivedFormats();
     if (typeof recomputeValidity === 'function') recomputeValidity();
 }
 
@@ -780,7 +636,7 @@ function renderPlacementRow(row, query) {
         + `<span class="id">#${_escAttr(row.id)}</span>`
         + `</button>`
         + `<span class="tree__meta"><span class="num">${row.child_count || children.length}</span><span>${(row.child_count || children.length) === 1 ? 'ad unit' : 'ad units'}</span></span>`
-        + `<a class="tree__use ${row.bundle_count ? '' : 'solo'}" href="${_escAttr(inventoryReuseHref(row))}">${_escAttr(inventoryBundleBadge(row))}<span class="tree__reuse-arrow">Reuse →</span></a>`
+        + inventoryRowSecondaryAction(row)
         + `</div>`;
 
     if (open && expandable) {
@@ -803,7 +659,7 @@ function renderAdUnitRow(row, depth = 0, cascade = false) {
         + `<span class="id">#${_escAttr(row.id)}</span>`
         + `</button>`
         + `<span class="tree__meta">${_escAttr(sizes || '—')}</span>`
-        + `<a class="tree__use ${row.bundle_count ? '' : 'solo'}" href="${_escAttr(inventoryReuseHref(row))}">${_escAttr(inventoryBundleBadge(row, cascade))}<span class="tree__reuse-arrow">Reuse →</span></a>`
+        + inventoryRowSecondaryAction(row, cascade)
         + `</div>`;
 }
 
@@ -918,7 +774,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // Pre-populate data after formats have loaded to avoid race condition
         prePopulateData();
     });
-    setupFormatSearch();
 
     // When the page is opened from the duplicate flow, the most common next
     // action is renaming the bundle. Autofocus + select the name so the
@@ -1046,39 +901,10 @@ function prePopulateInventoryConfig() {
 
 function prePopulateData() {
     prePopulateInventoryConfig();
+    updateDerivedFormats();
 
-    // Pre-populate formats (will be selected after formats load)
-    if (existingProfile.formats && existingProfile.formats.length > 0) {
-        existingProfile.formats.forEach(fmt => {
-            selectedFormats.add(fmt.id);
-        });
-        updateSelectedFormatsDisplay();
-        updateHiddenInput();
-        displayFormats(allFormats);
-    }
-
-    // Pre-populate publisher properties — detect mode and switch the
-    // visible section. Tag-mode rows are pre-rendered server-side from
-    // ``tag_rows`` so we don't repopulate them here (#532).
-    if (existingProfile.publisher_properties && existingProfile.publisher_properties.length > 0) {
-        const firstProp = existingProfile.publisher_properties[0];
-        if (firstProp.property_ids && Array.isArray(firstProp.property_ids)) {
-            document.querySelector('input[name="property_mode"][value="property_ids"]').checked = true;
-            togglePropertyMode();
-            firstProp.property_ids.forEach(propId => {
-                const checkbox = document.querySelector(`input[name="selected_property_ids"][value="${propId}"]`);
-                if (checkbox) checkbox.checked = true;
-            });
-        } else if (firstProp.property_tags && Array.isArray(firstProp.property_tags)) {
-            document.querySelector('input[name="property_mode"][value="tags"]').checked = true;
-            togglePropertyMode();
-            // Server already rendered the rows from ``tag_rows`` — nothing to do here.
-        } else {
-            document.querySelector('input[name="property_mode"][value="full"]').checked = true;
-            togglePropertyMode();
-            document.getElementById('publisher_properties').value = JSON.stringify(existingProfile.publisher_properties, null, 2);
-        }
-    }
+    // Publisher properties are rendered server-side as hidden all-property
+    // defaults. Placement-specific property mapping belongs in inventory setup.
 
     // Pre-populate targeting template
     if (existingProfile.targeting_template) {
@@ -1105,11 +931,7 @@ async function loadFormats() {
         // Check for errors
         if (data.error) {
             console.error('API returned error:', data);
-            document.getElementById('format-loading').innerHTML = `
-                <div style="color: #e74c3c; padding: 1rem; background: #fee; border: 1px solid #fcc; border-radius: 4px;">
-                    <strong>⚠️ Error loading formats:</strong> ${data.message || data.error}
-                </div>
-            `;
+            updateDerivedFormats();
             return;
         }
 
@@ -1123,150 +945,264 @@ async function loadFormats() {
 
         console.log(`✅ Loaded ${allFormats.length} formats from ${Object.keys(data.agents || {}).length} agent(s)`);
 
-        document.getElementById('format-loading').style.display = 'none';
-        displayFormats(allFormats);
+        updateDerivedFormats();
     } catch (error) {
         console.error('Error loading formats:', error);
-        document.getElementById('format-loading').innerHTML = `
-            <div style="color: #e74c3c; padding: 1rem; background: #fee; border: 1px solid #fcc; border-radius: 4px;">
-                <strong>⚠️ Network error loading formats:</strong> ${error.message}
-            </div>
-        `;
+        updateDerivedFormats();
     }
 }
 
-function setupFormatSearch() {
-    const searchBox = document.getElementById('format-search-input');
-    let searchTimeout;
+function formatIdValue(format) {
+    const fid = format && format.format_id;
+    if (fid && typeof fid === 'object') return fid.id || '';
+    return typeof fid === 'string' ? fid : '';
+}
 
-    searchBox.addEventListener('input', function(e) {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => {
-            const query = e.target.value.toLowerCase().trim();
-            if (query.length === 0) {
-                displayFormats(allFormats);
-            } else {
-                const filtered = allFormats.filter(fmt =>
-                    fmt.format_id.toLowerCase().includes(query) ||
-                    fmt.name.toLowerCase().includes(query) ||
-                    (fmt.description && fmt.description.toLowerCase().includes(query))
-                );
-                displayFormats(filtered);
-            }
-        }, 300);
+function formatAgentUrl(format) {
+    const fid = format && format.format_id;
+    return format?.agent_url || (fid && typeof fid === 'object' ? fid.agent_url : null) || DEFAULT_CREATIVE_AGENT_URL;
+}
+
+function canonicalFormatRef(id) {
+    const matching = allFormats.find(fmt => formatIdValue(fmt) === id);
+    return {
+        id,
+        agent_url: matching ? formatAgentUrl(matching) : DEFAULT_CREATIVE_AGENT_URL,
+    };
+}
+
+function sortSizeStrings(a, b) {
+    const [aw, ah] = a.split('x').map(Number);
+    const [bw, bh] = b.split('x').map(Number);
+    return (aw - bw) || (ah - bh);
+}
+
+function sizeFromValue(value) {
+    if (!value) return null;
+    if (typeof value === 'string' && value.includes('x')) {
+        const [w, h] = value.split('x').map(Number);
+        return Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h}` : null;
+    }
+    if (typeof value === 'object' && value.width && value.height) {
+        const w = Number(value.width);
+        const h = Number(value.height);
+        return Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h}` : null;
+    }
+    return null;
+}
+
+function addRowSizes(row, sizes) {
+    (row?.sizes || []).forEach(size => {
+        const parsed = sizeFromValue(size);
+        if (parsed && parsed !== '1x1') sizes.add(parsed);
     });
 }
 
-function displayFormats(formats) {
-    const container = document.getElementById('format-results');
-
-    if (formats.length === 0) {
-        container.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--sa-text-muted);">No formats found</div>';
-        container.style.display = 'block';
-        return;
-    }
-
-    // Group by category (format type removed in adcp 3.12)
-    const grouped = {};
-    formats.forEach(fmt => {
-        const cat = fmt.category || 'standard';
-        if (!grouped[cat]) {
-            grouped[cat] = [];
-        }
-        grouped[cat].push(fmt);
-    });
-
-    let html = '';
-    for (const [type, typeFormats] of Object.entries(grouped)) {
-        html += `
-            <div style="margin-bottom: 2rem;">
-                <h4 style="margin-bottom: 1rem; text-transform: capitalize; color: #2c3e50; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem;">${type}</h4>
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
-        `;
-
-        typeFormats.forEach(format => {
-            const isSelected = selectedFormats.has(format.format_id);
-            const borderColor = isSelected ? '#0066cc' : '#e0e0e0';
-            const bgColor = isSelected ? '#f0f7ff' : '#f9f9f9';
-            const checkIcon = isSelected ? '✓ ' : '';
-
-            html += `
-                <div style="border: 2px solid ${borderColor}; border-radius: 4px; padding: 0.75rem; background: ${bgColor}; cursor: pointer; transition: all 0.2s;"
-                     onclick="toggleFormat('${format.format_id}', '${format.name}', '${format.agent_url || ''}')">
-                    <div style="font-weight: 600; color: #333;">${checkIcon}${format.name}</div>
-                    ${format.description ? `<div style="color: #777; font-size: 0.85rem; margin-top: 0.25rem;">${format.description}</div>` : ''}
-                </div>
-            `;
-        });
-
-        html += '</div></div>';
-    }
-
-    container.innerHTML = html;
-    container.style.display = 'block';
+function rowCapabilities(row, fallbackCapabilities = null) {
+    const own = row?.capabilities || {};
+    if (own && Object.keys(own).length > 0) return own;
+    return fallbackCapabilities || {};
 }
 
-function toggleFormat(formatId, formatName, agentUrl) {
-    if (selectedFormats.has(formatId)) {
-        selectedFormats.delete(formatId);
-    } else {
-        selectedFormats.add(formatId);
-    }
-
-    updateSelectedFormatsDisplay();
-    updateHiddenInput();
-    displayFormats(allFormats); // Refresh display to show selection state
+function capabilitySlotKind(capabilities) {
+    return capabilities?.slot_kind || capabilities?.special_size?.kind || '';
 }
 
-function updateSelectedFormatsDisplay() {
-    const container = document.getElementById('selected-formats');
-    const list = document.getElementById('selected-formats-list');
-
-    if (selectedFormats.size === 0) {
-        container.style.display = 'none';
-        return;
-    }
-
-    container.style.display = 'block';
-
-    let html = '';
-    selectedFormats.forEach(formatId => {
-        const format = allFormats.find(f => f.format_id === formatId);
-        if (format) {
-            html += `
-                <span style="background: #0066cc; color: white; padding: 0.5rem 0.75rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.5rem;">
-                    ${format.name}
-                    <span style="cursor: pointer; font-weight: bold;" onclick="event.stopPropagation(); toggleFormat('${formatId}', '${format.name}', '${format.agent_url || ''}')">×</span>
-                </span>
-            `;
-        }
-    });
-
-    list.innerHTML = html;
+function displayFormatIdsForCapabilities(capabilities) {
+    const modes = capabilities?.render_modes || null;
+    if (!modes || typeof modes !== 'object') return GAM_CANONICAL_DISPLAY_FORMAT_IDS;
+    const ids = [];
+    if (modes.image) ids.push('display_image');
+    if (modes.html) ids.push('display_html');
+    if (modes.js) ids.push('display_js');
+    return ids.length ? ids : GAM_CANONICAL_DISPLAY_FORMAT_IDS;
 }
 
-function updateHiddenInput() {
-    // Store format references as JSON
-    const formatRefs = [];
-    selectedFormats.forEach(formatId => {
-        const format = allFormats.find(f => f.format_id === formatId);
-        if (format) {
-            formatRefs.push({
-                agent_url: format.agent_url || 'https://creative.adcontextprotocol.org',
-                format_id: formatId
+function fixedDisplayFormatIdsForCapabilities(capabilities) {
+    const slotKind = capabilitySlotKind(capabilities);
+    if (slotKind && !['fixed_display', 'responsive_display', 'rich_media'].includes(slotKind)) return [];
+    return displayFormatIdsForCapabilities(capabilities);
+}
+
+function addRowCanonicalFormats(row, formats, fallbackCapabilities = null) {
+    if (!row) return;
+    const capabilities = rowCapabilities(row, fallbackCapabilities);
+    (row.sizes || []).forEach(size => {
+        const parsed = sizeFromValue(size);
+        if (!parsed) return;
+        if (parsed === '1x1') {
+            const dims = capabilities?.dimensions || {};
+            const hasDims = ['min_width', 'max_width', 'min_height', 'max_height'].some(key => dims[key] !== undefined && dims[key] !== null && dims[key] !== '');
+            if (!hasDims) return;
+            displayFormatIdsForCapabilities(capabilities).forEach(formatId => {
+                const ref = canonicalFormatRef(formatId);
+                const format = {
+                    agent_url: ref.agent_url,
+                    id: ref.id,
+                };
+                ['min_width', 'max_width', 'min_height', 'max_height'].forEach(key => {
+                    if (dims[key] !== undefined && dims[key] !== null && dims[key] !== '') format[key] = Number(dims[key]);
+                });
+                formats.push(format);
             });
+            return;
         }
-    });
 
-    document.getElementById('formats-data').value = JSON.stringify(formatRefs);
+        const [width, height] = parsed.split('x').map(Number);
+        fixedDisplayFormatIdsForCapabilities(capabilities).forEach(formatId => {
+            const ref = canonicalFormatRef(formatId);
+            formats.push({
+                agent_url: ref.agent_url,
+                id: ref.id,
+                width,
+                height,
+            });
+        });
+    });
+}
+
+function addRowSpecialSizes(row, specialRows, fallbackCapabilities = null) {
+    if (!row) return;
+    const capabilities = rowCapabilities(row, fallbackCapabilities);
+    const hasSpecialSize = (row.sizes || []).some(size => sizeFromValue(size) === '1x1');
+    if (!hasSpecialSize || capabilitySlotKind(capabilities)) return;
+    specialRows.push({
+        id: row.id,
+        name: row.name,
+        kind: row.kind || 'ad_unit',
+    });
+}
+
+function selectedInventorySizes() {
+    const sizes = new Set();
+    inventorySelection.ad_units.forEach(id => addRowSizes(inventoryRowById('ad_units', id), sizes));
+    inventorySelection.placements.forEach(id => {
+        const placement = inventoryRowById('placements', id);
+        childRowsForPlacement(placement || {}).forEach(child => addRowSizes(child, sizes));
+    });
+    return Array.from(sizes).sort(sortSizeStrings);
+}
+
+function selectedInventorySpecialSizes() {
+    const specialRows = [];
+    const seen = new Set();
+    inventorySelection.ad_units.forEach(id => addRowSpecialSizes(inventoryRowById('ad_units', id), specialRows));
+    inventorySelection.placements.forEach(id => {
+        const placement = inventoryRowById('placements', id);
+        const placementCapabilities = rowCapabilities(placement);
+        childRowsForPlacement(placement || {}).forEach(child => addRowSpecialSizes(child, specialRows, placementCapabilities));
+    });
+    return specialRows.filter(row => {
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+    });
+}
+
+function deriveCanonicalFormatsFromInventory() {
+    const formats = [];
+    inventorySelection.ad_units.forEach(id => addRowCanonicalFormats(inventoryRowById('ad_units', id), formats));
+    inventorySelection.placements.forEach(id => {
+        const placement = inventoryRowById('placements', id);
+        const placementCapabilities = rowCapabilities(placement);
+        childRowsForPlacement(placement || {}).forEach(child => addRowCanonicalFormats(child, formats, placementCapabilities));
+    });
+    const seen = new Set();
+    return formats.filter(format => {
+        const key = JSON.stringify([
+            format.id,
+            format.width || null,
+            format.height || null,
+            format.min_width || null,
+            format.max_width || null,
+            format.min_height || null,
+            format.max_height || null,
+        ]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    }).sort((a, b) => (a.width || a.min_width || 0) - (b.width || b.min_width || 0) ||
+        (a.height || a.min_height || 0) - (b.height || b.min_height || 0) ||
+        String(a.id).localeCompare(String(b.id)));
+}
+
+function formatTypeLabel(formatId) {
+    if (formatId === 'display_image') return 'image';
+    if (formatId === 'display_html') return 'HTML5';
+    if (formatId === 'display_js') return 'JS';
+    return String(formatId || '').replaceAll('_', ' ');
+}
+
+function derivedFormatChips() {
+    const groups = new Map();
+    derivedFormats.forEach(format => {
+        let key = '';
+        if (format.width && format.height) {
+            key = `${format.width}x${format.height}`;
+        } else if (format.min_width || format.max_width || format.min_height || format.max_height) {
+            key = `${format.min_width || '?'}-${format.max_width || '?'}w × ${format.min_height || '?'}-${format.max_height || '?'}h`;
+        }
+        if (!key) return;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(formatTypeLabel(format.id));
+    });
+    return Array.from(groups.entries()).map(([size, types]) => ({size, types}));
+}
+
+function updateDerivedFormats() {
+    derivedFormats = deriveCanonicalFormatsFromInventory();
+    document.getElementById('formats-data').value = JSON.stringify(derivedFormats);
+    renderDerivedFormats();
+}
+
+function renderDerivedFormats() {
+    const status = document.getElementById('format-derived-status');
+    const list = document.getElementById('format-derived-list');
+    if (!status || !list) return;
+
+    const sizes = selectedInventorySizes();
+    const specialRows = selectedInventorySpecialSizes();
+    if ((inventorySelection.ad_units.size + inventorySelection.placements.size) === 0) {
+        status.textContent = 'Pick placements or ad units to detect creative formats.';
+        list.innerHTML = '';
+        return;
+    }
+    if (sizes.length === 0 && specialRows.length === 0) {
+        status.textContent = 'No creative sizes were found on the selected inventory. Choose synced inventory with sizes.';
+        list.innerHTML = '';
+        return;
+    }
+
+    const fixedText = sizes.length
+        ? `${sizes.length} fixed ${sizes.length === 1 ? 'size' : 'sizes'} detected.`
+        : 'No fixed creative sizes detected.';
+    const specialText = specialRows.length
+        ? ` ${specialRows.length} GAM 1x1 ${specialRows.length === 1 ? 'slot needs' : 'slots need'} capability setup before saving.`
+        : ' Formats use display creative types supported by GAM.';
+    status.textContent = fixedText + specialText;
+
+    const formatChips = derivedFormatChips().map(group => `
+        <span style="background: var(--sig-bg-card); color: var(--sig-fg-primary); border: 1px solid var(--sig-bd-hairline); padding: 5px 8px; border-radius: 999px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center;">
+            <strong>${_escAttr(group.size)}</strong>
+            <span style="color: var(--sig-fg-tertiary);">${_escAttr(group.types.join(' · '))}</span>
+        </span>
+    `);
+    const specialChips = specialRows.map(row => `
+        <span style="background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; padding: 5px 8px; border-radius: 999px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center;">
+            <strong>1x1 from GAM</strong>
+            <span>${_escAttr(row.name)} needs setup</span>
+        </span>
+    `);
+    list.innerHTML = formatChips.concat(specialChips).join('');
 }
 
 // Property mode toggle
 function togglePropertyMode() {
-    const mode = document.querySelector('input[name="property_mode"]:checked').value;
+    const mode = _propertyModeChecked();
     const tagsSection = document.getElementById('property-tags-section');
     const idsSection = document.getElementById('property-ids-section');
     const fullSection = document.getElementById('property-full-section');
+    if (!tagsSection || !idsSection || !fullSection) return;
 
     // Hide all sections first
     tagsSection.style.display = 'none';
@@ -1330,7 +1266,8 @@ function _normalizeTag(raw) {
 function _tagRowsFromForm() {
     const rows = document.querySelectorAll('#prop-rows .prop-row');
     return Array.from(rows).map((row) => {
-        const domain = (row.querySelector('select[name="publisher_domain[]"]')?.value || '').trim();
+        const domainEl = row.querySelector('select[name="publisher_domain[]"], input[name="publisher_domain[]"]');
+        const domain = (domainEl?.value || '').trim();
         const raw = row.querySelector('input[name="property_tags[]"]')?.value || '';
         const tags = raw.split(',').map((t) => t.trim()).filter(Boolean);
         return { domain, tags };
@@ -1342,7 +1279,9 @@ function _selectedPropertyIds() {
 }
 
 function _propertyModeChecked() {
-    return document.querySelector('input[name="property_mode"]:checked').value;
+    const checked = document.querySelector('input[name="property_mode"]:checked');
+    const hidden = document.querySelector('input[name="property_mode"]');
+    return (checked || hidden)?.value || 'tags';
 }
 
 function _adUnitIds() {
@@ -1369,12 +1308,9 @@ function computeValidity() {
     if (placements.length) invParts.push(placements.length + (placements.length === 1 ? ' placement' : ' placements'));
     if (adUnits.length) invParts.push(adUnits.length + (adUnits.length === 1 ? ' ad unit' : ' ad units'));
 
-    const formatCount = selectedFormats.size;
-    const selectedFormatIds = Array.from(selectedFormats);
-    const formatWarning = selectedFormatIds.some(id => id.toLowerCase().includes('video')) &&
-        ['freewheel', 'springserve'].includes(BUNDLE_ADAPTER_ID)
-        ? 'Bundle saves OK, but this adapter may not deliver the selected video format.'
-        : '';
+    const formatCount = derivedFormats.length;
+    const formatSizeCount = selectedInventorySizes().length;
+    const specialSizeCount = selectedInventorySpecialSizes().length;
 
     const mode = _propertyModeChecked();
     let propertyOk = false;
@@ -1409,7 +1345,7 @@ function computeValidity() {
                 const totalTags = rows.reduce((sum, r) => sum + r.tags.length, 0);
                 propertyText = rows.length === 1
                     ? `${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`
-                    : `${rows.length} domains · ${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`;
+                    : `${rows.length} sites/apps · ${totalTags} ${totalTags === 1 ? 'tag' : 'tags'}`;
                 const unknownTag = rows
                     .flatMap(r => r.tags.map(t => t.toLowerCase()))
                     .find(t => !KNOWN_PROPERTY_TAGS.has(t));
@@ -1478,11 +1414,12 @@ function computeValidity() {
             focusId: 'inventory-picker-search',
         }),
         formats: item({
-            ok: formatCount > 0,
-            warning: formatWarning,
-            text: formatCount > 0 ? formatCount.toString() : 'none',
-            message: formatWarning || 'Pick at least one creative format to save.',
-            focusId: 'format-search-input',
+            ok: formatCount > 0 && specialSizeCount === 0,
+            text: formatSizeCount > 0 ? `${formatSizeCount} ${formatSizeCount === 1 ? 'size' : 'sizes'}` : 'none',
+            message: specialSizeCount > 0
+                ? 'Classify GAM 1x1 special inventory before saving.'
+                : 'Pick inventory with synced creative sizes to save.',
+            focusId: 'inventory-picker-search',
         }),
         properties: item({
             ok: propertyOk,
@@ -1679,18 +1616,6 @@ if (profileForm) {
         }
         if (status) status.textContent = 'Saving bundle...';
     });
-}
-
-// Format toggle doesn't bubble a native input event from `selectedFormats`,
-// so hook into the existing toggleFormat() — wrap it. (#529)
-const _origToggleFormat = window.toggleFormat;
-if (typeof _origToggleFormat === 'function') {
-    window.toggleFormat = function (...args) {
-        const result = _origToggleFormat.apply(this, args);
-        recomputeValidity();
-        updateDirtyState();
-        return result;
-    };
 }
 
 document.addEventListener('keydown', (e) => {

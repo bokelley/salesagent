@@ -25,7 +25,7 @@
         <div class="form-group">
             <label for="name">Bundle Name *</label>
             <input type="text" id="name" name="name" required placeholder="e.g., Homepage Premium Display">
-            <small style="color: var(--sa-text-muted);">A short, descriptive name buyers will see in <code>list_products</code>.</small>
+            <small style="color: var(--sa-text-muted);">A short, descriptive buyer-facing name. Use sentence case with no terminal punctuation</small>
         </div>
 
         {# Profile ID is the internal slug — auto-generated server-side from
@@ -38,7 +38,7 @@
                 placeholder='Tell buyers what they get. Be factual, but explain why it&apos;s worth buying.
 e.g. "Our homepage — 100% viewable, sub-1s load, no creative rotation."'></textarea>
             <small style="color: var(--sa-text-muted);">
-                This shows in <code>list_products</code> when buyers discover your inventory. Treat it as merchandising copy.
+                Shown to buyers when they discover your inventory. Treat it as merchandising copy
             </small>
         </div>
 
@@ -124,7 +124,7 @@ e.g. "Our homepage — 100% viewable, sub-1s load, no creative rotation."'></tex
                     <input type="radio" name="property_mode" value="tags" checked onchange="togglePropertyMode()">
                     Use Property Tags (Recommended)
                 </label>
-                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible - buyers fetch property details via list_authorized_properties.</small>
+                <small style="display: block; color: var(--sa-text-muted); margin-left: 1.5rem;">Assign tags that group related properties. Simple and flexible for buyer discovery.</small>
             </div>
 
             <div class="form-group" style="margin-top: 0.5rem;">

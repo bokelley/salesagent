@@ -201,6 +201,14 @@ class GAMSyncRepository:
             )
         ).first()
 
+    def update_inventory_metadata(self, inventory_type: str, inventory_id: str, metadata: dict) -> GAMInventory | None:
+        """Replace metadata for one tenant-scoped synced inventory row."""
+        row = self.find_inventory_item(inventory_type, inventory_id)
+        if row is None:
+            return None
+        row.inventory_metadata = metadata
+        return row
+
     def list_inventory_by_ids(self, inventory_type: str, inventory_ids: list[str]) -> list[GAMInventory]:
         """Batch lookup: rows matching ``(inventory_type, inventory_id IN ...)``.
 

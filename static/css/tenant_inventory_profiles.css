@@ -1335,6 +1335,9 @@
     border-radius: 8px;
     background: var(--sig-bg-page);
 }
+.edit-page .prop-row--single {
+    grid-template-columns: 1fr;
+}
 .edit-page .prop-row label {
     display: block;
     font-size: 12px;

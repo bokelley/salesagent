@@ -7,9 +7,9 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tenant_inventory_profiles.css') }}">
 
 {#
-   Preview page (#531) — renders the bundle as a buyer's agent sees it via
-   ``list_products``. Replaces the old JSON-dumping endpoint with a real
-   page so "Preview" finally means preview, not "debug".
+   Preview page (#531) — renders the buyer-facing bundle card. Replaces
+   the old JSON-dumping endpoint with a real page so "Preview" finally
+   means preview, not "debug".
 #}
 
 <div class="edit-page">
@@ -23,14 +23,14 @@
         <header class="edit-page-header">
             <h1>Preview</h1>
             <p class="lead">
-                This is what a buyer's agent sees when it discovers your inventory via
-                <code>list_products</code> on <span class="pill-link">{{ adapter_label }}</span>.
+                This is what buyers see when they discover your inventory on
+                <span class="pill-link">{{ adapter_label }}</span>.
             </p>
         </header>
 
         <div class="preview-stack">
 
-            {# Buyer-facing card — what `list_products` actually returns. #}
+            {# Buyer-facing card. #}
             <article class="preview-card">
                 <div class="preview-card__head">
                     <h2 class="preview-card__name">{{ profile.name }}</h2>
@@ -83,13 +83,15 @@
                             Accepted creative formats
                             <span class="preview-section__count">{{ profile.format_ids | length }}</span>
                         </h3>
-                        {% if profile.format_ids %}
+                        {% if format_groups %}
                             <div class="preview-formats">
-                                {% for fmt in profile.format_ids %}
+                                {% for group in format_groups %}
                                     <span class="preview-format">
-                                        <span class="preview-format__id">{{ fmt.id }}</span>
-                                        {% if fmt.agent_url %}
-                                            <span class="preview-format__src">{{ fmt.agent_url }}</span>
+                                        {% if group.size %}
+                                            <span class="preview-format__id">{{ group.size }}</span>
+                                            <span class="preview-format__src">{{ group.types | join(' / ') }}</span>
+                                        {% else %}
+                                            <span class="preview-format__id">{{ group.label }}</span>
                                         {% endif %}
                                     </span>
                                 {% endfor %}

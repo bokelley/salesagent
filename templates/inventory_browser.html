@@ -400,9 +400,16 @@ function showInventoryDetail(item, type) {
     if (sizes.length > 0) {
         html += '<tr><th>Sizes:</th><td>';
         sizes.forEach(size => {
-            html += `<span class="inventory-size">${size.width}x${size.height}</span>`;
+            html += `<span class="inventory-size">${formatInventorySize(size)}</span>`;
         });
         html += '</td></tr>';
+    }
+
+    const capabilities = item.capabilities || (item.metadata && item.metadata.adcp_capabilities) || {};
+    if (capabilities.slot_kind) {
+        html += `<tr><th>Capabilities:</th><td>${formatCapabilities(capabilities)}</td></tr>`;
+    } else if (sizes.some(size => formatInventorySize(size) === '1x1')) {
+        html += '<tr><th>Capabilities:</th><td><span class="badge bg-warning text-dark">Needs setup</span></td></tr>';
     }
 
     if (item.metadata) {
@@ -422,6 +429,9 @@ function showInventoryDetail(item, type) {
             <button class="btn btn-sm btn-primary" onclick="assignToProduct()">
                 Assign to Product
             </button>
+            <a class="btn btn-sm btn-outline-primary" href="${scriptRoot}/tenant/${tenantId}/inventory/capabilities/${type}/${item.id}">
+                Configure capabilities
+            </a>
             <button class="btn btn-sm btn-secondary" onclick="copyInventoryId('${item.id}')">
                 Copy ID
             </button>
@@ -429,6 +439,30 @@ function showInventoryDetail(item, type) {
     `;
 
     detail.innerHTML = html;
+}
+
+function formatInventorySize(size) {
+    if (typeof size === 'string') return size;
+    if (size && size.width && size.height) return `${size.width}x${size.height}`;
+    return 'unknown';
+}
+
+function formatCapabilities(capabilities) {
+    const parts = [];
+    if (capabilities.slot_kind) {
+        parts.push(capabilities.slot_kind.replaceAll('_', ' '));
+    }
+    const dims = capabilities.dimensions || {};
+    if (dims.min_width || dims.max_width || dims.min_height || dims.max_height) {
+        parts.push(`${dims.min_width || '?'}-${dims.max_width || '?'}w × ${dims.min_height || '?'}-${dims.max_height || '?'}h`);
+    }
+    const modes = capabilities.render_modes || {};
+    const enabledModes = Object.entries(modes).filter(([, enabled]) => enabled).map(([mode]) => mode.toUpperCase());
+    if (enabledModes.length) parts.push(enabledModes.join(', '));
+    if (capabilities.safeframe && capabilities.safeframe !== 'unknown') {
+        parts.push(`SafeFrame ${capabilities.safeframe}`);
+    }
+    return parts.join(' · ');
 }
 
 function getStatusColor(status) {

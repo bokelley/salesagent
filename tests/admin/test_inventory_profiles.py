@@ -12,7 +12,7 @@ from werkzeug.datastructures import MultiDict
 
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Tenant
+from src.core.database.models import GAMInventory, InventoryProfile, Tenant
 from tests.factories import AuthorizedPropertyFactory, GAMInventoryFactory, InventoryProfileFactory, TenantFactory
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -128,6 +128,11 @@ class TestInventoryProfileCreate:
         assert "Create inventory bundle" in html
         assert "Create bundle" in html
         assert "Summary" in html
+        assert "Properties" in html
+        assert "all authorized properties" in html
+        assert "Publisher domain" not in html
+        assert "+ Add another site/app" not in html
+        assert 'type="hidden" name="publisher_domain[]"' in html
 
     def test_create_profile_with_tags_saves_to_db(self, client, test_tenant):
         """POST with valid tag-based config creates a profile."""
@@ -158,6 +163,220 @@ class TestInventoryProfileCreate:
             ).first()
         assert profile is not None
         assert profile.name == "New Tag Profile"
+
+    def test_create_profile_derives_canonical_formats_from_selected_gam_inventory(self, client, factory_session):
+        """Selected GAM sizes save as canonical parameterized display formats."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_id="au_formats",
+            name="Format Source Ad Unit",
+            inventory_metadata={
+                "parent_id": None,
+                "has_children": False,
+                "sizes": [{"width": 300, "height": 250}, {"width": 728, "height": 90}],
+            },
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data={
+                "name": "Derived Format Bundle",
+                "profile_id": "derived_format_bundle",
+                "description": "Created via test",
+                "targeted_ad_unit_ids": json.dumps(["au_formats"]),
+                "targeted_placement_ids": "[]",
+                "formats": "[]",
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            profile = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == tenant.tenant_id,
+                    InventoryProfile.profile_id == "derived_format_bundle",
+                )
+            ).first()
+
+        assert profile is not None
+        assert {fmt["id"] for fmt in profile.format_ids} == {"display_image", "display_html", "display_js"}
+        assert {(fmt["width"], fmt["height"]) for fmt in profile.format_ids} == {(300, 250), (728, 90)}
+        assert all(not fmt["id"].startswith("display_300x250") for fmt in profile.format_ids)
+
+    def test_create_profile_blocks_unclassified_gam_one_by_one_inventory(self, client, factory_session):
+        """GAM 1x1 is special inventory and must be classified before bundling."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_id="au_special_1x1",
+            name="Fluid Native Slot",
+            inventory_metadata={
+                "parent_id": None,
+                "has_children": False,
+                "sizes": [{"width": 1, "height": 1}],
+            },
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data={
+                "name": "Unclassified Special Bundle",
+                "profile_id": "unclassified_special_bundle",
+                "description": "Created via test",
+                "targeted_ad_unit_ids": json.dumps(["au_special_1x1"]),
+                "targeted_placement_ids": "[]",
+                "formats": "[]",
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            profile = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == tenant.tenant_id,
+                    InventoryProfile.profile_id == "unclassified_special_bundle",
+                )
+            ).first()
+
+        assert profile is None
+
+    def test_create_profile_derives_responsive_formats_from_classified_gam_one_by_one_inventory(
+        self, client, factory_session
+    ):
+        """A classified GAM 1x1 slot derives responsive display formats."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_id="au_responsive_1x1",
+            name="Responsive Display Slot",
+            inventory_metadata={
+                "parent_id": None,
+                "has_children": False,
+                "sizes": [{"width": 1, "height": 1}],
+                "adcp_capabilities": {
+                    "slot_kind": "responsive_display",
+                    "render_modes": {"image": True, "html": True, "js": False, "vast": False},
+                    "dimensions": {"min_width": 300, "max_width": 970, "min_height": 90, "max_height": 250},
+                    "safeframe": "supported",
+                    "special_size": {"kind": "responsive_display"},
+                },
+            },
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data={
+                "name": "Responsive Special Bundle",
+                "profile_id": "responsive_special_bundle",
+                "description": "Created via test",
+                "targeted_ad_unit_ids": json.dumps(["au_responsive_1x1"]),
+                "targeted_placement_ids": "[]",
+                "formats": "[]",
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            profile = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == tenant.tenant_id,
+                    InventoryProfile.profile_id == "responsive_special_bundle",
+                )
+            ).first()
+
+        assert profile is not None
+        assert {fmt["id"] for fmt in profile.format_ids} == {"display_image", "display_html"}
+        assert all("width" not in fmt and "height" not in fmt for fmt in profile.format_ids)
+        assert {
+            (fmt["min_width"], fmt["max_width"], fmt["min_height"], fmt["max_height"]) for fmt in profile.format_ids
+        } == {(300, 970, 90, 250)}
+
+    def test_create_profile_uses_placement_capabilities_for_child_gam_one_by_one_inventory(
+        self, client, factory_session
+    ):
+        """Placement capability setup classifies child 1x1 ad units in that placement."""
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_id="au_child_1x1",
+            name="Child Fluid Slot",
+            inventory_metadata={
+                "parent_id": "root",
+                "has_children": False,
+                "sizes": [{"width": 1, "height": 1}],
+            },
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_type="placement",
+            inventory_id="pl_responsive",
+            name="Responsive Placement",
+            inventory_metadata={
+                "ad_unit_ids": ["au_child_1x1"],
+                "adcp_capabilities": {
+                    "slot_kind": "responsive_display",
+                    "render_modes": {"image": False, "html": True, "js": True, "vast": False},
+                    "dimensions": {"min_width": 320, "max_width": 1280, "min_height": 50, "max_height": 600},
+                    "safeframe": "required",
+                    "special_size": {"kind": "responsive_display"},
+                },
+            },
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data={
+                "name": "Placement Responsive Bundle",
+                "profile_id": "placement_responsive_bundle",
+                "description": "Created via test",
+                "targeted_ad_unit_ids": "[]",
+                "targeted_placement_ids": json.dumps(["pl_responsive"]),
+                "include_descendants": "on",
+                "formats": "[]",
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            profile = session.scalars(
+                select(InventoryProfile).where(
+                    InventoryProfile.tenant_id == tenant.tenant_id,
+                    InventoryProfile.profile_id == "placement_responsive_bundle",
+                )
+            ).first()
+
+        assert profile is not None
+        assert {fmt["id"] for fmt in profile.format_ids} == {"display_html", "display_js"}
+        assert {
+            (fmt["min_width"], fmt["max_width"], fmt["min_height"], fmt["max_height"]) for fmt in profile.format_ids
+        } == {(320, 1280, 50, 600)}
+
 
     def test_create_profile_missing_name_redirects_without_creation(self, client, test_tenant):
         """POST without a name redirects back without creating a profile."""
@@ -233,6 +452,12 @@ class TestInventoryProfileCreate:
         factory_session.commit()
 
         _auth_session(client, tenant.tenant_id)
+        form_response = client.get(f"/tenant/{tenant.tenant_id}/inventory-profiles/add")
+        form_html = form_response.data.decode()
+        assert "all authorized properties" in form_html
+        assert "Site/app" not in form_html
+        assert "+ Add another site/app" not in form_html
+
         response = client.post(
             f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
             data=MultiDict(
@@ -306,6 +531,81 @@ class TestInventoryProfileCreate:
         assert saved is None
 
 
+class TestInventoryCapabilities:
+    """Test the inventory capability setup layer."""
+
+    def test_capabilities_form_renders_for_synced_inventory(self, client, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_id="au_capability_form",
+            name="Capability Form Ad Unit",
+            inventory_metadata={"sizes": [{"width": 1, "height": 1}]},
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.get(
+            f"/tenant/{tenant.tenant_id}/inventory/capabilities/ad_unit/au_capability_form",
+        )
+
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert "Inventory capabilities" in html
+        assert "Capability Form Ad Unit" in html
+        assert "1x1" in html
+
+    def test_capabilities_form_saves_metadata(self, client, factory_session):
+        tenant = TenantFactory(ad_server="google_ad_manager")
+        GAMInventoryFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            inventory_id="au_capability_save",
+            name="Capability Save Ad Unit",
+            inventory_metadata={"sizes": [{"width": 1, "height": 1}]},
+        )
+        factory_session.commit()
+
+        _auth_session(client, tenant.tenant_id)
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/inventory/capabilities/ad_unit/au_capability_save",
+            data={
+                "slot_kind": "responsive_display",
+                "min_width": "300",
+                "max_width": "970",
+                "min_height": "90",
+                "max_height": "250",
+                "render_image": "on",
+                "render_html": "on",
+                "safeframe": "supported",
+                "notes": "Responsive display slot.",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            row = session.scalars(
+                select(GAMInventory).where(
+                    GAMInventory.tenant_id == tenant.tenant_id,
+                    GAMInventory.inventory_type == "ad_unit",
+                    GAMInventory.inventory_id == "au_capability_save",
+                )
+            ).one()
+
+        capabilities = row.inventory_metadata["adcp_capabilities"]
+        assert capabilities["slot_kind"] == "responsive_display"
+        assert capabilities["dimensions"] == {
+            "min_width": 300,
+            "max_width": 970,
+            "min_height": 90,
+            "max_height": 250,
+        }
+        assert capabilities["render_modes"] == {"image": True, "html": True, "js": False, "vast": False}
+        assert capabilities["safeframe"] == "supported"
+
+
 class TestInventoryProfileDelete:
     """Test inventory profile deletion."""
 
@@ -367,6 +667,9 @@ class TestInventoryProfileEdit:
         assert "beforeunload" in html
         assert "Saving..." in html
         assert "KNOWN_PROPERTY_TAGS" in html
+        assert "Properties" in html
+        assert "all authorized properties" in html
+        assert "Publisher domain" not in html
         assert "Preview" in html  # action moved into formbar
         assert "Duplicate" in html  # action moved into formbar
         # Back link to list page
@@ -410,6 +713,7 @@ class TestInventoryProfileEdit:
             inventory_id="au_picker",
             name="Homepage Top",
             path=["Network", "Homepage", "Top"],
+            inventory_metadata={"sizes": [{"width": 1, "height": 1}]},
         )
         GAMInventoryFactory(
             tenant=tenant,
@@ -434,6 +738,7 @@ class TestInventoryProfileEdit:
         assert "INVENTORY_PICKER_LIMIT" in html
         assert "Homepage Top" in html
         assert "au_picker" in html
+        assert '"needs_capability_setup":true' in html or '"needs_capability_setup": true' in html
         assert "Homepage Placement" in html
         assert "pl_picker" in html
 
@@ -455,8 +760,11 @@ class TestInventoryProfilePreview:
         assert "Buyer View Bundle" in html
         assert "Accepted creative formats" in html
         assert "Publisher properties" in html
+        assert "300x250" in html
+        assert "display_300x250_image" not in html
         # Page framing makes the "as buyer sees it" intent clear.
-        assert "list_products" in html
+        assert "This is what buyers see" in html
+        assert "list_products" not in html
         # Back link to editor.
         assert f"/inventory-profiles/{pk}/edit" in html
 

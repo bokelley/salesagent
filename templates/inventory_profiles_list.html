@@ -53,7 +53,7 @@
             <p class="lead">
                 A bundle is a salable inventory shape — a named bag of {{ adapter_vocab.ad_units }},
                 {{ adapter_vocab.placements }}, creative formats and publisher properties. Buyers discover
-                bundles via AdCP <code>list_products</code>; the same placement can live in many bundles.
+                bundles in their buying workflow; the same placement can live in many bundles.
                 <em>Authored against</em> <span class="pill-link">{{ adapter_label }}</span>.
             </p>
         </header>
@@ -253,8 +253,8 @@
                                 <span class="k">Formats</span>
                                 <span class="v">
                                     {{ b.format_count }}
-                                    {% if b.format_ids %}
-                                        <span class="muted">{{ b.format_ids[:2] | join(', ') }}{% if b.format_count > 2 %}, +{{ b.format_count - 2 }}{% endif %}</span>
+                                    {% if b.format_labels %}
+                                        <span class="muted">{{ b.format_labels | join(', ') }}{% if b.format_group_count > 2 %}, +{{ b.format_group_count - 2 }}{% endif %}</span>
                                     {% endif %}
                                 </span>
                             </div>

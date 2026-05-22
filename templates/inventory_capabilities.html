@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Inventory capabilities - {{ tenant.name }} Sales Agent{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <header class="sa-page-header">
+        <div>
+            <h2 class="sa-page-header__title">Inventory capabilities</h2>
+            <p class="sa-page-header__subtitle">Define what this GAM inventory can render before packaging it into bundles.</p>
+        </div>
+    </header>
+
+    <a class="btn btn-outline-secondary btn-sm mb-3" href="{{ url_for('inventory.inventory_browse', tenant_id=tenant_id) }}">
+        Back to inventory
+    </a>
+
+    <div class="row">
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">{{ item.name }}</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="mb-0">
+                        <dt>ID</dt>
+                        <dd><code>{{ item.inventory_id }}</code></dd>
+                        <dt>Type</dt>
+                        <dd>{{ item.inventory_type | replace('_', ' ') | title }}</dd>
+                        <dt>Status</dt>
+                        <dd>{{ item.status }}</dd>
+                        {% if item.path %}
+                            <dt>Path</dt>
+                            <dd>{{ item.path | join(' › ') }}</dd>
+                        {% endif %}
+                        <dt>GAM sizes</dt>
+                        <dd>
+                            {% if sizes %}
+                                {% for size in sizes %}
+                                    <span class="badge bg-light text-dark border">{{ size }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted">None synced</span>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <form method="post" class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Rendering behavior</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="slot_kind">What is this inventory?</label>
+                        <select class="form-select" id="slot_kind" name="slot_kind">
+                            {% set special_size = capabilities.get('special_size') or {} %}
+                            {% set selected_kind = capabilities.get('slot_kind') or special_size.get('kind') or 'fixed_display' %}
+                            {% for value, label in capability_kinds.items() %}
+                                <option value="{{ value }}" {% if selected_kind == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="row">
+                        {% set dims = capabilities.get('dimensions') or {} %}
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label" for="min_width">Min width</label>
+                            <input class="form-control" id="min_width" name="min_width" inputmode="numeric" value="{{ dims.min_width or '' }}">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label" for="max_width">Max width</label>
+                            <input class="form-control" id="max_width" name="max_width" inputmode="numeric" value="{{ dims.max_width or '' }}">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label" for="min_height">Min height</label>
+                            <input class="form-control" id="min_height" name="min_height" inputmode="numeric" value="{{ dims.min_height or '' }}">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label" for="max_height">Max height</label>
+                            <input class="form-control" id="max_height" name="max_height" inputmode="numeric" value="{{ dims.max_height or '' }}">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Render modes</label>
+                        {% set render = capabilities.get('render_modes') or {} %}
+                        <div class="d-flex flex-wrap gap-3">
+                            {% for mode in render_modes %}
+                                <label class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="render_{{ mode }}"
+                                           {% if render.get(mode, mode in ['image', 'html', 'js']) %}checked{% endif %}>
+                                    <span class="form-check-label">{% if mode == 'js' %}JS{% else %}{{ mode | title }}{% endif %}</span>
+                                </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="safeframe">SafeFrame behavior</label>
+                        <select class="form-select" id="safeframe" name="safeframe">
+                            {% set sf = capabilities.get('safeframe') or 'unknown' %}
+                            {% for mode in safeframe_modes %}
+                                <option value="{{ mode }}" {% if sf == mode %}selected{% endif %}>{{ mode | replace('_', ' ') | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="notes">Notes</label>
+                        <textarea class="form-control" id="notes" name="notes" rows="3">{{ capabilities.get('notes') or '' }}</textarea>
+                    </div>
+                </div>
+                <div class="card-footer d-flex justify-content-end gap-2">
+                    <a class="btn btn-secondary" href="{{ url_for('inventory.inventory_browse', tenant_id=tenant_id) }}">Cancel</a>
+                    <button class="btn btn-primary" type="submit">Save capabilities</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

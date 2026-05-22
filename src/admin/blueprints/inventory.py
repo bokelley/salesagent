@@ -3,7 +3,7 @@
 import json
 import logging
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
@@ -21,6 +21,19 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 inventory_bp = Blueprint("inventory", __name__)
+
+_CAPABILITY_KINDS = {
+    "fixed_display": "Fixed display",
+    "responsive_display": "Responsive display",
+    "native": "Native",
+    "out_of_page": "Out of page / interstitial",
+    "olv": "OLV / video player",
+    "rich_media": "Rich media",
+    "not_sellable": "Not sellable",
+}
+
+_SAFEFRAME_MODES = {"unknown", "supported", "required", "disabled"}
+_RENDER_MODES = ("image", "html", "js", "vast")
 
 
 @inventory_bp.route("/tenant/<tenant_id>/targeting")
@@ -450,6 +463,144 @@ def _load_tenant_for_inventory(tenant_id):
             "is_embedded": is_embedded_view(tenant),
         }
     return tenant_dict, is_gam, adapter_type, None
+
+
+def _inventory_size_labels(metadata: dict | None) -> list[str]:
+    sizes = metadata.get("sizes") if isinstance(metadata, dict) else []
+    labels: list[str] = []
+    if not isinstance(sizes, list):
+        return labels
+    for size in sizes:
+        if isinstance(size, dict) and size.get("width") and size.get("height"):
+            labels.append(f"{size['width']}x{size['height']}")
+        elif isinstance(size, str) and "x" in size:
+            labels.append(size)
+    return labels
+
+
+def _int_field(name: str) -> int | None:
+    value = (request.form.get(name) or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _capabilities_from_form() -> dict:
+    slot_kind = request.form.get("slot_kind") or "fixed_display"
+    if slot_kind not in _CAPABILITY_KINDS:
+        slot_kind = "fixed_display"
+
+    safeframe = request.form.get("safeframe") or "unknown"
+    if safeframe not in _SAFEFRAME_MODES:
+        safeframe = "unknown"
+
+    render_modes = {mode: request.form.get(f"render_{mode}") == "on" for mode in _RENDER_MODES}
+    dimensions = {
+        "min_width": _int_field("min_width"),
+        "max_width": _int_field("max_width"),
+        "min_height": _int_field("min_height"),
+        "max_height": _int_field("max_height"),
+    }
+
+    capabilities = {
+        "slot_kind": slot_kind,
+        "render_modes": render_modes,
+        "safeframe": safeframe,
+        "dimensions": {key: value for key, value in dimensions.items() if value is not None},
+        "notes": (request.form.get("notes") or "").strip(),
+    }
+
+    # Back-compat with the bundle save guard added for GAM 1x1 handling.
+    capabilities["special_size"] = {"kind": slot_kind}
+    return capabilities
+
+
+def _clear_inventory_cache(tenant_id: str) -> None:
+    cache = getattr(current_app, "cache", None)
+    if not cache:
+        return
+    cache.delete(f"inventory_tree:v3:{tenant_id}")
+    cache.delete(f"inventory_tree_time:v3:{tenant_id}")
+    for inv_type in ("all", "ad_unit", "placement", None):
+        cache.delete(f"inventory_list:{tenant_id}:{inv_type or 'all'}:ACTIVE")
+
+
+@inventory_bp.route("/tenant/<tenant_id>/inventory/capabilities/<inventory_type>/<inventory_id>", methods=["GET"])
+@require_tenant_access()
+def edit_inventory_capabilities(tenant_id: str, inventory_type: str, inventory_id: str):
+    """Edit publisher-authored capabilities for a synced inventory row."""
+    if inventory_type not in {"ad_unit", "placement"}:
+        flash("Inventory capabilities can be edited for ad units and placements.", "error")
+        return redirect(url_for("inventory.inventory_browse", tenant_id=tenant_id))
+
+    tenant_dict, is_gam, adapter_type, not_found = _load_tenant_for_inventory(tenant_id)
+    if not_found:
+        return not_found
+
+    with get_db_session() as db_session:
+        repo = GAMSyncRepository(db_session, tenant_id)
+        item = repo.find_inventory_item(inventory_type, inventory_id)
+        if not item:
+            flash("Inventory item not found.", "error")
+            return redirect(url_for("inventory.inventory_browse", tenant_id=tenant_id))
+
+        metadata = item.inventory_metadata or {}
+        capabilities = metadata.get("adcp_capabilities") if isinstance(metadata, dict) else {}
+        if not isinstance(capabilities, dict):
+            capabilities = {}
+
+        return render_template(
+            "inventory_capabilities.html",
+            tenant=tenant_dict,
+            tenant_id=tenant_id,
+            tenant_name=tenant_dict["name"],
+            is_gam=is_gam,
+            adapter_type=adapter_type,
+            item=item,
+            metadata=metadata,
+            sizes=_inventory_size_labels(metadata),
+            capabilities=capabilities,
+            capability_kinds=_CAPABILITY_KINDS,
+            safeframe_modes=sorted(_SAFEFRAME_MODES),
+            render_modes=_RENDER_MODES,
+        )
+
+
+@inventory_bp.route("/tenant/<tenant_id>/inventory/capabilities/<inventory_type>/<inventory_id>", methods=["POST"])
+@require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
+@log_admin_action("update_inventory_capabilities")
+def save_inventory_capabilities(tenant_id: str, inventory_type: str, inventory_id: str):
+    """Persist publisher-authored capabilities on a synced inventory row."""
+    if inventory_type not in {"ad_unit", "placement"}:
+        flash("Inventory capabilities can be edited for ad units and placements.", "error")
+        return redirect(url_for("inventory.inventory_browse", tenant_id=tenant_id))
+
+    with get_db_session() as db_session:
+        repo = GAMSyncRepository(db_session, tenant_id)
+        item = repo.find_inventory_item(inventory_type, inventory_id)
+        if not item:
+            flash("Inventory item not found.", "error")
+            return redirect(url_for("inventory.inventory_browse", tenant_id=tenant_id))
+
+        metadata = dict(item.inventory_metadata or {})
+        metadata["adcp_capabilities"] = _capabilities_from_form()
+        repo.update_inventory_metadata(inventory_type, inventory_id, metadata)
+        db_session.commit()
+
+    _clear_inventory_cache(tenant_id)
+    flash("Inventory capabilities saved.", "success")
+    return redirect(
+        url_for(
+            "inventory.edit_inventory_capabilities",
+            tenant_id=tenant_id,
+            inventory_type=inventory_type,
+            inventory_id=inventory_id,
+        )
+    )
 
 
 @inventory_bp.route("/tenant/<tenant_id>/orders")
@@ -971,6 +1122,9 @@ def _unit_to_dict(unit, *, matched_search=False):
     metadata = unit.inventory_metadata or {}
     if not isinstance(metadata, dict):
         metadata = {}
+    capabilities = metadata.get("adcp_capabilities") or {}
+    if not isinstance(capabilities, dict):
+        capabilities = {}
     return {
         "id": unit.inventory_id,
         "name": unit.name,
@@ -981,6 +1135,8 @@ def _unit_to_dict(unit, *, matched_search=False):
         "has_children": metadata.get("has_children", False),
         "matched_search": matched_search,
         "sizes": metadata.get("sizes", []),
+        "metadata": metadata,
+        "capabilities": capabilities,
         "children": [],
     }
 
@@ -1341,6 +1497,7 @@ def get_inventory_list(tenant_id):
                     # Format response
                     result = []
                     for item in items:
+                        metadata = item.inventory_metadata or {}
                         result.append(
                             {
                                 "id": item.inventory_id,
@@ -1348,7 +1505,8 @@ def get_inventory_list(tenant_id):
                                 "type": item.inventory_type,
                                 "path": item.path or [],
                                 "status": item.status,
-                                "metadata": item.inventory_metadata or {},
+                                "metadata": metadata,
+                                "capabilities": metadata.get("adcp_capabilities", {}) if isinstance(metadata, dict) else {},
                             }
                         )
 
@@ -1390,6 +1548,7 @@ def get_inventory_list(tenant_id):
             # Format response
             result = []
             for item in items:
+                metadata = item.inventory_metadata or {}
                 result.append(
                     {
                         "id": item.inventory_id,
@@ -1397,7 +1556,8 @@ def get_inventory_list(tenant_id):
                         "type": item.inventory_type,
                         "path": item.path if item.path else [item.name],
                         "status": item.status,
-                        "metadata": item.inventory_metadata or {},
+                        "metadata": metadata,
+                        "capabilities": metadata.get("adcp_capabilities", {}) if isinstance(metadata, dict) else {},
                     }
                 )
 
