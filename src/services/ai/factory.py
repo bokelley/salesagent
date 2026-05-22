@@ -149,7 +149,9 @@ class AIServiceFactory:
 
             if api_key:
                 return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-            return GoogleModel(model_name, provider="google-gla")
+            # pydantic-ai 1.99 dropped the ``"google-gla"`` literal; the GLA path
+            # is now the default ``"google"`` provider (#521 dep bump).
+            return GoogleModel(model_name, provider="google")
 
         elif provider == "anthropic":
             from pydantic_ai.models.anthropic import AnthropicModel
