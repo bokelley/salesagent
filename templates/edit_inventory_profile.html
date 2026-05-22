@@ -223,14 +223,21 @@
                             </div>
                         </div>
                         <div class="card__body">
+                            {# Until the in-page picker ships (filed as a separate issue),
+                               the "Browse" buttons used to pop a "not yet implemented"
+                               alert. We surface the inventory browser as the canonical
+                               place to look up IDs, and the chip lists below render the
+                               bundle's current selection with name + ID. The hidden
+                               textareas carry the JSON-serialized id arrays for POST. #}
+                            <p class="card__sub" style="margin: 0 0 12px;">
+                                Pick IDs from your synced inventory via the
+                                <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}">
+                                    Inventory browser</a>, then paste them below.
+                                Per-item Reuse (#542) routes back here from the browser.
+                            </p>
+
                             <div class="field" style="margin-bottom: 14px;">
-                                <label for="ad-unit-search">Ad units</label>
-                                <div style="display: flex; gap: 8px; margin-top: 4px;">
-                                    <input type="text" id="ad-unit-search" placeholder="Search ad units…" style="flex: 1;">
-                                    <button type="button" onclick="openInventoryPicker('ad_unit')" class="btn btn-secondary">
-                                        Browse ad units
-                                    </button>
-                                </div>
+                                <label for="ad-unit-search">Ad units in this bundle</label>
                                 <div id="selected-ad-units" style="min-height: 60px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 8px; background: var(--sig-bg-page); margin-top: 6px;">
                                     <span style="color: var(--sig-fg-muted); font-size: 12.5px;">No ad units selected</span>
                                 </div>
@@ -238,13 +245,7 @@
                             </div>
 
                             <div class="field" style="margin-bottom: 14px;">
-                                <label for="placement-search">Placements</label>
-                                <div style="display: flex; gap: 8px; margin-top: 4px;">
-                                    <input type="text" id="placement-search" placeholder="Search placements…" style="flex: 1;">
-                                    <button type="button" onclick="openInventoryPicker('placement')" class="btn btn-secondary">
-                                        Browse placements
-                                    </button>
-                                </div>
+                                <label for="placement-search">Placements in this bundle</label>
                                 <div id="selected-placements" style="min-height: 60px; border: 1px solid var(--sig-bd-hairline); border-radius: 6px; padding: 8px; background: var(--sig-bg-page); margin-top: 6px;">
                                     <span style="color: var(--sig-fg-muted); font-size: 12.5px;">No placements selected</span>
                                 </div>
@@ -939,12 +940,6 @@ function setDefaultProperties() {
     document.getElementById('publisher_properties').value = JSON.stringify(defaultProps, null, 2);
 }
 
-// Inventory picker functions (reuse from product form)
-function openInventoryPicker(type) {
-    // TODO: Implement inventory picker modal
-    // For now, show alert
-    alert(`Inventory picker for ${type} not yet implemented. Please enter IDs manually in the hidden field.`);
-}
 
 // =====================================================================
 // Live validation (#529) + multi-domain row awareness (#532)
