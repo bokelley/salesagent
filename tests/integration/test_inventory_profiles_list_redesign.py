@@ -25,6 +25,12 @@ from src.admin.blueprints.inventory_profiles import (
     _list_unbundled_inventory,
     _resolve_inventory_names,
 )
+from src.services.bundle_adapter import get_adapter
+
+# Adapter under test in this file — GAM is the only one with real inventory
+# reads today (#521). FW/SS stubs are exercised separately in
+# tests/unit/test_bundle_adapter.py.
+GAM_ADAPTER = get_adapter("gam")
 from src.services.inventory_bundle_reference_sync import recompute_bundle_references
 from tests.factories import (
     GAMInventoryFactory,
@@ -121,7 +127,7 @@ class TestBuildCoverageSummary:
     def test_empty_tenant_returns_zeros(self, factory_session):
         tenant = TenantFactory()
 
-        cov = _build_coverage_summary(factory_session, tenant.tenant_id, bundles_data=[])
+        cov = _build_coverage_summary(factory_session, tenant.tenant_id, bundles_data=[], adapter=GAM_ADAPTER)
 
         assert cov == {
             "bundles": 0,
@@ -151,7 +157,7 @@ class TestBuildCoverageSummary:
         factory_session.flush()
 
         bundles_data = [{"products_using": 2}]
-        cov = _build_coverage_summary(factory_session, tenant.tenant_id, bundles_data=bundles_data)
+        cov = _build_coverage_summary(factory_session, tenant.tenant_id, bundles_data=bundles_data, adapter=GAM_ADAPTER)
 
         assert cov["bundles"] == 1
         assert cov["adUnitsBundled"] == 2
@@ -188,7 +194,7 @@ class TestUnbundledInventory:
         recompute_bundle_references(factory_session, tenant.tenant_id)
         factory_session.flush()
 
-        rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=50)
+        rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=50, adapter=GAM_ADAPTER)
 
         names = [r["name"] for r in rows]
         assert names == ["Orphan Unit"]
@@ -206,7 +212,7 @@ class TestUnbundledInventory:
                 name=f"Unit {i:03d}",
             )
 
-        rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=3)
+        rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=3, adapter=GAM_ADAPTER)
 
         assert len(rows) == 3
 
@@ -221,7 +227,7 @@ class TestUnbundledInventory:
             name="Custom Key",
         )
 
-        rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=50)
+        rows = _list_unbundled_inventory(factory_session, tenant.tenant_id, limit=50, adapter=GAM_ADAPTER)
 
         assert rows == []
 
@@ -247,7 +253,7 @@ class TestListSeedSuggestions:
             name="homepage / top-banner",
         )
 
-        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5)
+        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5, adapter=GAM_ADAPTER)
 
         assert len(rows) == 1
         assert rows[0]["external_id"] == "P1"
@@ -265,7 +271,7 @@ class TestListSeedSuggestions:
                 name=f"Placement {i:02d}",
             )
 
-        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5)
+        rows = _list_seed_suggestions(factory_session, tenant.tenant_id, limit=5, adapter=GAM_ADAPTER)
 
         assert len(rows) == 5
 
@@ -281,7 +287,7 @@ class TestListSeedSuggestions:
             name="Other tenant placement",
         )
 
-        rows = _list_seed_suggestions(factory_session, tenant_a.tenant_id, limit=5)
+        rows = _list_seed_suggestions(factory_session, tenant_a.tenant_id, limit=5, adapter=GAM_ADAPTER)
 
         assert rows == []
 
@@ -397,7 +403,7 @@ class TestResolveInventoryNames:
             inventory_config={"ad_units": [], "placements": []},
         )
 
-        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile)
+        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile, adapter=GAM_ADAPTER)
 
         assert result == {"ad_units": {}, "placements": {}}
 
@@ -423,7 +429,7 @@ class TestResolveInventoryNames:
             inventory_config={"ad_units": ["au1"], "placements": ["p1"]},
         )
 
-        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile)
+        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile, adapter=GAM_ADAPTER)
 
         assert result["ad_units"]["au1"]["name"] == "Homepage / Top"
         assert result["placements"]["p1"]["name"] == "Premium News"
@@ -449,7 +455,7 @@ class TestResolveInventoryNames:
             inventory_config={"ad_units": ["au_known", "au_missing"], "placements": []},
         )
 
-        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile)
+        result = _resolve_inventory_names(factory_session, tenant.tenant_id, profile, adapter=GAM_ADAPTER)
 
         assert "au_known" in result["ad_units"]
         assert "au_missing" not in result["ad_units"]
@@ -471,7 +477,7 @@ class TestResolveInventoryNames:
             inventory_config={"ad_units": ["shared_id"], "placements": []},
         )
 
-        result = _resolve_inventory_names(factory_session, tenant_a.tenant_id, profile)
+        result = _resolve_inventory_names(factory_session, tenant_a.tenant_id, profile, adapter=GAM_ADAPTER)
 
         assert result["ad_units"] == {}
 

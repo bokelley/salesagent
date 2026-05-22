@@ -9,15 +9,16 @@ configs are JSON blobs, so we can't compute the delta cheaply, and
 running a full reconcile over all of a tenant's bundles is fine even at
 scale — bundle counts per tenant are small (tens, not thousands).
 
-For #485 GAM is the only adapter consuming the data. The adapter is
-read from ``tenant.ad_server``. FreeWheel / SpringServe land when their
-inventory sync surfaces do.
+Adapter resolution goes through the bundle-adapter registry (#521). GAM
+is the only adapter that participates in references today; FW + SS are
+stubs (no synced inventory ⇒ no references). Adding a fourth adapter
+that wants references means registering it in ``bundle_adapter``; this
+service iterates whatever's there.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Final
 
 from sqlalchemy.orm import Session
 
@@ -26,13 +27,9 @@ from src.core.database.repositories.inventory_bundle_reference import (
 )
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.services.bundle_adapter import adapter_for_tenant
 
 logger = logging.getLogger(__name__)
-
-# Adapter slugs we know how to track inventory for today. Tenants on other
-# ad servers won't have InventoryBundleReference rows synced — the
-# dashboard skips coverage for them rather than guessing.
-_TRACKED_ADAPTERS: Final[frozenset[str]] = frozenset({"google_ad_manager", "gam"})
 
 
 def recompute_bundle_references(session: Session, tenant_id: str) -> None:
@@ -47,16 +44,16 @@ def recompute_bundle_references(session: Session, tenant_id: str) -> None:
     (``session.add`` / ``session.delete``) and *before* the commit, so the
     two writes share a transaction.
 
-    Silently no-ops if the tenant's adapter isn't tracked yet.
+    Silently no-ops for tenants on an ad server no bundle adapter has
+    claimed (the bundle UI degrades to "no coverage" for them anyway).
     """
     tenant = TenantConfigRepository(session, tenant_id).get_tenant()
     if tenant is None:
         # Tenant deleted mid-flight or unknown — nothing to reconcile.
         return
-    adapter = tenant.ad_server
-    if adapter not in _TRACKED_ADAPTERS:
+    adapter = adapter_for_tenant(tenant.ad_server)
+    if adapter is None:
         return
-    adapter_slug = "gam"  # Canonicalize for the table; ``google_ad_manager`` is the tenant column.
 
     # Pending session writes must be visible to the repository read below.
     session.flush()
@@ -73,12 +70,13 @@ def recompute_bundle_references(session: Session, tenant_id: str) -> None:
             placement_ids.add(str(raw))
 
     repo = InventoryBundleReferenceRepository(session, tenant_id)
-    repo.sync_bundle_references(adapter=adapter_slug, entity_type="ad_unit", in_bundle_ids=ad_unit_ids)
-    repo.sync_bundle_references(adapter=adapter_slug, entity_type="placement", in_bundle_ids=placement_ids)
+    repo.sync_bundle_references(adapter=adapter.adapter_id, entity_type="ad_unit", in_bundle_ids=ad_unit_ids)
+    repo.sync_bundle_references(adapter=adapter.adapter_id, entity_type="placement", in_bundle_ids=placement_ids)
 
     logger.info(
-        "Reconciled inventory_bundle_reference for tenant=%s: %d ad_units, %d placements bundled",
+        "Reconciled inventory_bundle_reference for tenant=%s (adapter=%s): %d ad_units, %d placements bundled",
         tenant_id,
+        adapter.adapter_id,
         len(ad_unit_ids),
         len(placement_ids),
     )

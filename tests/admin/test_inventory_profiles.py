@@ -336,9 +336,7 @@ class TestInventoryReuseFlow:
             session.commit()
         _create_sample_profile(test_tenant, name="Empty Bundle", profile_id="empty")
 
-        response = client.get(
-            f"/tenant/{test_tenant}/inventory-profiles/reuse?item=au_1&kind=ad_unit"
-        )
+        response = client.get(f"/tenant/{test_tenant}/inventory-profiles/reuse?item=au_1&kind=ad_unit")
 
         assert response.status_code == 200
         html = response.data.decode()

@@ -27,6 +27,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.services.bundle_adapter import adapter_for_tenant
 from src.services.inventory_bundle_reference_sync import recompute_bundle_references
 
 logger = logging.getLogger(__name__)
@@ -166,19 +167,30 @@ def list_inventory_profiles(tenant_id: str):
 
         bundles_data = [_build_bundle_card(profile, product_count) for profile, product_count in results]
 
-        # Coverage + unbundled rail are GAM-only today. Other adapters
-        # land when their inventory sync surfaces participate.
-        if tenant and tenant.ad_server in {"google_ad_manager", "gam"}:
-            coverage = _build_coverage_summary(session, tenant_id, bundles_data)
-            unbundled_items = _list_unbundled_inventory(session, tenant_id, limit=50)
-            adapter_label = "Google Ad Manager"
-            adapter_vocab = {"ad_units": "ad units", "placements": "placements"}
-            has_synced_inventory = (coverage["adUnitsTotal"] + coverage["placementsTotal"]) > 0
-            # Seed suggestions: surface synced placements as "promote into a bundle"
-            # candidates when the tenant has zero bundles. The list is a peek (5
-            # max) — operators with hundreds of placements use the full browser.
-            seed_suggestions = _list_seed_suggestions(session, tenant_id, limit=5) if len(bundles_data) == 0 else []
+        # Bundle-adapter dispatch (#521). Adapters that report real
+        # inventory (GAM today) light up coverage + unbundled rail; stubs
+        # (FreeWheel, SpringServe) keep label + vocab visible but return
+        # empty rails until their sync surfaces participate.
+        adapter = adapter_for_tenant(tenant.ad_server) if tenant else None
+        if adapter is not None:
+            coverage = _build_coverage_summary(session, tenant_id, bundles_data, adapter)
+            unbundled_items = _list_unbundled_inventory(session, tenant_id, limit=50, adapter=adapter)
+            adapter_label = adapter.label
+            adapter_vocab = {
+                "ad_units": adapter.vocab["primary"],
+                "placements": adapter.vocab["secondary"],
+            }
+            has_synced_inventory = adapter.has_synced_inventory(session, tenant_id)
+            # Seed suggestions: surface top-level placements as "promote into
+            # a bundle" candidates when the tenant has zero bundles. The list
+            # is a peek (5 max) — operators with hundreds of placements use
+            # the full browser. Stub adapters return [].
+            seed_suggestions = (
+                _list_seed_suggestions(session, tenant_id, limit=5, adapter=adapter) if len(bundles_data) == 0 else []
+            )
         else:
+            # Tenant on an ad server with no registered adapter — keep the
+            # page renderable but minimal.
             coverage = None
             unbundled_items = []
             adapter_label = (
@@ -240,39 +252,24 @@ def _build_bundle_card(profile: InventoryProfile, product_count: int) -> dict:
     }
 
 
-def _build_coverage_summary(session, tenant_id: str, bundles_data: list[dict]) -> dict:
+def _build_coverage_summary(session, tenant_id: str, bundles_data: list[dict], adapter) -> dict:
     """Coverage strip payload — four numbers across the top of the list page.
 
-    "Bundled" counts come from the denormalized ``InventoryBundleReference``
-    table that's kept fresh by ``recompute_bundle_references`` at bundle
-    save-time. "Total" comes from ``GAMInventory``. Adapter is hard-coded to
-    GAM today; the FW/SS branches land when their syncs land.
+    Totals come from the bundle adapter (#521); "bundled" counts come from
+    the denormalized ``InventoryBundleReference`` table that's kept fresh
+    by ``recompute_bundle_references`` at bundle save-time.
     """
-    from src.core.database.models import GAMInventory, InventoryBundleReference
+    from src.core.database.models import InventoryBundleReference
 
-    ad_units_total = (
-        session.scalar(
-            select(func.count())
-            .select_from(GAMInventory)
-            .where(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "ad_unit")
-        )
-        or 0
-    )
-    placements_total = (
-        session.scalar(
-            select(func.count())
-            .select_from(GAMInventory)
-            .where(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "placement")
-        )
-        or 0
-    )
+    ad_units_total = adapter.count_inventory(session, tenant_id, "ad_unit")
+    placements_total = adapter.count_inventory(session, tenant_id, "placement")
     ad_units_bundled = (
         session.scalar(
             select(func.count())
             .select_from(InventoryBundleReference)
             .where(
                 InventoryBundleReference.tenant_id == tenant_id,
-                InventoryBundleReference.adapter == "gam",
+                InventoryBundleReference.adapter == adapter.adapter_id,
                 InventoryBundleReference.entity_type == "ad_unit",
             )
         )
@@ -284,7 +281,7 @@ def _build_coverage_summary(session, tenant_id: str, bundles_data: list[dict]) -
             .select_from(InventoryBundleReference)
             .where(
                 InventoryBundleReference.tenant_id == tenant_id,
-                InventoryBundleReference.adapter == "gam",
+                InventoryBundleReference.adapter == adapter.adapter_id,
                 InventoryBundleReference.entity_type == "placement",
             )
         )
@@ -302,37 +299,32 @@ def _build_coverage_summary(session, tenant_id: str, bundles_data: list[dict]) -
     }
 
 
-def _list_unbundled_inventory(session, tenant_id: str, limit: int) -> list[dict]:
+def _list_unbundled_inventory(session, tenant_id: str, limit: int, adapter) -> list[dict]:
     """Rows for the "What's not bundled" rail.
 
-    Synced ``GAMInventory`` entities that don't appear in any
-    ``InventoryBundleReference``. Limit caps the list — operators with
+    Synced entities (per the bundle adapter, #521) that don't appear in
+    any ``InventoryBundleReference``. Limit caps the list — operators with
     thousands of unbundled units don't need to scroll through all of them
     on the dashboard; the rail is a peek, not the canonical browser.
     """
-    from src.core.database.repositories.gam_sync import GAMSyncRepository
     from src.core.database.repositories.inventory_bundle_reference import (
         InventoryBundleReferenceRepository,
     )
 
     bundle_repo = InventoryBundleReferenceRepository(session, tenant_id)
     bundled_by_type = {
-        "ad_unit": bundle_repo.bundled_external_ids(adapter="gam", entity_type="ad_unit"),
-        "placement": bundle_repo.bundled_external_ids(adapter="gam", entity_type="placement"),
+        "ad_unit": bundle_repo.bundled_external_ids(adapter=adapter.adapter_id, entity_type="ad_unit"),
+        "placement": bundle_repo.bundled_external_ids(adapter=adapter.adapter_id, entity_type="placement"),
     }
-    rows = GAMSyncRepository(session, tenant_id).list_inventory_not_in_set(
-        inventory_types=("ad_unit", "placement"),
-        bundled_ids_by_type=bundled_by_type,
-        limit=limit,
-    )
+    rows = adapter.list_unbundled(session, tenant_id, bundled_by_type, limit)
 
     return [
         {
-            "id": str(row.id),
-            "adapter_id": row.inventory_id,
-            "kind": row.inventory_type,
+            "id": row.external_id,
+            "adapter_id": row.external_id,
+            "kind": row.entity_type,
             "name": row.name,
-            "meta": _format_inventory_meta(row),
+            "meta": row.meta,
         }
         for row in rows
     ]
@@ -414,13 +406,13 @@ def _compute_blast_radius(session, tenant_id: str, profile: InventoryProfile) ->
 
 
 def _resolve_inventory_names(
-    session, tenant_id: str, profile: InventoryProfile
+    session, tenant_id: str, profile: InventoryProfile, adapter
 ) -> dict[str, dict[str, dict[str, str]]]:
     """Map external IDs in the bundle's inventory_config to human-readable names.
 
-    Solves the editor's "raw GAM IDs are unverifiable" problem (#530).
-    Operators editing a bundle see chips labelled
-    ``"tribune.com / home / top-banner (#21801001)"`` instead of bare IDs.
+    Solves the editor's "raw IDs are unverifiable" problem (#530). Dispatches
+    through the bundle adapter (#521) so each ad server's sync surface plugs
+    in without changing the call site.
 
     Returns shape::
 
@@ -429,25 +421,22 @@ def _resolve_inventory_names(
             "placements": { external_id: {"name": ..., "id": external_id}, ... },
         }
 
-    Missing IDs (e.g., the entity was deleted in GAM after the bundle saved)
-    don't appear in the map — the template falls back to showing the raw ID.
-    GAM-only today; FW/SS land when their syncs participate.
+    Missing IDs (e.g., the entity was deleted in the ad server after the
+    bundle saved) don't appear in the map — the template falls back to
+    showing the raw ID with an "unresolved" marker.
     """
-    from src.core.database.repositories.gam_sync import GAMSyncRepository
-
     config = profile.inventory_config or {}
     ad_unit_ids = list(config.get("ad_units") or [])
     placement_ids = list(config.get("placements") or [])
     if not ad_unit_ids and not placement_ids:
         return {"ad_units": {}, "placements": {}}
 
-    repo = GAMSyncRepository(session, tenant_id)
-    ad_unit_rows = repo.list_inventory_by_ids("ad_unit", ad_unit_ids)
-    placement_rows = repo.list_inventory_by_ids("placement", placement_ids)
+    ad_unit_rows = adapter.list_inventory_by_ids(session, tenant_id, "ad_unit", ad_unit_ids)
+    placement_rows = adapter.list_inventory_by_ids(session, tenant_id, "placement", placement_ids)
 
     return {
-        "ad_units": {row.inventory_id: {"name": row.name, "id": row.inventory_id} for row in ad_unit_rows},
-        "placements": {row.inventory_id: {"name": row.name, "id": row.inventory_id} for row in placement_rows},
+        "ad_units": {row.external_id: {"name": row.name, "id": row.external_id} for row in ad_unit_rows},
+        "placements": {row.external_id: {"name": row.name, "id": row.external_id} for row in placement_rows},
     }
 
 
@@ -464,36 +453,23 @@ def _list_products_using(session, tenant_id: str, profile_id: int) -> list[dict]
     return [{"product_id": r.product_id, "name": r.name} for r in rows]
 
 
-def _list_seed_suggestions(session, tenant_id: str, limit: int) -> list[dict]:
-    """Synced GAM placements to surface as "promote into a bundle" candidates.
+def _list_seed_suggestions(session, tenant_id: str, limit: int, adapter) -> list[dict]:
+    """Synced placements to surface as "promote into a bundle" candidates.
 
-    Empty-state UX (#481): a fresh tenant with thousands of synced ad units sees
-    a paralysing blank canvas. Promoting placements is the no-think starting
-    point. We show up to ``limit`` placements ordered by name; the heuristic can
-    grow more sophisticated (e.g. by descendant count) once we have ground-truth
-    data on which seeds operators actually accept.
+    Empty-state UX (#481): a fresh tenant with thousands of synced ad units
+    sees a paralysing blank canvas. Promoting placements is the no-think
+    starting point. Dispatches through the bundle adapter (#521) so each
+    ad server's notion of "top-level placement" plugs in.
     """
-    from src.core.database.repositories.gam_sync import GAMSyncRepository
-
-    rows = GAMSyncRepository(session, tenant_id).list_inventory("placement", limit=limit)
+    rows = adapter.list_top_level_placements(session, tenant_id, limit)
     return [
         {
-            "external_id": row.inventory_id,
+            "external_id": row.external_id,
             "name": row.name,
-            "meta": _format_inventory_meta(row),
+            "meta": row.meta,
         }
         for row in rows
     ]
-
-
-def _format_inventory_meta(row) -> str:
-    """One-line metadata for an unbundled inventory row."""
-    parts = []
-    if row.path:
-        parts.append(" › ".join(row.path[-3:]))
-    if row.status and row.status.lower() != "active":
-        parts.append(row.status.lower())
-    return " · ".join(parts) if parts else "—"
 
 
 @inventory_profiles_bp.route("/add", methods=["GET", "POST"])
@@ -947,20 +923,20 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             session.scalar(select(func.count()).select_from(Product).where(Product.inventory_profile_id == profile_id))
             or 0
         )
+        # Adapter dispatch (#521) — label + name resolution. Stub adapters
+        # (FW/SS) return empty name maps so chips render the raw id.
+        adapter = adapter_for_tenant(tenant.ad_server)
         adapter_label = (
-            "Google Ad Manager"
-            if tenant.ad_server in {"google_ad_manager", "gam"}
-            else (tenant.ad_server or "your ad server").replace("_", " ").title()
+            adapter.label if adapter is not None else (tenant.ad_server or "your ad server").replace("_", " ").title()
         )
         bundle_summary = _build_bundle_summary(profile, product_count, adapter_label)
         blast_radius = _compute_blast_radius(session, tenant_id, profile)
 
-        # GAM-only resolution. Other adapters fall back to raw IDs until their
-        # sync surfaces (mock has no inventory table so we skip the lookup).
-        if tenant.ad_server in {"google_ad_manager", "gam"}:
-            inventory_names = _resolve_inventory_names(session, tenant_id, profile)
-        else:
-            inventory_names = {"ad_units": {}, "placements": {}}
+        inventory_names = (
+            _resolve_inventory_names(session, tenant_id, profile, adapter)
+            if adapter is not None
+            else {"ad_units": {}, "placements": {}}
+        )
         products_using = _list_products_using(session, tenant_id, profile_id)
 
         # Render inside the session so JSON columns (``profile.format_ids``,
@@ -985,19 +961,18 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         )
 
 
-def _resolve_reuse_source(session, tenant_id: str, external_id: str, kind: str) -> dict | None:
+def _resolve_reuse_source(session, tenant_id: str, external_id: str, kind: str, adapter) -> dict | None:
     """Look up the ad_unit or placement being reused (#524).
 
-    Returns a dict the template can render directly: ``{name, external_id,
-    kind, meta, found}``. When the entity isn't in the synced GAM inventory
-    table (e.g., deleted upstream), ``found=False`` and ``name`` falls back
-    to the raw id so the operator can still see what they clicked.
+    Dispatches through the bundle adapter (#521). When the entity isn't in
+    the adapter's synced inventory (deleted upstream, or the tenant is on
+    a stub adapter), ``found=False`` and ``name`` falls back to the raw id
+    so the operator can still see what they clicked.
     """
     if kind not in {"placement", "ad_unit"}:
         return None
-    from src.core.database.repositories.gam_sync import GAMSyncRepository
 
-    row = GAMSyncRepository(session, tenant_id).find_inventory_item(kind, external_id)
+    row = adapter.find_inventory_item(session, tenant_id, kind, external_id)
     if row is None:
         return {
             "external_id": external_id,
@@ -1007,10 +982,10 @@ def _resolve_reuse_source(session, tenant_id: str, external_id: str, kind: str) 
             "found": False,
         }
     return {
-        "external_id": row.inventory_id,
-        "kind": row.inventory_type,
+        "external_id": row.external_id,
+        "kind": row.entity_type,
         "name": row.name,
-        "meta": _format_inventory_meta(row),
+        "meta": row.meta,
         "found": True,
     }
 
@@ -1083,11 +1058,22 @@ def reuse_inventory_bundles(tenant_id: str):
 
     with get_db_session() as session:
         tenant = session.get(Tenant, tenant_id)
-        source = _resolve_reuse_source(session, tenant_id, external_id, kind)
+        adapter = adapter_for_tenant(tenant.ad_server) if tenant else None
+        source = (
+            _resolve_reuse_source(session, tenant_id, external_id, kind, adapter)
+            if adapter is not None
+            else {
+                "external_id": external_id,
+                "kind": kind,
+                "name": external_id,
+                "meta": "Not found in synced inventory",
+                "found": False,
+            }
+        )
         bundles = _bundle_membership_picklist(session, tenant_id, external_id, kind)
         adapter_label = (
-            "Google Ad Manager"
-            if tenant and tenant.ad_server in {"google_ad_manager", "gam"}
+            adapter.label
+            if adapter is not None
             else (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
         )
 
@@ -1318,18 +1304,21 @@ def preview_inventory_profile(tenant_id: str, profile_id: int):
             return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
         tenant = session.get(Tenant, tenant_id)
+        adapter = adapter_for_tenant(tenant.ad_server) if tenant else None
         adapter_label = (
-            "Google Ad Manager"
-            if tenant and tenant.ad_server in {"google_ad_manager", "gam"}
+            adapter.label
+            if adapter is not None
             else (tenant.ad_server if tenant and tenant.ad_server else "your ad server").replace("_", " ").title()
         )
 
         # Resolve external IDs to human names so the buyer-shape preview
-        # mirrors what the chips on the editor now show (#530).
-        if tenant and tenant.ad_server in {"google_ad_manager", "gam"}:
-            inventory_names = _resolve_inventory_names(session, tenant_id, profile)
-        else:
-            inventory_names = {"ad_units": {}, "placements": {}}
+        # mirrors what the chips on the editor now show (#530). Stub
+        # adapters (FW/SS) return empty maps until their sync surfaces wire in.
+        inventory_names = (
+            _resolve_inventory_names(session, tenant_id, profile, adapter)
+            if adapter is not None
+            else {"ad_units": {}, "placements": {}}
+        )
 
         # Property summary as a structured payload the template can render
         # (vs the comma-separated string the JSON endpoint produces).
