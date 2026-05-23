@@ -105,7 +105,6 @@ AUTH_OPTIONAL_TOOLS = frozenset(
     {
         "get_adcp_capabilities",
         "get_products",
-        "get_signals",
         "list_creative_formats",
     }
 )

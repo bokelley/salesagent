@@ -75,13 +75,6 @@ def _tenant_signal_to_adcp(
     if ts.range_min is not None or ts.range_max is not None:
         range_obj = Range(min=ts.range_min, max=ts.range_max)
 
-    # AdCP's ``signal_id.id`` restricts characters to ``[a-zA-Z0-9_-]+``.
-    # Operators tend to want hierarchical identifiers like
-    # ``audience.sports_fans``; sanitize ``.`` to ``_`` for the wire and use
-    # the same shape for ``signal_agent_segment_id`` so a storefront round-
-    # trips the same identifier through activation.
-    wire_id = ts.signal_id.replace(".", "_")
-
     # AdCP validates ``signal_id.agent_url`` as a URL; the sample signals
     # use the public salesagent host. Fall back to the same when the tenant
     # hasn't set ``public_agent_url`` so projection doesn't fail validation.
@@ -91,9 +84,9 @@ def _tenant_signal_to_adcp(
         "signal_id": {
             "source": "agent",
             "agent_url": resolved_agent_url,
-            "id": wire_id,
+            "id": ts.signal_id,
         },
-        "signal_agent_segment_id": wire_id,
+        "signal_agent_segment_id": ts.signal_id,
         "name": ts.name,
         "description": ts.description or f"{ts.name} signal",
         # Operator-declared signals are the publisher's first-party data
@@ -234,6 +227,23 @@ def _pagination_window(total: int, cursor: str | None, limit: int | None) -> tup
     )
 
 
+def _validate_signal_discovery_request(req: GetSignalsRequest) -> None:
+    discovery_mode = getattr(req.discovery_mode, "value", req.discovery_mode)
+    if discovery_mode not in (None, "brief"):
+        raise AdCPValidationError(
+            "get_signals currently supports discovery_mode='brief' only",
+            details={"supported_discovery_modes": ["brief"]},
+        )
+    if req.if_wholesale_feed_version is not None or req.if_pricing_version is not None:
+        raise AdCPValidationError(
+            "get_signals catalog version preconditions are not supported for brief discovery",
+            details={
+                "if_wholesale_feed_version": req.if_wholesale_feed_version,
+                "if_pricing_version": req.if_pricing_version,
+            },
+        )
+
+
 async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
     """Shared implementation for get_signals (used by both MCP and A2A).
 
@@ -244,14 +254,15 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     Returns:
         GetSignalsResponse with matching signals
     """
-    # Principal ID available via identity.principal_id if needed
-    _ = identity.principal_id if identity else None
+    _validate_signal_discovery_request(req)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     assert identity is not None, "identity is required for signals"
     tenant = identity.tenant
     if not tenant:
         raise AdCPAuthenticationError("No tenant context available")
+    if not identity.principal_id:
+        raise AdCPAuthenticationError("Authentication required for signal discovery")
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments

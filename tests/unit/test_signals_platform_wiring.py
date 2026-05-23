@@ -10,6 +10,7 @@ from adcp.decisioning import create_adcp_server_from_platform
 from core.main import AUTH_OPTIONAL_TOOLS
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetSignalsRequest
 from src.core.tools.signals import _get_signals_impl
@@ -27,8 +28,8 @@ def _advertised_tools(platform) -> frozenset[str]:
         executor.shutdown(wait=True)
 
 
-def test_get_signals_is_auth_optional_discovery_tool() -> None:
-    assert "get_signals" in AUTH_OPTIONAL_TOOLS
+def test_get_signals_requires_authenticated_buyer() -> None:
+    assert "get_signals" not in AUTH_OPTIONAL_TOOLS
 
 
 @pytest.mark.parametrize("platform", [MockSellerPlatform(), GamPlatform()])
@@ -59,6 +60,7 @@ def test_platforms_declare_catalog_signals_capability(platform) -> None:
 @pytest.mark.asyncio
 async def test_get_signals_filters_by_structured_signal_id() -> None:
     identity = ResolvedIdentity(
+        principal_id="buyer_1",
         tenant_id="tenant_1",
         tenant={"ad_server": "google_ad_manager"},
         protocol="mcp",
@@ -82,6 +84,7 @@ async def test_get_signals_filters_by_structured_signal_id() -> None:
 @pytest.mark.asyncio
 async def test_get_signals_matches_natural_language_signal_spec_tokens() -> None:
     identity = ResolvedIdentity(
+        principal_id="buyer_1",
         tenant_id="tenant_1",
         tenant={"ad_server": "google_ad_manager"},
         protocol="mcp",
@@ -99,6 +102,7 @@ async def test_get_signals_matches_natural_language_signal_spec_tokens() -> None
 @pytest.mark.parametrize("signal_spec", ["EV", "AI", "adults"])
 async def test_get_signals_short_or_stopword_specs_do_not_match_all(signal_spec: str) -> None:
     identity = ResolvedIdentity(
+        principal_id="buyer_1",
         tenant_id="tenant_1",
         tenant={"ad_server": "google_ad_manager"},
         protocol="mcp",
@@ -114,6 +118,7 @@ async def test_get_signals_short_or_stopword_specs_do_not_match_all(signal_spec:
 @pytest.mark.asyncio
 async def test_get_signals_supports_pagination() -> None:
     identity = ResolvedIdentity(
+        principal_id="buyer_1",
         tenant_id="tenant_1",
         tenant={"ad_server": "google_ad_manager"},
         protocol="mcp",
@@ -127,3 +132,45 @@ async def test_get_signals_supports_pagination() -> None:
     assert response.pagination is not None
     assert response.pagination.has_more is True
     assert response.pagination.cursor == "2"
+
+
+@pytest.mark.asyncio
+async def test_get_signals_rejects_unauthenticated_discovery() -> None:
+    identity = ResolvedIdentity(
+        tenant_id="tenant_1",
+        tenant={"ad_server": "google_ad_manager"},
+        protocol="mcp",
+    )
+
+    with pytest.raises(AdCPAuthenticationError, match="signal discovery"):
+        await _get_signals_impl(GetSignalsRequest(), identity)
+
+
+@pytest.mark.asyncio
+async def test_get_signals_rejects_unsupported_discovery_mode() -> None:
+    identity = ResolvedIdentity(
+        principal_id="buyer_1",
+        tenant_id="tenant_1",
+        tenant={"ad_server": "google_ad_manager"},
+        protocol="mcp",
+    )
+
+    req = GetSignalsRequest(discovery_mode="wholesale")
+
+    with pytest.raises(AdCPValidationError, match="brief"):
+        await _get_signals_impl(req, identity)
+
+
+@pytest.mark.asyncio
+async def test_get_signals_rejects_version_preconditions_for_brief_discovery() -> None:
+    identity = ResolvedIdentity(
+        principal_id="buyer_1",
+        tenant_id="tenant_1",
+        tenant={"ad_server": "google_ad_manager"},
+        protocol="mcp",
+    )
+
+    req = GetSignalsRequest(if_wholesale_feed_version="feed-v1")
+
+    with pytest.raises(AdCPValidationError, match="version preconditions"):
+        await _get_signals_impl(req, identity)

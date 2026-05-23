@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 products_bp = Blueprint("products", __name__)
 
 
+def _catalog_acl_notification_scope(
+    before: list[str] | None,
+    after: list[str] | None,
+) -> list[str] | None:
+    """Return principals that need a catalog-change webhook for an ACL edit."""
+    if before is None or after is None:
+        return None
+    return sorted(set(before) | set(after))
+
+
 def _format_to_dict(fmt: Format) -> dict:
     """Convert a Format object to a frontend-compatible dict.
 
@@ -1507,6 +1517,9 @@ def edit_product(tenant_id, product_id):
                 # Empty list or no selection means visible to all (default)
                 from sqlalchemy.orm import attributes
 
+                previous_allowed_principal_ids = (
+                    list(product.allowed_principal_ids) if product.allowed_principal_ids is not None else None
+                )
                 allowed_principals = request.form.getlist("allowed_principal_ids")
                 if allowed_principals:
                     product.allowed_principal_ids = allowed_principals
@@ -1914,7 +1927,10 @@ def edit_product(tenant_id, product_id):
                     action="updated",
                     product_id=product.product_id,
                     data={"name": product.name},
-                    principal_ids=product.allowed_principal_ids or None,
+                    principal_ids=_catalog_acl_notification_scope(
+                        previous_allowed_principal_ids,
+                        product.allowed_principal_ids,
+                    ),
                 )
 
                 flash(f"Product '{product.name}' updated successfully", "success")

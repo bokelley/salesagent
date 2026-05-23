@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from src.core.database.repositories.push_notification import PushNotificationConfigSnapshot
-from src.core.database.repositories.uow import PushNotificationUoW
+from src.core.database.repositories.uow import AccountUoW, PushNotificationUoW
 from src.services.protocol_webhook_service import ProtocolWebhookService
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,15 @@ async def notify_account_status_changed_async(
     from_status: str,
     to_status: str,
     principal_id: str | None = None,
+    principal_ids: list[str] | None = None,
 ) -> None:
     """Notify registered buyers that an account status changed."""
+    visible_principal_ids = _account_visible_principal_ids(
+        tenant_id=tenant_id,
+        account_id=account_id,
+        fallback_principal_id=principal_id,
+        explicit_principal_ids=principal_ids,
+    )
     await _notify_protocol_change_async(
         tenant_id=tenant_id,
         event_type="account.status_changed",
@@ -31,7 +39,7 @@ async def notify_account_status_changed_async(
         object_id=account_id,
         action="status_changed",
         data={"from_status": from_status, "to_status": to_status},
-        principal_id=principal_id,
+        principal_ids=visible_principal_ids,
     )
 
 
@@ -42,6 +50,7 @@ def notify_account_status_changed(
     from_status: str,
     to_status: str,
     principal_id: str | None = None,
+    principal_ids: list[str] | None = None,
 ) -> None:
     """Sync wrapper for account status notifications from Flask handlers."""
     _run_or_schedule(
@@ -51,6 +60,7 @@ def notify_account_status_changed(
             from_status=from_status,
             to_status=to_status,
             principal_id=principal_id,
+            principal_ids=principal_ids,
         )
     )
 
@@ -119,9 +129,8 @@ async def _notify_protocol_change_async(
         return
 
     timestamp = datetime.now(UTC).isoformat()
-    service = ProtocolWebhookService()
     tasks = [
-        service.send_notification(
+        ProtocolWebhookService().send_notification(
             snapshot.to_delivery_config(),
             _build_change_payload(
                 snapshot,
@@ -160,7 +169,30 @@ def _build_change_payload(
     data: dict[str, Any],
     timestamp: str,
 ) -> dict[str, Any]:
+    event = {
+        "type": event_type,
+        "object_type": object_type,
+        "object_id": object_id,
+        "action": action,
+        "data": data,
+        "timestamp": timestamp,
+    }
+    if refresh_tool is not None:
+        event["refresh_tool"] = refresh_tool
+
     payload = {
+        "notification_id": f"notif_{uuid.uuid4().hex}",
+        "notification_type": event_type,
+        "subscriber_id": snapshot.principal_id,
+        "account_id": object_id if object_type == "account" else data.get("account_id"),
+        "wholesale_feed_version": timestamp,
+        "cache_scope": {
+            "object_type": object_type,
+            "object_id": object_id,
+            "refresh_tool": refresh_tool,
+        },
+        "event": event,
+        # Backward-compatible local shape retained for existing subscribers.
         "type": event_type,
         "tenant_id": tenant_id,
         "principal_id": snapshot.principal_id,
@@ -177,6 +209,25 @@ def _build_change_payload(
     if snapshot.validation_token is not None:
         payload["token"] = snapshot.validation_token
     return payload
+
+
+def _account_visible_principal_ids(
+    *,
+    tenant_id: str,
+    account_id: str,
+    fallback_principal_id: str | None = None,
+    explicit_principal_ids: list[str] | None = None,
+) -> list[str]:
+    if explicit_principal_ids is not None:
+        return sorted(set(explicit_principal_ids))
+
+    with AccountUoW(tenant_id) as uow:
+        assert uow.accounts is not None
+        principal_ids = uow.accounts.list_principal_ids_for_account(account_id)
+
+    if not principal_ids and fallback_principal_id is not None:
+        principal_ids = [fallback_principal_id]
+    return sorted(set(principal_ids))
 
 
 def _list_push_notification_targets(
