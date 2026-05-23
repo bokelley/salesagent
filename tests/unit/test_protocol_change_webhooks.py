@@ -125,6 +125,32 @@ async def test_catalog_change_webhook_includes_refresh_tool(monkeypatch) -> None
     assert sent[0]["payload"]["data"] == {"name": "Audience"}
 
 
+def test_signal_catalog_change_projects_legacy_signal_id_to_wire_safe_id(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(coro):
+        captured["coro"] = coro
+        coro.close()
+
+    async def noop():
+        return None
+
+    def fake_notify(**kwargs):
+        captured["kwargs"] = kwargs
+        return noop()
+
+    monkeypatch.setattr(protocol_change_webhooks, "_run_or_schedule", fake_run)
+    monkeypatch.setattr(protocol_change_webhooks, "_notify_protocol_change_async", fake_notify)
+
+    protocol_change_webhooks.notify_signal_catalog_changed(
+        tenant_id="tenant_1",
+        action="updated",
+        signal_id="audience.sports_fans",
+    )
+
+    assert captured["kwargs"]["object_id"] == "audience_sports_fans"
+
+
 @pytest.mark.asyncio
 async def test_product_catalog_change_filters_restricted_principals(monkeypatch) -> None:
     sent = []

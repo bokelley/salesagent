@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from adcp.decisioning import create_adcp_server_from_platform
+from adcp.server.mcp_tools import DISCOVERY_TOOLS
 
 from core.main import AUTH_OPTIONAL_TOOLS
 from core.platforms.gam import GamPlatform
@@ -29,7 +30,7 @@ def _advertised_tools(platform) -> frozenset[str]:
 
 
 def test_get_signals_requires_authenticated_buyer() -> None:
-    assert "get_signals" not in AUTH_OPTIONAL_TOOLS
+    assert "get_signals" not in (DISCOVERY_TOOLS | AUTH_OPTIONAL_TOOLS)
 
 
 @pytest.mark.parametrize("platform", [MockSellerPlatform(), GamPlatform()])
@@ -162,7 +163,7 @@ async def test_get_signals_rejects_unsupported_discovery_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_signals_rejects_version_preconditions_for_brief_discovery() -> None:
+async def test_get_signals_accepts_version_preconditions_for_brief_refresh() -> None:
     identity = ResolvedIdentity(
         principal_id="buyer_1",
         tenant_id="tenant_1",
@@ -172,5 +173,7 @@ async def test_get_signals_rejects_version_preconditions_for_brief_discovery() -
 
     req = GetSignalsRequest(if_wholesale_feed_version="feed-v1")
 
-    with pytest.raises(AdCPValidationError, match="version preconditions"):
-        await _get_signals_impl(req, identity)
+    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]):
+        response = await _get_signals_impl(req, identity)
+
+    assert response.signals

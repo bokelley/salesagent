@@ -41,6 +41,7 @@ from src.core.schemas import (
     Signal,
     SignalDeployment,
 )
+from src.core.signal_ids import adcp_safe_signal_id
 from src.core.testing_hooks import AdCPTestContext
 
 
@@ -79,14 +80,15 @@ def _tenant_signal_to_adcp(
     # use the public salesagent host. Fall back to the same when the tenant
     # hasn't set ``public_agent_url`` so projection doesn't fail validation.
     resolved_agent_url = agent_url or "https://salesagent.adcontextprotocol.org/signals"
+    wire_id = adcp_safe_signal_id(ts.signal_id)
 
     signal_kwargs: dict = {
         "signal_id": {
             "source": "agent",
             "agent_url": resolved_agent_url,
-            "id": ts.signal_id,
+            "id": wire_id,
         },
-        "signal_agent_segment_id": ts.signal_id,
+        "signal_agent_segment_id": wire_id,
         "name": ts.name,
         "description": ts.description or f"{ts.name} signal",
         # Operator-declared signals are the publisher's first-party data
@@ -233,14 +235,6 @@ def _validate_signal_discovery_request(req: GetSignalsRequest) -> None:
         raise AdCPValidationError(
             "get_signals currently supports discovery_mode='brief' only",
             details={"supported_discovery_modes": ["brief"]},
-        )
-    if req.if_wholesale_feed_version is not None or req.if_pricing_version is not None:
-        raise AdCPValidationError(
-            "get_signals catalog version preconditions are not supported for brief discovery",
-            details={
-                "if_wholesale_feed_version": req.if_wholesale_feed_version,
-                "if_pricing_version": req.if_pricing_version,
-            },
         )
 
 

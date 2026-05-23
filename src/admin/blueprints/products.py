@@ -28,11 +28,19 @@ logger = logging.getLogger(__name__)
 products_bp = Blueprint("products", __name__)
 
 
+def _normalize_catalog_acl(ids: list[str] | None) -> list[str] | None:
+    if not ids:
+        return None
+    return sorted(set(ids))
+
+
 def _catalog_acl_notification_scope(
     before: list[str] | None,
     after: list[str] | None,
 ) -> list[str] | None:
     """Return principals that need a catalog-change webhook for an ACL edit."""
+    before = _normalize_catalog_acl(before)
+    after = _normalize_catalog_acl(after)
     if before is None or after is None:
         return None
     return sorted(set(before) | set(after))

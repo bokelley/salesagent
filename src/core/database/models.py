@@ -1749,8 +1749,8 @@ class TenantSignal(Base, JSONValidatorMixin):
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
         nullable=False,
     )
-    # Stable AdCP-style identifier (e.g. ``audience.sports_fans``,
-    # ``kv.vertical``, ``weather.temperature_f``). Storefront references this.
+    # Stable AdCP-style identifier (e.g. ``audience_sports_fans``,
+    # ``kv_vertical``, ``weather_temperature_f``). Storefront references this.
     signal_id: Mapped[str] = mapped_column(String(200), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

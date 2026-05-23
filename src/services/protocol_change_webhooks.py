@@ -11,6 +11,7 @@ from typing import Any
 
 from src.core.database.repositories.push_notification import PushNotificationConfigSnapshot
 from src.core.database.repositories.uow import AccountUoW, PushNotificationUoW
+from src.core.signal_ids import adcp_safe_signal_id
 from src.services.protocol_webhook_service import ProtocolWebhookService
 
 logger = logging.getLogger(__name__)
@@ -96,12 +97,13 @@ def notify_signal_catalog_changed(
     data: dict[str, Any] | None = None,
 ) -> None:
     """Notify registered buyers that the signals catalog changed."""
+    wire_signal_id = adcp_safe_signal_id(signal_id)
     _run_or_schedule(
         _notify_protocol_change_async(
             tenant_id=tenant_id,
             event_type="catalog.changed",
             object_type="signal",
-            object_id=signal_id,
+            object_id=wire_signal_id,
             action=action,
             refresh_tool="get_signals",
             data=data or {},
