@@ -71,7 +71,7 @@ class MockSellerPlatform(DecisioningPlatform):
         ),
         account=CapabilitiesAccount(supported_billing=["operator"]),
         media_buy=MediaBuy(supported_pricing_models=["cpm"]),
-        signals=Signals(features=SignalsFeatures(catalog_signals=True)),
+        signals=Signals(discovery_modes=["brief", "wholesale"], features=SignalsFeatures(catalog_signals=True)),
         supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
     )
     accounts = SalesagentAccountStore()

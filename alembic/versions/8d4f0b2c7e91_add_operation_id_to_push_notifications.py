@@ -26,7 +26,28 @@ def upgrade() -> None:
     )
     op.add_column(
         "push_notification_configs",
+        sa.Column("account_id", sa.String(length=50), nullable=True),
+    )
+    op.add_column(
+        "push_notification_configs",
+        sa.Column("subscriber_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "push_notification_configs",
+        sa.Column("event_types", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.add_column(
+        "push_notification_configs",
         sa.Column("purpose", sa.String(length=32), server_default="async_task", nullable=False),
+    )
+    op.add_column(
+        "push_notification_configs",
+        sa.Column("is_current", sa.Boolean(), server_default=sa.text("true"), nullable=False),
+    )
+    op.create_index(
+        "idx_push_notification_configs_account",
+        "push_notification_configs",
+        ["tenant_id", "account_id"],
     )
     op.add_column("products", sa.Column("allowed_actions", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
     op.add_column("products", sa.Column("format_options", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
@@ -39,5 +60,10 @@ def downgrade() -> None:
     op.drop_column("products", "vendor_metric_optimization")
     op.drop_column("products", "format_options")
     op.drop_column("products", "allowed_actions")
+    op.drop_index("idx_push_notification_configs_account", table_name="push_notification_configs")
+    op.drop_column("push_notification_configs", "is_current")
     op.drop_column("push_notification_configs", "purpose")
+    op.drop_column("push_notification_configs", "event_types")
+    op.drop_column("push_notification_configs", "subscriber_id")
+    op.drop_column("push_notification_configs", "account_id")
     op.drop_column("push_notification_configs", "operation_id")

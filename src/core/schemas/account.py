@@ -100,6 +100,7 @@ class SyncResponseAccount(AdCPBaseModel):
     sandbox: bool | None = None
     errors: list[Any] | None = None
     setup: Any | None = None
+    notification_configs: list[Any] | None = None
 
 
 class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse):

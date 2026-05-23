@@ -24,6 +24,10 @@ from adcp.types import PaginationRequest, PaginationResponse
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
+from src.core.database.repositories.push_notification import (
+    PushNotificationConfigRepository,
+    PushNotificationConfigSnapshot,
+)
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
@@ -38,6 +42,7 @@ from src.core.schemas.account import (
 from src.services.protocol_change_webhooks import notify_account_status_changed_async
 from src.services.push_notification_registration import (
     normalize_push_notification_config,
+    register_account_notification_configs_in_repo,
     register_push_notification_config_in_repo,
 )
 
@@ -73,7 +78,7 @@ def _wire_status(status: str | None) -> str | None:
     return _INTERNAL_TO_WIRE_STATUS.get(status, status)
 
 
-def _db_account_to_schema(db_account: DBAccount) -> Account:
+def _db_account_to_schema(db_account: DBAccount, notification_configs: list[dict[str, Any]] | None = None) -> Account:
     """Convert ORM Account to Pydantic schema Account."""
     return Account(
         account_id=db_account.account_id,
@@ -91,7 +96,37 @@ def _db_account_to_schema(db_account: DBAccount) -> Account:
         account_scope=db_account.account_scope,
         governance_agents=db_account.governance_agents,
         sandbox=db_account.sandbox,
+        notification_configs=notification_configs,
         ext=db_account.ext,
+    )
+
+
+def _notification_configs_to_wire(snapshots: list[PushNotificationConfigSnapshot]) -> list[dict[str, Any]] | None:
+    configs = [
+        {
+            "subscriber_id": snapshot.subscriber_id or snapshot.principal_id,
+            "url": snapshot.url,
+            "event_types": snapshot.event_types or [],
+            "active": snapshot.is_active,
+        }
+        for snapshot in snapshots
+        if snapshot.account_id is not None and snapshot.event_types
+    ]
+    return sorted(configs, key=lambda config: config["subscriber_id"]) or None
+
+
+def _account_notification_configs_for_response(
+    repo: PushNotificationConfigRepository,
+    *,
+    principal_id: str,
+    account_id: str,
+) -> list[dict[str, Any]] | None:
+    return _notification_configs_to_wire(
+        repo.list_current_snapshots(
+            principal_id=principal_id,
+            purpose="catalog_changes",
+            account_id=account_id,
+        )
     )
 
 
@@ -179,8 +214,19 @@ def _list_accounts_impl(
         # Sort for deterministic pagination
         db_accounts.sort(key=lambda a: a.account_id)
 
+        assert uow.push_notifications is not None
         # Convert ORM models to schema models while session is alive
-        schema_accounts = [_db_account_to_schema(a) for a in db_accounts]
+        schema_accounts = [
+            _db_account_to_schema(
+                account,
+                _account_notification_configs_for_response(
+                    uow.push_notifications,
+                    principal_id=principal_id,
+                    account_id=account.account_id,
+                ),
+            )
+            for account in db_accounts
+        ]
 
     # Apply pagination after conversion
     paginated, pagination_resp = _apply_pagination(schema_accounts, getattr(req, "pagination", None))
@@ -287,6 +333,7 @@ def _build_sync_result(
     sandbox: bool | None = None,
     errors: list[Any] | None = None,
     setup: Any | None = None,
+    notification_configs: list[dict[str, Any]] | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object.
 
@@ -310,6 +357,7 @@ def _build_sync_result(
         sandbox=sandbox,
         errors=errors,
         setup=setup,
+        notification_configs=notification_configs,
     )
 
 
@@ -543,6 +591,7 @@ async def _sync_accounts_impl(
 
             if existing is not None:
                 seen_account_ids.add(existing.account_id)
+                account_notification_configs = getattr(entry, "notification_configs", None)
 
                 if dry_run:
                     # Check if fields would change
@@ -570,6 +619,13 @@ async def _sync_accounts_impl(
                 else:
                     action = "unchanged"
 
+                if account_notification_configs is not None:
+                    register_account_notification_configs_in_repo(
+                        uow.push_notifications,
+                        principal_id=principal_id,
+                        account_id=existing.account_id,
+                        configs=account_notification_configs,
+                    )
                 results.append(
                     _build_sync_result(
                         account_id=existing.account_id,
@@ -580,6 +636,11 @@ async def _sync_accounts_impl(
                         name=existing.name,
                         billing=existing.billing,
                         sandbox=existing.sandbox,
+                        notification_configs=_account_notification_configs_for_response(
+                            uow.push_notifications,
+                            principal_id=principal_id,
+                            account_id=existing.account_id,
+                        ),
                     )
                 )
             else:
@@ -650,6 +711,14 @@ async def _sync_accounts_impl(
 
                 # Grant agent access to the new account
                 repo.grant_access(principal_id, account_id)
+                account_notification_configs = getattr(entry, "notification_configs", None)
+                if account_notification_configs is not None:
+                    register_account_notification_configs_in_repo(
+                        uow.push_notifications,
+                        principal_id=principal_id,
+                        account_id=account_id,
+                        configs=account_notification_configs,
+                    )
 
                 results.append(
                     _build_sync_result(
@@ -662,6 +731,11 @@ async def _sync_accounts_impl(
                         billing=billing_val,
                         sandbox=sandbox,
                         setup=setup,
+                        notification_configs=_account_notification_configs_for_response(
+                            uow.push_notifications,
+                            principal_id=principal_id,
+                            account_id=account_id,
+                        ),
                     )
                 )
 

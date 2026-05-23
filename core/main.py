@@ -105,6 +105,7 @@ AUTH_OPTIONAL_TOOLS = frozenset(
     {
         "get_adcp_capabilities",
         "get_products",
+        "get_signals",
         "list_creative_formats",
     }
 )
@@ -356,7 +357,7 @@ def build_router() -> LazyPlatformRouter:
             # wired``). Declare when we wire that plug.
             features=Features(inline_creative_management=True),
         ),
-        signals=Signals(features=SignalsFeatures(catalog_signals=True)),
+        signals=Signals(discovery_modes=["brief", "wholesale"], features=SignalsFeatures(catalog_signals=True)),
         supported_protocols=[SupportedProtocol.media_buy, SupportedProtocol.signals],
     )
     # ProposalManager is wired per-tenant. Today every active tenant

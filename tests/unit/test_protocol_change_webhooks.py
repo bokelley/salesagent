@@ -1,6 +1,8 @@
 import pytest
 
 from src.core.database.repositories.push_notification import PushNotificationConfigSnapshot
+from src.core.schemas import Signal, SignalDeployment
+from src.core.tools.signals import _cpm_pricing_option
 from src.services import protocol_change_webhooks
 
 
@@ -96,7 +98,24 @@ async def test_catalog_change_webhook_includes_refresh_tool(monkeypatch) -> None
             sent.append({"payload": payload, "metadata": metadata})
             return True
 
+    signal = Signal(
+        signal_id={
+            "source": "agent",
+            "agent_url": "https://salesagent.adcontextprotocol.org/signals",
+            "id": "sig_1",
+        },
+        signal_agent_segment_id="sig_1",
+        name="Audience",
+        description="Audience signal",
+        signal_type="owned",
+        data_provider="publisher",
+        coverage_percentage=100.0,
+        deployments=[SignalDeployment(platform="mock", is_live=True, type="platform")],
+        pricing_options=_cpm_pricing_option(0.0),
+    )
+
     monkeypatch.setattr(protocol_change_webhooks, "_list_push_notification_targets", lambda *args, **kwargs: snapshots)
+    monkeypatch.setattr(protocol_change_webhooks, "_load_signal_for_webhook", lambda *args, **kwargs: signal)
     monkeypatch.setattr(protocol_change_webhooks, "ProtocolWebhookService", FakeProtocolWebhookService)
 
     await protocol_change_webhooks._notify_protocol_change_async(
@@ -110,14 +129,11 @@ async def test_catalog_change_webhook_includes_refresh_tool(monkeypatch) -> None
     )
 
     assert sent[0]["payload"]["type"] == "catalog.changed"
-    assert sent[0]["payload"]["notification_type"] == "catalog.changed"
+    assert sent[0]["payload"]["notification_type"] == "signal.updated"
     assert sent[0]["payload"]["subscriber_id"] == "agent_1"
-    assert sent[0]["payload"]["cache_scope"] == {
-        "object_type": "signal",
-        "object_id": "sig_1",
-        "refresh_tool": "get_signals",
-    }
-    assert sent[0]["payload"]["event"]["refresh_tool"] == "get_signals"
+    assert sent[0]["payload"]["cache_scope"] == "public"
+    assert sent[0]["payload"]["event"]["event_type"] == "signal.updated"
+    assert sent[0]["payload"]["event"]["payload"]["signal_agent_segment_id"] == "sig_1"
     assert sent[0]["payload"]["object_type"] == "signal"
     assert sent[0]["payload"]["object_id"] == "sig_1"
     assert sent[0]["payload"]["action"] == "updated"
@@ -149,6 +165,24 @@ def test_signal_catalog_change_projects_legacy_signal_id_to_wire_safe_id(monkeyp
     )
 
     assert captured["kwargs"]["object_id"] == "audience_sports_fans"
+
+
+def test_signal_catalog_changes_batches_into_one_scheduled_job(monkeypatch) -> None:
+    scheduled = []
+
+    def fake_run(coro):
+        scheduled.append(coro)
+        coro.close()
+
+    monkeypatch.setattr(protocol_change_webhooks, "_run_or_schedule", fake_run)
+
+    protocol_change_webhooks.notify_signal_catalog_changes(
+        tenant_id="tenant_1",
+        action="updated",
+        signal_ids=["sig_1", "sig_2", "sig_3"],
+    )
+
+    assert len(scheduled) == 1
 
 
 @pytest.mark.asyncio
@@ -191,6 +225,72 @@ async def test_product_catalog_change_filters_restricted_principals(monkeypatch)
     )
 
     assert [entry["url"] for entry in sent] == ["https://buyer-2.example/webhooks"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_change_honors_account_subscription_scope_and_event_types(monkeypatch) -> None:
+    sent = []
+    snapshots = [
+        PushNotificationConfigSnapshot(
+            id="pnc_1",
+            tenant_id="tenant_1",
+            principal_id="agent_1",
+            subscriber_id="sub_1",
+            account_id="acc_1",
+            event_types=["signal.*"],
+            url="https://buyer-1.example/webhooks",
+            purpose="catalog_changes",
+        ),
+        PushNotificationConfigSnapshot(
+            id="pnc_2",
+            tenant_id="tenant_1",
+            principal_id="agent_1",
+            subscriber_id="sub_2",
+            account_id="acc_2",
+            event_types=["product.updated"],
+            url="https://buyer-2.example/webhooks",
+            purpose="catalog_changes",
+        ),
+    ]
+
+    class FakeProtocolWebhookService:
+        async def send_notification(self, push_notification_config, payload, metadata):
+            sent.append({"url": push_notification_config.url, "payload": payload, "metadata": metadata})
+            return True
+
+    signal = Signal(
+        signal_id={
+            "source": "agent",
+            "agent_url": "https://salesagent.adcontextprotocol.org/signals",
+            "id": "sig_1",
+        },
+        signal_agent_segment_id="sig_1",
+        name="Audience",
+        description="Audience signal",
+        signal_type="owned",
+        data_provider="publisher",
+        coverage_percentage=100.0,
+        deployments=[SignalDeployment(platform="mock", is_live=True, type="platform")],
+        pricing_options=_cpm_pricing_option(0.0),
+    )
+
+    monkeypatch.setattr(protocol_change_webhooks, "_list_push_notification_targets", lambda *args, **kwargs: snapshots)
+    monkeypatch.setattr(protocol_change_webhooks, "_load_signal_for_webhook", lambda *args, **kwargs: signal)
+    monkeypatch.setattr(protocol_change_webhooks, "ProtocolWebhookService", FakeProtocolWebhookService)
+
+    await protocol_change_webhooks._notify_protocol_change_async(
+        tenant_id="tenant_1",
+        event_type="signal.updated",
+        object_type="signal",
+        object_id="sig_1",
+        action="updated",
+        refresh_tool="get_signals",
+        data={"account_ids": ["acc_1"]},
+    )
+
+    assert [entry["url"] for entry in sent] == ["https://buyer-1.example/webhooks"]
+    assert sent[0]["payload"]["subscriber_id"] == "sub_1"
+    assert sent[0]["payload"]["account_id"] == "acc_1"
 
 
 @pytest.mark.asyncio

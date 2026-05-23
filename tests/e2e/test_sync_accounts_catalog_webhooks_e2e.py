@@ -28,11 +28,15 @@ class CatalogWebhookReceiver(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
-        CatalogWebhookReceiver.received.append(json.loads(body.decode("utf-8")))
+        payload = json.loads(body.decode("utf-8"))
+        CatalogWebhookReceiver.received.append(payload)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"status":"received"}')
+        if payload.get("type") == "webhook.challenge":
+            self.wfile.write(json.dumps({"challenge": payload["challenge"]}).encode("utf-8"))
+        else:
+            self.wfile.write(b'{"status":"received"}')
 
     def log_message(self, format, *args):
         pass
@@ -64,7 +68,12 @@ def _db_context(live_server: dict[str, Any], test_auth_token: str) -> dict[str, 
     with psycopg2.connect(live_server["postgres"]) as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT tenant_id, principal_id FROM principals WHERE access_token = %s",
+                """
+                SELECT principals.tenant_id, principals.principal_id, tenants.public_agent_url
+                FROM principals
+                JOIN tenants ON tenants.tenant_id = principals.tenant_id
+                WHERE principals.access_token = %s
+                """,
                 (test_auth_token,),
             )
             row = cursor.fetchone()
@@ -74,7 +83,7 @@ def _db_context(live_server: dict[str, Any], test_auth_token: str) -> dict[str, 
                 (_EMBEDDED_ORG_ID, row[0]),
             )
         conn.commit()
-    return {"tenant_id": row[0], "principal_id": row[1]}
+    return {"tenant_id": row[0], "principal_id": row[1], "public_agent_url": row[2]}
 
 
 def _insert_deletable_product(live_server: dict[str, Any], tenant_id: str, product_id: str) -> None:
@@ -158,10 +167,9 @@ async def _register_webhook_via_sync_accounts(
     live_server: dict[str, Any],
     test_auth_token: str,
     webhook_url: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
     brand_domain = f"e2e-webhook-{uuid.uuid4().hex[:8]}.example"
-    operation_id = f"catalog-op-{uuid.uuid4()}"
-    validation_token = "client-validation-token"
+    subscriber_id = f"e2e-sub-{uuid.uuid4().hex[:8]}"
     headers = {"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"}
     transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
     async with Client(transport=transport) as client:
@@ -178,13 +186,19 @@ async def _register_webhook_via_sync_accounts(
                         "brand": {"domain": brand_domain},
                         "operator": "e2e-operator.example",
                         "billing": "operator",
+                        "notification_configs": [
+                            {
+                                "subscriber_id": subscriber_id,
+                                "url": webhook_url,
+                                "event_types": ["product.removed", "signal.created"],
+                                "authentication": {
+                                    "schemes": ["HMAC-SHA256"],
+                                    "credentials": "e2e-shared-secret-32-bytes-value",
+                                },
+                            }
+                        ],
                     }
                 ],
-                "push_notification_config": {
-                    "url": webhook_url,
-                    "operation_id": operation_id,
-                    "token": validation_token,
-                },
             },
         )
         data = parse_tool_result(result)
@@ -192,7 +206,8 @@ async def _register_webhook_via_sync_accounts(
     assert data["accounts"][0]["action"] == "created"
     account_id = data["accounts"][0]["account_id"]
     assert account_id
-    return account_id, operation_id, validation_token
+    assert data["accounts"][0]["notification_configs"][0]["subscriber_id"] == subscriber_id
+    return account_id, subscriber_id
 
 
 @pytest.mark.asyncio
@@ -203,7 +218,7 @@ async def test_sync_accounts_registration_fires_account_product_and_signal_webho
     catalog_webhook_server,
 ):
     ctx = _db_context(live_server, test_auth_token)
-    account_id, operation_id, validation_token = await _register_webhook_via_sync_accounts(
+    account_id, subscriber_id = await _register_webhook_via_sync_accounts(
         live_server,
         test_auth_token,
         catalog_webhook_server["url"],
@@ -211,22 +226,6 @@ async def test_sync_accounts_registration_fires_account_product_and_signal_webho
 
     session = requests.Session()
     admin_headers = _embedded_admin_headers(live_server["admin"])
-
-    account_response = session.post(
-        f"{live_server['admin']}/tenant/{ctx['tenant_id']}/accounts/{account_id}/status",
-        json={"status": "suspended"},
-        headers=admin_headers,
-        timeout=20,
-    )
-    assert account_response.status_code == 200, account_response.text
-    account_payload = _wait_for_payload(
-        catalog_webhook_server["received"],
-        lambda payload: payload.get("type") == "account.status_changed" and payload.get("object_id") == account_id,
-    )
-    assert account_payload["data"] == {"from_status": "active", "to_status": "suspended"}
-    assert account_payload["operation_id"] == operation_id
-    assert account_payload["token"] == validation_token
-    assert "validation_token" not in account_payload
 
     product_id = f"e2e_product_{uuid.uuid4().hex[:8]}"
     _insert_deletable_product(live_server, ctx["tenant_id"], product_id)
@@ -241,10 +240,11 @@ async def test_sync_accounts_registration_fires_account_product_and_signal_webho
         lambda payload: payload.get("object_type") == "product" and payload.get("object_id") == product_id,
     )
     assert product_payload["type"] == "catalog.changed"
+    assert product_payload["notification_type"] == "product.removed"
+    assert product_payload["account_id"] == account_id
+    assert product_payload["subscriber_id"] == subscriber_id
     assert product_payload["action"] == "deleted"
     assert product_payload["refresh_tool"] == "get_products"
-    assert product_payload["operation_id"] == operation_id
-    assert product_payload["token"] == validation_token
 
     signal_name = f"E2E Segment {uuid.uuid4().hex[:8]}"
     signal_response = session.post(
@@ -268,20 +268,31 @@ async def test_sync_accounts_registration_fires_account_product_and_signal_webho
         lambda payload: payload.get("object_type") == "signal" and payload.get("object_id") == signal_id,
     )
     assert signal_payload["type"] == "catalog.changed"
+    assert signal_payload["notification_type"] == "signal.created"
+    assert signal_payload["account_id"] == account_id
+    assert signal_payload["subscriber_id"] == subscriber_id
     assert signal_payload["action"] == "created"
     assert signal_payload["refresh_tool"] == "get_signals"
-    assert signal_payload["operation_id"] == operation_id
-    assert signal_payload["token"] == validation_token
 
     headers = {"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"}
     transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
     requested_signal_id = {
         "source": "agent",
-        "agent_url": "https://salesagent.adcontextprotocol.org/signals",
+        "agent_url": ctx["public_agent_url"],
         "id": signal_id,
     }
     async with Client(transport=transport) as client:
         result = await client.call_tool("get_signals", {"signal_ids": [requested_signal_id]})
         data = parse_tool_result(result)
+        wholesale_result = await client.call_tool(
+            "get_signals",
+            {
+                "discovery_mode": "wholesale",
+                "if_wholesale_feed_version": signal_payload["wholesale_feed_version"],
+                "if_pricing_version": signal_payload["wholesale_feed_version"],
+            },
+        )
+        wholesale_data = parse_tool_result(wholesale_result)
 
     assert [signal["signal_id"] for signal in data["signals"]] == [requested_signal_id]
+    assert wholesale_data["unchanged"] is True

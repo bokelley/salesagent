@@ -2701,6 +2701,9 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
     session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     operation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    account_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    subscriber_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    event_types: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     authentication_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     authentication_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_token: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -2713,6 +2716,7 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     auth_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     signing_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="hmac", server_default=text("'hmac'"))
 
@@ -2732,6 +2736,7 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
         ),
         Index("idx_push_notification_configs_tenant", "tenant_id"),
         Index("idx_push_notification_configs_principal", "tenant_id", "principal_id"),
+        Index("idx_push_notification_configs_account", "tenant_id", "account_id"),
     )
 
     def __repr__(self):
@@ -2743,6 +2748,8 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
             f"session_id='{self.session_id}', "
             f"url='{self.url}', "
             f"operation_id='{self.operation_id}', "
+            f"account_id='{self.account_id}', "
+            f"subscriber_id='{self.subscriber_id}', "
             f"purpose='{self.purpose}', "
             f"authentication_type='{self.authentication_type}', "
             f"authentication_token='***', "

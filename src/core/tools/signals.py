@@ -4,6 +4,8 @@ This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
 """
 
+import hashlib
+import json
 import logging
 import re
 import time
@@ -229,41 +231,19 @@ def _pagination_window(total: int, cursor: str | None, limit: int | None) -> tup
     )
 
 
-def _validate_signal_discovery_request(req: GetSignalsRequest) -> None:
-    discovery_mode = getattr(req.discovery_mode, "value", req.discovery_mode)
-    if discovery_mode not in (None, "brief"):
-        raise AdCPValidationError(
-            "get_signals currently supports discovery_mode='brief' only",
-            details={"supported_discovery_modes": ["brief"]},
-        )
+def _signal_feed_version(signals: list[Signal]) -> str:
+    """Return an opaque version token for the projected wholesale feed."""
+    payload = [
+        signal.model_dump(mode="json", exclude_none=True) if hasattr(signal, "model_dump") else signal
+        for signal in signals
+    ]
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return f"sigfeed_{digest[:24]}"
 
 
-async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
-    """Shared implementation for get_signals (used by both MCP and A2A).
-
-    Args:
-        req: Request containing query parameters for signal discovery
-        identity: Resolved identity from transport boundary
-
-    Returns:
-        GetSignalsResponse with matching signals
-    """
-    _validate_signal_discovery_request(req)
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    assert identity is not None, "identity is required for signals"
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
-    if not identity.principal_id:
-        raise AdCPAuthenticationError("Authentication required for signal discovery")
-
-    # Mock implementation - in production, this would query from a signal provider
-    # or the ad server's available audience segments
-    signals = []
-
-    # Sample signals for demonstration using local types (extend AdCP library types)
-    sample_signals = [
+def _sample_signals() -> list[Signal]:
+    """Return the built-in demo signals included in the public feed."""
+    return [
         Signal(
             signal_id={
                 "source": "agent",
@@ -356,27 +336,78 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         ),
     ]
 
-    # Merge operator-declared signals from tenant_signals. This is the
-    # publisher's first-party adapter capability map (custom KVs, audience
-    # segments, weather signals, …) projected onto AdCP Signal shape so the
-    # storefront sees the same vocabulary it would from any signals agent.
-    # adapter_config stays operator-side; the wire response carries
-    # value_type / categories / range only.
+
+def _build_signal_feed(
+    tenant_id: str,
+    *,
+    ad_server: str | None,
+    agent_url: str | None,
+) -> list[Signal]:
+    signals = _sample_signals()
+    signals.extend(_load_tenant_signals(tenant_id, ad_server=ad_server, agent_url=agent_url))
+    return signals
+
+
+def _validate_signal_discovery_request(req: GetSignalsRequest) -> None:
+    discovery_mode = getattr(req.discovery_mode, "value", req.discovery_mode)
+    if discovery_mode not in (None, "brief", "wholesale"):
+        raise AdCPValidationError(
+            "get_signals supports discovery_mode='brief' and discovery_mode='wholesale'",
+            details={"supported_discovery_modes": ["brief", "wholesale"]},
+        )
+    if discovery_mode == "wholesale" and (req.signal_spec is not None or req.signal_ids is not None):
+        raise AdCPValidationError(
+            "get_signals discovery_mode='wholesale' does not accept signal_spec or signal_ids",
+            details={"discovery_mode": "wholesale"},
+        )
+    if discovery_mode != "wholesale" and (
+        req.if_wholesale_feed_version is not None or req.if_pricing_version is not None
+    ):
+        raise AdCPValidationError(
+            "get_signals version preconditions require discovery_mode='wholesale'",
+            details={"discovery_mode": discovery_mode or "brief"},
+        )
+    if req.if_pricing_version is not None and req.if_wholesale_feed_version is None:
+        raise AdCPValidationError(
+            "if_pricing_version must be sent with if_wholesale_feed_version",
+            details={"field": "if_pricing_version"},
+        )
+
+
+async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
+    """Shared implementation for get_signals (used by both MCP and A2A).
+
+    Args:
+        req: Request containing query parameters for signal discovery
+        identity: Resolved identity from transport boundary
+
+    Returns:
+        GetSignalsResponse with matching signals
+    """
+    _validate_signal_discovery_request(req)
+
+    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    assert identity is not None, "identity is required for signals"
+    tenant = identity.tenant
+    if not tenant:
+        raise AdCPAuthenticationError("No tenant context available")
+
+    signals = []
     tenant_ad_server = tenant.get("ad_server") if isinstance(tenant, dict) else getattr(tenant, "ad_server", None)
     tenant_agent_url = (
         tenant.get("public_agent_url") if isinstance(tenant, dict) else getattr(tenant, "public_agent_url", None)
     )
     assert identity.tenant_id is not None  # resolved by transport wrapper
-    sample_signals.extend(
-        _load_tenant_signals(
-            identity.tenant_id,
-            ad_server=tenant_ad_server,
-            agent_url=tenant_agent_url,
-        )
+    feed_signals = _build_signal_feed(
+        identity.tenant_id,
+        ad_server=tenant_ad_server,
+        agent_url=tenant_agent_url,
     )
+    discovery_mode = getattr(req.discovery_mode, "value", req.discovery_mode) or "brief"
+    cache_scope = "public"
 
     # Filter based on request parameters using AdCP-compliant fields
-    for signal in sample_signals:
+    for signal in feed_signals:
         if req.signal_ids and not any(_signal_id_matches(signal_id, signal) for signal_id in req.signal_ids):
             continue
 
@@ -415,6 +446,23 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
         signals.append(signal)
 
+    wholesale_feed_version = _signal_feed_version(signals)
+    pricing_version = wholesale_feed_version
+    if (
+        discovery_mode == "wholesale"
+        and req.if_wholesale_feed_version == wholesale_feed_version
+        and (req.if_pricing_version is None or req.if_pricing_version == pricing_version)
+    ):
+        return GetSignalsResponse(
+            signals=None,
+            errors=None,
+            context=req.context,
+            wholesale_feed_version=wholesale_feed_version,
+            pricing_version=pricing_version,
+            cache_scope=cache_scope,
+            unchanged=True,
+        )
+
     # Apply pagination first-class when provided. ``max_results`` remains
     # supported for callers using the older flat field.
     limit = req.__dict__.get("max_results")
@@ -427,7 +475,26 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
     # Signals are already constructed as local types (extending library types),
     # so no conversion needed — pass directly to response.
-    return GetSignalsResponse(signals=signals, errors=None, pagination=pagination, context=req.context)
+    response_kwargs: dict[str, Any] = {
+        "signals": signals,
+        "errors": None,
+        "pagination": pagination,
+        "context": req.context,
+    }
+    if discovery_mode == "wholesale":
+        response_kwargs.update(
+            {
+                "wholesale_feed_version": wholesale_feed_version,
+                "pricing_version": pricing_version,
+                "cache_scope": cache_scope,
+            }
+        )
+    return GetSignalsResponse(**response_kwargs)
+
+
+def current_signal_feed_version(tenant_id: str, *, ad_server: str | None = None, agent_url: str | None = None) -> str:
+    """Return the current public signal wholesale-feed version for webhook payloads."""
+    return _signal_feed_version(_build_signal_feed(tenant_id, ad_server=ad_server, agent_url=agent_url))
 
 
 async def _activate_signal_impl(

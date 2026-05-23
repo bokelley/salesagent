@@ -11,10 +11,11 @@ from adcp.server.mcp_tools import DISCOVERY_TOOLS
 from core.main import AUTH_OPTIONAL_TOOLS
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetSignalsRequest
-from src.core.tools.signals import _get_signals_impl
+from src.core.tenant_context import TenantContext
+from src.core.tools.signals import _get_signals_impl, current_signal_feed_version
 
 
 def _advertised_tools(platform) -> frozenset[str]:
@@ -29,8 +30,8 @@ def _advertised_tools(platform) -> frozenset[str]:
         executor.shutdown(wait=True)
 
 
-def test_get_signals_requires_authenticated_buyer() -> None:
-    assert "get_signals" not in (DISCOVERY_TOOLS | AUTH_OPTIONAL_TOOLS)
+def test_get_signals_allows_public_catalog_discovery() -> None:
+    assert "get_signals" in (DISCOVERY_TOOLS | AUTH_OPTIONAL_TOOLS)
 
 
 @pytest.mark.parametrize("platform", [MockSellerPlatform(), GamPlatform()])
@@ -56,6 +57,10 @@ def test_platforms_declare_catalog_signals_capability(platform) -> None:
     assert platform.capabilities.signals is not None
     assert platform.capabilities.signals.features is not None
     assert platform.capabilities.signals.features.catalog_signals is True
+    assert {getattr(mode, "value", mode) for mode in platform.capabilities.signals.discovery_modes} == {
+        "brief",
+        "wholesale",
+    }
 
 
 @pytest.mark.asyncio
@@ -136,19 +141,21 @@ async def test_get_signals_supports_pagination() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_signals_rejects_unauthenticated_discovery() -> None:
+async def test_get_signals_allows_unauthenticated_discovery() -> None:
     identity = ResolvedIdentity(
         tenant_id="tenant_1",
         tenant={"ad_server": "google_ad_manager"},
         protocol="mcp",
     )
 
-    with pytest.raises(AdCPAuthenticationError, match="signal discovery"):
-        await _get_signals_impl(GetSignalsRequest(), identity)
+    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]):
+        response = await _get_signals_impl(GetSignalsRequest(), identity)
+
+    assert response.signals
 
 
 @pytest.mark.asyncio
-async def test_get_signals_rejects_unsupported_discovery_mode() -> None:
+async def test_get_signals_rejects_invalid_discovery_mode() -> None:
     identity = ResolvedIdentity(
         principal_id="buyer_1",
         tenant_id="tenant_1",
@@ -156,14 +163,14 @@ async def test_get_signals_rejects_unsupported_discovery_mode() -> None:
         protocol="mcp",
     )
 
-    req = GetSignalsRequest(discovery_mode="wholesale")
+    req = GetSignalsRequest.model_construct(discovery_mode="deep")
 
-    with pytest.raises(AdCPValidationError, match="brief"):
+    with pytest.raises(AdCPValidationError, match="brief.*wholesale"):
         await _get_signals_impl(req, identity)
 
 
 @pytest.mark.asyncio
-async def test_get_signals_accepts_version_preconditions_for_brief_refresh() -> None:
+async def test_get_signals_rejects_version_preconditions_for_brief_refresh() -> None:
     identity = ResolvedIdentity(
         principal_id="buyer_1",
         tenant_id="tenant_1",
@@ -173,7 +180,74 @@ async def test_get_signals_accepts_version_preconditions_for_brief_refresh() -> 
 
     req = GetSignalsRequest(if_wholesale_feed_version="feed-v1")
 
-    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]):
-        response = await _get_signals_impl(req, identity)
+    with pytest.raises(AdCPValidationError, match="discovery_mode='wholesale'"):
+        await _get_signals_impl(req, identity)
 
-    assert response.signals
+
+@pytest.mark.asyncio
+async def test_get_signals_wholesale_returns_version_and_unchanged() -> None:
+    identity = ResolvedIdentity(
+        tenant_id="tenant_1",
+        tenant={"ad_server": "google_ad_manager"},
+        protocol="mcp",
+    )
+
+    req = GetSignalsRequest(discovery_mode="wholesale")
+    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]):
+        first = await _get_signals_impl(req, identity)
+        second = await _get_signals_impl(
+            GetSignalsRequest(
+                discovery_mode="wholesale",
+                if_wholesale_feed_version=first.wholesale_feed_version,
+                if_pricing_version=first.pricing_version,
+            ),
+            identity,
+        )
+
+    assert first.signals
+    assert first.wholesale_feed_version
+    assert first.pricing_version == first.wholesale_feed_version
+    assert first.cache_scope.value == "public"
+    assert second.unchanged is True
+    assert second.signals is None
+    assert second.wholesale_feed_version == first.wholesale_feed_version
+
+
+@pytest.mark.asyncio
+async def test_current_signal_feed_version_matches_wholesale_get_signals_version() -> None:
+    identity = ResolvedIdentity(
+        tenant_id="tenant_1",
+        tenant={"ad_server": None, "public_agent_url": None},
+        protocol="mcp",
+    )
+
+    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]):
+        response = await _get_signals_impl(GetSignalsRequest(discovery_mode="wholesale"), identity)
+        current_version = current_signal_feed_version("tenant_1")
+
+    assert current_version == response.wholesale_feed_version
+
+
+@pytest.mark.asyncio
+async def test_get_signals_uses_public_agent_url_from_tenant_context() -> None:
+    tenant = TenantContext.from_dict(
+        {
+            "tenant_id": "tenant_1",
+            "ad_server": "google_ad_manager",
+            "public_agent_url": "https://publisher.example.com/adcp",
+        }
+    )
+    identity = ResolvedIdentity(
+        tenant_id=tenant.tenant_id,
+        tenant=tenant,
+        protocol="mcp",
+    )
+
+    with patch("src.core.tools.signals._load_tenant_signals", return_value=[]) as load_tenant_signals:
+        await _get_signals_impl(GetSignalsRequest(discovery_mode="wholesale"), identity)
+
+    load_tenant_signals.assert_called_once_with(
+        "tenant_1",
+        ad_server="google_ad_manager",
+        agent_url="https://publisher.example.com/adcp",
+    )

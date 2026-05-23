@@ -47,7 +47,7 @@ from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.signal_usage import SignalUsageRepository
 from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
-from src.services.protocol_change_webhooks import notify_signal_catalog_changed
+from src.services.protocol_change_webhooks import notify_signal_catalog_changes
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +75,12 @@ def _notify_signal_catalog_changes(
     signal_ids: list[str],
     data: dict[str, Any] | None = None,
 ) -> None:
-    for signal_id in signal_ids:
-        notify_signal_catalog_changed(
-            tenant_id=tenant_id,
-            action=action,
-            signal_id=signal_id,
-            data=data or {},
-        )
+    notify_signal_catalog_changes(
+        tenant_id=tenant_id,
+        action=action,
+        signal_ids=signal_ids,
+        data=data or {},
+    )
 
 
 def _parse_csv(raw: str | None) -> list[str]:
