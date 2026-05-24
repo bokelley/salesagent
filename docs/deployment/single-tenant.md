@@ -80,7 +80,7 @@ git clone https://github.com/prebid/salesagent.git
 cd salesagent
 cp .env.template .env
 # Edit .env with your configuration
-docker compose up -d
+CONDUCTOR_PORT=8000 make compose-up
 
 # Verify
 curl http://localhost:8000/health

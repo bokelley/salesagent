@@ -19,7 +19,7 @@ Set the `ADCP_MULTI_TENANT` environment variable:
 fly secrets set ADCP_MULTI_TENANT=true --app your-app-name
 
 # Docker
-ADCP_MULTI_TENANT=true docker compose up -d
+ADCP_MULTI_TENANT=true CONDUCTOR_PORT=8000 make compose-up
 
 # Cloud Run
 gcloud run services update salesagent \

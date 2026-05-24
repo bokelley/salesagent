@@ -249,7 +249,7 @@ python scripts/migrate_product_configs.py --tenant tenant_id --apply
 **In Development:**
 ```bash
 # Start Docker services
-docker compose up -d
+CONDUCTOR_PORT=8000 make compose-up
 
 # Access Admin UI
 open http://localhost:8000

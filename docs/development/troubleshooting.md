@@ -249,15 +249,15 @@ docker-compose run --user $(id -u):$(id -g) adcp-server
 services:
   adcp-server:
     environment:
-      # Note: python3.12 must match Dockerfile version
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
+      # Note: python3.13 must match Dockerfile version
+      PYTHONPATH: "/app/.venv/lib/python3.13/site-packages:${PYTHONPATH:-}"
     volumes:
       - .:/app
       - /app/.venv  # Preserve container's venv
 
   admin-ui:
     environment:
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
+      PYTHONPATH: "/app/.venv/lib/python3.13/site-packages:${PYTHONPATH:-}"
     volumes:
       - .:/app
       - /app/.venv

@@ -6,7 +6,7 @@ This guide walks you through configuring SSO for your tenant using OpenID Connec
 
 New tenants start in **Setup Mode**, which enables test credentials for initial configuration:
 
-1. **Start the system** with `docker compose up -d`
+1. **Start the system** with `CONDUCTOR_PORT=8000 make compose-up`
 2. **Log in** with test credentials:
    - Email: `test_super_admin@example.com`
    - Password: `test123`

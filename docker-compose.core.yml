@@ -59,6 +59,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     entrypoint: []
     env_file:
       - path: .env
@@ -83,6 +87,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     entrypoint: []
     env_file:
       - path: .env
@@ -120,7 +128,7 @@ services:
       # empty (no CSP set, no iframe restriction). Production managed-
       # mode deployments set this to e.g. "'self' https://*.scope3.com".
       MANAGED_MODE_FRAME_ANCESTORS: "${MANAGED_MODE_FRAME_ANCESTORS:-}"
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
+      PYTHONPATH: "/app/.venv/lib/python3.13/site-packages"
       PYTHONUNBUFFERED: "1"
       FLASK_ENV: development
     depends_on:
@@ -160,7 +168,7 @@ services:
       # Earlier versions probed /admin/health on the host port (3091) which
       # 404'd AND wasn't reachable from inside the container; the resulting
       # "(unhealthy)" status was misleading.
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "python", "scripts/healthcheck.py", "3001"]
       interval: 30s
       timeout: 10s
       retries: 3

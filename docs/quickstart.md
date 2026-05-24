@@ -33,8 +33,8 @@ curl http://localhost:8000/health
 git clone https://github.com/prebid/salesagent.git
 cd salesagent
 
-# Start all services (includes PostgreSQL)
-docker compose up -d
+# Build and start all services (includes PostgreSQL)
+CONDUCTOR_PORT=8000 make compose-up
 
 # Verify it's running
 curl http://localhost:8000/health
@@ -127,7 +127,7 @@ docker compose down
 docker compose down -v
 
 # Rebuild after code changes
-docker compose build && docker compose up -d
+CONDUCTOR_PORT=8000 make compose-up
 ```
 
 ## Troubleshooting
@@ -136,8 +136,8 @@ docker compose build && docker compose up -d
 If containers don't start properly on the first attempt, this is usually a timing issue:
 ```bash
 docker compose down -v          # Clean up
-docker compose build --no-cache # Rebuild without cache
-docker compose up -d            # Start fresh
+LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}') docker compose build --no-cache adcp-server
+CONDUCTOR_PORT=8000 make compose-up
 ```
 
 ### Docker volume conflicts
@@ -145,7 +145,7 @@ If you have other Postgres containers, volumes may conflict. The salesagent uses
 ```bash
 docker compose down -v  # Remove volumes
 docker volume prune     # Clean up orphan volumes
-docker compose up -d
+CONDUCTOR_PORT=8000 make compose-up
 ```
 
 ### "No tenant context" error
@@ -162,7 +162,7 @@ kill -9 $(lsof -t -i:8000)
 This can happen if the default tenant wasn't created with public discovery enabled:
 ```bash
 docker compose down -v  # Reset database
-docker compose up -d    # Recreate demo tenant
+CONDUCTOR_PORT=8000 make compose-up
 ```
 
 ## Next Steps

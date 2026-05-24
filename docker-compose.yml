@@ -3,7 +3,7 @@
 # For local development with hot-reload.
 #
 # Usage:
-#   docker compose up
+#   CONDUCTOR_PORT=8000 make compose-up
 #
 # Endpoints (default port 8000):
 #   http://localhost:8000/       - Admin UI (login here)
@@ -60,8 +60,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - .:/app
-      - /app/.venv
+      - ./audit_logs:/app/audit_logs
     # ``migrate.py`` then ``seed_demo_data.py``: the second step is dev-only —
     # the seed is idempotent so re-runs are safe, and the env-gated mock-adapter
     # setup it relies on (``ADCP_TESTING``/``ADCP_MULTI_TENANT``) is set on the
@@ -118,7 +117,7 @@ services:
       # refuses to start without one. Mirrors scripts/test-stack.sh.
       ENCRYPTION_KEY: "${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"
       # Development settings
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
+      PYTHONPATH: "/app/.venv/lib/python3.13/site-packages"
       PYTHONUNBUFFERED: "1"
       FLASK_ENV: development
     depends_on:
@@ -129,12 +128,22 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # Mount source code for hot reloading
-      - .:/app
-      - /app/.venv
+      # Mount source code for hot reloading without shadowing the image venv.
+      - ./src:/app/src
+      - ./core:/app/core
+      - ./scripts:/app/scripts
+      - ./templates:/app/templates
+      - ./static:/app/static
+      - ./config:/app/config
+      - ./schemas:/app/schemas
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
+      - ./crontab:/app/crontab:ro
 
       # Mount local adcp library directly into venv (replaces installed package)
-      # - ../adcp-client-python/src/adcp:/app/.venv/lib/python3.12/site-packages/adcp:ro - Uncomment this if you want to use locally installed adcp-python-client for e2e testing purposes
+      # - ../adcp-client-python/src/adcp:/app/.venv/lib/python3.13/site-packages/adcp:ro - Uncomment this if you want to use locally installed adcp-python-client for e2e testing purposes
 
       # Optional: Mount audit logs
       - ./audit_logs:/app/audit_logs
@@ -143,7 +152,7 @@ services:
       - adcp_global_uv_cache:/cache/uv
     command: ["python", "scripts/run_server.py"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "python", "scripts/healthcheck.py", "8080"]
       interval: 30s
       timeout: 10s
       retries: 3

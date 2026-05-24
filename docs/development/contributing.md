@@ -199,9 +199,12 @@ uv run pytest tests/integration/
 # With coverage
 uv run pytest --cov=. --cov-report=html
 
-# Inside Docker
-docker-compose exec adcp-server pytest
+# Container smoke test
+CONDUCTOR_PORT=8000 make compose-up
+curl http://localhost:8000/health
 ```
+
+The runtime Docker image intentionally excludes development and test dependencies. Run pytest from the local uv environment or tox, not inside `adcp-server`.
 
 ### Test Categories
 

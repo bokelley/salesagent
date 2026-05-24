@@ -4,7 +4,8 @@
 # /a2a, /health.
 #
 # Usage on the VM:
-#   docker compose -f docker-compose.gcp.yml --env-file .env.gcp up -d --build
+#   LOCKFILE_HASH=$(shasum -a 256 uv.lock | awk '{print $1}') \
+#     docker compose -f docker-compose.gcp.yml --env-file .env.gcp up -d --build
 
 services:
   # db-init runs alembic against the *test clone* (fly-db). The clone is a
@@ -15,6 +16,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     entrypoint: []
     env_file:
       - path: .env.gcp
@@ -30,6 +35,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        LOCKFILE_HASH: ${LOCKFILE_HASH:-set-this-build-arg}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     entrypoint: []
     env_file:
       - path: .env.gcp
@@ -38,8 +47,9 @@ services:
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
       ADCP_SALES_PORT: "8000"
-      ADCP_AUTH_TEST_MODE: "true"
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages"
+      ADCP_AUTH_TEST_MODE: "false"
+      ENVIRONMENT: "production"
+      PYTHONPATH: "/app/.venv/lib/python3.13/site-packages"
       PYTHONUNBUFFERED: "1"
       FLASK_ENV: production
     depends_on:
@@ -51,7 +61,7 @@ services:
     command: ["python", "scripts/run_server.py"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "scripts/healthcheck.py", "8000"]
       interval: 30s
       timeout: 10s
       retries: 3

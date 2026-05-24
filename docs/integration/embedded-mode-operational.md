@@ -328,6 +328,6 @@ The `sync_run.completed` / `sync_run.failed` events power the storefront's "sync
 1. ~~**`docker-compose.core.yml` is untracked**~~ — committed in `b54b4e22`; canonical dev stack for embedded-mode testing.
 2. **Sync filter for SA-flow tenants** — verify and fix `sync_all_tenants.py` if the current filter excludes service-account auth.
 3. ~~**Tenant Management API key bootstrap**~~ — env-var-first (`TENANT_MANAGEMENT_API_KEY`), DB-fallback on miss. Core compose ships a dev default. Use `scripts/initialize_tenant_mgmt_api_key.py` to mint a production key.
-4. **Health check endpoints** — `docker-compose.core.yml` healthchecks `/admin/health`. Host-product deployment monitoring should probably also poll `/api/v1/tenant-management/health` (existing) and `/mcp/health` if available.
+4. **Health check endpoints** — `docker-compose.core.yml` now probes the root `/health` endpoint directly. Host-product deployment monitoring should also poll `/api/v1/tenant-management/health` (existing) and `/mcp/health` if available.
 
 These don't block sprint 1 implementation, but should be resolved before any host product deploys to its own staging environment.

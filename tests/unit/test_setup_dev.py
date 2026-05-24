@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 # The script is not in a package, so we import via importlib.
 # We must register the module in sys.modules before exec_module
@@ -315,6 +315,38 @@ class TestGetConductorPort:
 
 
 # ---------------------------------------------------------------------------
+# Docker Compose environment helpers
+# ---------------------------------------------------------------------------
+
+
+class TestComposeEnvironment:
+    def test_get_lockfile_hash(self, tmp_path: Path):
+        lockfile = tmp_path / "uv.lock"
+        lockfile.write_text("lock-content\n")
+
+        assert (
+            setup_dev.get_lockfile_hash(lockfile) == "2888eb1ae63d13407a7959f06d6ba2cd15bbf929539281ced9d829cb9b071eb4"
+        )
+
+    def test_build_compose_env_adds_required_defaults(self, tmp_path: Path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("CONDUCTOR_PORT=9000\n")
+        (tmp_path / "uv.lock").write_text("lock-content\n")
+
+        with (
+            patch.object(setup_dev, "ROOT_DIR", tmp_path),
+            patch.object(setup_dev, "ENV_FILE", env_path),
+            patch.object(setup_dev, "_git_output", side_effect=["abc123", "feature/test"]),
+        ):
+            result = setup_dev.build_compose_env({"PATH": "/bin"})
+
+        assert result["CONDUCTOR_PORT"] == "9000"
+        assert result["LOCKFILE_HASH"] == "2888eb1ae63d13407a7959f06d6ba2cd15bbf929539281ced9d829cb9b071eb4"
+        assert result["GIT_SHA"] == "abc123"
+        assert result["GIT_BRANCH"] == "feature/test"
+
+
+# ---------------------------------------------------------------------------
 # StepResult and SetupReport
 # ---------------------------------------------------------------------------
 
@@ -488,3 +520,30 @@ class TestEnsureTox:
             result = setup_dev.ensure_tox()
         assert result.ok is True  # not a hard failure
         assert "not found" in result.message
+
+
+# ---------------------------------------------------------------------------
+# start_infrastructure
+# ---------------------------------------------------------------------------
+
+
+class TestStartInfrastructure:
+    def test_builds_then_starts_compose_services(self):
+        compose_env = {"LOCKFILE_HASH": "hash", "CONDUCTOR_PORT": "8000"}
+
+        with (
+            patch.object(setup_dev, "build_compose_env", return_value=compose_env),
+            patch.object(setup_dev, "_run") as mock_run,
+        ):
+            result = setup_dev.start_infrastructure()
+
+        assert result.ok is True
+        mock_run.assert_has_calls(
+            [
+                call(["docker", "compose", "build", "adcp-server"], env=compose_env),
+                call(
+                    ["docker", "compose", "up", "-d", "--force-recreate", "adcp-server", "proxy"],
+                    env=compose_env,
+                ),
+            ]
+        )

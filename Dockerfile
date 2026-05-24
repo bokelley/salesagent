@@ -19,7 +19,7 @@ WORKDIR /src
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o /out/supercronic-linux-amd64 . && \
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags='-s -w' -o /out/supercronic-linux-arm64 .
 
-FROM python:3.12-slim AS builder
+FROM python:3.13-slim AS builder
 
 # Disable man pages and docs to speed up apt operations
 RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
@@ -39,9 +39,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq-dev \
     git
 
-# Install uv (cacheable)
+# Install uv (cacheable). Keep this pinned to CI's UV_VERSION.
+ARG UV_VERSION=0.11.15
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir uv
+    pip install --no-cache-dir "uv==${UV_VERSION}"
 
 # Set up caching for uv
 ENV UV_CACHE_DIR=/cache/uv
@@ -63,7 +64,7 @@ COPY pyproject.toml uv.lock ./
 # Default value forces an explicit build — no silent regression on CI.
 ARG LOCKFILE_HASH=set-this-build-arg
 
-# Install dependencies with caching and increased timeout
+# Install production dependencies with caching and increased timeout
 ENV UV_HTTP_TIMEOUT=300
 RUN --mount=type=cache,target=/cache/uv \
     --mount=type=cache,target=/root/.cache/pip \
@@ -74,10 +75,10 @@ RUN --mount=type=cache,target=/cache/uv \
         exit 1; \
     fi && \
     echo "Installing dependencies for lockfile=${LOCKFILE_HASH}" && \
-    uv sync --frozen
+    uv sync --frozen --no-dev
 
 # Runtime stage
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.title="AdCP Sales Agent"
@@ -97,13 +98,12 @@ RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
     echo 'path-exclude /usr/share/linda/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc && \
     sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
 
-# Install runtime dependencies (no gcc/libpq-dev/git — build deps stay in builder)
+# Install runtime dependencies (no gcc/libpq-dev/git/curl — build deps stay in builder)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update --error-on=any && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libpq5 \
-    curl
+    libpq5
 
 # Copy the per-arch supercronic binary we just built from source on Go
 # 1.26.3. See the ``supercronic-builder`` stage header for the CVE list
@@ -127,10 +127,19 @@ ARG GIT_BRANCH=unknown
 ENV APP_GIT_SHA=$GIT_SHA
 ENV APP_GIT_BRANCH=$GIT_BRANCH
 
-# Copy application code
-COPY . .
+# Copy runtime application files explicitly. Avoid broad COPY so local
+# credentials, agent config, tests, and generated caches cannot enter images.
+COPY alembic.ini pyproject.toml uv.lock crontab ./
+COPY alembic/ alembic/
+COPY config/ config/
+COPY core/ core/
+COPY schemas/ schemas/
+COPY scripts/ scripts/
+COPY src/ src/
+COPY static/ static/
+COPY templates/ templates/
 
-# Copy pre-built virtual environment from builder stage (contains all compiled deps)
+# Copy pre-built virtual environment from builder stage (runtime deps only)
 COPY --from=builder /app/.venv /app/.venv
 
 # Add .venv to PATH and set PYTHONPATH for module imports
@@ -153,7 +162,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD ["python", "scripts/healthcheck.py", "8080"]
 
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
 ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]

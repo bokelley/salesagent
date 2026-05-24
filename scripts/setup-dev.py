@@ -10,6 +10,8 @@ Pure functions are importable and unit-testable.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import secrets
 import shutil
@@ -224,6 +226,36 @@ def get_conductor_port(env: dict[str, str]) -> int:
         return DEFAULT_PORT
 
 
+def get_lockfile_hash(lockfile: Path | None = None) -> str:
+    """Return the uv.lock content hash used to invalidate Docker install layers."""
+    target = lockfile or ROOT_DIR / "uv.lock"
+    return hashlib.sha256(target.read_bytes()).hexdigest()
+
+
+def _git_output(args: list[str], default: str) -> str:
+    """Read a git metadata value without making setup depend on git state."""
+    result = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(ROOT_DIR),
+    )
+    value = result.stdout.strip()
+    return value or default
+
+
+def build_compose_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the environment needed for Docker Compose startup."""
+    env = load_env_file(ENV_FILE)
+    env.update(os.environ if base_env is None else base_env)
+    env.setdefault("CONDUCTOR_PORT", str(DEFAULT_PORT))
+    env.setdefault("LOCKFILE_HASH", get_lockfile_hash())
+    env.setdefault("GIT_SHA", _git_output(["rev-parse", "--short=7", "HEAD"], "unknown"))
+    env.setdefault("GIT_BRANCH", _git_output(["rev-parse", "--abbrev-ref", "HEAD"], "unknown"))
+    return env
+
+
 # ---------------------------------------------------------------------------
 # Side-effectful step functions
 # ---------------------------------------------------------------------------
@@ -357,14 +389,16 @@ def ensure_tox() -> StepResult:
 
 def start_infrastructure() -> StepResult:
     """Start Docker Compose services."""
+    env = build_compose_env()
     try:
-        _run(["docker", "compose", "up", "-d"])
+        _run(["docker", "compose", "build", "adcp-server"], env=env)
+        _run(["docker", "compose", "up", "-d", "--force-recreate", "adcp-server", "proxy"], env=env)
         return StepResult(name="infrastructure", ok=True, message="Docker services started")
     except subprocess.CalledProcessError as exc:
         return StepResult(
             name="infrastructure",
             ok=False,
-            message=f"docker compose up failed: {exc.stderr or exc}",
+            message=f"docker compose startup failed: {exc.stderr or exc}",
         )
 
 

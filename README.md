@@ -28,7 +28,7 @@ Try the sales agent locally:
 # Clone and start
 git clone https://github.com/prebid/salesagent.git
 cd salesagent
-docker compose up -d
+CONDUCTOR_PORT=8000 make compose-up
 
 # Test the MCP interface
 uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools

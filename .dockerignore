@@ -39,6 +39,8 @@ env/
 
 # Testing
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .tox/
@@ -61,6 +63,8 @@ Desktop.ini
 # Config
 config.json
 client_secret*.json
+.gam-test-config.json
+.mcp.json
 .env
 .env.*
 conductor_ports.json
@@ -83,6 +87,8 @@ Dockerfile.*
 
 # Conductor workspaces
 .conductor/
+.context/
+.claude/
 
 # CI/CD
 .github/
@@ -93,6 +99,12 @@ Dockerfile.*
 audit_logs/
 ui_tests/
 playwright-report/
+tests/
+**/tests/
+openapi.json
+openapi.yaml
+logs/
+product_coverage.json
 
 # Temporary files
 tmp/
