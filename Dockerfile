@@ -133,7 +133,6 @@ COPY alembic.ini pyproject.toml uv.lock crontab ./
 COPY alembic/ alembic/
 COPY config/ config/
 COPY core/ core/
-COPY schemas/ schemas/
 COPY scripts/ scripts/
 COPY src/ src/
 COPY static/ static/

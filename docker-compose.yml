@@ -135,7 +135,6 @@ services:
       - ./templates:/app/templates
       - ./static:/app/static
       - ./config:/app/config
-      - ./schemas:/app/schemas
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
