@@ -13,7 +13,7 @@ framework primitives shipped in [`adcp>=4.3`](https://github.com/adcontextprotoc
 | `src/core/tools.py` A2A `*_raw` functions            | same handler, served by `serve(transport="a2a")`  |
 | `src/core/domain_routing.py` (~250 LOC nginx routing)| `adcp.server.SubdomainTenantMiddleware`           |
 | `src/adapters/__init__.py` `ADAPTER_REGISTRY` dict   | `adcp.decisioning.PlatformRouter`                 |
-| `src/core/auth.py` + `resolved_identity.py`          | `adcp.decisioning.AccountStore` Protocol          |
+| `src/core/auth.py` + `resolved_identity.py`          | `core/stores/accounts.py` AccountStore impl       |
 | Custom webhook delivery + retry                      | `adcp.webhook_supervisor_pg.PgWebhookDeliverySupervisor` |
 | `tests/bdd/`, structural guards for transport boundary | `adcp.server.TestControllerStore` + storyboards |
 
@@ -34,7 +34,6 @@ progresses, `src/` shrinks; the ORM and migrations don't move.
 core/
 ├── main.py              # PlatformRouter + serve() entrypoint
 ├── tenancy.py           # SubdomainTenantRouter backed by Tenant ORM
-├── auth.py              # AccountStore impl over Principal/Tenant
 ├── platforms/
 │   ├── mock.py          # DecisioningPlatform subclass (first milestone)
 │   ├── gam.py           # ported later

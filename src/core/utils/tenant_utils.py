@@ -59,7 +59,7 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),
         "product_ranking_prompt": tenant.product_ranking_prompt,
         # is_embedded drives the buyer-protocol identity-from-headers path
-        # (see core.auth._try_resolve_embedded_buyer_identity). Embedded
+        # (see src.core.auth._try_resolve_embedded_buyer_identity). Embedded
         # tenants are provisioned by a host product and authenticate
         # buyer-protocol calls via X-Identity-* + X-Principal-Id from a
         # trusted network, not via per-principal access tokens.
