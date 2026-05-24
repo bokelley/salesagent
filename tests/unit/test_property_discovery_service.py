@@ -10,6 +10,7 @@ import pytest
 from adcp import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidationError
 
 from src.services.property_discovery_service import PropertyDiscoveryService
+from tests.helpers.adagents import managed_website_property
 
 
 class MockSetup:
@@ -945,6 +946,64 @@ class TestPropertyDiscoveryService:
                     assert stats["domains_synced"] == 1
                     assert stats["properties_found"] == 0, "publisher_properties selectors should be filtered out"
                     assert len(stats["errors"]) == 0
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_keeps_cross_domain_publisher_properties(self):
+        """Strict SDK resolution is authoritative for managed-network files.
+
+        A manager domain such as cafemedia.com can authorize child publisher
+        domains via ``publisher_properties[].publisher_domains[]``. Once
+        get_properties_by_agent resolves those to real properties, the
+        discovery service must not filter them back down to cafemedia.com.
+        """
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        resolved_properties = [
+            managed_website_property("site_a", "a.example.com", "Site A"),
+            managed_website_property("site_b", "b.example.com", "Site B"),
+        ]
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = {
+                        "authorized_agents": [
+                            {
+                                "url": "https://interchange.io",
+                                "authorization_type": "publisher_properties",
+                                "publisher_properties": [
+                                    {
+                                        "publisher_domains": ["a.example.com", "b.example.com"],
+                                        "selection_type": "by_tag",
+                                        "property_tags": ["managed"],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                    mock_by_agent.return_value = resolved_properties
+                    mock_tags.return_value = ["managed"]
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["cafemedia.com"],
+                        agent_url="https://interchange.io",
+                    )
+
+        assert stats["domains_synced"] == 1
+        assert stats["properties_found"] == 2
+        assert stats["properties_created"] == 2
+        assert len(stats["errors"]) == 0
 
         mock_db_patcher.stop()
 

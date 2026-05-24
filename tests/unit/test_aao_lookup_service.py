@@ -23,6 +23,7 @@ from src.services.aao_lookup_service import (
     invalidate_adagents_cache,
     validate_public_agent_url_hostname,
 )
+from tests.helpers.adagents import managed_website_property
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +96,48 @@ class TestGetPublisherPartnerStatusAuthorized:
         assert status.total_properties == 3
         assert status.authorized_properties == 2
         assert status.aao_onboarding_url == "https://agenticadvertising.org/publisher/wonderstruck.org"
+        assert status.error is None
+
+    @pytest.mark.asyncio
+    async def test_authorized_resolves_publisher_properties_compact_form(self):
+        """Managed-network selector shape resolves through the SDK, not the
+        legacy selector-dict passthrough that made CafeMedia look pending."""
+        adagents = {
+            "properties": [
+                managed_website_property("site_a", "a.example.com", "Site A"),
+                managed_website_property("site_b", "b.example.com", "Site B"),
+                {
+                    "property_id": "site_c",
+                    "property_type": "website",
+                    "name": "Site C",
+                    "identifiers": [{"type": "domain", "value": "c.example.com"}],
+                    "publisher_domain": "c.example.com",
+                    "tags": ["other"],
+                },
+            ],
+            "authorized_agents": [
+                {
+                    "url": "https://interchange.io",
+                    "authorization_type": "publisher_properties",
+                    "publisher_properties": [
+                        {
+                            "publisher_domains": ["a.example.com", "b.example.com", "c.example.com"],
+                            "selection_type": "by_tag",
+                            "property_tags": ["managed"],
+                        }
+                    ],
+                }
+            ],
+        }
+        with patch(
+            "src.services.aao_lookup_service.fetch_adagents",
+            AsyncMock(return_value=adagents),
+        ):
+            status = await get_publisher_partner_status("cafemedia.com", "https://interchange.io")
+
+        assert status.status == "authorized"
+        assert status.total_properties == 2
+        assert status.authorized_properties == 2
         assert status.error is None
 
 
@@ -318,6 +361,16 @@ class TestValidatePublicAgentUrlHostname:
                 "not-a-url",
                 is_embedded=True,
                 virtual_host=None,
+                subdomain=None,
+                sales_agent_domain=None,
+            )
+
+    def test_invalid_port_rejected(self):
+        with pytest.raises(PublicAgentUrlMismatch, match="invalid port"):
+            validate_public_agent_url_hostname(
+                "https://sales-agent.wonderstruck.org:abc",
+                is_embedded=False,
+                virtual_host="sales-agent.wonderstruck.org",
                 subdomain=None,
                 sales_agent_domain=None,
             )

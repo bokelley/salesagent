@@ -27,17 +27,25 @@ from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
     AdapterConfig,
+    AuthorizedProperty,
     Creative,
     CurrencyLimit,
     MediaBuy,
     Principal,
     Product,
     PropertyTag,
+    PublisherPartner,
     SyncJob,
     Tenant,
 )
-from tests.factories import MediaBuyFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    MediaBuyFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.helpers.managed_tenant_api import bind_factories_to_session, install_management_api_key
+from tests.helpers.publisher_authorization import seed_verified_publisher_authorization
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -323,6 +331,84 @@ class TestProvision:
         assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
         body = patch_resp.get_json()
         assert body["public_agent_url"] == "https://interchange.io"
+
+    def test_patch_public_agent_url_invalidates_authorization_cache(
+        self, client, auth_headers, cleanup_tenants, bound_factories
+    ):
+        tenant = TenantFactory(
+            tenant_id="tenant_aao_url_changed",
+            subdomain="tenant-aao-url-changed",
+            virtual_host="agent-new.example.com",
+            public_agent_url="https://agent-old.example.com",
+            is_embedded=False,
+        )
+        cleanup_tenants.append(tenant.tenant_id)
+        partner = seed_verified_publisher_authorization(tenant, property_id="stale_property")
+        partner_id = partner.id
+
+        patch_resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}",
+            headers=auth_headers,
+            json={"public_agent_url": "https://agent-new.example.com"},
+        )
+
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+        bound_factories.expire_all()
+        persisted_partner = bound_factories.get(PublisherPartner, partner_id)
+        assert persisted_partner is not None
+        assert persisted_partner.is_verified is False
+        assert persisted_partner.last_synced_at is None
+        assert persisted_partner.sync_status == "pending"
+        assert persisted_partner.total_properties is None
+        assert persisted_partner.authorized_properties is None
+        assert persisted_partner.aao_status_kind is None
+        stale_property = bound_factories.get(
+            AuthorizedProperty,
+            {"tenant_id": tenant.tenant_id, "property_id": "stale_property"},
+        )
+        assert stale_property is not None
+        assert stale_property.verification_status == "pending"
+        assert stale_property.verification_error == "Agent URL changed; refresh publisher authorization."
+        assert bound_factories.get(PropertyTag, {"tenant_id": tenant.tenant_id, "tag_id": "sports"}) is None
+        assert bound_factories.get(PropertyTag, {"tenant_id": tenant.tenant_id, "tag_id": "all_inventory"}) is not None
+
+    def test_patch_public_agent_url_preserves_cache_when_effective_url_unchanged(
+        self, client, auth_headers, cleanup_tenants, bound_factories
+    ):
+        tenant = TenantFactory(
+            tenant_id="tenant_aao_url_effective_same",
+            subdomain="tenant-aao-url-effective-same",
+            virtual_host="agent-same.example.com",
+            public_agent_url=None,
+            is_embedded=False,
+        )
+        cleanup_tenants.append(tenant.tenant_id)
+        partner = seed_verified_publisher_authorization(tenant, property_id="current_property")
+        partner_id = partner.id
+
+        patch_resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}",
+            headers=auth_headers,
+            json={"public_agent_url": "https://AGENT-SAME.EXAMPLE.COM/"},
+        )
+
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+        bound_factories.expire_all()
+        persisted_partner = bound_factories.get(PublisherPartner, partner_id)
+        assert persisted_partner is not None
+        assert persisted_partner.is_verified is True
+        assert persisted_partner.last_synced_at is not None
+        assert persisted_partner.sync_status == "success"
+        assert persisted_partner.total_properties == 1
+        assert persisted_partner.authorized_properties == 1
+        assert persisted_partner.aao_status_kind == "authorized"
+        current_property = bound_factories.get(
+            AuthorizedProperty,
+            {"tenant_id": tenant.tenant_id, "property_id": "current_property"},
+        )
+        assert current_property is not None
+        assert current_property.verification_status == "verified"
+        assert bound_factories.get(PropertyTag, {"tenant_id": tenant.tenant_id, "tag_id": "sports"}) is not None
 
     # ------------------------------------------------------------------
     # First-sync kicks off as a side effect; never surfaces in response.

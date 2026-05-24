@@ -217,7 +217,13 @@ def validate_public_agent_url_hostname(
     """
     from urllib.parse import urlparse
 
-    raw = (urlparse(public_agent_url).hostname or "").lower()
+    parsed = urlparse(public_agent_url)
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise PublicAgentUrlMismatch(f"public_agent_url {public_agent_url!r} has an invalid port") from exc
+
+    raw = (parsed.hostname or "").lower()
     if not raw:
         raise PublicAgentUrlMismatch(f"public_agent_url {public_agent_url!r} has no hostname")
     hostname = _normalize_hostname_for_compare(raw)

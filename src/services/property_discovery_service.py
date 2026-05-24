@@ -100,6 +100,12 @@ def _agent_entry_is_unbound(adagents_data: dict[str, Any], agent_url: str) -> bo
     return entry is not None and is_bare_entry(entry)
 
 
+def _agent_uses_publisher_properties(adagents_data: dict[str, Any], agent_url: str) -> bool:
+    """True when the agent is authorized through cross-publisher selectors."""
+    entry = find_agent_entry(adagents_data, agent_url)
+    return isinstance(entry, dict) and entry.get("authorization_type") == "publisher_properties"
+
+
 def _has_matching_domain_identifier(prop: dict[str, Any], publisher_domain: str) -> bool:
     """True when ``prop`` carries a ``type=domain`` identifier matching
     ``publisher_domain`` under :func:`_domains_match`'s normalization.
@@ -284,7 +290,8 @@ class PropertyDiscoveryService:
                     adagents_data: dict[str, Any] = result  # type: ignore[assignment]
 
                     properties = _extract_properties(adagents_data, domain, agent_url)
-                    properties = _filter_properties_by_domain(properties, domain)
+                    if agent_url is None or not _agent_uses_publisher_properties(adagents_data, agent_url):
+                        properties = _filter_properties_by_domain(properties, domain)
 
                     stats["properties_found"] += len(properties)
                     logger.info(f"Found {len(properties)} properties from {domain}")

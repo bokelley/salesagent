@@ -14,6 +14,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import Blueprint, jsonify, request
 from spectree import Response, SpecTree
@@ -106,6 +107,7 @@ from src.core.database.repositories.adapter_config import AdapterConfigRepositor
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_tenant_url
+from src.services.agent_url_resolver import resolve_agent_url
 from src.services.protocol_change_webhooks import notify_account_status_changed
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
@@ -175,6 +177,26 @@ def _api_error(code: str, message: str, status: int, details: dict | None = None
     """Build a (jsonified, status) tuple matching the :class:`ApiError` schema."""
     body = ApiError(error=code, message=message, details=details).model_dump(exclude_none=True)
     return jsonify(body), status
+
+
+def _canonical_agent_url(value: str | None) -> str | None:
+    """Canonicalize an agent URL for effective-URL change detection."""
+    if value is None:
+        return None
+    parsed = urlsplit(value.strip())
+    host = (parsed.hostname or "").lower()
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        parsed_port = None
+    port = f":{parsed_port}" if parsed_port else ""
+    path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), f"{host}{port}", path, parsed.query, ""))
+
+
+def _agent_urls_match(left: str | None, right: str | None) -> bool:
+    """Compare effective agent URLs using canonical host/path normalization."""
+    return _canonical_agent_url(left) == _canonical_agent_url(right)
 
 
 def _adapter_probe_error(adapter_type: str, probe: ProbeResult):
@@ -1351,7 +1373,12 @@ def patch_tenant(tenant_id: str):
             except PublicAgentUrlMismatch as exc:
                 session.rollback()
                 return _api_error("public_agent_url_mismatch", str(exc), 422)
+            previous_agent_url = resolve_agent_url(tenant)
             tenant.public_agent_url = req.public_agent_url
+            if not _agent_urls_match(previous_agent_url, resolve_agent_url(tenant)):
+                TenantConfigRepository(session, tenant_id).invalidate_publisher_partner_aao_statuses(
+                    "Agent URL changed; refresh publisher authorization."
+                )
         if req.default_gam_advertiser_id is not None:
             tenant.default_gam_advertiser_id = req.default_gam_advertiser_id
         if req.embed_breadcrumb_root is not None:

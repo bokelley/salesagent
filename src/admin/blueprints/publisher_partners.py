@@ -83,18 +83,18 @@ def _persist_status(partner: PublisherPartner, status: PublisherPartnerStatus) -
         partner.last_synced_at = datetime.now(UTC)
 
 
-def _partner_to_dict(partner: PublisherPartner, *, fallback_property_count: int = 0) -> dict:
-    """Serialize a PublisherPartner row for the JSON list endpoint.
-
-    ``fallback_property_count`` is the legacy count from AuthorizedProperty,
-    used only when the new AAO ``total_properties`` column is NULL (pre-AAO
-    rows that haven't been refreshed yet)."""
+def _partner_to_dict(partner: PublisherPartner) -> dict:
+    """Serialize a PublisherPartner row for the JSON list endpoint."""
     aao_url = f"https://agenticadvertising.org/publisher/{partner.publisher_domain}"
-    if partner.total_properties is None and partner.aao_status_kind is None:
-        # Pre-AAO row — legacy count from AuthorizedProperty as a stopgap so
-        # the UI shows something until the next sync runs.
-        total = fallback_property_count
-        authorized = fallback_property_count if partner.is_verified else 0
+    is_legacy_unrefreshed = partner.total_properties is None and partner.aao_status_kind is None
+    if is_legacy_unrefreshed:
+        # Pre-AAO row, or a row invalidated after public_agent_url changed.
+        # Do not project AuthorizedProperty fallback counts here: those rows
+        # may have been verified under an old agent URL, and rendering them as
+        # "Authorized 1/1" is precisely the stale-state bug this endpoint must
+        # prevent. The next explicit refresh/sync repopulates the AAO columns.
+        total = 0
+        authorized = 0
         ui_status = "stale"
     elif partner.aao_status_kind is not None:
         # Persisted kind from aao_lookup_service is the source of truth —
@@ -120,7 +120,7 @@ def _partner_to_dict(partner: PublisherPartner, *, fallback_property_count: int 
         "id": partner.id,
         "publisher_domain": partner.publisher_domain,
         "display_name": partner.display_name,
-        "is_verified": partner.is_verified,
+        "is_verified": False if is_legacy_unrefreshed else partner.is_verified,
         "last_synced_at": partner.last_synced_at.isoformat() if partner.last_synced_at else None,
         "last_refreshed_at": partner.last_refreshed_at.isoformat() if partner.last_refreshed_at else None,
         "sync_status": partner.sync_status,
@@ -206,26 +206,8 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             )
             partners = session.scalars(stmt_partners).all()
 
-            # Get property counts per publisher domain
-            from sqlalchemy import func
-
-            from src.core.database.models import AuthorizedProperty
-
-            property_counts_stmt = (
-                select(AuthorizedProperty.publisher_domain, func.count(AuthorizedProperty.property_id))
-                .filter(AuthorizedProperty.tenant_id == tenant_id)
-                .group_by(AuthorizedProperty.publisher_domain)
-            )
-            property_counts = {row[0]: row[1] for row in session.execute(property_counts_stmt).all()}
-
             # Convert to dict
-            partners_list = [
-                _partner_to_dict(
-                    partner,
-                    fallback_property_count=property_counts.get(partner.publisher_domain, 0),
-                )
-                for partner in partners
-            ]
+            partners_list = [_partner_to_dict(partner) for partner in partners]
 
             total_properties = sum(p["total_properties"] or 0 for p in partners_list)
             authorized_properties = sum(p["authorized_properties"] or 0 for p in partners_list)

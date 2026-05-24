@@ -11,10 +11,22 @@ beads: salesagent-9y0
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from urllib.parse import urlsplit
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import AdapterConfig, Principal, PublisherPartner, Tenant
+from src.core.database.models import (
+    AdapterConfig,
+    AuthorizedProperty,
+    InventoryProfile,
+    Principal,
+    Product,
+    PropertyTag,
+    PublisherPartner,
+    Tenant,
+)
+from src.services.agent_url_resolver import resolve_agent_url
 
 
 class TenantConfigRepository:
@@ -45,6 +57,56 @@ class TenantConfigRepository:
         """Get all publisher partners for the tenant."""
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
         return list(self._session.scalars(stmt).all())
+
+    def invalidate_publisher_partner_aao_statuses(self, reason: str) -> None:
+        """Clear cached AAO status for all publisher partners in this tenant."""
+        tenant = self.get_tenant()
+        agent_url = resolve_agent_url(tenant) if tenant is not None else None
+        default_publisher_domain = (urlsplit(agent_url).hostname or "unknown").lower() if agent_url else "unknown"
+        default_publisher_properties = [
+            {
+                "publisher_domain": default_publisher_domain,
+                "property_tags": ["all_inventory"],
+                "selection_type": "by_tag",
+            }
+        ]
+        for partner in self.list_publisher_partners():
+            partner.is_verified = False
+            partner.total_properties = None
+            partner.authorized_properties = None
+            partner.last_synced_at = None
+            partner.last_refreshed_at = None
+            partner.last_fetch_error = None
+            partner.aao_status_kind = None
+            partner.sync_status = "pending"
+            partner.sync_error = reason
+        authorized_properties = self._session.scalars(
+            select(AuthorizedProperty).where(AuthorizedProperty.tenant_id == self._tenant_id)
+        ).all()
+        for prop in authorized_properties:
+            prop.verification_status = "pending"
+            prop.verification_checked_at = None
+            prop.verification_error = reason
+        self._session.execute(
+            delete(PropertyTag).where(
+                PropertyTag.tenant_id == self._tenant_id,
+                PropertyTag.tag_id != "all_inventory",
+                PropertyTag.description == "Tag discovered from publisher adagents.json",
+            )
+        )
+        inventory_profiles = self._session.scalars(
+            select(InventoryProfile).where(InventoryProfile.tenant_id == self._tenant_id)
+        ).all()
+        for profile in inventory_profiles:
+            profile.publisher_properties = default_publisher_properties
+
+        products = self._session.scalars(select(Product).where(Product.tenant_id == self._tenant_id)).all()
+        for product in products:
+            product.inventory_profile_id = None
+            product.properties = default_publisher_properties
+            product.property_ids = None
+            product.property_tags = None
+        self._session.flush()
 
     def list_publisher_domains(self) -> list[str]:
         """Get sorted list of publisher domain strings for the tenant."""

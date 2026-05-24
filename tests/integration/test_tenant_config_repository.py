@@ -8,9 +8,17 @@ beads: salesagent-9y0
 
 import pytest
 
+from src.core.database.models import AuthorizedProperty, PropertyTag
 from src.core.database.repositories.tenant_config import TenantConfigRepository
-from tests.factories import AdapterConfigFactory, PublisherPartnerFactory, TenantFactory
+from tests.factories import (
+    AdapterConfigFactory,
+    InventoryProfileFactory,
+    ProductFactory,
+    PublisherPartnerFactory,
+    TenantFactory,
+)
 from tests.harness._base import IntegrationEnv
+from tests.helpers.publisher_authorization import seed_verified_publisher_authorization
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -70,6 +78,102 @@ class TestListPublisherPartners:
             partners = repo.list_publisher_partners()
 
         assert partners == []
+
+    def test_invalidate_publisher_partner_aao_statuses(self, integration_db):
+        with _RepoEnv() as env:
+            tenant = TenantFactory(
+                tenant_id="tcr_invalidate",
+                is_embedded=False,
+                public_agent_url="https://interchange.io/acme",
+                virtual_host="agent-new.example.com",
+            )
+            partner = seed_verified_publisher_authorization(tenant, property_id="stale_property")
+            profile = InventoryProfileFactory(
+                tenant=tenant,
+                publisher_properties=[
+                    {"publisher_domain": "publisher.example", "property_tags": ["sports"], "selection_type": "by_tag"}
+                ],
+            )
+            direct_product = ProductFactory(
+                tenant=tenant,
+                product_id="prod_direct_stale",
+                properties=[{"publisher_domain": "publisher.example", "property_tags": ["sports"]}],
+                property_tags=None,
+            )
+            profile_product = ProductFactory(
+                tenant=tenant,
+                product_id="prod_profile_stale",
+                inventory_profile_id=profile.id,
+            )
+            other_tenant = TenantFactory(tenant_id="tcr_invalidate_other")
+            seed_verified_publisher_authorization(
+                other_tenant,
+                property_id="other_property",
+                publisher_domain="other.example",
+            )
+
+            session = env.get_session()
+            repo = TenantConfigRepository(session, "tcr_invalidate")
+            repo.invalidate_publisher_partner_aao_statuses("Agent URL changed; refresh publisher authorization.")
+            session.commit()
+            session.refresh(partner)
+
+            assert partner.is_verified is False
+            assert partner.sync_status == "pending"
+            assert partner.sync_error == "Agent URL changed; refresh publisher authorization."
+            assert partner.total_properties is None
+            assert partner.authorized_properties is None
+            assert partner.aao_status_kind is None
+            assert partner.last_synced_at is None
+            assert partner.last_refreshed_at is None
+            stale_property = session.get(
+                AuthorizedProperty,
+                {"tenant_id": "tcr_invalidate", "property_id": "stale_property"},
+            )
+            assert stale_property is not None
+            assert stale_property.verification_status == "pending"
+            assert stale_property.verification_error == "Agent URL changed; refresh publisher authorization."
+            assert stale_property.verification_checked_at is None
+            assert (
+                session.get(
+                    AuthorizedProperty,
+                    {"tenant_id": "tcr_invalidate_other", "property_id": "other_property"},
+                )
+                is not None
+            )
+            assert session.get(PropertyTag, {"tenant_id": "tcr_invalidate", "tag_id": "sports"}) is None
+            assert session.get(PropertyTag, {"tenant_id": "tcr_invalidate", "tag_id": "all_inventory"}) is not None
+            assert session.get(PropertyTag, {"tenant_id": "tcr_invalidate_other", "tag_id": "sports"}) is not None
+            session.refresh(profile)
+            session.refresh(direct_product)
+            session.refresh(profile_product)
+            assert profile.publisher_properties == [
+                {
+                    "publisher_domain": "interchange.io",
+                    "property_tags": ["all_inventory"],
+                    "selection_type": "by_tag",
+                }
+            ]
+            assert direct_product.inventory_profile_id is None
+            assert direct_product.properties == [
+                {
+                    "publisher_domain": "interchange.io",
+                    "property_tags": ["all_inventory"],
+                    "selection_type": "by_tag",
+                }
+            ]
+            assert direct_product.property_ids is None
+            assert direct_product.property_tags is None
+            assert profile_product.inventory_profile_id is None
+            assert profile_product.properties == [
+                {
+                    "publisher_domain": "interchange.io",
+                    "property_tags": ["all_inventory"],
+                    "selection_type": "by_tag",
+                }
+            ]
+            assert profile_product.property_ids is None
+            assert profile_product.property_tags is None
 
 
 class TestGetAdapterConfig:
