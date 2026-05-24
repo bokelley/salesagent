@@ -11,6 +11,7 @@ import asyncio
 
 import pytest
 from adcp import GetProductsRequest
+from adcp import GetProductsResponse as LibraryGetProductsResponse
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetSignalsRequest
@@ -167,6 +168,92 @@ def test_authoring_inventory_signal_and_product_unblocks_buyer_discovery(admin_c
     signals = asyncio.run(_get_signals_impl(GetSignalsRequest(), identity=_identity(tenant_id)))
     discovered_signal_ids = {signal.signal_agent_segment_id for signal in signals.signals}
     assert signal_id in discovered_signal_ids
+
+
+def test_wholesale_discovery_retains_profile_backed_product_pricing(admin_client, factory_session, monkeypatch):
+    """Wholesale discovery retains Composition API product pricing.
+
+    Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-05A
+    """
+    tenant_id = "composition_api_wholesale_pricing"
+    profile_id = "homepage_sports"
+    product_id = "wholesale_priced_display"
+    _seed_tenant(tenant_id)
+    headers = _headers(monkeypatch)
+
+    profile_resp = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/inventory-profiles",
+        json=_inventory_profile_payload(profile_id),
+        headers=headers,
+    )
+    assert profile_resp.status_code == 201
+
+    product_resp = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/products",
+        json=_product_payload(product_id, profile_id),
+        headers=headers,
+    )
+    assert product_resp.status_code == 201
+    assert product_resp.get_json()["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
+
+    products = asyncio.run(
+        _get_products_impl(
+            GetProductsRequest(buying_mode="wholesale"),
+            identity=_identity(tenant_id),
+        )
+    )
+
+    assert [product.product_id for product in products.products] == [product_id]
+    discovered_product = products.products[0].model_dump(mode="json")
+    assert len(discovered_product["pricing_options"]) == 1
+    pricing = discovered_product["pricing_options"][0]
+    assert pricing["pricing_model"] == "cpm"
+    assert pricing["currency"] == "USD"
+    assert pricing["pricing_option_id"] == "cpm_usd_auction"
+    assert pricing["floor_price"] == 3.0
+    assert pricing["price_guidance"]["p50"] == 4.0
+    assert pricing["price_guidance"]["p75"] == 5.0
+    LibraryGetProductsResponse.model_validate(products.model_dump(mode="json"))
+
+
+def test_brief_discovery_suppresses_profile_backed_product_pricing(admin_client, factory_session, monkeypatch):
+    """Brief discovery still suppresses anonymous pricing.
+
+    Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-05
+    """
+    tenant_id = "composition_api_brief_pricing"
+    profile_id = "homepage_sports"
+    product_id = "brief_priced_display"
+    _seed_tenant(tenant_id)
+    headers = _headers(monkeypatch)
+
+    profile_resp = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/inventory-profiles",
+        json=_inventory_profile_payload(profile_id),
+        headers=headers,
+    )
+    assert profile_resp.status_code == 201
+
+    product_resp = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/products",
+        json=_product_payload(product_id, profile_id),
+        headers=headers,
+    )
+    assert product_resp.status_code == 201
+
+    products = asyncio.run(
+        _get_products_impl(
+            GetProductsRequest(
+                buying_mode="brief",
+                brief="wholesale sports display inventory",
+                brand={"domain": "buyer.example"},
+            ),
+            identity=_identity(tenant_id),
+        )
+    )
+
+    assert [product.product_id for product in products.products] == [product_id]
+    assert products.products[0].model_dump(mode="json")["pricing_options"] == []
 
 
 def test_product_update_replaces_pricing_without_empty_option_gap(admin_client, factory_session, monkeypatch):
