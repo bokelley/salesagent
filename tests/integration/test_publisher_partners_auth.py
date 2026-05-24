@@ -53,6 +53,7 @@ ROUTES = [
     ("POST", "/tenant/any-tenant/publisher-partners", {"publisher_domain": "example.com"}),
     ("DELETE", "/tenant/any-tenant/publisher-partners/1", None),
     ("POST", "/tenant/any-tenant/publisher-partners/sync", None),
+    ("POST", "/tenant/any-tenant/publisher-partners/sync-from-directory", None),
     ("GET", "/tenant/any-tenant/publisher-partners/1/properties", None),
 ]
 

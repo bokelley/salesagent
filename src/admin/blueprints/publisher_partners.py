@@ -610,6 +610,124 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": str(e)}), 500
 
 
+@publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync-from-directory", methods=["POST"])
+@require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
+def sync_publisher_partners_from_directory(tenant_id: str) -> Response | tuple[Response, int]:
+    """Bulk-discover publishers by querying the AAO directory's inverse-lookup.
+
+    Replaces the per-domain Add Publisher / Verify-All workflow for any
+    tenant whose authorizations are indexed in the AAO directory. One call
+    returns the full publisher set with verification status, manager-domain
+    attribution, and per-publisher property counts already resolved by the
+    directory's crawler. Avoids the N-publisher-domain HTTP fan-out the
+    legacy ``/sync`` endpoint performs.
+
+    Upsert semantics:
+
+    - Publisher in directory + not in DB → create row (``is_verified=True``,
+      ``sync_status="success"``, counts populated from the directory).
+    - Publisher in directory + in DB → update verification + counts;
+      preserve manually-set ``display_name``.
+    - Publisher in DB + not in directory → left alone. Operators may have
+      manually added publishers that haven't been indexed yet, or whose
+      adagents.json the directory hasn't crawled. Removal is a separate
+      decision, not a side effect of "didn't appear in this sync."
+    """
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+    from src.services.aao_lookup_service import fetch_publishers_from_directory
+
+    try:
+        with get_db_session() as session:
+            repo = TenantConfigRepository(session, tenant_id)
+            tenant = repo.get_tenant()
+            if not tenant:
+                return jsonify({"error": "Tenant not found"}), 404
+
+            agent_url = _resolve_agent_url(tenant)
+            if not agent_url:
+                return (
+                    jsonify(
+                        {
+                            "error": "Agent URL not configured (set public_agent_url, virtual_host, or SALES_AGENT_DOMAIN)"
+                        }
+                    ),
+                    500,
+                )
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(
+                    asyncio.wait_for(
+                        fetch_publishers_from_directory(agent_url, timeout=30.0),
+                        timeout=180.0,
+                    )
+                )
+            finally:
+                loop.close()
+
+            # Index existing rows by publisher_domain so we can upsert in a
+            # single pass without N queries per directory row.
+            existing_by_domain = {p.publisher_domain: p for p in repo.list_publisher_partners()}
+
+            now = datetime.now(UTC)
+            created = 0
+            updated = 0
+            for pub in result.publishers:
+                domain = pub.publisher_domain
+                row = existing_by_domain.get(domain)
+                if row is None:
+                    row = PublisherPartner(
+                        tenant_id=tenant_id,
+                        publisher_domain=domain,
+                        display_name=domain,
+                        sync_status="success",
+                        is_verified=True,
+                        last_synced_at=now,
+                        last_refreshed_at=now,
+                        total_properties=pub.properties_total,
+                        authorized_properties=pub.properties_authorized,
+                        aao_status_kind=pub.status,
+                    )
+                    session.add(row)
+                    created += 1
+                else:
+                    row.sync_status = "success"
+                    row.is_verified = True
+                    row.last_synced_at = now
+                    row.last_refreshed_at = now
+                    row.total_properties = pub.properties_total
+                    row.authorized_properties = pub.properties_authorized
+                    row.aao_status_kind = pub.status
+                    row.last_fetch_error = None
+                    row.sync_error = None
+                    updated += 1
+
+            session.commit()
+
+            return jsonify(
+                {
+                    "message": "Sync from AAO directory completed",
+                    "agent_url": result.agent_url,
+                    "directory_indexed_at": result.directory_indexed_at,
+                    "pages_fetched": result.pages_fetched,
+                    "discovered": len(result.publishers),
+                    "created": created,
+                    "updated": updated,
+                }
+            )
+
+    except (AdagentsValidationError, AdagentsTimeoutError) as e:
+        logger.warning("AAO directory sync failed for tenant=%s: %s", tenant_id, e)
+        return jsonify({"error": f"AAO directory unavailable: {e}"}), 502
+    except TimeoutError:
+        logger.warning("AAO directory sync timed out for tenant=%s", tenant_id)
+        return jsonify({"error": "AAO directory sync timed out"}), 504
+    except Exception as e:
+        logger.error("Error syncing from AAO directory: %s", e, exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/refresh", methods=["POST"])
 @require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def refresh_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:

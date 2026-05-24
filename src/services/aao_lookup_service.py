@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from adcp import fetch_adagents, get_all_properties, get_properties_by_agent
-from adcp.adagents import validate_adagents_structure
+from adcp.adagents import fetch_agent_authorizations_from_directory, validate_adagents_structure
 
 from src.services._adagents_shapes import find_agent_entry, is_bare_entry, top_level_properties
 
@@ -30,8 +30,22 @@ _AAO_PUBLISHER_DIRECTORY = os.environ.get(
     "AAO_PUBLISHER_DIRECTORY_URL",
     "https://agenticadvertising.org/publisher",
 ).rstrip("/")
+# Separate from _AAO_PUBLISHER_DIRECTORY (which is the per-publisher landing
+# page prefix used for deep-links): this is the AAO directory's API root,
+# where the inverse-lookup endpoint `/v1/agents/{agent_url}/publishers` is
+# mounted. Defaults to the same operator's host without the /publisher path.
+_AAO_DIRECTORY_API = os.environ.get(
+    "AAO_DIRECTORY_API_URL",
+    "https://agenticadvertising.org",
+).rstrip("/")
 _PLATFORM_AGENT_HOSTS_ENV = os.environ.get("EMBEDDED_PLATFORM_AGENT_HOSTS", "interchange.io")
 _PLATFORM_AGENT_HOSTS = frozenset(h.strip().lower() for h in _PLATFORM_AGENT_HOSTS_ENV.split(",") if h.strip())
+
+# Cap on directory pages we'll walk in one sync. At 200 publishers/page and
+# Raptive's ~6,800-publisher footprint, 50 pages covers the largest known
+# network with headroom. Stops runaway loops if the directory ever emits a
+# pathological pagination cycle.
+_DIRECTORY_MAX_PAGES = 50
 
 
 PublisherPartnerStatusKind = Literal[
@@ -411,3 +425,120 @@ def _format_validation_error(errors: list) -> str:
     if len(errors) == 1:
         return f"Non-conformant adagents.json: {first}"
     return f"Non-conformant adagents.json: {first} (and {len(errors) - 1} more)"
+
+
+@dataclass(frozen=True)
+class DirectoryPublisher:
+    """Single publisher row from the AAO directory's inverse-lookup response.
+
+    Mirrors the AdCP directory API's per-publisher record shape (see
+    `docs/aao/directory-api.mdx` in adcontextprotocol/adcp). Plain
+    dataclass so callers don't take a hard dependency on the SDK's
+    generated Pydantic model — keeps endpoint code and tests simple, and
+    keeps the upsert codepath stable across SDK schema iterations.
+    """
+
+    publisher_domain: str
+    discovery_method: str
+    manager_domain: str | None
+    status: str
+    properties_total: int
+    properties_authorized: int
+    last_verified_at: str | None
+
+
+@dataclass(frozen=True)
+class DirectorySyncResult:
+    """Discovery snapshot from the AAO directory's inverse-lookup endpoint.
+
+    Returned by :func:`fetch_publishers_from_directory` and consumed by the
+    `POST /publisher-partners/sync-from-directory` endpoint to upsert
+    :class:`PublisherPartner` rows.
+
+    ``publishers`` carries the full paginated set the directory has indexed
+    for our agent_url. ``directory_indexed_at`` is the directory's own
+    snapshot timestamp; callers persist it for the "synced from directory at
+    X (directory was fresh as of Y)" provenance display.
+    """
+
+    agent_url: str
+    publishers: list[DirectoryPublisher]
+    directory_indexed_at: str | None
+    pages_fetched: int
+
+
+async def fetch_publishers_from_directory(
+    agent_url: str,
+    *,
+    directory_url: str | None = None,
+    timeout: float = 30.0,
+) -> DirectorySyncResult:
+    """Paginate the AAO directory's inverse-lookup endpoint for ``agent_url``.
+
+    Walks every page returned by the SDK's
+    :func:`adcp.adagents.fetch_agent_authorizations_from_directory` via
+    the ``cursor`` keyword, concatenates the publisher list, and returns
+    a flat :class:`DirectorySyncResult`. Bounded by
+    :data:`_DIRECTORY_MAX_PAGES` so a pathological pagination cycle can't
+    spin forever (at 200 publishers/page, 50 pages covers Raptive's
+    ~6,800-publisher footprint with headroom).
+
+    Raises :class:`AdagentsValidationError` / :class:`AdagentsTimeoutError`
+    from the SDK on directory failures; callers translate to HTTP 502/504.
+    """
+    base = (directory_url or _AAO_DIRECTORY_API).rstrip("/")
+    publishers: list[DirectoryPublisher] = []
+    cursor: str | None = None
+    indexed_at: str | None = None
+    pages = 0
+
+    for _ in range(_DIRECTORY_MAX_PAGES):
+        page = await fetch_agent_authorizations_from_directory(
+            agent_url,
+            directory_url=base,
+            cursor=cursor,
+            timeout=timeout,
+        )
+        pages += 1
+        for pub in page.publishers:
+            publishers.append(
+                DirectoryPublisher(
+                    publisher_domain=pub.publisher_domain,
+                    discovery_method=getattr(pub, "discovery_method", "direct") or "direct",
+                    manager_domain=getattr(pub, "manager_domain", None),
+                    status=getattr(pub, "status", "authorized") or "authorized",
+                    properties_total=int(getattr(pub, "properties_total", 0) or 0),
+                    properties_authorized=int(getattr(pub, "properties_authorized", 0) or 0),
+                    last_verified_at=(
+                        pub.last_verified_at.isoformat()
+                        if getattr(pub, "last_verified_at", None) is not None
+                        and hasattr(pub.last_verified_at, "isoformat")
+                        else getattr(pub, "last_verified_at", None)
+                    ),
+                )
+            )
+        # Take the freshest directory_indexed_at; pages within a sync
+        # can straddle a refresh cycle, so the last one we see is the
+        # most current snapshot the caller should record.
+        if page.directory_indexed_at:
+            indexed_at = (
+                page.directory_indexed_at.isoformat()
+                if hasattr(page.directory_indexed_at, "isoformat")
+                else str(page.directory_indexed_at)
+            )
+        if not page.next_cursor:
+            break
+        cursor = page.next_cursor
+    else:
+        logger.warning(
+            "AAO directory sync hit page cap (%d) for agent_url=%s — truncating",
+            _DIRECTORY_MAX_PAGES,
+            agent_url,
+        )
+
+    return DirectorySyncResult(
+        agent_url=agent_url,
+        publishers=publishers,
+        directory_indexed_at=indexed_at,
+        pages_fetched=pages,
+    )

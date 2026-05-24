@@ -415,3 +415,96 @@ class TestValidatePublicAgentUrlHostname:
 # (introduced by main's PR #98); see tests/unit/test_publisher_domain_ssrf.py
 # for that coverage. Removed validate_publisher_domain_safe here in favor
 # of the shared helper.
+
+
+class TestFetchPublishersFromDirectory:
+    """Wraps the SDK's inverse-lookup with pagination + dataclass projection.
+
+    The salesagent code shouldn't take a hard dependency on the SDK's
+    Pydantic shape (it iterates rapidly across beta versions). These tests
+    verify:
+
+    - Pagination walks every page the SDK returns and stops on absent
+      ``next_cursor``.
+    - SDK Pydantic objects are projected onto :class:`DirectoryPublisher`
+      dataclass fields with the right defaults when the SDK omits values.
+    - The freshest ``directory_indexed_at`` (last page seen) is preserved.
+    - SDK exceptions surface unchanged so endpoint code can translate to
+      HTTP 502/504.
+    """
+
+    @pytest.mark.asyncio
+    async def test_paginates_until_no_cursor_and_projects_fields(self):
+        from src.services.aao_lookup_service import (
+            DirectoryPublisher,
+            fetch_publishers_from_directory,
+        )
+
+        def _make_page(domains, cursor):
+            # Mirror the SDK's Pydantic shape with attribute access.
+            class _Pub:
+                def __init__(self, d):
+                    self.publisher_domain = d
+                    self.discovery_method = "ads_txt_managerdomain"
+                    self.manager_domain = "cafemedia.com"
+                    self.status = "authorized"
+                    self.properties_total = 2
+                    self.properties_authorized = 1
+                    self.last_verified_at = None
+
+            class _Page:
+                def __init__(self, ds, cur):
+                    self.publishers = [_Pub(d) for d in ds]
+                    self.next_cursor = cur
+                    self.directory_indexed_at = "2026-05-22T11:24:16.689Z"
+
+            return _Page(domains, cursor)
+
+        # Three pages: a, b, then c with no next_cursor → stop.
+        pages = [
+            _make_page(["a.com", "b.com"], "cursor-1"),
+            _make_page(["c.com"], "cursor-2"),
+            _make_page(["d.com"], None),
+        ]
+        with patch(
+            "src.services.aao_lookup_service.fetch_agent_authorizations_from_directory",
+            new=AsyncMock(side_effect=pages),
+        ) as sdk_call:
+            result = await fetch_publishers_from_directory(
+                "https://agent.example.com",
+                directory_url="https://aao.example.com",
+            )
+
+        # Walked exactly three pages (stopped on absent next_cursor, not
+        # the 50-page cap).
+        assert sdk_call.await_count == 3
+        assert result.pages_fetched == 3
+        # Cursors threaded through correctly: page 1 had no cursor, page 2
+        # got "cursor-1", page 3 got "cursor-2".
+        assert sdk_call.await_args_list[0].kwargs["cursor"] is None
+        assert sdk_call.await_args_list[1].kwargs["cursor"] == "cursor-1"
+        assert sdk_call.await_args_list[2].kwargs["cursor"] == "cursor-2"
+        # All four publishers concatenated.
+        assert [p.publisher_domain for p in result.publishers] == ["a.com", "b.com", "c.com", "d.com"]
+        # SDK Pydantic objects projected onto our dataclass shape.
+        assert all(isinstance(p, DirectoryPublisher) for p in result.publishers)
+        assert result.publishers[0].discovery_method == "ads_txt_managerdomain"
+        assert result.publishers[0].manager_domain == "cafemedia.com"
+        assert result.publishers[0].properties_authorized == 1
+        # directory_indexed_at preserved verbatim from the page (string form
+        # — the projection only calls .isoformat() when the SDK gave us a
+        # datetime).
+        assert result.directory_indexed_at == "2026-05-22T11:24:16.689Z"
+
+    @pytest.mark.asyncio
+    async def test_sdk_error_propagates(self):
+        from adcp.exceptions import AdagentsValidationError
+
+        from src.services.aao_lookup_service import fetch_publishers_from_directory
+
+        with patch(
+            "src.services.aao_lookup_service.fetch_agent_authorizations_from_directory",
+            new=AsyncMock(side_effect=AdagentsValidationError("directory 502")),
+        ):
+            with pytest.raises(AdagentsValidationError, match="directory 502"):
+                await fetch_publishers_from_directory("https://agent.example.com")
