@@ -6,6 +6,19 @@ from src.core.tools.signals import _cpm_pricing_option
 from src.services import protocol_change_webhooks
 
 
+def test_run_or_schedule_waits_for_background_thread_in_test_mode(monkeypatch) -> None:
+    ran = []
+
+    async def task():
+        ran.append("task")
+
+    monkeypatch.setenv("ADCP_TESTING", "true")
+
+    protocol_change_webhooks._run_or_schedule(task())
+
+    assert ran == ["task"]
+
+
 @pytest.mark.asyncio
 async def test_account_status_change_webhook_targets_registered_principal(monkeypatch) -> None:
     sent = []

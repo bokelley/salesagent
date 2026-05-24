@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -624,7 +625,29 @@ def _run_or_schedule(coro) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        threading.Thread(target=lambda: asyncio.run(coro), daemon=True).start()
+        _run_in_background_thread(coro, wait=bool(os.environ.get("ADCP_TESTING")))
         return
 
     loop.create_task(coro)
+
+
+def _run_in_background_thread(coro, *, wait: bool) -> None:
+    errors: list[Exception] = []
+
+    def _run_background() -> None:
+        try:
+            asyncio.run(coro)
+        except Exception as exc:
+            if wait:
+                errors.append(exc)
+            else:
+                logger.exception("protocol change webhook background task failed")
+
+    thread = threading.Thread(target=_run_background, daemon=not wait)
+    thread.start()
+    if not wait:
+        return
+
+    thread.join()
+    if errors:
+        raise errors[0]

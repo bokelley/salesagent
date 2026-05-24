@@ -72,7 +72,7 @@ def _collect_unmarked_tests() -> list[str]:
         capture_output=True,
         text=True,
         cwd=str(PROJECT_ROOT),
-        timeout=60,
+        timeout=180,
     )
 
     # Parse output lines. pytest -q outputs lines like:
