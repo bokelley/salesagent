@@ -10,8 +10,10 @@ adcp#4478 for the unbound-state context).
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
+from adcp import get_properties_by_agent as sdk_get_properties_by_agent
 from adcp.adagents import normalize_url
 
 # Every selector field the AdCP schema's authorized_agents oneOf
@@ -75,3 +77,80 @@ def top_level_properties(adagents: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(props, list):
         return []
     return [p for p in props if isinstance(p, dict)]
+
+
+def _has_string_values(value: Any) -> bool:
+    """True when a selector list contains at least one non-empty string."""
+    return isinstance(value, list) and any(isinstance(item, str) and item for item in value)
+
+
+def _normalize_compact_selector(selector: dict[str, Any]) -> dict[str, Any] | None:
+    """Convert dict-form publisher_properties into an SDK selector list item.
+
+    This is intentionally only a container-shape adapter. The SDK remains
+    responsible for exact domain matching, revocations, selection rules, and
+    deduplication. We fail closed when the dict mixes singular and compact
+    domain fields because that is not a safe, unambiguous shape to normalize.
+    """
+    has_singular = "publisher_domain" in selector
+    has_compact = "publisher_domains" in selector
+    if has_singular == has_compact:
+        return None
+
+    normalized = dict(selector)
+    if "selection_type" not in normalized:
+        if _has_string_values(normalized.get("property_ids")):
+            normalized["selection_type"] = "by_id"
+        elif _has_string_values(normalized.get("property_tags")):
+            normalized["selection_type"] = "by_tag"
+        else:
+            normalized["selection_type"] = "all"
+    return normalized
+
+
+def _adagents_with_normalized_publisher_properties(
+    adagents: dict[str, Any], agent_url: str, selector: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Return an adagents copy with the matching agent's dict selector listified."""
+    normalized_selector = _normalize_compact_selector(selector)
+    if normalized_selector is None:
+        return None
+
+    patched = deepcopy(adagents)
+    authorized_agents = patched.get("authorized_agents")
+    if not isinstance(authorized_agents, list):
+        return None
+
+    target = normalize_url(agent_url)
+    for agent in authorized_agents:
+        if not isinstance(agent, dict):
+            continue
+        if normalize_url(agent.get("url", "")) == target:
+            agent["publisher_properties"] = [normalized_selector]
+            return patched
+    return None
+
+
+def get_authorized_properties_by_agent(adagents: dict[str, Any], agent_url: str) -> list[dict[str, Any]]:
+    """Resolve properties authorized for ``agent_url`` with local compat fixes.
+
+    Delegates to the AdCP SDK first. If it returns no properties for a
+    ``publisher_properties`` entry using the compact dict shape, normalize
+    only that container shape into the SDK's list form and delegate again.
+    """
+    properties = sdk_get_properties_by_agent(adagents, agent_url)
+    if properties:
+        return properties
+
+    entry = find_agent_entry(adagents, agent_url)
+    if not isinstance(entry, dict) or entry.get("authorization_type") != "publisher_properties":
+        return properties
+
+    publisher_properties = entry.get("publisher_properties")
+    if not isinstance(publisher_properties, dict):
+        return properties
+
+    patched = _adagents_with_normalized_publisher_properties(adagents, agent_url, publisher_properties)
+    if patched is None:
+        return properties
+    return sdk_get_properties_by_agent(patched, agent_url)

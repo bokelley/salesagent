@@ -19,13 +19,19 @@ from adcp import (
     get_all_properties,
     get_all_tags,
 )
-from adcp.adagents import get_properties_by_agent
 from sqlalchemy import select
 from sqlalchemy.sql import Select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, PropertyTag
-from src.services._adagents_shapes import find_agent_entry, is_bare_entry, top_level_properties
+from src.services._adagents_shapes import (
+    find_agent_entry,
+    is_bare_entry,
+    top_level_properties,
+)
+from src.services._adagents_shapes import (
+    get_authorized_properties_by_agent as get_properties_by_agent,
+)
 
 logger = logging.getLogger(__name__)
 

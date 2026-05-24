@@ -23,7 +23,7 @@ from src.services.aao_lookup_service import (
     invalidate_adagents_cache,
     validate_public_agent_url_hostname,
 )
-from tests.helpers.adagents import managed_website_property
+from tests.helpers.adagents import managed_website_property, publisher_properties_dict_adagents
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +86,7 @@ class TestGetPublisherPartnerStatusAuthorized:
                 return_value=[{"property_id": "p1"}, {"property_id": "p2"}, {"property_id": "p3"}],
             ),
             patch(
-                "src.services.aao_lookup_service.get_properties_by_agent",
+                "src.services.aao_lookup_service.get_authorized_properties_by_agent",
                 return_value=[{"property_id": "p1"}, {"property_id": "p2"}],
             ),
         ):
@@ -140,6 +140,20 @@ class TestGetPublisherPartnerStatusAuthorized:
         assert status.authorized_properties == 2
         assert status.error is None
 
+    @pytest.mark.asyncio
+    async def test_authorized_resolves_publisher_properties_dict_form(self):
+        """CafeMedia-style publisher_properties dict resolves by domain list."""
+        with patch(
+            "src.services.aao_lookup_service.fetch_adagents",
+            AsyncMock(return_value=publisher_properties_dict_adagents()),
+        ):
+            status = await get_publisher_partner_status("cafemedia.com", "https://interchange.io")
+
+        assert status.status == "authorized"
+        assert status.total_properties == 3
+        assert status.authorized_properties == 2
+        assert status.error is None
+
 
 class TestGetPublisherPartnerStatusPending:
     """When fetch succeeds but agent_url isn't listed: status='pending'."""
@@ -179,7 +193,7 @@ class TestGetPublisherPartnerStatusPending:
                 return_value=[{"property_id": "p1"}, {"property_id": "p2"}],
             ),
             patch(
-                "src.services.aao_lookup_service.get_properties_by_agent",
+                "src.services.aao_lookup_service.get_authorized_properties_by_agent",
                 return_value=[],
             ),
         ):

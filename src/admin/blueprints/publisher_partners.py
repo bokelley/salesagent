@@ -9,8 +9,6 @@ from datetime import UTC, datetime
 from adcp.adagents import (
     AuthorizationContext,
     fetch_adagents,
-    get_properties_by_agent,
-    verify_agent_authorization,
 )
 from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidationError
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
@@ -22,6 +20,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
 from src.core.domain_config import get_tenant_url
 from src.core.security.url_validator import BLOCKED_HOSTNAMES, check_url_ssrf
+from src.services._adagents_shapes import get_authorized_properties_by_agent
 from src.services.aao_lookup_service import (
     PublisherPartnerStatus,
     get_publisher_partner_status,
@@ -814,7 +813,8 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
                     loop.close()
 
                 # Check if agent is authorized
-                is_authorized = verify_agent_authorization(adagents_data, agent_url)
+                properties = get_authorized_properties_by_agent(adagents_data, agent_url)
+                is_authorized = bool(properties)
 
                 if not is_authorized:
                     return (
@@ -824,8 +824,6 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
                         200,
                     )
 
-                # Get properties for this agent
-                properties = get_properties_by_agent(adagents_data, agent_url)
                 ctx = AuthorizationContext(properties)
 
                 # Return authorization context

@@ -10,7 +10,7 @@ import pytest
 from adcp import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidationError
 
 from src.services.property_discovery_service import PropertyDiscoveryService
-from tests.helpers.adagents import managed_website_property
+from tests.helpers.adagents import managed_website_property, publisher_properties_dict_adagents
 
 
 class MockSetup:
@@ -999,6 +999,37 @@ class TestPropertyDiscoveryService:
                         ["cafemedia.com"],
                         agent_url="https://interchange.io",
                     )
+
+        assert stats["domains_synced"] == 1
+        assert stats["properties_found"] == 2
+        assert stats["properties_created"] == 2
+        assert len(stats["errors"]) == 0
+
+        mock_db_patcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_sync_properties_keeps_publisher_properties_dict_form(self):
+        """CafeMedia-style dict selectors resolve before domain filtering."""
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                mock_fetch.return_value = publisher_properties_dict_adagents()
+                mock_tags.return_value = ["managed"]
+
+                stats = await self.service.sync_properties_from_adagents(
+                    "tenant1",
+                    ["cafemedia.com"],
+                    agent_url="https://interchange.io",
+                )
 
         assert stats["domains_synced"] == 1
         assert stats["properties_found"] == 2

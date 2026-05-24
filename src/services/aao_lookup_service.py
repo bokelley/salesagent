@@ -15,10 +15,15 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from adcp import fetch_adagents, get_all_properties, get_properties_by_agent
+from adcp import fetch_adagents, get_all_properties
 from adcp.adagents import fetch_agent_authorizations_from_directory, validate_adagents_structure
 
-from src.services._adagents_shapes import find_agent_entry, is_bare_entry, top_level_properties
+from src.services._adagents_shapes import (
+    find_agent_entry,
+    get_authorized_properties_by_agent,
+    is_bare_entry,
+    top_level_properties,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +172,7 @@ async def is_agent_authorized_by_publisher(
     # The SDK's get_properties_by_agent() returns the property list for
     # the agent_url; an empty list means the agent isn't authorized.
     # We don't actually need the property list here — just the boolean.
-    properties = get_properties_by_agent(adagents, public_agent_url)
+    properties = get_authorized_properties_by_agent(adagents, public_agent_url)
     if not properties:
         return False, f"agent_url {public_agent_url!r} not listed in adagents.json"
     return True, None
@@ -275,7 +280,10 @@ def _count_total_properties(adagents: dict[str, Any]) -> int:
     ``inline_properties`` (the previous implementation) under-reported
     publishers using the recommended brand.json + by-id pattern, producing
     nonsense ratios like "0 listed / 47 authorized"."""
-    return len(get_all_properties(adagents) or [])
+    properties = get_all_properties(adagents) or []
+    if properties:
+        return len(properties)
+    return len(top_level_properties(adagents))
 
 
 def _count_top_level_properties(adagents: dict[str, Any]) -> int:
@@ -341,7 +349,7 @@ async def get_publisher_partner_status(
         _ADAGENTS_CACHE[publisher_domain] = (now, adagents)
 
     total_listed = _count_total_properties(adagents)
-    authorized_props = get_properties_by_agent(adagents, public_agent_url) or []
+    authorized_props = get_authorized_properties_by_agent(adagents, public_agent_url) or []
     if authorized_props:
         return PublisherPartnerStatus(
             publisher_domain=publisher_domain,
