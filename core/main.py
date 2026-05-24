@@ -407,14 +407,12 @@ def build_router() -> LazyPlatformRouter:
         proposal_store_factory=lambda _tenant_id: get_proposal_store(),
     )
     # validate_idempotency_wiring inspects the platform handed to serve()
-    # for @IdempotencyStore.wrap decorators. The router shell has none —
+    # for @IdempotencyStore.wrap decorators. The router shell has none:
     # dedup is wired one indirection deeper, on the per-tenant platforms
     # the factory produces (mock + gam both wrap their mutating methods).
-    # Setting the escape hatch tells the boot validator dedup IS wired,
-    # just not on this object. Tracked upstream (LazyPlatformRouter +
-    # validate_idempotency_wiring composition).
-    # SDK reads this via ``getattr(platform, "_adcp_idempotency_external", False)``
-    # — a duck-typed escape hatch (no typed protocol surface). Use setattr to
+    # ``_adcp_idempotency_external`` is the SDK's documented escape hatch for
+    # that composition pattern. The validator reads it with
+    # ``getattr(platform, "_adcp_idempotency_external", False)``; use setattr to
     # match the SDK's read-side ergonomics without adding ``type: ignore``.
     setattr(router, "_adcp_idempotency_external", True)  # noqa: B010
     return router
