@@ -31,8 +31,6 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # (issue #240) — the helper is a module-level function, not an
 # ``_impl``, so the scanner naturally exempts its body.
 KNOWN_VIOLATIONS = {
-    # _get_products_impl: 1 violation (logging)
-    ("products.py", 599),
     # _list_creatives_impl: 1 violation (filter dict conversion)
     ("creatives/listing.py", 141),  # filters.model_dump(exclude_none=True)
 }

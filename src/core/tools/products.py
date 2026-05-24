@@ -12,6 +12,7 @@ from typing import Any
 from adcp import FormatId
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp.types import PropertyListReference
+from pydantic import ValidationError
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -133,6 +134,28 @@ def filter_products_by_property_list(
         Filtered list of products that match the property list criteria.
     """
     return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
+
+
+def convert_product_models_to_resolved(
+    product_models: list[Any],
+    adapter_type: str | None,
+    source: str,
+) -> list[ResolvedProduct]:
+    """Convert product models, skipping individually invalid catalog entries."""
+    products: list[ResolvedProduct] = []
+    for product_obj in product_models:
+        product_id = getattr(product_obj, "product_id", "<unknown>")
+        try:
+            products.append(convert_product_model_to_resolved(product_obj, adapter_type=adapter_type))
+            logger.debug("Successfully converted %s product %s", source, product_id)
+        except (ValueError, ValidationError):
+            logger.warning(
+                "Skipping %s product %s because its catalog configuration is incomplete or invalid",
+                source,
+                product_id,
+                exc_info=True,
+            )
+    return products
 
 
 async def _get_products_impl(
@@ -346,18 +369,7 @@ async def _get_products_impl(
         # Convert database Product models to ResolvedProduct (wire-shape +
         # internal fields). Filter pipeline below operates on these; at the
         # response boundary we project ``[r.wire for r in eligible]``.
-        products: list[ResolvedProduct] = []
-        for product_obj in db_products:
-            try:
-                products.append(convert_product_model_to_resolved(product_obj, adapter_type=tenant_adapter_type))
-                logger.debug(f"Successfully converted product {product_obj.product_id}")
-            except Exception as e:
-                error_msg = (
-                    f"Product '{product_obj.product_id}' failed to convert to AdCP schema. "
-                    f"This indicates data corruption or migration issue. Error: {e}"
-                )
-                logger.error(error_msg)
-                raise ValueError(error_msg) from e
+        products = convert_product_models_to_resolved(db_products, tenant_adapter_type, "static")
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
 
@@ -428,12 +440,12 @@ async def _get_products_impl(
         if dynamic_variants:
             # Convert Product models to Product schemas for response
 
-            for variant_model in dynamic_variants:
-                # Convert database model to ResolvedProduct (matches the static-product
-                # path above so the filter pipeline sees a uniform list type).
-                products.append(convert_product_model_to_resolved(variant_model, adapter_type=tenant_adapter_type))
+            # Convert database models to ResolvedProduct (matches the static-product
+            # path above so the filter pipeline sees a uniform list type).
+            converted_dynamic = convert_product_models_to_resolved(dynamic_variants, tenant_adapter_type, "dynamic")
+            products.extend(converted_dynamic)
 
-            logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
+            logger.info("[GET_PRODUCTS] Added %s dynamic product variants", len(converted_dynamic))
     except (ImportError, RuntimeError, OSError) as e:
         logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 
@@ -596,7 +608,7 @@ async def _get_products_impl(
             filtered_products.append(product)
 
         products = filtered_products
-        logger.info(f"Applied filters: {req.filters.model_dump(exclude_none=True)}. {len(products)} products remain.")
+        logger.info("Applied get_products filters. %s products remain.", len(products))
 
     # Filter products based on policy compliance (if policy checks are enabled)
     eligible_products = []

@@ -20,6 +20,7 @@ beads: salesagent-vagl
 """
 
 import contextlib
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -165,68 +166,92 @@ class TestIdentityValidation:
 class TestProductConversionError:
     """Test product conversion error path.
 
-    Intent: when a product stored in DB has corrupt data that fails schema
-    conversion, the error must be fatal (not silently skipped) and include
-    the product_id for debugging.
+    Intent: when a product stored in DB has incomplete authoring that fails
+    schema conversion, get_products skips that product, logs it with the
+    product_id for debugging, and continues returning the rest of the catalog.
     """
 
     @pytest.mark.asyncio
-    async def test_convert_failure_raises_valueerror_with_product_id(self):
-        """convert_product_model_to_resolved raises → ValueError with product_id."""
+    async def test_convert_failure_skips_product_and_logs_product_id(self, caplog):
+        """convert_product_model_to_resolved raises → product skipped with product_id log."""
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
 
-        mock_product = MagicMock()
-        mock_product.product_id = "corrupt-product-42"
+        product = create_test_product(product_id="corrupt-product-42")
+        mock_uow = _mock_uow_with_products([product])
 
-        mock_uow = _mock_uow_with_products([mock_product])
+        def convert_with_error(p, **kw):
+            raise ValueError(f"{p.product_id}: missing required field 'delivery_type'")
 
-        with (
-            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
-            patch(
-                "src.core.tools.products.convert_product_model_to_resolved",
-                side_effect=Exception("missing required field 'delivery_type'"),
-            ),
-        ):
+        patches = _standard_patches(mock_uow, convert_fn=convert_with_error)
+        caplog.set_level(logging.WARNING, logger="src.core.tools.products")
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(ValueError, match="corrupt-product-42") as exc_info:
-                await _get_products_impl(req, identity)
+            response = await _get_products_impl(req, identity)
 
-            assert "missing required field" in str(exc_info.value)
+        assert response.products == []
+        assert "Skipping static product corrupt-product-42" in caplog.text
+        assert "missing required field" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_convert_failure_is_not_silently_swallowed(self):
-        """Unlike get_product_catalog, _get_products_impl must raise on conversion error."""
+    async def test_convert_failure_does_not_hide_valid_products(self, caplog):
+        """A bad product is filtered without suppressing valid catalog entries."""
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
 
-        good_product = MagicMock()
-        good_product.product_id = "good-1"
-        bad_product = MagicMock()
-        bad_product.product_id = "bad-1"
+        good_product = create_test_product(product_id="good-1")
+        bad_product = create_test_product(product_id="bad-1")
 
         def convert_with_error(p, **kw):
             if p.product_id == "bad-1":
-                raise TypeError("unexpected None for pricing_options")
+                raise ValueError("unexpected None for pricing_options")
             return p
 
         mock_uow = _mock_uow_with_products([good_product, bad_product])
+        patches = _standard_patches(mock_uow, convert_fn=convert_with_error)
+        caplog.set_level(logging.WARNING, logger="src.core.tools.products")
 
-        with (
-            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
-            patch(
-                "src.core.tools.products.convert_product_model_to_resolved",
-                side_effect=convert_with_error,
-            ),
-        ):
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(ValueError, match="bad-1"):
+            response = await _get_products_impl(req, identity)
+
+        assert [p.product_id for p in response.products] == ["good-1"]
+        assert "Skipping static product bad-1" in caplog.text
+        assert "unexpected None for pricing_options" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unexpected_conversion_exception_propagates(self):
+        """Unexpected converter bugs remain fatal instead of hiding catalog state."""
+        tenant = _make_tenant()
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+        req = _make_request()
+
+        product = create_test_product(product_id="buggy-product")
+
+        def convert_with_bug(p, **kw):
+            raise TypeError("converter bug")
+
+        mock_uow = _mock_uow_with_products([product])
+        patches = _standard_patches(mock_uow, convert_fn=convert_with_bug)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+
+            from src.core.tools.products import _get_products_impl
+
+            with pytest.raises(TypeError, match="converter bug"):
                 await _get_products_impl(req, identity)
 
 

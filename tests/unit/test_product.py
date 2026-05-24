@@ -30,6 +30,8 @@ UNSPECIFIED (9 — implementation-defined, not in AdCP spec):
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
@@ -99,6 +101,47 @@ class TestProductMainFlow:
             ids = {p.product_id for p in response.products}
             assert ids == {"prod_001", "prod_002"}
 
+    async def test_incomplete_catalog_product_is_skipped_and_logged(self, caplog):
+        """A single bad catalog row does not fail the whole get_products response."""
+        with ProductEnv() as env:
+            env.add_product(product_id="good_product", name="Ready Product")
+            env.add_product(product_id="bad_product", name="Incomplete Product")
+
+            default_converter = env.mock["convert_resolved"].side_effect
+
+            def convert_or_raise(product_obj, **kwargs):
+                if product_obj.product_id == "bad_product":
+                    raise ValueError("no pricing_options")
+                return default_converter(product_obj, **kwargs)
+
+            env.mock["convert_resolved"].side_effect = convert_or_raise
+            caplog.set_level(logging.WARNING, logger="src.core.tools.products")
+
+            response = await env.call_impl(brief="display")
+
+            assert [p.product_id for p in response.products] == ["good_product"]
+            assert "Skipping static product bad_product" in caplog.text
+            assert "incomplete or invalid" in caplog.text
+
+    async def test_response_serialization_omits_none_nested_product_fields(self):
+        """Nested product serialization preserves exclude_none for protocol envelopes."""
+        with ProductEnv() as env:
+            env.add_product(product_id="wholesale_product", name="Wholesale Product")
+
+            response = await env.call_impl(brief=None, buying_mode="wholesale")
+            payload = response.model_dump(mode="json", exclude_none=True)
+
+            product_payload = payload["products"][0]
+            assert "format_options" not in product_payload
+            assert "placements" not in product_payload
+            assert isinstance(product_payload["format_ids"], list)
+
+            included = response.model_dump(mode="json", include={"products": {0: {"product_id"}}})
+            assert included == {"products": [{"product_id": "wholesale_product"}]}
+
+            excluded = response.model_dump(mode="json", exclude={"products": {0: {"format_ids"}}})
+            assert "format_ids" not in excluded["products"][0]
+
     async def test_delivery_type_filter(self):
         """Covers: UC-001-MAIN-06
 
@@ -132,6 +175,29 @@ class TestProductMainFlow:
 
             ids = [p.product_id for p in response.products]
             assert "variant_001" in ids
+
+    async def test_bad_dynamic_variant_is_skipped_and_not_counted_in_log(self, caplog):
+        """Dynamic product conversion logs the number of variants actually added."""
+        with ProductEnv() as env:
+            good = _make_product(product_id="good_dynamic", name="Good Dynamic Variant")
+            bad = _make_product(product_id="bad_dynamic", name="Bad Dynamic Variant")
+            env.set_dynamic_variants([good, bad])
+
+            default_converter = env.mock["convert_resolved"].side_effect
+
+            def convert_or_raise(product_obj, **kwargs):
+                if product_obj.product_id == "bad_dynamic":
+                    raise ValueError("invalid dynamic variant")
+                return default_converter(product_obj, **kwargs)
+
+            env.mock["convert_resolved"].side_effect = convert_or_raise
+            caplog.set_level(logging.INFO, logger="src.core.tools.products")
+
+            response = await env.call_impl(brief="test")
+
+            assert [p.product_id for p in response.products] == ["good_dynamic"]
+            assert "Skipping dynamic product bad_dynamic" in caplog.text
+            assert "[GET_PRODUCTS] Added 1 dynamic product variants" in caplog.text
 
 
 class TestProductAccessControl:

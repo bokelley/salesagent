@@ -133,6 +133,43 @@ class NestedModelSerializerMixin:
             # Automatically serializes nested_field correctly
     """
 
+    @staticmethod
+    def _field_nested_selector(selector: Any, field_name: str) -> Any:
+        if isinstance(selector, dict):
+            field_selector = selector.get(field_name)
+            return None if isinstance(field_selector, bool) else field_selector
+        return None
+
+    @staticmethod
+    def _list_item_nested_selector(selector: Any, index: int) -> Any:
+        if isinstance(selector, dict):
+            item_selector = selector.get(index)
+            if item_selector is not None:
+                return None if isinstance(item_selector, bool) else item_selector
+            all_selector = selector.get("__all__")
+            return None if isinstance(all_selector, bool) else all_selector
+        return selector
+
+    @classmethod
+    def _nested_model_dump_kwargs(cls, info: Any, include: Any = None, exclude: Any = None) -> dict[str, Any]:
+        kwargs = {
+            "mode": info.mode,
+            "exclude_unset": info.exclude_unset,
+            "exclude_defaults": info.exclude_defaults,
+            "exclude_none": info.exclude_none,
+            "round_trip": info.round_trip,
+            "serialize_as_any": info.serialize_as_any,
+        }
+        if info.by_alias is not None:
+            kwargs["by_alias"] = info.by_alias
+        if info.context is not None:
+            kwargs["context"] = info.context
+        if include is not None:
+            kwargs["include"] = include
+        if exclude is not None:
+            kwargs["exclude"] = exclude
+        return kwargs
+
     @model_serializer(mode="wrap")
     def _serialize_nested_models(self, serializer, info):
         """Automatically serialize nested Pydantic models using their custom model_dump()."""
@@ -148,13 +185,30 @@ class NestedModelSerializerMixin:
             if field_value is None:
                 continue
 
+            field_include = self._field_nested_selector(info.include, field_name)
+            field_exclude = self._field_nested_selector(info.exclude, field_name)
+
             # Handle list of Pydantic models
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
+                    data[field_name] = [
+                        item.model_dump(
+                            **self._nested_model_dump_kwargs(
+                                info,
+                                include=self._list_item_nested_selector(field_include, index),
+                                exclude=self._list_item_nested_selector(field_exclude, index),
+                            )
+                        )
+                        for index, item in enumerate(field_value)
+                    ]
             # Handle single Pydantic model
             elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
+                nested_kwargs = self._nested_model_dump_kwargs(
+                    info,
+                    include=field_include,
+                    exclude=field_exclude,
+                )
+                data[field_name] = field_value.model_dump(**nested_kwargs)
 
         return data
 
