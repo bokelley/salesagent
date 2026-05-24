@@ -425,8 +425,8 @@ logger.log(
    uv run pytest
 
    # Check formatting
-   black --check .
-   ruff check .
+   uv run ruff format --check .
+   uv run ruff check .
    ```
 
 3. **Commit with descriptive message:**

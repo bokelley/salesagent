@@ -264,17 +264,12 @@ repos:
       - id: check-ast
       - id: debug-statements
 
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-      - id: black
-        language_version: python3
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
 
   # Type checking with mypy via the project's own venv (NOT
   # mirrors-mypy's isolated environment). The previous hook listed
