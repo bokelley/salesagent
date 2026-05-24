@@ -78,15 +78,19 @@ Then the product is included in results
 ### BR-RULE-004: Anonymous Pricing Suppression
 **Obligation ID** BR-RULE-004-01
 **Layer** behavioral
-**Invariant:** Anonymous requests have `pricing_options` set to empty array on every product.
+**Invariant:** Anonymous curated-discovery requests have `pricing_options` set to empty array on every product. Anonymous `buying_mode='wholesale'` feed reads retain pricing because `Product.pricing_options` is required by the AdCP wire schema and buyers use wholesale feeds for catalog cache population.
 **Scenario:**
 ```gherkin
 Given a product with 3 pricing options
-When an anonymous user requests products
+When an anonymous user requests products in brief mode
 Then the product has pricing_options = []
 
 Given a product with 3 pricing options
 When an authenticated user requests products
+Then the product has all 3 pricing options
+
+Given a product with 3 pricing options
+When an anonymous user requests products in wholesale mode
 Then the product has all 3 pricing options
 ```
 **Priority:** P1

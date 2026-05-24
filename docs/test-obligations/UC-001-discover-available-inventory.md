@@ -756,9 +756,21 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 **Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-05
 **Layer** schema
 **Given** the request is anonymous
+**And** `buying_mode` is `brief`
 **When** the system processes the response
 **Then** every product has `pricing_options` set to an empty array `[]`
 **And** no pricing information is exposed
+**Business Rule:** BR-RULE-004 (INV-1)
+**Priority:** P0
+
+#### Scenario: Anonymous wholesale -- pricing retained for feed validity
+**Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-05A
+**Layer** schema
+**Given** the request is anonymous
+**And** `buying_mode` is `wholesale`
+**When** the system processes the response
+**Then** every product retains its `pricing_options`
+**And** the response remains valid against the AdCP Product schema
 **Business Rule:** BR-RULE-004 (INV-1)
 **Priority:** P0
 

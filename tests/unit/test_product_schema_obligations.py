@@ -561,7 +561,7 @@ class TestAnonymousDiscoverySchema:
         assert self._is_visible_anonymous(product)
 
     def test_anonymous_pricing_suppression(self):
-        """Anonymous response strips pricing detail from serialized output.
+        """Anonymous brief/discovery response strips pricing detail from serialized output.
 
         Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-05
         """

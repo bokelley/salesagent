@@ -149,6 +149,18 @@ def when_request_products(ctx: dict) -> None:
     _call_get_products(ctx)
 
 
+@when("the Buyer Agent sends a brief-mode get_products request")
+def when_buyer_agent_request_products_brief(ctx: dict) -> None:
+    """Dispatch a curated-discovery get_products request."""
+    _call_get_products(ctx, buying_mode="brief", brief="inventory profile test")
+
+
+@when("the Buyer Agent sends a wholesale-mode get_products request")
+def when_buyer_agent_request_products_wholesale(ctx: dict) -> None:
+    """Dispatch a wholesale-feed get_products request."""
+    _call_get_products(ctx, buying_mode="wholesale", brief=None, brand=None, filters={})
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -160,6 +172,28 @@ def then_has_products(ctx: dict) -> None:
     assert response.products is not None, "Response has no products"
     assert len(response.products) >= 1, f"Expected >= 1 product, got {len(response.products)}"
     ctx["first_product"] = response.products[0]
+
+
+@then("every product should have pricing_options as an empty array")
+def then_every_product_pricing_empty(ctx: dict) -> None:
+    """Assert all returned products have pricing suppressed."""
+    assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
+    response = ctx["response"]
+    assert response.products is not None, "Response has no products"
+    assert response.products, "Expected at least one product"
+    for product in response.products:
+        assert product.pricing_options == [], f"Product {product.product_id} pricing_options were not suppressed"
+
+
+@then("every product should retain its full pricing_options")
+def then_every_product_pricing_retained(ctx: dict) -> None:
+    """Assert all returned products retain non-empty pricing options."""
+    assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
+    response = ctx["response"]
+    assert response.products is not None, "Response has no products"
+    assert response.products, "Expected at least one product"
+    for product in response.products:
+        assert product.pricing_options, f"Product {product.product_id} has no pricing_options"
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))

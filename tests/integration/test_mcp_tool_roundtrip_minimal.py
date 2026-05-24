@@ -28,6 +28,34 @@ def _wire_envelope(prefix: str) -> dict:
     return {"account": _WIRE_ACCOUNT, "idempotency_key": f"{prefix}-{uuid.uuid4()}"}
 
 
+@pytest.fixture
+def anonymous_wholesale_default_catalog(factory_session):
+    """Seed localhost's anonymous default-tenant catalog before the MCP server starts."""
+    from tests.factories import PricingOptionFactory, ProductFactory, PropertyTagFactory, TenantFactory
+
+    tenant = TenantFactory(
+        tenant_id="default",
+        subdomain="default",
+        brand_manifest_policy="public",
+        public_agent_url="https://default.example.com/agent",
+    )
+    PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+    product = ProductFactory(
+        tenant=tenant,
+        product_id="anonymous_wholesale_product",
+        delivery_type="non_guaranteed",
+    )
+    PricingOptionFactory(
+        product=product,
+        pricing_model="cpm",
+        rate=None,
+        is_fixed=False,
+        price_guidance={"floor": 1.0, "p50": 5.0, "p75": 8.0},
+    )
+    factory_session.commit()
+    return product.product_id
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.requires_db
@@ -58,6 +86,24 @@ class TestMCPToolRoundtripMinimal:
         # FastMCP call_tool returns structured_content
         content = result.structured_content if hasattr(result, "structured_content") else result
         assert "products" in content
+
+    async def test_get_products_anonymous_wholesale_retains_pricing_options(
+        self, anonymous_wholesale_default_catalog, mcp_server
+    ):
+        """Anonymous wholesale feed reads must stay AdCP-valid at the MCP boundary."""
+        headers = {"x-adcp-tenant": "default"}
+        transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
+        client = Client(transport=transport)
+
+        async with client:
+            result = await client.call_tool("get_products", {"buying_mode": "wholesale", "filters": {}})
+
+        content = result.structured_content if hasattr(result, "structured_content") else result
+        assert content is not None
+        assert "products" in content
+        assert content["products"], "anonymous wholesale should return public catalog products"
+        assert {product["product_id"] for product in content["products"]} == {anonymous_wholesale_default_catalog}
+        assert all(product["pricing_options"] for product in content["products"])
 
     async def test_create_media_buy_minimal(self, mcp_client):
         """Test create_media_buy with minimal required parameters."""

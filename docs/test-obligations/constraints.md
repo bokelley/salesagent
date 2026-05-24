@@ -437,11 +437,16 @@ Then product is suppressed
 ### anonymous_pricing: Anonymous Pricing Suppression
 **Obligation ID** CONSTR-ANONYMOUS-PRICING-01
 **Layer** behavioral
-**Requirement:** Authenticated = full pricing. Anonymous = pricing_options=[].
+**Requirement:** Authenticated = full pricing. Anonymous brief/discovery = pricing_options=[]. Anonymous wholesale = full pricing, because wholesale feed payloads must satisfy the AdCP Product schema's non-empty pricing_options requirement.
 **Scenario:**
 ```gherkin
 Given anonymous request
+And buying_mode is brief
 Then every product has pricing_options=[]
+
+Given anonymous request
+And buying_mode is wholesale
+Then every product retains pricing_options
 ```
 **Priority:** P1
 **Affected by 3.6:** No

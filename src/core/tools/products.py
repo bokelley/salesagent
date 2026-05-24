@@ -739,9 +739,13 @@ async def _get_products_impl(
 
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues
-    if principal_id is None:  # Anonymous user
+    buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
+    if principal_id is None and buying_mode != "wholesale":  # Anonymous non-feed discovery
         # Remove pricing data from products for anonymous users
-        # Set to empty list to hide pricing (will be excluded during serialization).
+        # Set to empty list to hide pricing for curated discovery responses.
+        # Wholesale feed reads keep pricing because Product.pricing_options is
+        # required by the AdCP wire schema and buyers use the feed for catalog
+        # cache population.
         # ResolvedProduct is frozen so we mutate the wire LibraryProduct directly.
         for product in eligible_products:
             product.wire.pricing_options = []
@@ -767,6 +771,7 @@ async def _get_products_impl(
         else principal_id
     )
     brand_domain = req.brand.domain if req.brand else None
+    pricing_visibility = "full" if principal_id is not None or buying_mode == "wholesale" else "suppressed"
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
     audit_logger.log_operation(
         operation="get_products",
@@ -778,6 +783,9 @@ async def _get_products_impl(
             "product_count": len(eligible_products),
             "brief_length": len(brief_text),
             "has_filters": req.filters is not None,
+            "buying_mode": buying_mode,
+            "pricing_visibility": pricing_visibility,
+            "is_anonymous": principal_id is None,
             "operator": operator,
             "brand_domain": brand_domain,
             "elapsed_ms": elapsed_ms,

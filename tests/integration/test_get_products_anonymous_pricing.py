@@ -1,7 +1,8 @@
 """Integration tests for anonymous pricing suppression (UC-001).
 
-Tests verify that anonymous users (no principal_id) receive products with
-pricing_options set to empty list, while authenticated users see full pricing.
+Tests verify that anonymous brief/discovery users (no principal_id) receive
+products with pricing_options set to empty list, while authenticated users and
+anonymous wholesale feed readers see full pricing.
 
 Obligations covered:
 - BR-RULE-004-01: Anonymous pricing suppression
@@ -36,11 +37,12 @@ def _lazy_identity(
 
 
 class TestAnonymousPricingSuppression:
-    """Tests that anonymous users get pricing_options=[] on every product.
+    """Tests that anonymous brief/discovery users get pricing_options=[] on every product.
 
     The business rule: unauthenticated (anonymous) requests must have
-    pricing data stripped from all returned products. Products are still
-    returned, only pricing is hidden.
+    pricing data stripped from curated discovery responses. Products are still
+    returned, only pricing is hidden. Wholesale feed reads keep pricing so the
+    response remains AdCP schema-valid for catalog cache population.
     """
 
     @pytest.mark.asyncio
@@ -65,6 +67,114 @@ class TestAnonymousPricingSuppression:
         assert len(result.products) == 1
         assert result.products[0].product_id == "priced_product"
         assert result.products[0].pricing_options == []
+
+    @pytest.mark.asyncio
+    async def test_anonymous_wholesale_request_retains_pricing_options(self, integration_db):
+        """Wholesale feed reads must remain schema-valid for unauthenticated catalog sync.
+
+        Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-05A
+        """
+        from adcp import GetProductsResponse as LibraryGetProductsResponse
+
+        with ProductEnv(tenant_id="anon-pricing-wholesale", principal_id=None) as env:
+            tenant = TenantFactory(
+                tenant_id="anon-pricing-wholesale",
+                subdomain="anon-pricing-wholesale",
+                brand_manifest_policy="public",
+            )
+            p = ProductFactory(
+                tenant=tenant,
+                product_id="wholesale_priced_product",
+                delivery_type="non_guaranteed",
+            )
+            PricingOptionFactory(
+                product=p,
+                pricing_model="cpm",
+                rate=None,
+                is_fixed=False,
+                price_guidance={"floor": 1.0, "p50": 5.0, "p75": 8.0},
+            )
+
+            env._identity = _lazy_identity("anon-pricing-wholesale", principal_id=None)
+
+            result = await env.call_impl(buying_mode="wholesale", brief=None, brand=None, filters={})
+
+        assert len(result.products) == 1
+        assert result.products[0].product_id == "wholesale_priced_product"
+        assert len(result.products[0].pricing_options) == 1
+        LibraryGetProductsResponse.model_validate(result.model_dump(mode="json"))
+
+    @pytest.mark.asyncio
+    async def test_anonymous_wholesale_hides_restricted_products_but_retains_public_pricing(self, integration_db):
+        """Wholesale pricing visibility must not bypass allowed_principal_ids ACLs."""
+        with ProductEnv(tenant_id="anon-pricing-wholesale-acl", principal_id=None) as env:
+            tenant = TenantFactory(
+                tenant_id="anon-pricing-wholesale-acl",
+                subdomain="anon-pricing-wholesale-acl",
+                brand_manifest_policy="public",
+            )
+            public_product = ProductFactory(
+                tenant=tenant,
+                product_id="public_wholesale_product",
+                delivery_type="non_guaranteed",
+                allowed_principal_ids=None,
+            )
+            PricingOptionFactory(product=public_product)
+            restricted_product = ProductFactory(
+                tenant=tenant,
+                product_id="restricted_wholesale_product",
+                delivery_type="non_guaranteed",
+                allowed_principal_ids=["buyer-1"],
+            )
+            PricingOptionFactory(product=restricted_product)
+
+            env._identity = _lazy_identity("anon-pricing-wholesale-acl", principal_id=None)
+
+            result = await env.call_impl(buying_mode="wholesale", brief=None, brand=None, filters={})
+
+        assert [product.product_id for product in result.products] == ["public_wholesale_product"]
+        assert len(result.products[0].pricing_options) == 1
+
+    @pytest.mark.asyncio
+    async def test_anonymous_wholesale_audit_logs_pricing_visibility(self, integration_db):
+        """Audit details distinguish anonymous wholesale pricing exposure from discovery suppression."""
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import AuditLog
+
+        with ProductEnv(tenant_id="anon-pricing-wholesale-audit", principal_id=None) as env:
+            tenant = TenantFactory(
+                tenant_id="anon-pricing-wholesale-audit",
+                subdomain="anon-pricing-wholesale-audit",
+                brand_manifest_policy="public",
+            )
+            product = ProductFactory(
+                tenant=tenant,
+                product_id="audited_wholesale_product",
+                delivery_type="non_guaranteed",
+            )
+            PricingOptionFactory(product=product)
+
+            env._identity = _lazy_identity("anon-pricing-wholesale-audit", principal_id=None)
+
+            await env.call_impl(buying_mode="wholesale", brief=None, brand=None, filters={})
+
+        with get_db_session() as session:
+            audit = session.scalars(
+                select(AuditLog)
+                .where(
+                    AuditLog.tenant_id == "anon-pricing-wholesale-audit",
+                    AuditLog.operation == "AdCP.get_products",
+                )
+                .order_by(AuditLog.log_id.desc())
+            ).first()
+
+        assert audit is not None
+        assert audit.details is not None
+        assert audit.details["buying_mode"] == "wholesale"
+        assert audit.details["pricing_visibility"] == "full"
+        assert audit.details["is_anonymous"] is True
 
     @pytest.mark.asyncio
     async def test_anonymous_request_product_count_unchanged(self, integration_db):

@@ -436,12 +436,20 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-4 violated: anonymous request and product has allowed_principal_ids (no error, product just hidden)
 
   @T-UC-001-inv-004 @invariant @BR-RULE-004 @analysis-2026-03-09 @schema-v3.0.0-rc.1
-  Scenario: BR-RULE-004 INV-1 holds - anonymous request, pricing suppressed
+  Scenario: BR-RULE-004 INV-1 holds - anonymous brief request, pricing suppressed
     Given the Buyer has no authentication credentials
     And the tenant brand_manifest_policy is "public"
-    When the Buyer Agent sends a get_products request
+    When the Buyer Agent sends a brief-mode get_products request
     Then every product should have pricing_options as an empty array
-    # INV-1 holds: anonymous request, pricing stripped
+    # INV-1 holds: anonymous brief discovery request, pricing stripped
+
+  @T-UC-001-inv-004-1w @invariant @BR-RULE-004 @analysis-2026-05-24 @schema-v3.0.0-rc.1
+  Scenario: BR-RULE-004 INV-1 wholesale exception - anonymous wholesale request retains pricing
+    Given the Buyer has no authentication credentials
+    And the tenant brand_manifest_policy is "public"
+    When the Buyer Agent sends a wholesale-mode get_products request
+    Then every product should retain its full pricing_options
+    # Wholesale feed reads must remain schema-valid: Product.pricing_options is required.
 
   @T-UC-001-inv-004-2 @invariant @BR-RULE-004 @analysis-2026-03-09 @schema-v3.0.0-rc.1
   Scenario: BR-RULE-004 INV-2 holds - authenticated request, full pricing retained
@@ -727,7 +735,8 @@ Feature: BR-UC-001 Discover Available Inventory
     Examples: Valid partitions
       | partition                    | outcome                          |
       | authenticated_full_pricing   | full pricing options returned    |
-      | anonymous_suppressed         | pricing_options set to []        |
+      | anonymous_brief_suppressed   | pricing_options set to []        |
+      | anonymous_wholesale_pricing  | full pricing options returned    |
 
   @T-UC-001-partition-relevance @partition @relevance_score @analysis-2026-03-09 @schema-v3.0.0-rc.1
   Scenario Outline: relevance_score partition validation - <partition>

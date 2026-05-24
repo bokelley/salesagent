@@ -214,6 +214,12 @@ mappings:
       upstream_refs: ["BR-RULE-004"]
       business_rules: ["BR-RULE-004"]
       status: new
+    - adcp_scenario_id: "T-UC-001-inv-004-1w"
+      adcp_feature: "BR-UC-001-discover-available-inventory.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-004"]
+      business_rules: ["BR-RULE-004"]
+      status: new
     - adcp_scenario_id: "T-UC-001-inv-004-2"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
       obligation_id: null
