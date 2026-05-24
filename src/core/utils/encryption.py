@@ -7,6 +7,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
 
+SECRET_CIPHERTEXT_PREFIX = "enc:"
+
 
 class EncryptionKeyMissingError(ValueError):
     """Raised when ENCRYPTION_KEY is not set.
@@ -121,7 +123,10 @@ def is_encrypted(value: str | None) -> bool:
         ValueError: If ``ENCRYPTION_KEY`` is not set when a structural match
             triggers a decryption attempt.
     """
-    if not value or not value.startswith("gAAAAA"):
+    if not value:
+        return False
+    value = value.removeprefix(SECRET_CIPHERTEXT_PREFIX)
+    if not value.startswith("gAAAAA"):
         return False
     try:
         decrypt_api_key(value)

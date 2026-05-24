@@ -396,6 +396,13 @@ def get_or_materialize_media_buy(
     repo = MediaBuyRepository(session, tenant_id)
     existing = repo.get_by_id_or_external_id(media_buy_id)
     if existing is not None:
+        if existing.source == "gam_import":
+            if not repo.gam_import_is_assigned_to_principal(existing, principal_id):
+                raise AdCPAuthorizationError(
+                    f"Media buy {media_buy_id!r} is not assigned to principal {principal_id!r}."
+                )
+        elif existing.principal_id != principal_id:
+            raise AdCPAuthorizationError(f"Media buy {media_buy_id!r} is not assigned to principal {principal_id!r}.")
         return existing
 
     if is_projected_media_buy_id(media_buy_id):

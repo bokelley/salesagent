@@ -72,8 +72,8 @@
             <div class="form-group">
                 <label for="auth_credentials">Credentials</label>
                 <input type="password" id="auth_credentials" name="auth_credentials"
-                       value="{{ agent.auth_credentials if agent else '' }}"
-                       placeholder="Enter token or API key">
+                       value=""
+                       placeholder="{% if agent and agent.has_auth %}Configured; enter a new value to replace{% else %}Enter token or API key{% endif %}">
                 <small>
                     {% if agent %}
                     Leave blank to keep existing credentials. Enter a new value to update.

@@ -37,6 +37,7 @@ from sqlalchemy.sql import func
 
 from src.core.database.json_type import JSONType
 from src.core.json_validators import JSONValidatorMixin
+from src.core.utils.encryption import SECRET_CIPHERTEXT_PREFIX
 
 # Minimal-but-spec-valid baseline for ``Product.reporting_capabilities`` per
 # adcp 4.4. The same value is used as both the SQL ``server_default`` (for
@@ -53,6 +54,44 @@ PRODUCT_REPORTING_CAPABILITIES_DEFAULT: dict = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _decrypt_optional_secret(
+    stored_value: str | None,
+    *,
+    secret_name: str,
+    owner_id: str,
+    allow_legacy_plaintext: bool = False,
+) -> str | None:
+    """Decrypt a Fernet-backed optional secret column.
+
+    ``allow_legacy_plaintext`` is for columns that were historically stored in
+    plaintext and may still contain old rows until the backfill migration runs.
+    """
+    if not stored_value:
+        return None
+
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.utils.encryption import decrypt_api_key
+
+    try:
+        has_prefix = stored_value.startswith(SECRET_CIPHERTEXT_PREFIX)
+        if allow_legacy_plaintext and not has_prefix:
+            return stored_value
+        ciphertext = stored_value.removeprefix(SECRET_CIPHERTEXT_PREFIX)
+        return decrypt_api_key(ciphertext)
+    except ValueError as exc:
+        raise AdCPConfigurationError(f"Failed to decrypt {secret_name} for {owner_id}") from exc
+
+
+def _encrypt_optional_secret(value: str | None) -> str | None:
+    """Encrypt an optional secret value for storage."""
+    if not value:
+        return None
+
+    from src.core.utils.encryption import encrypt_api_key
+
+    return f"{SECRET_CIPHERTEXT_PREFIX}{encrypt_api_key(value)}"
 
 
 class Base(DeclarativeBase):
@@ -263,27 +302,16 @@ class Tenant(Base, JSONValidatorMixin):
     @property
     def gemini_api_key(self) -> str | None:
         """Get decrypted Gemini API key."""
-        if not self._gemini_api_key:
-            return None
-        from src.core.utils.encryption import decrypt_api_key
-
-        try:
-            return decrypt_api_key(self._gemini_api_key)
-        except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
-            raise AdCPConfigurationError(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}") from exc
+        return _decrypt_optional_secret(
+            self._gemini_api_key,
+            secret_name="Gemini API key",
+            owner_id=f"tenant {self.tenant_id}",
+        )
 
     @gemini_api_key.setter
     def gemini_api_key(self, value: str | None) -> None:
         """Set encrypted Gemini API key."""
-        if not value:
-            self._gemini_api_key = None
-            return
-
-        from src.core.utils.encryption import encrypt_api_key
-
-        self._gemini_api_key = encrypt_api_key(value)
+        self._gemini_api_key = _encrypt_optional_secret(value)
 
     @property
     def primary_domain(self) -> str | None:
@@ -796,26 +824,16 @@ class TenantAuthConfig(Base):
     @property
     def oidc_client_secret(self) -> str | None:
         """Decrypt and return the OIDC client secret."""
-        if not self.oidc_client_secret_encrypted:
-            return None
-        from src.core.utils.encryption import decrypt_api_key
-
-        try:
-            return decrypt_api_key(self.oidc_client_secret_encrypted)
-        except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
-            raise AdCPConfigurationError(f"Failed to decrypt OIDC client secret for tenant {self.tenant_id}") from exc
+        return _decrypt_optional_secret(
+            self.oidc_client_secret_encrypted,
+            secret_name="OIDC client secret",
+            owner_id=f"tenant {self.tenant_id}",
+        )
 
     @oidc_client_secret.setter
     def oidc_client_secret(self, value: str | None) -> None:
         """Encrypt and store the OIDC client secret."""
-        if value is None:
-            self.oidc_client_secret_encrypted = None
-        else:
-            from src.core.utils.encryption import encrypt_api_key
-
-            self.oidc_client_secret_encrypted = encrypt_api_key(value)
+        self.oidc_client_secret_encrypted = _encrypt_optional_secret(value)
 
 
 class Creative(Base):
@@ -1440,29 +1458,16 @@ class AdapterConfig(Base):
     @property
     def gam_service_account_json(self) -> str | None:
         """Get decrypted GAM service account JSON."""
-        if not self._gam_service_account_json:
-            return None
-        from src.core.utils.encryption import decrypt_api_key
-
-        try:
-            return decrypt_api_key(self._gam_service_account_json)
-        except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
-            raise AdCPConfigurationError(
-                f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}"
-            ) from exc
+        return _decrypt_optional_secret(
+            self._gam_service_account_json,
+            secret_name="GAM service account JSON",
+            owner_id=f"tenant {self.tenant_id}",
+        )
 
     @gam_service_account_json.setter
     def gam_service_account_json(self, value: str | None) -> None:
         """Set encrypted GAM service account JSON."""
-        if not value:
-            self._gam_service_account_json = None
-            return
-
-        from src.core.utils.encryption import encrypt_api_key
-
-        self._gam_service_account_json = encrypt_api_key(value)
+        self._gam_service_account_json = _encrypt_optional_secret(value)
 
 
 class CreativeAgent(Base):
@@ -1486,7 +1491,7 @@ class CreativeAgent(Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     auth_header: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    auth_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
+    _auth_credentials: Mapped[str | None] = mapped_column("auth_credentials", Text, nullable=True)
     timeout: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -1500,6 +1505,21 @@ class CreativeAgent(Base):
         Index("idx_creative_agents_tenant", "tenant_id"),
         Index("idx_creative_agents_enabled", "enabled"),
     )
+
+    @property
+    def auth_credentials(self) -> str | None:
+        """Get decrypted auth credentials for private creative agents."""
+        return _decrypt_optional_secret(
+            self._auth_credentials,
+            secret_name="creative agent auth credentials",
+            owner_id=f"creative_agent {self.id or 'new'} tenant {self.tenant_id}",
+            allow_legacy_plaintext=True,
+        )
+
+    @auth_credentials.setter
+    def auth_credentials(self, value: str | None) -> None:
+        """Set encrypted auth credentials for private creative agents."""
+        self._auth_credentials = _encrypt_optional_secret(value)
 
 
 class SignalsAgent(Base):
@@ -1522,7 +1542,7 @@ class SignalsAgent(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "bearer", "api_key", etc.
     auth_header: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g., "x-api-key", "Authorization"
-    auth_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
+    _auth_credentials: Mapped[str | None] = mapped_column("auth_credentials", Text, nullable=True)
     forward_promoted_offering: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     timeout: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1537,6 +1557,21 @@ class SignalsAgent(Base):
         Index("idx_signals_agents_tenant", "tenant_id"),
         Index("idx_signals_agents_enabled", "enabled"),
     )
+
+    @property
+    def auth_credentials(self) -> str | None:
+        """Get decrypted auth credentials for private signals agents."""
+        return _decrypt_optional_secret(
+            self._auth_credentials,
+            secret_name="signals agent auth credentials",
+            owner_id=f"signals_agent {self.id or 'new'} tenant {self.tenant_id}",
+            allow_legacy_plaintext=True,
+        )
+
+    @auth_credentials.setter
+    def auth_credentials(self, value: str | None) -> None:
+        """Set encrypted auth credentials for private signals agents."""
+        self._auth_credentials = _encrypt_optional_secret(value)
 
 
 class GAMInventory(Base):

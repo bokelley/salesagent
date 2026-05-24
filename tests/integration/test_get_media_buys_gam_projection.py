@@ -11,9 +11,14 @@ from __future__ import annotations
 import pytest
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
-from src.core.schemas import GetMediaBuysRequest
+from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.exceptions import AdCPAuthorizationError, AdCPNotFoundError
+from src.core.schemas import GetMediaBuysRequest, SyncCreativeResult
+from src.core.tools._gam_projection import get_or_materialize_media_buy, materialize_projected_buy, projected_package_id
+from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.media_buy_list import _get_media_buys_impl
-from tests.factories import GAMLineItemFactory, PrincipalFactory
+from src.core.tools.media_buy_update import _verify_principal
+from tests.factories import CreativeFactory, GAMLineItemFactory, PrincipalFactory
 from tests.integration._gam_projection_helpers import (
     build_assigned_order_scenario,
     make_identity,
@@ -46,6 +51,143 @@ class TestProjectionVisibility:
 
         ids = [mb.media_buy_id for mb in result.media_buys]
         assert f"gam_{sc.order.order_id}" not in ids
+
+    def test_materialized_import_hidden_after_assignment_revoked(self, factory_session):
+        sc = build_assigned_order_scenario()
+        media_buy_id = f"gam_{sc.order.order_id}"
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            media_buy_id,
+        )
+        factory_session.commit()
+
+        sc.advertiser.principal_id = None
+        factory_session.commit()
+
+        result = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+
+        assert media_buy_id not in [mb.media_buy_id for mb in result.media_buys]
+
+    def test_materialized_import_update_rejected_after_assignment_revoked(self, factory_session):
+        sc = build_assigned_order_scenario()
+        media_buy_id = f"gam_{sc.order.order_id}"
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            media_buy_id,
+        )
+        factory_session.commit()
+
+        sc.advertiser.principal_id = None
+        factory_session.commit()
+
+        repo = MediaBuyRepository(factory_session, sc.tenant.tenant_id)
+        with pytest.raises(AdCPAuthorizationError):
+            _verify_principal(media_buy_id, make_identity(sc.tenant.tenant_id, sc.principal.principal_id), repo)
+
+    def test_materialized_import_visible_to_new_assignee_after_reassignment(self, factory_session):
+        sc = build_assigned_order_scenario()
+        new_owner = PrincipalFactory(tenant=sc.tenant)
+        media_buy_id = f"gam_{sc.order.order_id}"
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            media_buy_id,
+        )
+        factory_session.commit()
+
+        sc.advertiser.principal_id = new_owner.principal_id
+        factory_session.commit()
+
+        old_owner_result = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]),
+            identity=make_identity(sc.tenant.tenant_id, sc.principal.principal_id),
+        )
+        new_owner_result = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]),
+            identity=make_identity(sc.tenant.tenant_id, new_owner.principal_id),
+        )
+
+        assert media_buy_id not in [mb.media_buy_id for mb in old_owner_result.media_buys]
+        assert media_buy_id in [mb.media_buy_id for mb in new_owner_result.media_buys]
+
+    def test_materialized_import_update_allowed_for_new_assignee_after_reassignment(self, factory_session):
+        sc = build_assigned_order_scenario()
+        new_owner = PrincipalFactory(tenant=sc.tenant)
+        media_buy_id = f"gam_{sc.order.order_id}"
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            media_buy_id,
+        )
+        factory_session.commit()
+
+        sc.advertiser.principal_id = new_owner.principal_id
+        factory_session.commit()
+
+        repo = MediaBuyRepository(factory_session, sc.tenant.tenant_id)
+        _verify_principal(media_buy_id, make_identity(sc.tenant.tenant_id, new_owner.principal_id), repo)
+        with pytest.raises(AdCPAuthorizationError):
+            _verify_principal(media_buy_id, make_identity(sc.tenant.tenant_id, sc.principal.principal_id), repo)
+
+    def test_get_or_materialize_returns_existing_import_for_new_assignee_after_reassignment(self, factory_session):
+        sc = build_assigned_order_scenario()
+        new_owner = PrincipalFactory(tenant=sc.tenant)
+        media_buy_id = f"gam_{sc.order.order_id}"
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            media_buy_id,
+        )
+        factory_session.commit()
+
+        sc.advertiser.principal_id = new_owner.principal_id
+        factory_session.commit()
+
+        media_buy = get_or_materialize_media_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            new_owner.principal_id,
+            media_buy_id,
+        )
+
+        assert media_buy.media_buy_id == media_buy_id
+
+    def test_sync_creatives_package_assignment_rejected_after_assignment_revoked(self, factory_session):
+        sc = build_assigned_order_scenario()
+        line_item = GAMLineItemFactory(tenant=sc.tenant, order_id=sc.order.order_id, status="DELIVERING")
+        media_buy_id = f"gam_{sc.order.order_id}"
+        package_id = projected_package_id(line_item.line_item_id)
+        creative = CreativeFactory(tenant=sc.tenant, principal=sc.principal)
+        materialize_projected_buy(
+            factory_session,
+            sc.tenant.tenant_id,
+            sc.principal.principal_id,
+            media_buy_id,
+        )
+        factory_session.commit()
+
+        sc.advertiser.principal_id = None
+        factory_session.commit()
+
+        results = [SyncCreativeResult(creative_id=creative.creative_id, action="unchanged")]
+        with pytest.raises(AdCPNotFoundError):
+            _process_assignments(
+                assignments={creative.creative_id: [package_id]},
+                results=results,
+                tenant={"tenant_id": sc.tenant.tenant_id},
+                validation_mode="strict",
+                principal_id=sc.principal.principal_id,
+            )
 
     def test_other_principals_advertiser_orders_not_visible(self, factory_session):
         sc = build_assigned_order_scenario()

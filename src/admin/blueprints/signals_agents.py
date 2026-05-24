@@ -172,7 +172,7 @@ def edit_signals_agent(tenant_id, agent_id):
                 "enabled": agent.enabled,
                 "auth_type": agent.auth_type,
                 "auth_header": agent.auth_header,
-                "auth_credentials": agent.auth_credentials,
+                "has_auth": bool(agent.auth_credentials),
                 "forward_promoted_offering": agent.forward_promoted_offering,
                 "timeout": agent.timeout,
             }

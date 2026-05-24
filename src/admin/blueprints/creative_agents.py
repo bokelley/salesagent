@@ -160,7 +160,7 @@ def edit_creative_agent(tenant_id, agent_id):
                 "enabled": agent.enabled,
                 "priority": agent.priority,
                 "auth_type": agent.auth_type,
-                "auth_credentials": agent.auth_credentials,
+                "has_auth": bool(agent.auth_credentials),
             }
 
             return render_template(

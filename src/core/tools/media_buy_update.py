@@ -287,6 +287,18 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
     if not media_buy:
         raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
+    if media_buy.source == "gam_import":
+        if not repo.gam_import_is_assigned_to_principal(media_buy, principal_id):
+            security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+            security_logger.log_security_violation(
+                operation="access_media_buy",
+                principal_id=principal_id,
+                resource_id=media_buy_id,
+                reason="Materialized GAM import no longer has a live advertiser assignment for this principal",
+            )
+            raise AdCPAuthorizationError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
+        return
+
     if media_buy.principal_id != principal_id:
         # CRITICAL: Verify principal_id is set (security check, not assertion)
         # Using explicit check instead of assert because asserts are removed with python -O

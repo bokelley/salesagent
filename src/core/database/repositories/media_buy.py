@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from src.core.database.models import MediaBuy, MediaPackage
+from src.core.database.models import GamAdvertiser, MediaBuy, MediaPackage
 
 
 class MediaBuyRepository:
@@ -136,15 +136,80 @@ class MediaBuyRepository:
 
         Filters are combined with AND. Pass None to skip a filter.
         """
-        stmt = select(MediaBuy).where(
-            MediaBuy.tenant_id == self._tenant_id,
-            MediaBuy.principal_id == principal_id,
-        )
+        assigned_advertiser_ids = self._assigned_gam_advertiser_ids(principal_id)
+        visible_to_principal = self._visible_media_buy_clause(principal_id, assigned_advertiser_ids)
+        stmt = select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id, visible_to_principal)
         if media_buy_ids is not None:
             stmt = stmt.where(MediaBuy.media_buy_id.in_(media_buy_ids))
         if statuses is not None:
             stmt = stmt.where(MediaBuy.status.in_(statuses))
         return list(self._session.scalars(stmt).all())
+
+    def _assigned_gam_advertiser_ids(self, principal_id: str) -> set[str]:
+        return set(
+            self._session.scalars(
+                select(GamAdvertiser.advertiser_id).where(
+                    GamAdvertiser.tenant_id == self._tenant_id,
+                    GamAdvertiser.principal_id == principal_id,
+                )
+            ).all()
+        )
+
+    def _visible_media_buy_clause(self, principal_id: str, assigned_advertiser_ids: set[str]) -> Any:
+        native_or_owned = and_(
+            or_(MediaBuy.source.is_(None), MediaBuy.source != "gam_import"),
+            MediaBuy.principal_id == principal_id,
+        )
+        if not assigned_advertiser_ids:
+            return native_or_owned
+        return or_(
+            native_or_owned,
+            and_(
+                MediaBuy.source == "gam_import",
+                MediaBuy.raw_request["gam_advertiser_id"].as_string().in_(assigned_advertiser_ids),
+            ),
+        )
+
+    def gam_import_is_assigned_to_principal(self, media_buy: MediaBuy, principal_id: str) -> bool:
+        """Return whether a materialized GAM import still belongs to principal_id.
+
+        GAM-imported rows are materialized snapshots of ``gam_orders``. Access
+        remains governed by the live ``gam_advertisers.principal_id`` assignment
+        so clearing or changing an advertiser assignment revokes stale rows that
+        were previously stamped with ``MediaBuy.principal_id``.
+        """
+        if media_buy.source != "gam_import":
+            return True
+
+        advertiser_id = (media_buy.raw_request or {}).get("gam_advertiser_id")
+        if not advertiser_id:
+            return False
+
+        return (
+            self._session.scalar(
+                select(GamAdvertiser.advertiser_id).where(
+                    GamAdvertiser.tenant_id == self._tenant_id,
+                    GamAdvertiser.advertiser_id == str(advertiser_id),
+                    GamAdvertiser.principal_id == principal_id,
+                )
+            )
+            is not None
+        )
+
+    def _filter_live_gam_import_assignments(self, media_buys: list[MediaBuy], principal_id: str) -> list[MediaBuy]:
+        """Hide materialized GAM imports whose advertiser assignment changed."""
+        imported = [buy for buy in media_buys if buy.source == "gam_import"]
+        if not imported:
+            return media_buys
+
+        assigned_advertiser_ids = self._assigned_gam_advertiser_ids(principal_id)
+
+        return [
+            buy
+            for buy in media_buys
+            if buy.source != "gam_import"
+            or str((buy.raw_request or {}).get("gam_advertiser_id")) in assigned_advertiser_ids
+        ]
 
     def get_active(self) -> list[MediaBuy]:
         """Get all active media buys for the tenant."""
@@ -213,7 +278,12 @@ class MediaBuyRepository:
             result.setdefault(pkg.media_buy_id, []).append(pkg)
         return result
 
-    def find_package_with_media_buy(self, package_id: str) -> tuple[MediaPackage, MediaBuy] | None:
+    def find_package_with_media_buy(
+        self,
+        package_id: str,
+        *,
+        principal_id: str | None = None,
+    ) -> tuple[MediaPackage, MediaBuy] | None:
         """Find a package and its parent media buy by package_id within the tenant.
 
         Useful when you only have a package_id and need to resolve the parent
@@ -231,7 +301,14 @@ class MediaBuyRepository:
         ).first()
         if result is None:
             return None
-        return result[0], result[1]
+        db_package, db_media_buy = result[0], result[1]
+        if principal_id is not None:
+            if db_media_buy.source == "gam_import":
+                if not self.gam_import_is_assigned_to_principal(db_media_buy, principal_id):
+                    return None
+            elif db_media_buy.principal_id != principal_id:
+                return None
+        return db_package, db_media_buy
 
     # ------------------------------------------------------------------
     # Tenant-wide list queries (for admin/dashboard)
