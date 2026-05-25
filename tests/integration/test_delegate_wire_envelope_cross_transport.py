@@ -114,6 +114,41 @@ def _call_a2a_raw(skill: str, parameters: dict[str, Any], authenticated_principa
     return run_on_app_loop(_factory)
 
 
+def _clear_framework_idempotency_cache_for_key(idempotency_key: str) -> None:
+    """Remove SDK-level idempotency cache entries for a test key.
+
+    The race-recovery wire test needs to drive the seller's DB-level
+    IntegrityError branch after creating the winning row. The SDK wrapper would
+    otherwise replay before the delegate is invoked, so the test clears the
+    framework cache while leaving the media_buy row intact.
+    """
+    from adcp.server.idempotency import MemoryBackend, PgBackend
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from core.platforms import gam, mock
+    from src.core.database.database_session import get_engine
+
+    seen_backend_ids: set[int] = set()
+    for store in (mock._IDEMPOTENCY, gam._IDEMPOTENCY):
+        backend = store.backend
+        backend_id = id(backend)
+        if backend_id in seen_backend_ids:
+            continue
+        seen_backend_ids.add(backend_id)
+        if isinstance(backend, MemoryBackend):
+            run_on_app_loop(lambda _app, b=backend: b.clear())
+        elif isinstance(backend, PgBackend):
+            try:
+                with get_engine().begin() as conn:
+                    conn.execute(text("DELETE FROM adcp_idempotency WHERE key = :key"), {"key": idempotency_key})
+            except SQLAlchemyError:
+                # Some tests run with MemoryBackend and no bootstrapped
+                # adcp_idempotency table. The MemoryBackend clear above is the
+                # relevant path there.
+                pass
+
+
 def _extract_a2a_data(body: dict[str, Any], *, expected_state: str) -> dict[str, Any]:
     """Extract the A2A task DataPart and assert the task state."""
     assert "error" not in body, f"A2A response should not be a top-level JSON-RPC error; got: {body!r}"
@@ -141,6 +176,15 @@ def _extract_a2a_adcp_error(body: dict[str, Any]) -> dict[str, Any]:
     data = _extract_a2a_data(body, expected_state="failed")
     adcp_error = data.get("adcp_error")
     assert adcp_error is not None, f"DataPart.data.adcp_error missing; got: {json.dumps(data)[:500]}"
+    return adcp_error
+
+
+def _extract_mcp_adcp_error(result: Any) -> dict[str, Any]:
+    """Extract the MCP ``structuredContent.adcp_error`` envelope."""
+    assert result.isError is True, f"Expected isError=True for MCP error result; got: {result!r}"
+    structured = result.structuredContent or {}
+    adcp_error = structured.get("adcp_error")
+    assert adcp_error is not None, f"Expected structuredContent.adcp_error envelope, got: {structured!r}"
     return adcp_error
 
 
@@ -222,6 +266,17 @@ def _conflicting_create_media_buy_payloads(
     return first_payload, conflict_payload
 
 
+def _missing_product_create_media_buy_payload(authenticated_principal: dict[str, str]) -> dict[str, Any]:
+    """Build a create payload that references a product outside the tenant catalog."""
+    payload = _create_media_buy_payload(
+        authenticated_principal,
+        idempotency_key=f"missing-product-{uuid.uuid4().hex}",
+        budget=1000.0,
+    )
+    payload["packages"][0]["product_id"] = "nonexistent_product"
+    return payload
+
+
 def _assert_idempotency_conflict_adcp_error(adcp_error: dict[str, Any], *, transport: str) -> None:
     """Assert the AdCP idempotency conflict wire envelope."""
     assert adcp_error.get("code") == "IDEMPOTENCY_CONFLICT", (
@@ -231,6 +286,39 @@ def _assert_idempotency_conflict_adcp_error(adcp_error: dict[str, Any], *, trans
         f"Expected recovery='correctable' on {transport} wire, got {adcp_error.get('recovery')!r}"
     )
     assert "field" not in adcp_error, "IDEMPOTENCY_CONFLICT must not include a field pointer"
+
+
+def _assert_product_not_found_adcp_error(adcp_error: dict[str, Any], *, transport: str) -> None:
+    """Assert nonexistent products use the spec-canonical wire error code."""
+    assert adcp_error.get("code") == "PRODUCT_NOT_FOUND", (
+        f"Expected code='PRODUCT_NOT_FOUND' on {transport} wire, got {adcp_error.get('code')!r}"
+    )
+    assert adcp_error.get("code") != "validation_error", "Legacy lowercase validation_error leaked onto the wire"
+    assert adcp_error.get("recovery") == "correctable", (
+        f"Expected recovery='correctable' on {transport} wire, got {adcp_error.get('recovery')!r}"
+    )
+    assert adcp_error.get("field") == "packages[].product_id", (
+        f"Expected field='packages[].product_id' on {transport} wire, got {adcp_error.get('field')!r}"
+    )
+
+
+def _assert_create_payload_preserves_package_fields(
+    payload: dict[str, Any],
+    authenticated_principal: dict[str, str],
+    *,
+    transport: str,
+) -> None:
+    """Assert replayed create responses preserve buyer-visible package fields."""
+    assert payload.get("media_buy_id"), f"Expected media_buy_id on {transport} create response; got: {payload!r}"
+    packages = payload.get("packages") or []
+    assert len(packages) == 1, f"Expected one package on {transport} create response; got: {payload!r}"
+    package = packages[0]
+    assert package.get("product_id") == authenticated_principal["product_id"], (
+        f"Expected product_id to round-trip on {transport} create response; got: {package!r}"
+    )
+    assert package.get("pricing_option_id") == "cpm_usd_fixed", (
+        f"Expected pricing_option_id to round-trip on {transport} create response; got: {package!r}"
+    )
 
 
 def _assert_mcp_create_success(result: Any) -> None:
@@ -345,10 +433,7 @@ def test_validation_error_wire_envelope_mcp(authenticated_principal) -> None:
 
     # CallToolResult: isError=True + structuredContent.adcp_error per
     # transport-errors.mdx §MCP Binding.
-    assert result.isError is True, f"Expected isError=True for delegate ValidationError; got result: {result!r}"
-    structured = result.structuredContent or {}
-    adcp_error = structured.get("adcp_error")
-    assert adcp_error is not None, f"Expected structuredContent.adcp_error envelope, got: {structured!r}"
+    adcp_error = _extract_mcp_adcp_error(result)
     assert adcp_error.get("code") == "INVALID_REQUEST", (
         f"Expected code='INVALID_REQUEST' on MCP wire, got {adcp_error.get('code')!r}. "
         f"Without the ValidationError translation, the framework wraps it as "
@@ -394,11 +479,123 @@ def test_idempotency_conflict_wire_envelope_mcp(authenticated_principal) -> None
         authenticated_principal,
     )
 
-    assert conflict.isError is True, f"Expected isError=True for idempotency conflict; got: {conflict!r}"
-    structured = conflict.structuredContent or {}
-    adcp_error = structured.get("adcp_error")
-    assert adcp_error is not None, f"Expected structuredContent.adcp_error envelope, got: {structured!r}"
+    adcp_error = _extract_mcp_adcp_error(conflict)
     _assert_idempotency_conflict_adcp_error(adcp_error, transport="MCP")
+
+
+@pytest.mark.requires_db
+def test_create_media_buy_replay_wire_payload_mcp(authenticated_principal) -> None:
+    """End-to-end MCP wire test: same-key replay marks the envelope and
+    preserves buyer-visible package fields.
+    """
+    payload = _create_media_buy_payload(
+        authenticated_principal,
+        idempotency_key=f"idem-replay-mcp-{uuid.uuid4().hex}",
+        budget=1000.0,
+    )
+
+    first = _call_mcp_raw("create_media_buy", payload, authenticated_principal)
+    _assert_mcp_create_success(first)
+    first_structured = first.structuredContent or {}
+    _assert_create_payload_preserves_package_fields(
+        first_structured,
+        authenticated_principal,
+        transport="initial MCP",
+    )
+
+    replay = _call_mcp_raw("create_media_buy", payload, authenticated_principal)
+
+    assert replay.isError is False, f"Expected successful replay for identical payload; got: {replay!r}"
+    replay_structured = replay.structuredContent or {}
+    assert replay_structured.get("media_buy_id") == first_structured.get("media_buy_id"), (
+        f"Expected replay to return same media_buy_id; got first={first_structured!r}, replay={replay_structured!r}"
+    )
+    assert replay_structured.get("replayed") is True, (
+        f"Expected replayed=true on MCP replay envelope; got: {replay_structured!r}"
+    )
+    _assert_create_payload_preserves_package_fields(
+        replay_structured,
+        authenticated_principal,
+        transport="MCP replay",
+    )
+
+
+@pytest.mark.requires_db
+def test_create_media_buy_integrity_race_replay_wire_payload_mcp(authenticated_principal, monkeypatch) -> None:
+    """End-to-end MCP wire test for the DB race-recovery replay branch.
+
+    The in-process ASGI harness runs on one event loop, so this deterministically
+    simulates the loser side of a parallel insert race: create the winning row,
+    clear only the SDK replay cache, hide the early DB idempotency lookup once,
+    and let the real unique constraint raise ``IntegrityError``. The response
+    still goes through the actual MCP dispatcher.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    payload = _create_media_buy_payload(
+        authenticated_principal,
+        idempotency_key=f"idem-race-mcp-{uuid.uuid4().hex}",
+        budget=1000.0,
+    )
+    first = _call_mcp_raw("create_media_buy", payload, authenticated_principal)
+    _assert_mcp_create_success(first)
+    first_structured = first.structuredContent or {}
+    _assert_create_payload_preserves_package_fields(
+        first_structured,
+        authenticated_principal,
+        transport="initial MCP race winner",
+    )
+
+    _clear_framework_idempotency_cache_for_key(payload["idempotency_key"])
+
+    original_find = MediaBuyRepository.find_by_idempotency_key
+    hid_existing_row = False
+
+    def hide_existing_row_once(
+        self: MediaBuyRepository,
+        idempotency_key: str,
+        principal_id: str,
+    ) -> Any:
+        nonlocal hid_existing_row
+        if idempotency_key == payload["idempotency_key"] and not hid_existing_row:
+            hid_existing_row = True
+            return None
+        return original_find(self, idempotency_key, principal_id)
+
+    monkeypatch.setattr(MediaBuyRepository, "find_by_idempotency_key", hide_existing_row_once)
+
+    replay = _call_mcp_raw("create_media_buy", payload, authenticated_principal)
+
+    assert hid_existing_row, "Test did not force the early idempotency lookup miss"
+    assert replay.isError is False, f"Expected successful race recovery replay; got: {replay!r}"
+    replay_structured = replay.structuredContent or {}
+    assert replay_structured.get("media_buy_id") == first_structured.get("media_buy_id"), (
+        f"Expected race replay to return same media_buy_id; got "
+        f"first={first_structured!r}, replay={replay_structured!r}"
+    )
+    assert replay_structured.get("replayed") is True, (
+        f"Expected replayed=true on MCP race-recovery replay envelope; got: {replay_structured!r}"
+    )
+    _assert_create_payload_preserves_package_fields(
+        replay_structured,
+        authenticated_principal,
+        transport="MCP race-recovery replay",
+    )
+
+
+@pytest.mark.requires_db
+def test_nonexistent_product_wire_error_mcp(authenticated_principal) -> None:
+    """End-to-end MCP wire test: nonexistent products do not leak the legacy
+    lowercase ``validation_error`` code observed in #341.
+    """
+    result = _call_mcp_raw(
+        "create_media_buy",
+        _missing_product_create_media_buy_payload(authenticated_principal),
+        authenticated_principal,
+    )
+
+    adcp_error = _extract_mcp_adcp_error(result)
+    _assert_product_not_found_adcp_error(adcp_error, transport="MCP")
 
 
 @pytest.mark.requires_db
@@ -421,6 +618,54 @@ def test_idempotency_conflict_wire_envelope_a2a(authenticated_principal) -> None
     adcp_error = _extract_a2a_adcp_error(conflict)
 
     _assert_idempotency_conflict_adcp_error(adcp_error, transport="A2A")
+
+
+@pytest.mark.requires_db
+def test_create_media_buy_replay_wire_payload_a2a(authenticated_principal) -> None:
+    """End-to-end A2A wire test: same-key replay marks the task artifact and
+    preserves buyer-visible package fields.
+    """
+    payload = _create_media_buy_payload(
+        authenticated_principal,
+        idempotency_key=f"idem-replay-a2a-{uuid.uuid4().hex}",
+        budget=1000.0,
+    )
+
+    first = _call_a2a_raw("create_media_buy", payload, authenticated_principal)
+    first_data = _extract_a2a_data(first, expected_state="completed")
+    _assert_create_payload_preserves_package_fields(
+        first_data,
+        authenticated_principal,
+        transport="initial A2A",
+    )
+
+    replay = _call_a2a_raw("create_media_buy", payload, authenticated_principal)
+    replay_data = _extract_a2a_data(replay, expected_state="completed")
+
+    assert replay_data.get("media_buy_id") == first_data.get("media_buy_id"), (
+        f"Expected replay to return same media_buy_id; got first={first_data!r}, replay={replay_data!r}"
+    )
+    assert replay_data.get("replayed") is True, f"Expected replayed=true on A2A replay artifact; got: {replay_data!r}"
+    _assert_create_payload_preserves_package_fields(
+        replay_data,
+        authenticated_principal,
+        transport="A2A replay",
+    )
+
+
+@pytest.mark.requires_db
+def test_nonexistent_product_wire_error_a2a(authenticated_principal) -> None:
+    """End-to-end A2A wire test: nonexistent products publish
+    ``PRODUCT_NOT_FOUND`` in the failed task artifact.
+    """
+    body = _call_a2a_raw(
+        "create_media_buy",
+        _missing_product_create_media_buy_payload(authenticated_principal),
+        authenticated_principal,
+    )
+    adcp_error = _extract_a2a_adcp_error(body)
+
+    _assert_product_not_found_adcp_error(adcp_error, transport="A2A")
 
 
 @pytest.mark.requires_db
