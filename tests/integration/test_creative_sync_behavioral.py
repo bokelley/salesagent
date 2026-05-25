@@ -9,7 +9,7 @@ Covers: salesagent-xwkj, salesagent-11th, salesagent-0m59, salesagent-mi8l
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from adcp.types import CreativeAction
@@ -1092,10 +1092,8 @@ class TestProvenanceEnforcement:
 class TestMediaBuyStatusOnSync:
     """Media buy status transitions on creative assignment with real DB."""
 
-    def test_draft_with_approved_at_transitions_to_pending_creatives(self, integration_db):
-        """Covers: UC-006-MEDIA-BUY-STATUS-01 — draft + approved_at → pending_creatives."""
-        from datetime import datetime
-
+    def test_draft_with_approved_at_transitions_to_pending_start(self, integration_db):
+        """Covers: UC-006-MEDIA-BUY-STATUS-01 — draft + approved_at + assignment → pending_start."""
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -1109,6 +1107,8 @@ class TestMediaBuyStatusOnSync:
                 principal=principal,
                 status="draft",
                 approved_at=datetime(2026, 1, 1, tzinfo=UTC),
+                start_time=datetime.now(UTC) + timedelta(days=1),
+                end_time=datetime.now(UTC) + timedelta(days=8),
             )
             pkg = MediaPackageFactory(media_buy=media_buy)
             mb_id = media_buy.media_buy_id
@@ -1123,7 +1123,7 @@ class TestMediaBuyStatusOnSync:
         with get_db_session() as session:
             mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
             assert mb is not None
-            assert mb.status == "pending_creatives"
+            assert mb.status == "pending_start"
 
     def test_draft_without_approved_at_stays_draft(self, integration_db):
         """Covers: UC-006-MEDIA-BUY-STATUS-02 — draft without approved_at stays draft."""
@@ -1156,10 +1156,8 @@ class TestMediaBuyStatusOnSync:
             assert mb is not None
             assert mb.status == "draft"
 
-    def test_non_draft_status_unchanged(self, integration_db):
+    def test_active_status_unchanged(self, integration_db):
         """Covers: UC-006-MEDIA-BUY-STATUS-03 — active status not affected by assignment."""
-        from datetime import datetime
-
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -1191,8 +1189,6 @@ class TestMediaBuyStatusOnSync:
 
     def test_upsert_assignment_still_transitions(self, integration_db):
         """Covers: UC-006-MEDIA-BUY-STATUS-04 — upserted assignment triggers status check."""
-        from datetime import datetime
-
         from sqlalchemy import select
 
         from src.core.database.database_session import get_db_session
@@ -1206,6 +1202,8 @@ class TestMediaBuyStatusOnSync:
                 principal=principal,
                 status="draft",
                 approved_at=datetime(2026, 1, 1, tzinfo=UTC),
+                start_time=datetime.now(UTC) + timedelta(days=1),
+                end_time=datetime.now(UTC) + timedelta(days=8),
             )
             pkg = MediaPackageFactory(media_buy=media_buy)
             mb_id = media_buy.media_buy_id
@@ -1227,7 +1225,7 @@ class TestMediaBuyStatusOnSync:
         with get_db_session() as session:
             mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
             assert mb is not None
-            assert mb.status == "pending_creatives"
+            assert mb.status == "pending_start"
 
 
 # ---------------------------------------------------------------------------

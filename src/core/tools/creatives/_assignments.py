@@ -6,6 +6,7 @@ from typing import Any
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
+from src.core.tools.media_buy_create import _status_after_creative_attachment
 
 logger = logging.getLogger(__name__)
 
@@ -197,11 +198,22 @@ def _process_assignments(
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
 
-            # Update media buy status if needed (draft -> pending_creatives)
+            # Update media buy status if needed. ``pending_creatives`` means no
+            # creatives are assigned, so attaching creatives clears that blocker
+            # independently of creative review state.
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
-                if mb_obj.status == "draft" and mb_obj.approved_at is not None:
-                    mb_obj.status = "pending_creatives"
-                    logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
+                previous_status = mb_obj.status
+                next_status = _status_after_creative_attachment(
+                    current_status=previous_status,
+                    approved_at=mb_obj.approved_at,
+                    start_time=mb_obj.start_time,
+                    end_time=mb_obj.end_time,
+                )
+                if next_status is not None:
+                    mb_obj.status = next_status
+                    logger.info(
+                        f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from {previous_status} to {mb_obj.status}"
+                    )
 
             # UoW auto-commits on clean exit
 

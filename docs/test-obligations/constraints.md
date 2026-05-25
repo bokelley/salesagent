@@ -2038,12 +2038,12 @@ Then all creative formats allowed
 ### media_buy_status: Media Buy Status Transition
 **Obligation ID** CONSTR-MEDIA-BUY-STATUS-01
 **Layer** behavioral
-**Requirement:** draft + approved_at transitions to pending_creatives on assignment. Draft without approved_at stays draft. Non-draft unchanged.
+**Requirement:** pending_creatives means no creatives assigned. Approved draft or pending_creatives buys transition to date-based status when creatives are assigned. Draft without approved_at stays draft. Active/terminal statuses remain unchanged.
 **Scenario:**
 ```gherkin
 Given draft media buy with approved_at set
 When creative assigned
-Then status becomes pending_creatives
+Then status becomes pending_start or active
 ```
 **Priority:** P1
 **Affected by 3.6:** No

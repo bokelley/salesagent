@@ -1823,6 +1823,19 @@ class TestPendingCreativesVariantClassification:
         )
         assert _request_has_creatives(with_inline) is True
 
+        # Package-level creative assignments → True.
+        with_assignments = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_assignments": [{"creative_id": "cr_assigned"}],
+                }
+            ]
+        )
+        assert _request_has_creatives(with_assignments) is True
+
     @pytest.mark.asyncio
     async def test_config_disabled_auto_create_emits_variant_one(self):
         """Tenant-config-disabled auto_create still mints a buy → variant-1.
@@ -1928,6 +1941,57 @@ class TestInlineCreativeObligations:
         mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
 
     @pytest.mark.asyncio
+    async def test_inline_creatives_can_enter_manual_approval_path(self):
+        """Inline creatives are compatible with manual approval routing.
+
+        Covers: UC-002-ALT-WITH-INLINE-CREATIVES-05
+        """
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creatives": [
+                        {
+                            "creative_id": "inline_manual_1",
+                            "name": "Manual Review Ad",
+                            "format_id": {"agent_url": "https://creative.example.com/", "id": "display_300x250"},
+                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                            "variants": [],
+                        }
+                    ],
+                },
+            ]
+        )
+        product = _mock_product("prod_1")
+
+        with _PatchContext(products=[product], human_review_required=True) as pc:
+            with (
+                patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+                patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
+                patch("src.core.tools.media_buy_create.get_slack_notifier"),
+                patch("src.core.tools.media_buy_create.activity_feed"),
+                patch("src.core.tools.media_buy_create.get_audit_logger"),
+            ):
+                mock_upload.return_value = (req.packages, {"pkg-1": ["inline_manual_1"]})
+                mock_adapter = MagicMock()
+                mock_adapter.manual_approval_required = False
+                mock_adapter.manual_approval_operations = ["create_media_buy"]
+                mock_adapter_fn.return_value = mock_adapter
+
+                result = await _create_media_buy_impl(req=req, identity=pc.identity)
+
+        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert result.response.media_buy_id is not None
+        assert result.response.status == MediaBuyStatus.pending_start
+        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
+
+    @pytest.mark.asyncio
     async def test_inline_creative_format_validation(self):
         """Inline creative format IDs are validated via format spec lookup.
 
@@ -1947,30 +2011,27 @@ class TestInlineCreativeObligations:
         assert "FORMAT_VALIDATION_ERROR" in str(exc_info.value.details)
 
     @pytest.mark.asyncio
-    async def test_unapproved_creatives_may_trigger_manual_approval(self):
-        """Unapproved creatives may trigger manual approval path.
+    async def test_assigned_unapproved_creatives_do_not_hold_pending_creatives(self):
+        """Assigned creatives move the buy out of pending_creatives.
 
-        Covers: UC-002-ALT-WITH-INLINE-CREATIVES-05
+        Covers: UC-002-MAIN-21
 
         Note: The approval determination considers adapter settings and tenant
-        settings independently of creative state. Creative approval state
-        influences the media buy status post-creation.
+        settings independently of creative state. Creative approval state is
+        exposed through creative_approvals, not the media-buy status.
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
 
-        # When creatives are not approved, status reflects the creative-side blocker.
-        # Per AdCP, pending_creatives covers both "no creatives uploaded" and
-        # "creatives present but not yet approved" — both block activation pending
-        # buyer/system action on creatives.
+        # Per AdCP, pending_creatives means the buy has no creatives assigned.
+        # Once creatives are attached, status falls back to start/manual gates
+        # even if creative review is still pending.
         status = _determine_media_buy_status(
             manual_approval_required=False,
             has_creatives=True,
-            creatives_approved=False,
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
         )
-        # Unapproved creatives -> pending_creatives (waiting for creative approval)
-        assert status == "pending_creatives"
+        assert status == "pending_start"
 
 
 class TestProposalBasedObligations:

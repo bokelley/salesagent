@@ -723,13 +723,13 @@ These scenarios directly test the salesagent-goy2 fix.
 
 ### Media Buy Status Transition on Assignment (BR-RULE-040)
 
-#### Scenario: Draft media buy with approved_at transitions to pending_creatives (INV-1)
+#### Scenario: Approved draft media buy leaves creative-blocked status on assignment (INV-1)
 **Obligation ID** UC-006-MEDIA-BUY-STATUS-01
 **Layer** behavioral
 
 **Given** a media buy with status "draft" and approved_at = "2026-01-15T10:00:00Z"
 **When** a creative is assigned to a package in that media buy
-**Then** the media buy status transitions to "pending_creatives"
+**Then** the media buy status transitions to "pending_start" or "active" based on flight dates
 **Business Rule** BR-RULE-040 INV-1
 **Priority** P1 -- lifecycle transition
 
@@ -760,7 +760,7 @@ These scenarios directly test the salesagent-goy2 fix.
 **Given** a media buy with status "draft" and approved_at set
 **When** an existing creative assignment is updated (upsert)
 **Then** the status transition check still fires
-**And** the media buy transitions to "pending_creatives" if still in draft
+**And** the media buy transitions to date-based status if still in draft
 **Business Rule** BR-RULE-040 INV-4
 **Priority** P2 -- upsert trigger
 

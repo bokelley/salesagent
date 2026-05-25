@@ -1,5 +1,6 @@
 """Integration tests for update_media_buy creative assignment functionality."""
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -69,10 +70,12 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             principal_id="test_principal",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
-            start_date="2025-11-01",
-            end_date="2025-11-30",
-            start_time="2025-11-01T00:00:00Z",
-            end_time="2025-11-30T23:59:59Z",
+            start_date=(datetime.now(UTC) + timedelta(days=1)).date(),
+            end_date=(datetime.now(UTC) + timedelta(days=8)).date(),
+            start_time=datetime.now(UTC) + timedelta(days=1),
+            end_time=datetime.now(UTC) + timedelta(days=8),
+            status="pending_creatives",
+            approved_at=datetime(2026, 1, 1, tzinfo=UTC),
             raw_request={
                 "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
             },
@@ -179,6 +182,9 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         assert len(assignments) == 2
         assigned_creative_ids = {a.creative_id for a in assignments}
         assert assigned_creative_ids == {"creative_1", "creative_2"}
+        updated_buy = session.scalars(select(MediaBuy).filter_by(media_buy_id="test_buy_123")).first()
+        assert updated_buy is not None
+        assert updated_buy.status == "pending_start"
 
 
 @pytest.mark.requires_db

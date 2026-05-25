@@ -1006,7 +1006,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 4, 1, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, True, True, start, end, now) == "completed"
+        assert _determine_media_buy_status(False, True, start, end, now) == "completed"
 
     def test_active_when_in_flight_with_creatives(self):
         """UC-002-ST02: in-flight with approved creatives -> active.
@@ -1020,7 +1020,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, True, True, start, end, now) == "active"
+        assert _determine_media_buy_status(False, True, start, end, now) == "active"
 
     def test_pending_when_manual_approval_required(self):
         """UC-002-ST03: manual approval required -> pending_start.
@@ -1034,7 +1034,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(True, True, True, start, end, now) == "pending_start"
+        assert _determine_media_buy_status(True, True, start, end, now) == "pending_start"
 
     def test_pending_creatives_when_missing_creatives(self):
         """UC-002-ST04: no creatives -> pending_creatives.
@@ -1050,7 +1050,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 3, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, False, False, start, end, now) == "pending_creatives"
+        assert _determine_media_buy_status(False, False, start, end, now) == "pending_creatives"
 
     def test_pending_when_before_start(self):
         """UC-002-ST05: before start_time -> pending_start.
@@ -1064,7 +1064,7 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 2, 15, tzinfo=UTC)
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_start"
+        assert _determine_media_buy_status(False, True, start, end, now) == "pending_start"
 
     def test_pending_creatives_takes_precedence_over_future_start(self):
         """UC-002-ST06: no creatives + future start -> pending_creatives (not pending_start).
@@ -1084,26 +1084,41 @@ class TestCreateMediaBuyStatusDetermination:
         now = datetime(2026, 2, 15, tzinfo=UTC)
         future_start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
-        assert _determine_media_buy_status(False, False, False, future_start, end, now) == "pending_creatives", (
+        assert _determine_media_buy_status(False, False, future_start, end, now) == "pending_creatives", (
             "no creatives + future start must yield pending_creatives, not pending_start"
         )
 
         # Case 2: creatives present + future start -> pending_start
-        assert _determine_media_buy_status(False, True, True, future_start, end, now) == "pending_start", (
+        assert _determine_media_buy_status(False, True, future_start, end, now) == "pending_start", (
             "creatives present + future start must yield pending_start"
         )
 
         # Case 3: no creatives + in-flight (past start) -> pending_creatives
         in_flight_now = datetime(2026, 3, 15, tzinfo=UTC)
         past_start = datetime(2026, 3, 1, tzinfo=UTC)
-        assert (
-            _determine_media_buy_status(False, False, False, past_start, end, in_flight_now) == "pending_creatives"
-        ), "no creatives + in-flight must yield pending_creatives"
+        assert _determine_media_buy_status(False, False, past_start, end, in_flight_now) == "pending_creatives", (
+            "no creatives + in-flight must yield pending_creatives"
+        )
 
         # Case 4: creatives present + in-flight (past start) -> active
-        assert _determine_media_buy_status(False, True, True, past_start, end, in_flight_now) == "active", (
+        assert _determine_media_buy_status(False, True, past_start, end, in_flight_now) == "active", (
             "creatives present + in-flight must yield active"
         )
+
+    def test_assigned_creatives_leave_pending_creatives_even_before_review(self):
+        """UC-002-ST07: pending_creatives means no creatives assigned.
+
+        Creative review state is carried on package-level creative_approvals,
+        so once creatives are attached the media-buy status falls back to the
+        flight-date/manual-approval gates.
+        """
+        from src.core.tools.media_buy_create import _determine_media_buy_status
+
+        now = datetime(2026, 2, 15, tzinfo=UTC)
+        future_start = datetime(2026, 3, 1, tzinfo=UTC)
+        end = datetime(2026, 3, 31, tzinfo=UTC)
+
+        assert _determine_media_buy_status(False, True, future_start, end, now) == "pending_start"
 
 
 class TestCreateMediaBuyImplAuth:

@@ -58,6 +58,7 @@ from src.core.tools._gam_projection import (
     is_projected_media_buy_id,
     log_materialization_audit,
 )
+from src.core.tools.media_buy_create import _status_after_creative_attachment
 
 
 def _is_terminal_media_buy_state(status: str | None) -> bool:
@@ -87,6 +88,24 @@ def _is_terminal_media_buy_state(status: str | None) -> bool:
     if status is None:
         return False
     return status in MEDIA_BUY_TRANSITIONS and not MEDIA_BUY_TRANSITIONS[status]
+
+
+def _apply_creative_attachment_status_transition(media_buy_obj: Any, media_buy_id: str, reason: str) -> None:
+    """Advance media-buy status after creatives are attached, when applicable."""
+    previous_status = media_buy_obj.status
+    next_status = _status_after_creative_attachment(
+        current_status=previous_status,
+        approved_at=media_buy_obj.approved_at,
+        start_time=media_buy_obj.start_time,
+        end_time=media_buy_obj.end_time,
+    )
+    if next_status is None:
+        return
+
+    media_buy_obj.status = next_status
+    logger.info(
+        f"[UPDATE] Media buy {media_buy_id} transitioned from {previous_status} to {media_buy_obj.status} ({reason})"
+    )
 
 
 def _is_explicit_cancel_request(req: UpdateMediaBuyRequest) -> bool:
@@ -1221,18 +1240,13 @@ def _update_media_buy_impl(
                         )
                         session.add(assignment)
 
-                    # If media buy was approved (approved_at set) but is in draft status
-                    # (meaning it was approved without creatives), transition to pending_creatives
-                    # Check whenever creative_ids are being set (not just when new ones added)
-                    if (
-                        pkg_update.creative_ids
-                        and media_buy_obj.status == "draft"
-                        and media_buy_obj.approved_at is not None
-                    ):
-                        media_buy_obj.status = "pending_creatives"
-                        logger.info(
-                            f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
-                            f"(creative_ids: {pkg_update.creative_ids})"
+                    # Creative IDs attach creatives to the buy. Once attached,
+                    # pending_creatives clears independently of creative review state.
+                    if pkg_update.creative_ids:
+                        _apply_creative_attachment_status_transition(
+                            media_buy_obj,
+                            actual_media_buy_id,
+                            f"creative_ids: {pkg_update.creative_ids}",
                         )
 
                     # Flush to persist assignment changes within the session
@@ -1447,55 +1461,18 @@ def _update_media_buy_impl(
                             updated_assignments.append(creative_id)
                             new_assignments_created.append(creative_id)
 
-                    # State machine: creative_assignments may unblock two transitions.
-                    # 1. draft + approved_at → pending_creatives (approved without creatives).
-                    # 2. pending_creatives → pending_start/active (creatives now attached).
+                    # State machine: creative_assignments may unblock pending media buys.
                     #    Per spec/storyboard ``pending_creatives_to_start``, the buy state
                     #    advances when creatives are *attached*, independently of creative
                     #    review state — the two lifecycles are decoupled. ``_compute_status``
                     #    on the read path will derive pending_start/active from flight dates
                     #    once we clear the persisted blocker.
                     if pkg_update.creative_assignments and updated_assignments:
-                        if media_buy_obj.status == "draft" and media_buy_obj.approved_at is not None:
-                            media_buy_obj.status = "pending_creatives"
-                            logger.info(
-                                f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
-                                f"(creative_assignments processed: {updated_assignments})"
-                            )
-                        elif media_buy_obj.status == "pending_creatives" and (
-                            media_buy_obj.start_time is not None and media_buy_obj.end_time is not None
-                        ):
-                            # Clear the blocker so date-based status (pending_start/active)
-                            # takes over. Persist the date-derived value rather than
-                            # nulling out, so get_media_buys / response status agree.
-                            #
-                            # Per AdCP 3.0.6 spec text: ``pending_creatives`` is "media buy
-                            # is approved but has *no creatives assigned*" — the gate
-                            # clears on assignment, not on review approval. So the call
-                            # below intentionally hard-codes ``creatives_approved=True``;
-                            # creative review state is captured separately on
-                            # ``creative_approvals[*].approval_status`` in the read path.
-                            # Storyboard ``pending_creatives_to_start/assign_creative_to_package``
-                            # tests this exact transition.
-                            #
-                            # Note: ``_determine_media_buy_status`` (used on create) keeps
-                            # the buy at ``pending_creatives`` until creatives are
-                            # *approved* — that's the create-path's older read of the
-                            # spec, tracked as a follow-up to align with this transition.
-                            from src.core.tools.media_buy_create import _determine_media_buy_status
-
-                            media_buy_obj.status = _determine_media_buy_status(
-                                manual_approval_required=False,
-                                has_creatives=True,
-                                creatives_approved=True,
-                                start_time=media_buy_obj.start_time,
-                                end_time=media_buy_obj.end_time,
-                            )
-                            logger.info(
-                                f"[UPDATE] Media buy {actual_media_buy_id} transitioned from "
-                                f"pending_creatives to {media_buy_obj.status} "
-                                f"(creative_assignments processed: {updated_assignments})"
-                            )
+                        _apply_creative_attachment_status_transition(
+                            media_buy_obj,
+                            actual_media_buy_id,
+                            f"creative_assignments processed: {updated_assignments}",
+                        )
 
                     # Flush to persist assignment changes within the session
                     session.flush()

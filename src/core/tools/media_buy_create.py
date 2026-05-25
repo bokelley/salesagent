@@ -99,6 +99,14 @@ class PackageAssignmentDict(TypedDict):
     weight: int
 
 
+class RequestedCreativeAssignment(TypedDict):
+    """Normalized package creative binding from either supported request shape."""
+
+    creative_id: str
+    weight: int
+    placement_ids: list[str] | None
+
+
 logger = logging.getLogger(__name__)
 console = Console()
 
@@ -198,10 +206,57 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
     return getattr(package, "creative_ids", None)
 
 
+def _get_requested_creative_assignments(
+    package: AdcpPackageRequest | PackageRequest | Package | MediaPackage,
+) -> list[RequestedCreativeAssignment]:
+    """Normalize ``creative_ids`` and spec ``creative_assignments`` into bindings.
+
+    ``creative_ids`` is the legacy local shorthand. ``creative_assignments`` is
+    the AdCP placement/weight-aware shape. Create paths validate and persist
+    both through the same flow so the media-buy status and read path cannot
+    disagree about whether creatives are actually attached.
+    """
+    assignments_by_id: dict[str, RequestedCreativeAssignment] = {}
+
+    for creative_id in _get_creative_ids(package) or []:
+        assignments_by_id[str(creative_id)] = {
+            "creative_id": str(creative_id),
+            "weight": 100,
+            "placement_ids": None,
+        }
+
+    for assignment in getattr(package, "creative_assignments", None) or []:
+        creative_id = str(assignment.creative_id)
+        assignments_by_id[creative_id] = {
+            "creative_id": creative_id,
+            "weight": int(assignment.weight) if assignment.weight is not None else 100,
+            "placement_ids": list(assignment.placement_ids) if assignment.placement_ids is not None else None,
+        }
+
+    return list(assignments_by_id.values())
+
+
+def _get_requested_creative_ids(
+    package: AdcpPackageRequest | PackageRequest | Package | MediaPackage,
+) -> list[str] | None:
+    """Return all creative ids requested on a package, regardless of input shape."""
+    creative_ids = [assignment["creative_id"] for assignment in _get_requested_creative_assignments(package)]
+    return creative_ids or None
+
+
+def _build_creatives_not_found_error(missing_ids: set[str]) -> tuple[str, AdCPNotFoundError]:
+    """Build the canonical missing-creatives error for create-time assignment paths."""
+    error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
+    return error_msg, AdCPNotFoundError(
+        error_msg,
+        details={"error_code": "CREATIVES_NOT_FOUND"},
+        recovery="correctable",
+    )
+
+
 def _determine_media_buy_status(
     manual_approval_required: bool,
     has_creatives: bool,
-    creatives_approved: bool,
     start_time: datetime,
     end_time: datetime,
     now: datetime | None = None,
@@ -212,16 +267,15 @@ def _determine_media_buy_status(
 
     Status Priority (highest to lowest) - ALL SPEC-COMPLIANT:
     1. completed: Past end date (terminal — must check first)
-    2. pending_creatives: Missing or unapproved creatives — buyer's next action is
-       sync_creatives. Higher priority than pending_start because creatives are a
-       concrete missing artifact, not just a wall-clock wait.
+    2. pending_creatives: No creatives assigned — buyer's next action is
+       sync_creatives. Higher priority than pending_start because missing creatives
+       are a concrete missing artifact, not just a wall-clock wait.
     3. pending_start: Manual approval required OR scheduled for future start
-    4. active: Currently delivering (has creatives, approved, within flight dates)
+    4. active: Currently delivering (has creatives within flight dates)
 
     Args:
         manual_approval_required: Whether the media buy requires manual approval
         has_creatives: Whether creatives have been assigned
-        creatives_approved: Whether all assigned creatives are approved
         start_time: Campaign start datetime
         end_time: Campaign end datetime
         now: Current time (defaults to datetime.now(UTC))
@@ -240,7 +294,10 @@ def _determine_media_buy_status(
     # Priority 2: Pending creatives (higher than pending_start). Per AdCP, this is the
     # buyer's signal to call sync_creatives. A future-dated buy with no creatives is
     # blocked on creatives, not on the clock — pending_creatives wins.
-    if not has_creatives or not creatives_approved:
+    #
+    # Creative review state is reported separately on creative_approvals[*]; once
+    # creatives are attached, the buy leaves pending_creatives even if review is pending.
+    if not has_creatives:
         return MediaBuyStatus.pending_creatives.value
 
     # Priority 3: Pending start (manual approval gate or scheduled for future)
@@ -249,6 +306,35 @@ def _determine_media_buy_status(
 
     # Priority 4: Active (currently delivering - all conditions met)
     return MediaBuyStatus.active.value
+
+
+def _status_after_creative_attachment(
+    *,
+    current_status: str,
+    approved_at: datetime | None,
+    start_time: datetime | None,
+    end_time: datetime | None,
+    now: datetime | None = None,
+) -> str | None:
+    """Return the new media-buy status after creatives are attached, if any.
+
+    ``pending_creatives`` means no creatives are assigned. Once assignments exist,
+    creative review state remains on ``creative_approvals[*]`` and the buy status
+    falls back to manual approval / flight-date gates.
+    """
+    if current_status == "draft" and approved_at is None:
+        return None
+    if current_status not in {"draft", MediaBuyStatus.pending_creatives.value}:
+        return None
+    if start_time is None or end_time is None:
+        return MediaBuyStatus.pending_start.value
+    return _determine_media_buy_status(
+        manual_approval_required=False,
+        has_creatives=True,
+        start_time=start_time,
+        end_time=end_time,
+        now=now,
+    )
 
 
 def _request_has_creatives(req: CreateMediaBuyRequest) -> bool:
@@ -263,8 +349,9 @@ def _request_has_creatives(req: CreateMediaBuyRequest) -> bool:
     if not req.packages:
         return False
     for pkg in req.packages:
-        # Local PackageRequest extension: list of pre-uploaded creative ids
-        if _get_creative_ids(pkg):
+        # Local ``creative_ids`` and AdCP ``creative_assignments`` both attach
+        # pre-uploaded creatives to the package.
+        if _get_requested_creative_ids(pkg):
             return True
         # adcp PackageRequest: inline ``creatives`` list (full creative objects)
         inline = getattr(pkg, "creatives", None)
@@ -484,7 +571,7 @@ def _validate_creatives_before_adapter_call(
     # Collect all creative IDs from all packages
     all_creative_ids = set()
     for package in packages:
-        pkg_creative_ids = _get_creative_ids(package)
+        pkg_creative_ids = _get_requested_creative_ids(package)
         if pkg_creative_ids:
             all_creative_ids.update(pkg_creative_ids)
 
@@ -556,7 +643,7 @@ def _validate_creatives_before_adapter_call(
     # Collect all product_ids from packages that have creatives
     product_ids_needed: set[str] = set()
     for package in packages:
-        pkg_creative_ids = _get_creative_ids(package)
+        pkg_creative_ids = _get_requested_creative_ids(package)
         if pkg_creative_ids and package.product_id:
             product_ids_needed.add(package.product_id)
 
@@ -581,7 +668,7 @@ def _validate_creatives_before_adapter_call(
 
         # Check each package's creatives against its product's accepted formats
         for package in packages:
-            pkg_creative_ids = _get_creative_ids(package)
+            pkg_creative_ids = _get_requested_creative_ids(package)
             if not pkg_creative_ids or not package.product_id:
                 continue
 
@@ -2669,7 +2756,7 @@ async def _create_media_buy_impl(
                                     "pricing_option_id": getattr(req_pkg, "pricing_option_id", None),
                                     "budget": budget_value,
                                     "targeting_overlay": req_pkg.targeting_overlay,
-                                    "creative_ids": _get_creative_ids(req_pkg),
+                                    "creative_ids": _get_requested_creative_ids(req_pkg),
                                     "format_ids": req_pkg.format_ids,
                                     "canceled": getattr(pkg_obj, "canceled", False),
                                     "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
@@ -2733,7 +2820,7 @@ async def _create_media_buy_impl(
                     # Batch load all creatives upfront
                     all_creative_ids = []
                     for package in req.packages:
-                        pkg_cids = _get_creative_ids(package)
+                        pkg_cids = _get_requested_creative_ids(package)
                         if pkg_cids:
                             all_creative_ids.extend(pkg_cids)
 
@@ -2747,6 +2834,13 @@ async def _create_media_buy_impl(
                         creatives_map = {str(c.creative_id): c for c in creatives_list}
                         logger.info(f"[CREATIVE_ASSIGN_DEBUG] Loaded {len(creatives_map)} creatives from database")
 
+                        missing_ids = set(all_creative_ids) - set(creatives_map.keys())
+                        if missing_ids:
+                            error_msg, error = _build_creatives_not_found_error(missing_ids)
+                            logger.error(error_msg)
+                            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
+                            raise error
+
                         # Validate creative formats against product formats BEFORE creating assignments
                         # This ensures creatives match the product's supported formats
                         # Validation happens at assignment time (not sync time) because:
@@ -2756,7 +2850,7 @@ async def _create_media_buy_impl(
                         from src.core.helpers import validate_creative_format_against_product
 
                         for package in req.packages:
-                            pkg_cids = _get_creative_ids(package)
+                            pkg_cids = _get_requested_creative_ids(package)
                             if pkg_cids and package.product_id:
                                 # Load product to check supported formats
                                 product_for_format_validation_stmt = select(ModelProduct).where(
@@ -2803,8 +2897,8 @@ async def _create_media_buy_impl(
 
                     # Create assignments for each package
                     for i, package in enumerate(req.packages):
-                        pkg_cids = _get_creative_ids(package)
-                        if pkg_cids:
+                        requested_assignments = _get_requested_creative_assignments(package)
+                        if requested_assignments:
                             # Get package_id from pending_packages (already generated)
                             pkg_id: str | None = pending_packages[i].package_id if i < len(pending_packages) else None
                             if not pkg_id:
@@ -2812,10 +2906,12 @@ async def _create_media_buy_impl(
                                 continue
 
                             logger.info(
-                                f"[CREATIVE_ASSIGN_DEBUG] Creating assignments for package {pkg_id}, creative_ids: {pkg_cids}"
+                                f"[CREATIVE_ASSIGN_DEBUG] Creating assignments for package {pkg_id}, creative_ids: "
+                                f"{[a['creative_id'] for a in requested_assignments]}"
                             )
 
-                            for creative_id in pkg_cids:
+                            for requested_assignment in requested_assignments:
+                                creative_id = requested_assignment["creative_id"]
                                 creative = creatives_map.get(creative_id)
                                 if not creative:
                                     logger.warning(f"Creative {creative_id} not found in database, skipping assignment")
@@ -2830,6 +2926,8 @@ async def _create_media_buy_impl(
                                     media_buy_id=media_buy_id,
                                     package_id=pkg_id,
                                     creative_id=creative_id,
+                                    weight=requested_assignment["weight"],
+                                    placement_ids=requested_assignment["placement_ids"],
                                 )
                                 session.add(assignment)
                                 logger.info(
@@ -3314,7 +3412,7 @@ async def _create_media_buy_impl(
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
                     creative_ids=(
-                        _get_creative_ids(matching_package) if matching_package else None
+                        _get_requested_creative_ids(matching_package) if matching_package else None
                     ),  # Include creative_ids from uploaded creatives
                 )
             )
@@ -3431,34 +3529,21 @@ async def _create_media_buy_impl(
         assert step is not None, "step should be created when not in dry_run mode"
         assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
 
-        # Determine initial status using centralized logic
-        # Check if creatives are assigned and approved
-        has_creatives = False
-        creatives_approved = True  # Assume approved if any exist
-
-        # Check packages for creative_ids
-        if req.packages:
-            for pkg in req.packages:
-                if _get_creative_ids(pkg):
-                    has_creatives = True
-                    # For now, assume creatives in request are not yet approved
-                    # They need to go through sync_creatives approval flow
-                    creatives_approved = False
-                    break
+        # Determine initial status using centralized logic.
+        has_creatives = _request_has_creatives(req)
 
         # Use centralized status determination
         now = datetime.now(UTC)
         media_buy_status = _determine_media_buy_status(
             manual_approval_required=False,  # This path only runs when approval NOT required
             has_creatives=has_creatives,
-            creatives_approved=creatives_approved,
             start_time=start_time,
             end_time=end_time,
             now=now,
         )
         logger.info(
             f"[STATUS] Media buy {response.media_buy_id}: manual_approval=False, "
-            f"has_creatives={has_creatives}, creatives_approved={creatives_approved} → status={media_buy_status}"
+            f"has_creatives={has_creatives} → status={media_buy_status}"
         )
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
@@ -3671,7 +3756,7 @@ async def _create_media_buy_impl(
                 # Batch load all creatives upfront to avoid N+1 queries
                 all_creative_ids = []
                 for package in req.packages:
-                    pkg_cids = _get_creative_ids(package)
+                    pkg_cids = _get_requested_creative_ids(package)
                     if pkg_cids:
                         all_creative_ids.extend(pkg_cids)
 
@@ -3690,14 +3775,10 @@ async def _create_media_buy_impl(
                     missing_ids = requested_creative_ids - found_creative_ids
 
                     if missing_ids:
-                        error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
+                        error_msg, error = _build_creatives_not_found_error(missing_ids)
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        raise AdCPNotFoundError(
-                            error_msg,
-                            details={"error_code": "CREATIVES_NOT_FOUND"},
-                            recovery="correctable",
-                        )
+                        raise error
 
                     # Validate creative formats against product formats BEFORE creating assignments
                     # This ensures creatives match the product's supported formats
@@ -3708,7 +3789,7 @@ async def _create_media_buy_impl(
                     from src.core.helpers import validate_creative_format_against_product
 
                     for package in req.packages:
-                        pkg_cids = _get_creative_ids(package)
+                        pkg_cids = _get_requested_creative_ids(package)
                         if pkg_cids and package.product_id:
                             # Load product to check supported formats
                             product_format_check_stmt = select(ModelProduct).where(
@@ -3757,8 +3838,8 @@ async def _create_media_buy_impl(
                                         )
 
                 for i, package in enumerate(req.packages):
-                    pkg_cids = _get_creative_ids(package)
-                    if pkg_cids:
+                    requested_assignments = _get_requested_creative_assignments(package)
+                    if requested_assignments:
                         # Use package_id from response (matches what's in media_packages table)
                         # NO FALLBACK - if adapter doesn't return package_id, fail loudly
                         response_package_id = None
@@ -3781,7 +3862,8 @@ async def _create_media_buy_impl(
                         # Collect platform creative IDs for association
                         platform_creative_ids = []
 
-                        for creative_id in pkg_cids:
+                        for requested_assignment in requested_assignments:
+                            creative_id = requested_assignment["creative_id"]
                             # Get creative from batch-loaded map
                             creative = creatives_by_id.get(creative_id)
 
@@ -3917,6 +3999,8 @@ async def _create_media_buy_impl(
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
                                 creative_id=creative_id,
+                                weight=requested_assignment["weight"],
+                                placement_ids=requested_assignment["placement_ids"],
                             )
                             session.add(assignment)
 

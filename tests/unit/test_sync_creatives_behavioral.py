@@ -2,7 +2,7 @@
 
 Locks current behavior for migration safety (Flask -> FastAPI).
 Tests organized by BR-RULE invariant, covering:
-- BR-RULE-040: Media buy status transitions (5 invariants, zero prior coverage)
+- BR-RULE-040: Media buy status transitions (6 invariants, zero prior coverage)
 - BR-RULE-033 inv2/inv3: Strict/lenient assignment modes
 - BR-RULE-037 inv6: Slack notification guard
 - BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode
@@ -10,7 +10,7 @@ Tests organized by BR-RULE invariant, covering:
 Reference: salesagent-1xsp design field.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -47,6 +47,8 @@ def _make_db_package():
         mb_status="draft",
         mb_approved_at=None,
         product_id=None,
+        start_time=None,
+        end_time=None,
     ):
         db_package = Mock()
         db_package.package_id = package_id
@@ -57,6 +59,8 @@ def _make_db_package():
         db_media_buy.media_buy_id = media_buy_id
         db_media_buy.status = mb_status
         db_media_buy.approved_at = mb_approved_at
+        db_media_buy.start_time = start_time or datetime.now(UTC) + timedelta(days=1)
+        db_media_buy.end_time = end_time or datetime.now(UTC) + timedelta(days=8)
 
         return db_package, db_media_buy
 
@@ -83,8 +87,9 @@ def _make_creative_uow(assignment_repo=None):
 class TestMediaBuyStatusTransitions:
     """BR-RULE-040: Media buy status transitions triggered by assignments.
 
-    When a creative is assigned to a package, the parent media buy's status
-    may transition from 'draft' to 'pending_creatives' if approved_at is set.
+    ``pending_creatives`` means no creatives are assigned. When a creative is
+    assigned to an approved or pending_creatives media buy, status falls back
+    to flight-date gates; unapproved drafts remain draft.
     """
 
     def _run_assignments(self, assignments, results, tenant, db_package, db_media_buy, db_creative=None):
@@ -122,8 +127,8 @@ class TestMediaBuyStatusTransitions:
                 validation_mode="strict",
             )
 
-    def test_draft_with_approved_at_transitions_to_pending_creatives(self, tenant, _make_db_package):
-        """rule-040-inv1: draft + approved_at -> pending_creatives."""
+    def test_draft_with_approved_at_transitions_to_pending_start(self, tenant, _make_db_package):
+        """rule-040-inv1: draft + approved_at + assignment -> pending_start."""
         db_package, db_media_buy = _make_db_package(
             mb_status="draft",
             mb_approved_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -138,7 +143,7 @@ class TestMediaBuyStatusTransitions:
             db_media_buy=db_media_buy,
         )
 
-        assert db_media_buy.status == "pending_creatives"
+        assert db_media_buy.status == "pending_start"
 
     def test_draft_without_approved_at_stays_draft(self, tenant, _make_db_package):
         """rule-040-inv2: draft without approved_at stays draft."""
@@ -158,8 +163,8 @@ class TestMediaBuyStatusTransitions:
 
         assert db_media_buy.status == "draft"
 
-    def test_non_draft_status_unchanged(self, tenant, _make_db_package):
-        """rule-040-inv3: non-draft status is not changed by assignments."""
+    def test_active_status_unchanged(self, tenant, _make_db_package):
+        """rule-040-inv3: active status is not changed by assignments."""
         db_package, db_media_buy = _make_db_package(
             mb_status="active",
             mb_approved_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -213,8 +218,8 @@ class TestMediaBuyStatusTransitions:
                 validation_mode="strict",
             )
 
-        # Status should be pending_creatives (transitioned once, not twice)
-        assert db_media_buy.status == "pending_creatives"
+        # Status should transition once, not once per creative.
+        assert db_media_buy.status == "pending_start"
 
     def test_both_created_and_updated_trigger_check(self, tenant, _make_db_package):
         """rule-040-inv5: both action=created and action=updated creatives trigger status check."""
@@ -253,7 +258,25 @@ class TestMediaBuyStatusTransitions:
                 validation_mode="strict",
             )
 
-        assert db_media_buy.status == "pending_creatives"
+        assert db_media_buy.status == "pending_start"
+
+    def test_pending_creatives_transitions_to_pending_start(self, tenant, _make_db_package):
+        """rule-040-inv6: pending_creatives clears once creatives are assigned."""
+        db_package, db_media_buy = _make_db_package(
+            mb_status="pending_creatives",
+            mb_approved_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        results = [SyncCreativeResult(creative_id="c1", action="created")]
+
+        self._run_assignments(
+            assignments={"c1": ["pkg_1"]},
+            results=results,
+            tenant=tenant,
+            db_package=db_package,
+            db_media_buy=db_media_buy,
+        )
+
+        assert db_media_buy.status == "pending_start"
 
 
 # ========================================================================
