@@ -452,6 +452,23 @@ def test_validation_error_wire_envelope_mcp(authenticated_principal) -> None:
 
 
 @pytest.mark.requires_db
+def test_create_media_buy_unknown_field_rejected_mcp(authenticated_principal) -> None:
+    """Dev-mode MCP create calls must fail loudly on unknown top-level fields."""
+    payload = _create_media_buy_payload(
+        authenticated_principal,
+        idempotency_key=f"unknown-field-mcp-{uuid.uuid4().hex}",
+        budget=1000.0,
+    )
+    payload["nonsense_field"] = "bar"
+
+    result = _call_mcp_raw("create_media_buy", payload, authenticated_principal)
+
+    assert result.isError is True, f"Expected unknown create_media_buy field to fail; got: {result!r}"
+    assert "nonsense_field" in repr(result)
+    assert "media_buy_id" not in (result.structuredContent or {})
+
+
+@pytest.mark.requires_db
 def test_idempotency_conflict_wire_envelope_mcp(authenticated_principal) -> None:
     """End-to-end MCP wire test: same ``idempotency_key`` plus a different
     canonical payload surfaces as ``IDEMPOTENCY_CONFLICT`` with

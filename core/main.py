@@ -33,6 +33,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Callable
+from typing import Any
 
 from a2wsgi import WSGIMiddleware
 from adcp.decisioning import (
@@ -90,6 +92,8 @@ from src.core.signing import SigningVerifyMiddleware
 
 logger = logging.getLogger(__name__)
 
+PreValidationHook = Callable[[str, dict[str, Any]], dict[str, Any]]
+
 
 # Tools callable without a bearer token. Buyers need to discover the agent
 # before they have credentials.
@@ -109,6 +113,89 @@ AUTH_OPTIONAL_TOOLS = frozenset(
         "list_creative_formats",
     }
 )
+
+
+def _strict_request_fields_by_tool() -> dict[str, set[str]]:
+    """Return request fields salesagent supports for each AdCP tool.
+
+    The SDK's library request models intentionally allow extra fields, but
+    salesagent's local request models are strict in dev/CI. This map restores
+    that local strictness at the wire boundary before permissive SDK models can
+    accept or drop unknown fields.
+    """
+    from src.core.schemas import (
+        CreateMediaBuyRequest,
+        GetMediaBuyDeliveryRequest,
+        GetMediaBuysRequest,
+        GetProductsRequest,
+        GetSignalsRequest,
+        ListCreativeFormatsRequest,
+        ListCreativesRequest,
+        SyncCreativesRequest,
+        UpdateMediaBuyRequest,
+    )
+
+    return {
+        "create_media_buy": set(CreateMediaBuyRequest.model_fields),
+        "get_media_buy_delivery": set(GetMediaBuyDeliveryRequest.model_fields),
+        "get_media_buys": set(GetMediaBuysRequest.model_fields),
+        "get_products": set(GetProductsRequest.model_fields),
+        "get_signals": set(GetSignalsRequest.model_fields),
+        "list_creative_formats": set(ListCreativeFormatsRequest.model_fields),
+        "list_creatives": {
+            "created_after",
+            "created_before",
+            "fields",
+            "filters",
+            "format",
+            "include_assignments",
+            "include_performance",
+            "include_sub_assets",
+            "limit",
+            "media_buy_id",
+            "media_buy_ids",
+            "page",
+            "search",
+            "sort_by",
+            "sort_order",
+            "status",
+            "tags",
+        }
+        | set(ListCreativesRequest.model_fields),
+        "sync_creatives": set(SyncCreativesRequest.model_fields),
+        # update_media_buy is advertised as separate media_buy_id + patch params,
+        # while the impl consumes a unified UpdateMediaBuyRequest.
+        "update_media_buy": {"media_buy_id", "patch"} | set(UpdateMediaBuyRequest.model_fields),
+    }
+
+
+def _with_dev_unknown_field_rejection(
+    hooks: dict[str, PreValidationHook],
+) -> dict[str, PreValidationHook]:
+    """Compose SDK spec-compat hooks with salesagent strict-extra checks."""
+    fields_by_tool = _strict_request_fields_by_tool()
+    wrapped: dict[str, PreValidationHook] = dict(hooks)
+
+    def make_hook(tool_name: str, base_hook: PreValidationHook | None, known_fields: set[str]) -> PreValidationHook:
+        def hook(name: str, params: dict[str, Any]) -> dict[str, Any]:
+            normalized = base_hook(name, params) if base_hook is not None else params
+            from src.core.request_compat import normalize_request_params
+
+            normalized = normalize_request_params(tool_name, normalized).params
+            from src.core.config import is_production
+
+            if not is_production():
+                unknown = sorted(normalized.keys() - known_fields)
+                if unknown:
+                    fields = ", ".join(unknown)
+                    raise ValueError(f"Unknown field(s) for {tool_name}: {fields}")
+            return normalized
+
+        return hook
+
+    for tool_name, known_fields in fields_by_tool.items():
+        wrapped[tool_name] = make_hook(tool_name, wrapped.get(tool_name), known_fields)
+    return wrapped
 
 
 # ---- Tenant resolution (uses adcp PR #544 CallableSubdomainTenantRouter) ----
@@ -737,7 +824,7 @@ def _serve_kwargs(
         # symbol the SDK's own test suite uses for the same reason. Drop
         # this when 6.0 ships or when we update tests to declare
         # ``adcp_version`` explicitly.
-        "pre_validation_hooks": _spec_compat_hooks_impl(),
+        "pre_validation_hooks": _with_dev_unknown_field_rejection(_spec_compat_hooks_impl()),
         "on_startup": on_startup,
         "on_shutdown": on_shutdown,
     }

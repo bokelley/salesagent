@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
@@ -24,7 +25,7 @@ class RequestCompatMiddleware(Middleware):
 
     Three-stage pipeline:
     1. Translate deprecated field names via normalize_request_params()
-    2. Strip fields not in the tool's JSON Schema via strip_unknown_params()
+    2. Reject unknown fields in development, strip them in production
     3. (Production only) If TypeAdapter rejects the arguments with a structural
        validation error, erase complex types to raw dicts via JSON round-trip
        and retry. This lets our Pydantic models (with extra='ignore') be the
@@ -53,16 +54,16 @@ class RequestCompatMiddleware(Middleware):
         if compat_result.translations_applied:
             modified = True
 
-        # Step 2: Strip unknown fields (schema-aware, production only)
-        # In dev mode, unknown fields reach TypeAdapter and fail loudly —
-        # this is how we detect that the seller agent doesn't support a
-        # field the spec requires. In production, strip silently to avoid
-        # rejecting callers using newer schema versions.
+        # Step 2: Handle unknown fields (schema-aware, environment-specific).
+        # The SDK's permissive FastMCP argument model strips unknown fields
+        # before our strict request models can reject them, so dev/CI must fail
+        # here. Production strips silently to avoid rejecting callers using
+        # newer schema versions.
         from src.core.config import is_production
 
-        if is_production():
-            known_params = await self._get_known_params(context, tool_name)
-            if known_params is not None:
+        known_params = await self._get_known_params(context, tool_name)
+        if known_params is not None:
+            if is_production():
                 normalized, stripped = strip_unknown_params(normalized, known_params)
                 if stripped:
                     modified = True
@@ -71,6 +72,11 @@ class RequestCompatMiddleware(Middleware):
                         tool_name,
                         ", ".join(stripped),
                     )
+            else:
+                unknown = sorted(normalized.keys() - known_params)
+                if unknown:
+                    fields = ", ".join(unknown)
+                    raise ToolError(f"Unknown field(s) for {tool_name}: {fields}")
 
         if modified:
             new_message = CallToolRequestParams(

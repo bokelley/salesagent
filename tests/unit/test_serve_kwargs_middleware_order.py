@@ -133,11 +133,21 @@ def test_pre_validation_hooks_do_not_default_account_refs():
     hooks = kwargs.get("pre_validation_hooks")
     assert hooks is not None, "pre_validation_hooks missing — pre-v3 buyer payloads will fail validation"
 
-    account_required_tools = {"create_media_buy", "sync_accounts", "activate_signal"}
+    account_required_tools = {"sync_accounts", "activate_signal"}
     unexpected_hooks = sorted(account_required_tools.intersection(hooks))
     assert not unexpected_hooks, (
         f"pre_validation_hooks must not mask missing account refs with seller-specific defaults: {unexpected_hooks}"
     )
+    create_hook = hooks.get("create_media_buy")
+    assert create_hook is not None, "create_media_buy needs strict dev-mode unknown-field rejection"
+
+    payload = {"brand": {"domain": "example.com"}}
+    normalized = create_hook("create_media_buy", payload)
+    assert "account" not in normalized
+    assert "account_id" not in normalized
+
+    with pytest.raises(ValueError, match="campaign_ref"):
+        create_hook("create_media_buy", {"campaign_ref": "old-ref"})
 
 
 def test_signing_verify_runs_last(middleware_classes):

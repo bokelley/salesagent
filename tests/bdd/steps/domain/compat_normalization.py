@@ -100,11 +100,25 @@ def then_result_contains_buyer_campaign_ref(compat_result: dict, value: str) -> 
     assert params["buyer_campaign_ref"] == value
 
 
+@then(parsers.parse('the result contains campaign_ref "{value}"'))
+def then_result_contains_campaign_ref(compat_result: dict, value: str) -> None:
+    """Verify campaign_ref remains visible for strict validation."""
+    params = compat_result["normalization_result"].params
+    assert params["campaign_ref"] == value
+
+
 @then("the result does not contain campaign_ref")
 def then_no_campaign_ref(compat_result: dict) -> None:
     """Verify campaign_ref was removed."""
     params = compat_result["normalization_result"].params
     assert "campaign_ref" not in params
+
+
+@then("the result does not contain buyer_campaign_ref")
+def then_no_buyer_campaign_ref(compat_result: dict) -> None:
+    """Verify buyer_campaign_ref was not synthesized."""
+    params = compat_result["normalization_result"].params
+    assert "buyer_campaign_ref" not in params
 
 
 @then(parsers.parse('the result contains account with account_id "{value}"'))

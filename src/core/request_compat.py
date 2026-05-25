@@ -116,12 +116,10 @@ def normalize_request_params(
 
     # --- Tool-scoped translations ---
 
-    # campaign_ref → buyer_campaign_ref (create_media_buy only)
-    if "campaign_ref" in result:
-        if tool_name == "create_media_buy" and "buyer_campaign_ref" not in result:
-            result["buyer_campaign_ref"] = result["campaign_ref"]
-            translations.append("campaign_ref → buyer_campaign_ref")
-        del result["campaign_ref"]
+    # campaign_ref was removed from create_media_buy alongside
+    # buyer_campaign_ref. Leave it visible so strict validation rejects the
+    # actual unsupported buyer field instead of translating it to another
+    # unsupported name.
 
     # brand_manifest → brand (get_products, create_media_buy only)
     if "brand_manifest" in result:
@@ -130,14 +128,16 @@ def normalize_request_params(
             if brand_ref is not None:
                 result["brand"] = brand_ref
                 translations.append("brand_manifest → brand")
-        del result["brand_manifest"]
+        if tool_name in _BRAND_TOOLS:
+            del result["brand_manifest"]
 
     # promoted_offerings → catalogs (get_products)
     if "promoted_offerings" in result:
-        if "catalogs" not in result:
+        if tool_name == "get_products" and "catalogs" not in result:
             result["catalogs"] = result["promoted_offerings"]
             translations.append("promoted_offerings → catalogs")
-        del result["promoted_offerings"]
+        if tool_name == "get_products":
+            del result["promoted_offerings"]
 
     # --- Package-level translations ---
     if "packages" in result and isinstance(result["packages"], list):

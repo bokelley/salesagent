@@ -15,10 +15,10 @@ Feature: Deprecated field normalization across transports
     And the brand was resolved with domain "acme.com"
 
   @T-COMPAT-001-campaign-ref
-  Scenario: campaign_ref is renamed to buyer_campaign_ref
+  Scenario: campaign_ref remains visible for strict validation
     When the normalizer translates campaign_ref "camp-123" for create_media_buy
-    Then the result contains buyer_campaign_ref "camp-123"
-    And the result does not contain campaign_ref
+    Then the result contains campaign_ref "camp-123"
+    And the result does not contain buyer_campaign_ref
 
   @T-COMPAT-001-account-id
   Scenario: account_id string is wrapped in account object

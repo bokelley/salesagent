@@ -442,11 +442,9 @@ async def _delegate_get_products(req: GetProductsRequest, ctx: RequestContext[An
     Note: typed ``req: GetProductsRequest`` here documents intent but
     the SDK resolves ``params_model`` from the platform router's base
     class advertisement, not from this delegate or the platform
-    subclass override. Unknown-field rejection (dev-mode strict-extra)
-    is therefore not enforced at the wire boundary today —
-    ``tests/integration/test_mcp_unknown_field_handling.py``'s
-    ``test_unknown_field_rejected`` is xfailed pending an upstream
-    SDK change.
+    subclass override. Dev-mode unknown-field rejection is restored at
+    the pre-validation-hook boundary in ``core.main`` before the SDK's
+    permissive library model can accept or drop extra fields.
     """
     identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, GetProductsRequest)

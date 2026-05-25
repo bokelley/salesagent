@@ -38,6 +38,18 @@ def _make_copied_context(original, **kwargs):
     return copied
 
 
+def _attach_tool_schema(ctx, properties: set[str]):
+    """Attach enough FastMCP context for RequestCompatMiddleware schema lookup."""
+    tool = MagicMock()
+    tool.parameters = {"properties": {name: {} for name in properties}}
+    server = MagicMock()
+    server.get_tool = AsyncMock(return_value=tool)
+    fastmcp_ctx = MagicMock()
+    fastmcp_ctx.fastmcp = server
+    ctx.fastmcp_context = fastmcp_ctx
+    return ctx
+
+
 class TestMiddlewareCallsNormalizer:
     """Middleware delegates to normalize_request_params."""
 
@@ -102,6 +114,26 @@ class TestMiddlewarePassthrough:
 
             ctx.copy.assert_not_called()
             call_next.assert_called_once_with(ctx)
+
+
+class TestMiddlewareUnknownFields:
+    """Unknown-field handling is environment-aware."""
+
+    @pytest.mark.asyncio
+    async def test_dev_mode_rejects_unknown_fields(self, middleware):
+        from fastmcp.exceptions import ToolError
+
+        ctx = _make_context("get_products", {"brief": "ads", "nonsense_field": "bar"})
+        _attach_tool_schema(ctx, {"brief"})
+        call_next = AsyncMock()
+
+        with (
+            patch("src.core.config.is_production", return_value=False),
+            pytest.raises(ToolError, match="nonsense_field"),
+        ):
+            await middleware.on_call_tool(ctx, call_next)
+
+        call_next.assert_not_called()
 
 
 class TestShouldRetry:
