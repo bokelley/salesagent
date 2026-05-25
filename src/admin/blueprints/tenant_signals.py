@@ -57,6 +57,9 @@ _VALID_VALUE_TYPES = ("binary", "categorical", "numeric")
 _SIGNAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 # AdCP ``Tag`` regex — lowercase alphanumeric with `_` and `-` only.
 _TAG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+_MAX_TAG_LENGTH = 64
+_MAX_SIGNAL_NAME_LENGTH = 200
+_MAX_BULK_SIGNAL_IDS = 500
 # Display labels for the (multi-)adapter source list on the bulk-map UI
 # (#480). Keys match ``tenant.ad_server`` values.
 _ADAPTER_LABELS = {
@@ -106,7 +109,23 @@ def _normalize_tags(raw: str | list[str] | None) -> list[str]:
     bad = [t for t in pieces if not _TAG_PATTERN.match(t)]
     if bad:
         raise ValueError(f"invalid tag(s): {', '.join(bad)} (lowercase alnum + _- only)")
+    too_long = [t for t in pieces if len(t) > _MAX_TAG_LENGTH]
+    if too_long:
+        raise ValueError(f"tag(s) exceed {_MAX_TAG_LENGTH} characters: {', '.join(too_long)}")
     return sorted(set(pieces))
+
+
+def _validate_bulk_signal_ids(signal_ids: Any) -> list[str]:
+    if not isinstance(signal_ids, list) or not signal_ids:
+        raise ValueError("signal_ids must be a non-empty list")
+    if len(signal_ids) > _MAX_BULK_SIGNAL_IDS:
+        raise ValueError(f"signal_ids cannot contain more than {_MAX_BULK_SIGNAL_IDS} entries")
+    return [str(sid) for sid in signal_ids]
+
+
+def _validate_signal_name_length(name: str, *, subject: str = "name") -> None:
+    if len(name) > _MAX_SIGNAL_NAME_LENGTH:
+        raise ValueError(f"{subject} must be {_MAX_SIGNAL_NAME_LENGTH} characters or fewer")
 
 
 def _parse_float(raw: str | None) -> float | None:
@@ -813,6 +832,14 @@ def edit_signal(tenant_id: str, signal_id: str):
 _BULK_OPS = ("add_tag", "remove_tag", "rename_prefix", "rename_suffix")
 
 
+def _bulk_rename_candidate(signal: TenantSignal, op_name: str, value: str) -> str | None:
+    if op_name == "rename_prefix":
+        return None if signal.name.startswith(value) else f"{value}{signal.name}"
+    if op_name == "rename_suffix":
+        return None if signal.name.endswith(value) else f"{signal.name}{value}"
+    return None
+
+
 def _apply_bulk_update(
     repo: TenantSignalRepository, signal_ids: list[str], op_name: str, value: str
 ) -> tuple[list[str], list[str]]:
@@ -837,18 +864,14 @@ def _apply_bulk_update(
                 updated.append(signal.signal_id)
             else:
                 skipped.append(signal.signal_id)
-        elif op_name == "rename_prefix":
-            if not signal.name.startswith(value):
-                signal.name = f"{value}{signal.name}"
-                updated.append(signal.signal_id)
-            else:
+        elif op_name in ("rename_prefix", "rename_suffix"):
+            new_name = _bulk_rename_candidate(signal, op_name, value)
+            if new_name is None:
                 skipped.append(signal.signal_id)
-        elif op_name == "rename_suffix":
-            if not signal.name.endswith(value):
-                signal.name = f"{signal.name}{value}"
-                updated.append(signal.signal_id)
             else:
-                skipped.append(signal.signal_id)
+                _validate_signal_name_length(new_name, subject=f"renamed signal {signal.signal_id!r}")
+                signal.name = new_name
+                updated.append(signal.signal_id)
     return updated, skipped
 
 
@@ -876,8 +899,10 @@ def bulk_update(tenant_id: str):
     signal_ids = payload.get("signal_ids") or []
     op_name = payload.get("op")
     value = (payload.get("value") or "").strip()
-    if not isinstance(signal_ids, list) or not signal_ids:
-        return jsonify({"error": "signal_ids must be a non-empty list"}), 400
+    try:
+        signal_ids = _validate_bulk_signal_ids(signal_ids)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if op_name not in _BULK_OPS:
         return jsonify({"error": f"unsupported op: {op_name!r}"}), 400
     if not value:
@@ -896,7 +921,10 @@ def bulk_update(tenant_id: str):
         if session.get(Tenant, tenant_id) is None:
             return jsonify({"error": "tenant not found"}), 404
         repo = TenantSignalRepository(session, tenant_id)
-        updated, skipped = _apply_bulk_update(repo, signal_ids, op_name, value)
+        try:
+            updated, skipped = _apply_bulk_update(repo, signal_ids, op_name, value)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         session.commit()
 
     _notify_signal_catalog_changes(
@@ -952,8 +980,10 @@ def bulk_delete(tenant_id: str):
     payload = request.get_json(silent=True) or {}
     signal_ids = payload.get("signal_ids") or []
     confirm_typed = payload.get("confirm_typed") or ""
-    if not isinstance(signal_ids, list) or not signal_ids:
-        return jsonify({"error": "signal_ids must be a non-empty list"}), 400
+    try:
+        signal_ids = _validate_bulk_signal_ids(signal_ids)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     with get_db_session() as session:
         if session.get(Tenant, tenant_id) is None:
@@ -992,6 +1022,10 @@ def rename_signal(tenant_id: str, signal_id: str):
     new_name = (payload.get("name") or "").strip()
     if not new_name:
         return jsonify({"error": "name is required"}), 400
+    try:
+        _validate_signal_name_length(new_name)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with get_db_session() as session:
         repo = TenantSignalRepository(session, tenant_id)
         signal = repo.get_by_id(signal_id)

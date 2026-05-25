@@ -59,6 +59,13 @@ class TestNormalizeTags:
         with pytest.raises(ValueError, match="invalid tag"):
             _normalize_tags("has.dots")
 
+    def test_rejects_tags_over_64_characters(self):
+        from src.admin.blueprints.tenant_signals import _normalize_tags
+
+        too_long = "a" * 65
+        with pytest.raises(ValueError, match=too_long):
+            _normalize_tags(too_long)
+
 
 class TestGamAdminUrl:
     """Deep-link helper for the Maps-to panel (#481 #6)."""
@@ -305,6 +312,27 @@ class TestApplyBulkUpdate:
             assert updated == []
             assert skipped == ["s1"]
 
+    @pytest.mark.parametrize(
+        ("op_name", "value"),
+        [
+            ("rename_prefix", "prefix"),
+            ("rename_suffix", "suffix"),
+        ],
+    )
+    def test_rename_rejects_names_over_200_characters(self, integration_db, op_name, value):
+        from src.admin.blueprints.tenant_signals import _apply_bulk_update
+        from src.core.database.repositories.tenant_signal import TenantSignalRepository
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalTagsEnv() as env:
+            tenant = TenantFactory(tenant_id=f"bulk_rename_long_{op_name}")
+            TenantSignalFactory(tenant=tenant, signal_id="s1", name="a" * 195)
+            session = env.get_session()
+            repo = TenantSignalRepository(session, tenant.tenant_id)
+
+            with pytest.raises(ValueError, match="200 characters"):
+                _apply_bulk_update(repo, ["s1"], op_name, value)
+
 
 class TestApplyBulkDelete:
     """``_apply_bulk_delete`` enforces the reference-safety gate."""
@@ -416,3 +444,61 @@ class TestApplyBulkDelete:
 
             assert deleted == ["exists"]
             assert not_found == ["ghost"]
+
+
+class TestSignalsRoutesInputBounds:
+    """Route-level validation for request-body bounds."""
+
+    def test_bulk_update_rejects_more_than_500_signal_ids(self, authenticated_admin_session, integration_db):
+        from tests.factories import TenantFactory
+
+        with _SignalTagsEnv():
+            tenant = TenantFactory(tenant_id="bulk_update_bound_t1")
+            tenant_id = tenant.tenant_id
+
+        response = authenticated_admin_session.post(
+            f"/tenant/{tenant_id}/signals/bulk-update",
+            json={
+                "signal_ids": [f"s{i}" for i in range(501)],
+                "op": "add_tag",
+                "value": "premium",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "500" in response.get_json()["error"]
+
+    def test_bulk_delete_rejects_more_than_500_signal_ids(self, authenticated_admin_session, integration_db):
+        from tests.factories import TenantFactory
+
+        with _SignalTagsEnv():
+            tenant = TenantFactory(tenant_id="bulk_delete_bound_t1")
+            tenant_id = tenant.tenant_id
+
+        response = authenticated_admin_session.post(
+            f"/tenant/{tenant_id}/signals/bulk-delete",
+            json={
+                "signal_ids": [f"s{i}" for i in range(501)],
+                "confirm_typed": "DELETE",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "500" in response.get_json()["error"]
+
+    def test_rename_signal_rejects_names_over_200_characters(self, authenticated_admin_session, integration_db):
+        from tests.factories import TenantFactory, TenantSignalFactory
+
+        with _SignalTagsEnv():
+            tenant = TenantFactory(tenant_id="rename_bound_t1")
+            signal = TenantSignalFactory(tenant=tenant, signal_id="s1", name="Sports Fans")
+            tenant_id = tenant.tenant_id
+            signal_id = signal.signal_id
+
+        response = authenticated_admin_session.post(
+            f"/tenant/{tenant_id}/signals/{signal_id}/rename",
+            json={"name": "a" * 201},
+        )
+
+        assert response.status_code == 400
+        assert "200" in response.get_json()["error"]
