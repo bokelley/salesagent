@@ -10,6 +10,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 # Global registry of running approval threads
 _active_approvals: dict[str, threading.Thread] = {}
 _approval_lock = threading.Lock()
+
+
+def _generate_approval_id(order_id: str) -> str:
+    return f"approval_{order_id}_{uuid4().hex}"
 
 
 def start_order_approval_background(
@@ -64,7 +69,7 @@ def start_order_approval_background(
                 raise ValueError(f"Approval already running for order {order_id}: {approval.sync_id}")
 
         # Create new approval job
-        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+        approval_id = _generate_approval_id(order_id)
 
         approval_job = SyncJob(
             sync_id=approval_id,

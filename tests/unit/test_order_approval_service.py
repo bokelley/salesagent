@@ -91,6 +91,38 @@ def test_start_approval_creates_sync_job(mock_db_session):
     assert sync_job_call.progress["webhook_url"] == "https://example.com/webhook"
 
 
+def test_stale_approval_cleanup_does_not_remove_new_registry_entry(mock_db_session):
+    """A delayed old thread cleanup must not remove a newer approval entry."""
+    import src.services.order_approval_service as service
+
+    with (
+        patch(
+            "src.services.order_approval_service._generate_approval_id",
+            side_effect=["approval_12345_old", "approval_12345_new"],
+        ),
+        patch("src.services.order_approval_service._run_approval_thread"),
+    ):
+        old_id = start_order_approval_background(
+            order_id="12345",
+            media_buy_id="mb_123",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+        )
+        new_id = start_order_approval_background(
+            order_id="12345",
+            media_buy_id="mb_456",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+        )
+
+    with service._approval_lock:
+        service._active_approvals.pop(old_id, None)
+
+    active_approvals = get_active_approvals()
+    assert old_id not in active_approvals
+    assert new_id in active_approvals
+
+
 def test_start_approval_rejects_duplicate(mock_db_session):
     """Test that starting approval for same order fails."""
     from src.core.database.models import SyncJob
