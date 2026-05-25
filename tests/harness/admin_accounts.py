@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from html.parser import HTMLParser
 from typing import Any
 
 from sqlalchemy import delete
@@ -22,6 +23,27 @@ from src.core.database.models import Account, Tenant
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 logger = logging.getLogger(__name__)
+
+
+class _CsrfMetaParser(HTMLParser):
+    """Extract the admin CSRF token from the base template's meta tag."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.token: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "meta":
+            return
+        attr_map = dict(attrs)
+        if attr_map.get("name") == "csrf-token":
+            self.token = attr_map.get("content") or None
+
+
+def _extract_csrf_token(html: str) -> str | None:
+    parser = _CsrfMetaParser()
+    parser.feed(html)
+    return parser.token
 
 
 class _AdminResponse:
@@ -98,6 +120,7 @@ class AdminAccountEnv:
         # E2E mode: requests.Session
         self._session: Any = None
         self._base_url: str = ""
+        self._csrf_token: str | None = None
 
         self._tenant_id: str = self.DEFAULT_TENANT_ID
         self._created_account_ids: list[str] = []
@@ -203,6 +226,7 @@ class AdminAccountEnv:
             if self._session is not None:
                 self._session.close()
             self._session = requests.Session()
+            self._csrf_token = None
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -246,13 +270,33 @@ class AdminAccountEnv:
     def _get(self, url: str) -> _AdminResponse:
         if self._mode == "integration":
             return _AdminResponse.from_flask(self._flask_client.get(url))
-        return _AdminResponse.from_requests(self._session.get(url, allow_redirects=False))
+        response = self._session.get(url, allow_redirects=False)
+        self._capture_e2e_csrf_token(response)
+        return _AdminResponse.from_requests(response)
 
     def _e2e_csrf_headers(self) -> dict[str, str]:
-        """Same-origin Origin so the admin's CSRF before_request guard
-        (#32) accepts the POST. Integration mode runs with TESTING=True
-        and bypasses the guard entirely, so this only matters for e2e."""
-        return {"Origin": self._base_url.rstrip("/")}
+        """Headers that make e2e requests match browser-submitted admin requests."""
+        self._ensure_e2e_csrf_token()
+        headers = {"Origin": self._base_url.rstrip("/")}
+        if self._csrf_token:
+            headers["X-CSRF-Token"] = self._csrf_token
+        return headers
+
+    def _capture_e2e_csrf_token(self, response: Any) -> None:
+        content_type = response.headers.get("content-type", "")
+        if not content_type.startswith("text/html"):
+            return
+        token = _extract_csrf_token(response.text)
+        if token:
+            self._csrf_token = token
+
+    def _ensure_e2e_csrf_token(self) -> None:
+        if self._csrf_token:
+            return
+        response = self._session.get(self._url(), allow_redirects=False)
+        self._capture_e2e_csrf_token(response)
+        if not self._csrf_token:
+            raise RuntimeError(f"E2E admin CSRF token bootstrap failed: {response.status_code} {response.text[:200]}")
 
     def _post_form(self, url: str, data: dict[str, str]) -> _AdminResponse:
         if self._mode == "integration":

@@ -1,5 +1,6 @@
 """Flask application factory for Admin UI."""
 
+import hmac
 import json
 import logging
 import os
@@ -51,6 +52,28 @@ from src.core.domain_config import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_ADMIN_CSRF_SESSION_KEY = "_admin_csrf_token"
+_ADMIN_CSRF_HEADER_NAMES = ("X-CSRF-Token", "X-CSRFToken")
+_ADMIN_CSRF_FORM_FIELD = "csrf_token"
+
+
+def _get_submitted_admin_csrf_token() -> str:
+    """Return the CSRF token supplied on an unsafe admin request."""
+    for header_name in _ADMIN_CSRF_HEADER_NAMES:
+        token = request.headers.get(header_name)
+        if token:
+            return token
+    return request.form.get(_ADMIN_CSRF_FORM_FIELD, "")
+
+
+def _get_or_create_admin_csrf_token() -> str:
+    """Return the browser-session CSRF token used by admin templates."""
+    token = session.get(_ADMIN_CSRF_SESSION_KEY)
+    if not isinstance(token, str) or not token:
+        token = secrets.token_urlsafe(32)
+        session[_ADMIN_CSRF_SESSION_KEY] = token
+    return token
 
 
 def _sanitize_for_log(value, *, max_len: int = 200) -> str:
@@ -264,11 +287,12 @@ def create_app(config=None):
     app.cache = cache  # Make cache available to blueprints
 
     # CSRF defense: refuse mutating cookie-authed POSTs from third-party
-    # origins. The session cookie is ``SameSite=None`` for OAuth flow
-    # reasons, so the cookie rides cross-origin POSTs — only the
-    # Origin/Referer comparison reliably distinguishes a legitimate
+    # origins and require a positive session-bound token. The session
+    # cookie is ``SameSite=None`` for OAuth flow reasons, so the cookie
+    # rides cross-origin POSTs — Origin/Referer distinguishes a legitimate
     # admin form submission from an attacker's auto-submitting form on
-    # ``evil.example.com``.
+    # ``evil.example.com`` while the token is defense-in-depth against
+    # proxy/header misconfiguration.
     #
     # The guard runs as ``before_request`` on the whole app, but only
     # cookie-authed routes are vulnerable. The structural bypass — no
@@ -281,6 +305,18 @@ def create_app(config=None):
     # decorators (@require_api_key_auth, @require_auth) still enforce
     # their own credentials. Closes #32.
     _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+    @app.context_processor
+    def inject_csrf_token():
+        def csrf_token() -> str:
+            # Keep anonymous/public pages from minting a session cookie just
+            # because base.html renders the meta tag. Authenticated admin
+            # sessions already have keys in Flask's session object.
+            if not session:
+                return ""
+            return _get_or_create_admin_csrf_token()
+
+        return {"csrf_token": csrf_token}
 
     @app.before_request
     def enforce_admin_csrf():
@@ -319,7 +355,24 @@ def create_app(config=None):
         candidate = request.headers.get("Origin") or request.headers.get("Referer") or ""
         expected = request.host_url.rstrip("/")
         if candidate and (candidate == expected or candidate.startswith(expected + "/")):
-            return None
+            expected_token = session.get(_ADMIN_CSRF_SESSION_KEY)
+            submitted_token = _get_submitted_admin_csrf_token()
+            if (
+                isinstance(expected_token, str)
+                and submitted_token
+                and hmac.compare_digest(expected_token, submitted_token)
+            ):
+                return None
+
+            logger.warning(
+                "Refusing admin %s to %s with missing/invalid CSRF token — origin=%r referer=%r host_url=%r",
+                request.method,
+                request.path,
+                request.headers.get("Origin"),
+                request.headers.get("Referer"),
+                expected,
+            )
+            abort(403, description="Admin CSRF token missing or invalid.")
 
         logger.warning(
             "Refusing cross-origin admin %s to %s — origin=%r referer=%r host_url=%r",

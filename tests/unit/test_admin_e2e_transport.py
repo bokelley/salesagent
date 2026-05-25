@@ -59,3 +59,38 @@ class TestAdminE2eTransportCapability:
             assert env.mode == "e2e", f"Expected 'e2e', got '{env.mode}'"
         finally:
             del os.environ["ADCP_SALES_PORT"]
+
+    def test_extracts_admin_csrf_meta_token(self) -> None:
+        """Harness can read the browser CSRF token rendered by base.html."""
+        from tests.harness.admin_accounts import _extract_csrf_token
+
+        html = '<html><head><meta name="csrf-token" content="token-123"></head></html>'
+
+        assert _extract_csrf_token(html) == "token-123"
+
+    def test_e2e_csrf_headers_bootstrap_token_from_accounts_page(self) -> None:
+        """E2E unsafe requests include the same CSRF token a browser would submit."""
+        from tests.harness.admin_accounts import AdminAccountEnv
+
+        class FakeResponse:
+            status_code = 200
+            text = '<meta name="csrf-token" content="token-456">'
+            headers = {"content-type": "text/html; charset=utf-8"}
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            def get(self, url: str, allow_redirects: bool = False) -> FakeResponse:
+                self.urls.append(url)
+                return FakeResponse()
+
+        session = FakeSession()
+        env = AdminAccountEnv(mode="e2e")
+        env._base_url = "http://localhost:8092"
+        env._session = session
+
+        headers = env._e2e_csrf_headers()
+
+        assert headers == {"Origin": "http://localhost:8092", "X-CSRF-Token": "token-456"}
+        assert session.urls == ["http://localhost:8092/tenant/bdd_admin_tenant/accounts/"]

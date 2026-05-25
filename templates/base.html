@@ -4,6 +4,75 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() if csrf_token else '' }}">
+    <script>
+        (function() {
+            const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+            function csrfToken() {
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                return meta ? meta.getAttribute('content') || '' : '';
+            }
+
+            function sameOrigin(input) {
+                try {
+                    let rawUrl = '';
+                    if (typeof input === 'string') {
+                        rawUrl = input;
+                    } else if (input instanceof URL) {
+                        rawUrl = input.href;
+                    } else if (input && typeof input.url === 'string') {
+                        rawUrl = input.url;
+                    }
+                    if (!rawUrl) {
+                        return false;
+                    }
+                    const url = new URL(rawUrl, window.location.href);
+                    return url.origin === window.location.origin;
+                } catch (err) {
+                    return false;
+                }
+            }
+
+            const originalFetch = window.fetch;
+            if (originalFetch) {
+                window.fetch = function(input, init) {
+                    const requestInit = init ? Object.assign({}, init) : {};
+                    const requestMethod = requestInit.method || (input && input.method) || 'GET';
+                    const method = requestMethod.toUpperCase();
+                    const token = csrfToken();
+
+                    if (token && unsafeMethods.has(method) && sameOrigin(input)) {
+                        const headers = new Headers(
+                            requestInit.headers || (input instanceof Request ? input.headers : undefined)
+                        );
+                        if (!headers.has('X-CSRF-Token')) {
+                            headers.set('X-CSRF-Token', token);
+                        }
+                        requestInit.headers = headers;
+                    }
+
+                    return originalFetch.call(this, input, requestInit);
+                };
+            }
+
+            document.addEventListener('submit', function(event) {
+                const form = event.target;
+                if (!(form instanceof HTMLFormElement)) {
+                    return;
+                }
+                const method = (form.getAttribute('method') || 'GET').toUpperCase();
+                const token = csrfToken();
+                if (!token || !unsafeMethods.has(method) || form.querySelector('input[name="csrf_token"]')) {
+                    return;
+                }
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'csrf_token';
+                input.value = token;
+                form.appendChild(input);
+            }, true);
+        })();
+    </script>
     <title>{% block title %}Sales Agent Admin{% endblock %}</title>
     <!-- Favicon -->
     {% if tenant and tenant.favicon_url %}

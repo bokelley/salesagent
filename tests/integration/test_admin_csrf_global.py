@@ -1,10 +1,11 @@
 """Global CSRF defense for the admin Flask app.
 
-Refuses mutating cookie-authed POSTs from third-party origins. The
-session cookie is ``SameSite=None`` for OAuth flow reasons, so the
-cookie rides cross-origin POSTs — only the Origin/Referer comparison
-reliably distinguishes a legit admin form submission from a CSRF
-attack on ``evil.example.com``.
+Refuses mutating cookie-authed POSTs from third-party origins and
+requires a positive session-bound CSRF token. The session cookie is
+``SameSite=None`` for OAuth flow reasons, so the cookie rides
+cross-origin POSTs — Origin/Referer distinguishes a legit admin form
+submission from a CSRF attack on ``evil.example.com`` while the token
+adds defense-in-depth if proxy/header handling regresses.
 
 This guard is on top of the per-route Origin checks the signing-keys
 admin shipped with (PR #234) — defense in depth, plus closes #32 for
@@ -48,13 +49,14 @@ class TestAdminCsrfGlobal:
     """
 
     @staticmethod
-    def _attach_session_cookie(client) -> None:
+    def _attach_session_cookie(client, *, csrf_token: str = "test-csrf-token") -> str:
         """Simulate a logged-in browser by setting the Flask session
-        cookie. Value content doesn't matter for the CSRF guard — its
-        presence is what makes cross-origin POSTs exploitable.
-
-        Flask 3.x signature: ``set_cookie(key, value=, **kwargs)``."""
-        client.set_cookie("session", "fakevalue", domain="localhost")
+        cookie. The cookie presence makes cross-origin POSTs exploitable;
+        the session token is the positive CSRF check for same-origin posts."""
+        with client.session_transaction() as flask_session:
+            flask_session["authenticated"] = True
+            flask_session["_admin_csrf_token"] = csrf_token
+        return csrf_token
 
     def test_post_with_session_and_no_origin_or_referer_is_403(self, production_admin_client):
         """Cookie present + no Origin/Referer is the classic CSRF shape
@@ -86,13 +88,34 @@ class TestAdminCsrfGlobal:
         """A same-origin cookie-authed POST passes the CSRF guard — it
         may still 4xx downstream (auth, validation), but NOT 403 from
         the CSRF guard."""
+        token = self._attach_session_cookie(production_admin_client)
+        resp = production_admin_client.post(
+            "/tenant/anything/deactivate",
+            headers={"Origin": "http://localhost", "X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+        assert resp.status_code != 403, f"same-origin POST should not be CSRF-rejected; got 403: {resp.data!r}"
+
+    def test_post_with_session_and_same_origin_without_csrf_token_is_403(self, production_admin_client):
+        """Origin alone is no longer sufficient for cookie-authed unsafe requests."""
         self._attach_session_cookie(production_admin_client)
         resp = production_admin_client.post(
             "/tenant/anything/deactivate",
             headers={"Origin": "http://localhost"},
             follow_redirects=False,
         )
-        assert resp.status_code != 403, f"same-origin POST should not be CSRF-rejected; got 403: {resp.data!r}"
+        assert resp.status_code == 403
+
+    def test_post_with_session_and_same_origin_form_csrf_token_passes(self, production_admin_client):
+        """Classic HTML form submissions can send the token as form data."""
+        token = self._attach_session_cookie(production_admin_client)
+        resp = production_admin_client.post(
+            "/tenant/anything/deactivate",
+            headers={"Origin": "http://localhost"},
+            data={"csrf_token": token},
+            follow_redirects=False,
+        )
+        assert resp.status_code != 403, f"same-origin form POST should not be CSRF-rejected; got 403: {resp.data!r}"
 
     def test_get_is_never_csrf_rejected(self, production_admin_client):
         """Read methods don't change state, so the CSRF guard must not
