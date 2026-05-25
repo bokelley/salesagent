@@ -12,6 +12,7 @@
 {%- macro pencil_svg() -%}
 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="true" focusable="false"
      style="vertical-align: middle; opacity: 0.55;">
   <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
 </svg>
@@ -19,7 +20,8 @@
 
 {%- macro dots_svg() -%}
 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="true" focusable="false">
   <circle cx="12" cy="6" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="18" r="1.2"/>
 </svg>
 {%- endmacro -%}
@@ -228,20 +230,20 @@
           <div class="srow__actions">
             {% if s.mapped %}
             <span class="rel">
-              <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
-              <div class="menu" hidden>
-                <div class="menu__head">Mapping</div>
-                <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ s.mapped.signal_id }}">
+              <button type="button" class="menu-trigger" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">{{ dots_svg() }}</button>
+              <div class="menu" hidden role="menu">
+                <div class="menu__head" role="presentation">Mapping</div>
+                <a href="#" class="menu__item" role="menuitem" tabindex="-1" data-action="rename" data-signal-id="{{ s.mapped.signal_id }}">
                   <span>Rename signal</span>
                 </a>
-                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item" role="menuitem" tabindex="-1">
                   <span>Edit tags…</span>
                 </a>
-                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item">
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=s.mapped.signal_id) }}" class="menu__item" role="menuitem" tabindex="-1">
                   <span>View signal page</span>
                 </a>
-                <div class="menu__sep"></div>
-                <a href="#" class="menu__item danger"
+                <div class="menu__sep" role="separator"></div>
+                <a href="#" class="menu__item danger" role="menuitem" tabindex="-1"
                    data-action="delete"
                    data-signal-id="{{ s.mapped.signal_id }}"
                    data-active-buys="{{ s.mapped.active_buys }}">
@@ -385,12 +387,12 @@
             <div class="srow__actions">
               {% if v.mapped %}
               <span class="rel">
-                <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
-                <div class="menu" hidden>
-                  <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ v.mapped.signal_id }}">
+                <button type="button" class="menu-trigger" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">{{ dots_svg() }}</button>
+                <div class="menu" hidden role="menu">
+                  <a href="#" class="menu__item" role="menuitem" tabindex="-1" data-action="rename" data-signal-id="{{ v.mapped.signal_id }}">
                     <span>Rename signal</span>
                   </a>
-                  <a href="#" class="menu__item danger"
+                  <a href="#" class="menu__item danger" role="menuitem" tabindex="-1"
                      data-action="delete"
                      data-signal-id="{{ v.mapped.signal_id }}"
                      data-active-buys="{{ v.mapped.active_buys }}">
@@ -472,16 +474,16 @@
           <div style="display: flex; gap: 6px;">
             <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="sig-btn sig-btn--outline sig-btn--sm">Edit expression</a>
             <span class="rel">
-              <button type="button" class="menu-trigger" aria-label="More actions">{{ dots_svg() }}</button>
-              <div class="menu" hidden>
-                <a href="#" class="menu__item" data-action="rename" data-signal-id="{{ c.signal_id }}">
+              <button type="button" class="menu-trigger" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">{{ dots_svg() }}</button>
+              <div class="menu" hidden role="menu">
+                <a href="#" class="menu__item" role="menuitem" tabindex="-1" data-action="rename" data-signal-id="{{ c.signal_id }}">
                   <span>Rename signal</span>
                 </a>
-                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="menu__item">
+                <a href="{{ url_for('tenant_signals.edit_signal', tenant_id=tenant_id, signal_id=c.signal_id) }}" class="menu__item" role="menuitem" tabindex="-1">
                   <span>Edit tags…</span>
                 </a>
-                <div class="menu__sep"></div>
-                <a href="#" class="menu__item danger"
+                <div class="menu__sep" role="separator"></div>
+                <a href="#" class="menu__item danger" role="menuitem" tabindex="-1"
                    data-action="delete"
                    data-signal-id="{{ c.signal_id }}"
                    data-active-buys="{{ c.active_buys }}">

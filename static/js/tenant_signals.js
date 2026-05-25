@@ -257,19 +257,116 @@
   }
 
   // ---------- Overflow menus ----------
+  function menuForTrigger(trigger) {
+    const menu = trigger?.nextElementSibling;
+    return menu?.classList.contains('menu') ? menu : null;
+  }
+
+  function triggerForMenu(menu) {
+    const trigger = menu?.previousElementSibling;
+    return trigger?.classList.contains('menu-trigger') ? trigger : null;
+  }
+
+  function menuItems(menu) {
+    return [...menu.querySelectorAll('.menu__item')].filter((item) => !item.hidden);
+  }
+
+  function closeMenu(menu, { restoreFocus = false } = {}) {
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    const trigger = triggerForMenu(menu);
+    if (trigger) {
+      trigger.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) trigger.focus();
+    }
+  }
+
+  function closeAllMenus({ except = null } = {}) {
+    document.querySelectorAll('.menu').forEach((menu) => {
+      if (menu !== except) closeMenu(menu);
+    });
+  }
+
+  function openMenu(trigger, { focus = 'first' } = {}) {
+    const menu = menuForTrigger(trigger);
+    if (!menu) return;
+    closeAllMenus({ except: menu });
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    const items = menuItems(menu);
+    const target = focus === 'last' ? items.at(-1) : items[0];
+    target?.focus();
+  }
+
   document.addEventListener('click', (e) => {
     const trigger = e.target.closest('.menu-trigger');
     if (trigger) {
       e.stopPropagation();
-      const menu = trigger.nextElementSibling;
-      const open = !menu.hidden;
-      // Close all other menus
-      document.querySelectorAll('.menu').forEach((m) => { if (m !== menu) m.hidden = true; });
-      menu.hidden = open;
+      const menu = menuForTrigger(trigger);
+      if (!menu) return;
+      if (menu.hidden) openMenu(trigger);
+      else closeMenu(menu, { restoreFocus: true });
       return;
     }
     if (!e.target.closest('.menu')) {
-      document.querySelectorAll('.menu').forEach((m) => { m.hidden = true; });
+      closeAllMenus();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const trigger = e.target.closest('.menu-trigger');
+    if (trigger && ['Enter', ' ', 'ArrowDown', 'ArrowUp'].includes(e.key)) {
+      e.preventDefault();
+      openMenu(trigger, { focus: e.key === 'ArrowUp' ? 'last' : 'first' });
+      return;
+    }
+
+    const menu = e.target.closest('.menu');
+    if (!menu || menu.hidden) return;
+    const items = menuItems(menu);
+    const currentIndex = items.indexOf(document.activeElement);
+    const item = e.target.closest('.menu__item');
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeMenu(menu, { restoreFocus: true });
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!items.length) return;
+      items[(currentIndex + 1) % items.length]?.focus();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!items.length) return;
+      items[(currentIndex - 1 + items.length) % items.length]?.focus();
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      items[0]?.focus();
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      items.at(-1)?.focus();
+      return;
+    }
+    if (item && ['Enter', ' '].includes(e.key)) {
+      e.preventDefault();
+      item.click();
+      return;
+    }
+    if (e.key === 'Tab' && items.length) {
+      if (e.shiftKey && currentIndex <= 0) {
+        e.preventDefault();
+        items.at(-1)?.focus();
+      } else if (!e.shiftKey && currentIndex === items.length - 1) {
+        e.preventDefault();
+        items[0]?.focus();
+      }
     }
   });
 
@@ -286,7 +383,7 @@
     const original = span.dataset.signalName;
     const signalId = span.dataset.signalId;
     span.classList.add('editing');
-    span.innerHTML = `<input type="text" value="${escapeAttr(original)}" style="font: inherit; color: inherit; border: none; background: transparent; outline: none; width: ${Math.max(8, original.length)}ch">`;
+    span.innerHTML = `<input type="text" value="${escapeAttr(original)}" aria-label="Rename signal ${escapeAttr(original)}" style="font: inherit; color: inherit; border: none; background: transparent; outline: none; width: ${Math.max(8, original.length)}ch">`;
     const input = span.querySelector('input');
     input.focus();
     input.select();
@@ -336,17 +433,18 @@
   }
 
   function pencilSvg() {
-    return ' <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; opacity: 0.55;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
+    return ' <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="vertical-align: middle; opacity: 0.55;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
   }
 
   // ---------- Overflow-menu rename trigger ----------
   document.querySelectorAll('.menu__item[data-action="rename"]').forEach((item) => {
     item.addEventListener('click', (e) => {
       e.stopPropagation();
+      e.preventDefault();
       const signalId = item.dataset.signalId;
       const span = document.querySelector(`.sig-name[data-signal-id="${CSS.escape(signalId)}"]`);
       if (span) {
-        document.querySelectorAll('.menu').forEach((m) => { m.hidden = true; });
+        closeAllMenus();
         startInlineEdit(span);
       }
     });
@@ -522,6 +620,8 @@
   document.querySelectorAll('.menu__item[data-action="delete"], .menu__item[data-action="unmap"]').forEach((item) => {
     item.addEventListener('click', async (e) => {
       e.stopPropagation();
+      e.preventDefault();
+      closeAllMenus();
       const signalId = item.dataset.signalId;
       const activeBuys = parseInt(item.dataset.activeBuys || '0', 10);
       const url = urls.signalDelete(signalId);
