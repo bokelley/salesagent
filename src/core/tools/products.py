@@ -765,11 +765,8 @@ async def _get_products_impl(
     # by — see #22 for the principal→account refactor that will eventually
     # make this lookup go through the Account record directly.
     elapsed_ms = int((time.time() - start_time) * 1000)
-    operator = (
-        req.account.operator  # type: ignore[union-attr]
-        if getattr(req, "account", None) and getattr(req.account, "operator", None)
-        else principal_id
-    )
+    account = req.account
+    operator = account.operator if account is not None and account.operator else principal_id
     brand_domain = req.brand.domain if req.brand else None
     pricing_visibility = "full" if principal_id is not None or buying_mode == "wholesale" else "suppressed"
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])

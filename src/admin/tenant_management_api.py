@@ -13,7 +13,7 @@ import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from flask import Blueprint, jsonify, request
@@ -171,6 +171,11 @@ def protect_tenant_management_docs():
 # ---------------------------------------------------------------------------
 # Helpers shared by the new spectree endpoints
 # ---------------------------------------------------------------------------
+
+
+def _validated_json_payload() -> Any:
+    """Return the Spectree-validated JSON payload attached to the Flask request."""
+    return cast(Any, request).context.json
 
 
 def _api_error(code: str, message: str, status: int, details: dict | None = None):
@@ -1088,7 +1093,7 @@ def delete_tenant(tenant_id):
 )
 def provision_tenant():
     """Provision a managed tenant (one-shot create + adapter + currency + property tag + optional principal)."""
-    req: ProvisionTenantRequest = request.context.json
+    req: ProvisionTenantRequest = _validated_json_payload()
 
     # Step 1: external_org_id uniqueness check (informational — not unique at DB level today).
     with get_db_session() as preflight:
@@ -1314,7 +1319,7 @@ def preview_adapter_endpoint():
     ``ok=false`` (renders inline) — only malformed bodies / missing API key
     surface as 4xx via the normal middleware path.
     """
-    req: PreviewAdapterRequest = request.context.json
+    req: PreviewAdapterRequest = _validated_json_payload()
     adapter_dict = _adapter_config_to_dict(req.adapter)
     preview = preview_adapter(adapter_dict["type"], adapter_dict)
     response = PreviewAdapterResponse(
@@ -1340,7 +1345,7 @@ def preview_adapter_endpoint():
 )
 def patch_tenant(tenant_id: str):
     """Update platform-managed fields on a tenant (PATCH semantics — only listed fields are touched)."""
-    req: UpdateTenantRequest = request.context.json  # type: ignore[attr-defined]
+    req: UpdateTenantRequest = _validated_json_payload()
 
     with get_db_session() as session:
         session.info["management_api_caller"] = True
@@ -1484,7 +1489,7 @@ _ADAPTER_PUT_SCHEMA = _adapter_request_schema()
 )
 def put_adapter_config(tenant_id: str):
     """Replace the tenant's adapter config. Tests the connection before commit."""
-    body = request.context.json  # type: ignore[attr-defined]
+    body = _validated_json_payload()
     adapter_schema: AdapterConfigSchema = body.root
     adapter_dict = _adapter_config_to_dict(adapter_schema)
 
@@ -1675,7 +1680,7 @@ def upsert_account(tenant_id: str):
     and skips the ``pending_provision`` round trip. Returns 201 on create,
     200 on update.
     """
-    req: CreateAccountRequest = request.context.json  # type: ignore[attr-defined]
+    req: CreateAccountRequest = _validated_json_payload()
 
     # Validation that's awkward in Pydantic alone (cross-field).
     if req.billing == "agent" and not req.buyer_agent_principal_id:
@@ -1934,7 +1939,7 @@ def create_buyer_advertiser_mapping(tenant_id: str):
     the id. This avoids breaking the rule-creation flow during
     onboarding before the first sync completes.
     """
-    req: CreateBuyerAdvertiserMappingRequest = request.context.json  # type: ignore[attr-defined]
+    req: CreateBuyerAdvertiserMappingRequest = _validated_json_payload()
 
     if req.brand_id is not None and req.brand_house is None:
         return _api_error(
@@ -2013,7 +2018,7 @@ def patch_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
     Patching ``brand_house`` / ``brand_id`` can collide with another rule;
     409 on natural-key conflict, same shape as POST.
     """
-    req: UpdateBuyerAdvertiserMappingRequest = request.context.json  # type: ignore[attr-defined]
+    req: UpdateBuyerAdvertiserMappingRequest = _validated_json_payload()
 
     with get_db_session() as session:
         session.info["management_api_caller"] = True
@@ -2306,13 +2311,11 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
         try:
             from src.services.gam_advertisers_sync import sync_advertisers
 
-            # ``advertisers_id`` is narrowed to ``str`` by the
-            # ``if advertisers_id`` guard above, but mypy doesn't propagate the
-            # narrow into the closure default. ``str`` here matches the
-            # narrowed-truthy type at the call site.
+            advertisers_sync_id = advertisers_id
+
             def _run_advertisers_in_thread(
                 tenant_id: str = tenant_id,
-                sync_id: str = advertisers_id,  # type: ignore[assignment]
+                sync_id: str = advertisers_sync_id,
             ) -> None:
                 """Wrap sync_advertisers so its re-raise (intentional for
                 direct callers + cron pickup) doesn't escape the daemon
@@ -3023,7 +3026,7 @@ def approve_workflow(tenant_id: str, workflow_id: str):
     """Approve a workflow. Idempotent: re-approving returns 200 with the
     existing state. Conflicting re-decide (approve after reject) returns
     409. Expired workflows can't be approved."""
-    req: ApproveWorkflowRequest = request.context.json  # type: ignore[attr-defined]
+    req: ApproveWorkflowRequest = _validated_json_payload()
     return _decide_workflow(tenant_id, workflow_id, decision="approve", notes=req.notes)
 
 
@@ -3036,7 +3039,7 @@ def approve_workflow(tenant_id: str, workflow_id: str):
 def reject_workflow(tenant_id: str, workflow_id: str):
     """Reject a workflow. Notes are required. Idempotent re-rejection
     returns 200 with existing state; conflicting decision returns 409."""
-    req: RejectWorkflowRequest = request.context.json  # type: ignore[attr-defined]
+    req: RejectWorkflowRequest = _validated_json_payload()
     return _decide_workflow(tenant_id, workflow_id, decision="reject", notes=req.notes)
 
 
@@ -3329,7 +3332,7 @@ def create_webhook(tenant_id: str):
     from src.core.database.repositories import TenantConfigRepository, WebhookSubscriptionRepository
     from src.core.database.repositories.webhook_subscription import generate_secret
 
-    req: CreateWebhookSubscriptionRequest = request.context.json  # type: ignore[attr-defined]
+    req: CreateWebhookSubscriptionRequest = _validated_json_payload()
 
     try:
         validated_url = validate_webhook_url(req.url)
@@ -3502,10 +3505,10 @@ def test_webhook(tenant_id: str, webhook_id: str):
     # Reuse a single subscription-like object reference for bookkeeping. The
     # delivery service refreshes its DB state each time anyway.
     class _SubProxy:
-        webhook_id = sub_webhook_id
-        tenant_id = sub_tenant_id
-        url = sub_url
-        extra_headers = sub_extra_headers
+        webhook_id: str = sub_webhook_id
+        tenant_id: str = sub_tenant_id
+        url: str = sub_url
+        extra_headers: dict[str, Any] | None = sub_extra_headers
 
     for event_type in targets:
         envelope = build_envelope(
@@ -3516,9 +3519,7 @@ def test_webhook(tenant_id: str, webhook_id: str):
         # _SubProxy is a duck-typed stand-in for WebhookSubscription that
         # carries just the fields deliver_event_sync reads. Real subscription
         # row would be overkill for a connectivity test.
-        status_code, latency_ms, error = asyncio.run(
-            deliver_event_sync(_SubProxy, secret, envelope)  # type: ignore[arg-type]
-        )
+        status_code, latency_ms, error = asyncio.run(deliver_event_sync(_SubProxy(), secret, envelope))
         delivered = status_code is not None and 200 <= status_code < 300
         if not delivered:
             overall_ok = False

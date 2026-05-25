@@ -13,7 +13,8 @@ before their start date.
 import asyncio
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import cast
 
 from sqlalchemy import select
 
@@ -118,10 +119,10 @@ class MediaBuyStatusScheduler:
                 start_time = raw_start.replace(tzinfo=UTC)
             else:
                 start_time = raw_start
-        elif media_buy.start_date:
-            start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+        else:
+            start_date = cast(date | None, media_buy.start_date)
+            if start_date is not None:
+                start_time = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=UTC)
 
         if start_time is None:
             return None  # No start time defined
@@ -133,10 +134,10 @@ class MediaBuyStatusScheduler:
                 end_time = raw_end.replace(tzinfo=UTC)
             else:
                 end_time = raw_end
-        elif media_buy.end_date:
-            end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+        else:
+            end_date = cast(date | None, media_buy.end_date)
+            if end_date is not None:
+                end_time = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC)
 
         if end_time is None:
             return None  # No end time defined

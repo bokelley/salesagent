@@ -35,7 +35,7 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from adcp.webhooks import sign_legacy_webhook
@@ -46,6 +46,15 @@ from src.core.database.repositories import WebhookSubscriptionRepository
 from src.core.database.repositories.webhook_subscription import hash_secret  # noqa: F401  (re-export)
 
 logger = logging.getLogger(__name__)
+
+
+class WebhookDeliveryTarget(Protocol):
+    """Subscription fields required for synchronous webhook delivery."""
+
+    webhook_id: str
+    tenant_id: str
+    url: str
+    extra_headers: dict[str, Any] | None
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +273,7 @@ async def _post_signed(
 
 
 async def deliver_event_sync(
-    subscription: WebhookSubscription,
+    subscription: WebhookDeliveryTarget,
     secret: str,
     envelope: dict[str, Any],
     *,

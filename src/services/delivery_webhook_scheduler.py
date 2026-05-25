@@ -323,7 +323,7 @@ class DeliveryWebhookScheduler:
 
             # Set webhook-specific metadata directly on the response model
             # These fields are defined on the library's GetMediaBuyDeliveryResponse
-            delivery_response.notification_type = NotificationType.scheduled  # type: ignore[assignment]
+            delivery_response.notification_type = NotificationType.scheduled  # type: ignore[assignment]  # blocked by adcp duplicate NotificationType enum exports
             delivery_response.next_expected_at = next_expected_at
             # Heartbeat reports for pending_start/paused buys carry no real
             # delivery yet; flag partial_data so receivers can route on it.
@@ -409,7 +409,7 @@ class DeliveryWebhookScheduler:
                 status=AdcpTaskStatus.completed,
                 timestamp=datetime.now(UTC),
                 idempotency_key=generate_webhook_idempotency_key(),
-                result=delivery_response.model_dump(mode="json"),  # type: ignore[arg-type]
+                result=delivery_response.model_dump(mode="json"),  # type: ignore[arg-type]  # blocked by adcp webhook task union
             )
 
             # Send webhook notification OUTSIDE the session context

@@ -207,7 +207,6 @@ def resolve_account_advertiser(
             network_code = adapter_config.get("network_code")
             if not network_code and tenant.ad_server == "google_ad_manager":
                 # Fall back to AdapterConfig if caller didn't pass it.
-                from src.adapters.gam import AdapterConfig as GamConfig  # type: ignore[attr-defined] # noqa: F401
                 from src.core.database.models import AdapterConfig as AdapterConfigModel
 
                 config_row = session.scalars(select(AdapterConfigModel).filter_by(tenant_id=tenant_id)).first()

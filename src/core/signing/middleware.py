@@ -32,7 +32,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from adcp.signing import (
     SignatureVerificationError,
@@ -257,7 +257,7 @@ class SigningVerifyMiddleware:
             raise ValueError(
                 f"ADCP_SIGNING_COVERS_DIGEST must be one of 'required'/'forbidden'/'either' (got {env_digest!r})"
             )
-        self._covers_digest: Literal["required", "forbidden", "either"] = env_digest  # type: ignore[assignment]
+        self._covers_digest = cast(Literal["required", "forbidden", "either"], env_digest)
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":

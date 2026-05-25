@@ -9,7 +9,7 @@ import hashlib
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 
 from adcp import (
     AdagentsNotFoundError,
@@ -273,7 +273,7 @@ class PropertyDiscoveryService:
 
             logger.info(f"Syncing properties from {len(publisher_domains)} publisher domains")
 
-            async def fetch_domain_data(domain: str, delay: float) -> tuple[str, dict | Exception]:
+            async def fetch_domain_data(domain: str, delay: float) -> tuple[str, dict[str, Any] | Exception]:
                 """Fetch adagents.json from a domain with rate limiting delay."""
                 try:
                     await asyncio.sleep(delay)
@@ -284,25 +284,22 @@ class PropertyDiscoveryService:
                     return (domain, e)
 
             fetch_tasks = [fetch_domain_data(domain, i * 0.5) for i, domain in enumerate(publisher_domains)]
-            fetch_results_raw = await asyncio.gather(*fetch_tasks, return_exceptions=False)
-            fetch_results_list = cast(list[tuple[str, dict[str, Any] | Exception]], list(fetch_results_raw))
+            fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=False)
 
-            for domain, result in fetch_results_list:  # type: ignore[assignment]
+            for domain, fetch_result in fetch_results:
                 try:
-                    if isinstance(result, Exception):
-                        _log_fetch_error(domain, result, stats)
+                    if isinstance(fetch_result, Exception):
+                        _log_fetch_error(domain, fetch_result, stats)
                         continue
 
-                    adagents_data: dict[str, Any] = result  # type: ignore[assignment]
-
-                    properties = _extract_properties(adagents_data, domain, agent_url)
-                    if agent_url is None or not _agent_uses_publisher_properties(adagents_data, agent_url):
+                    properties = _extract_properties(fetch_result, domain, agent_url)
+                    if agent_url is None or not _agent_uses_publisher_properties(fetch_result, agent_url):
                         properties = _filter_properties_by_domain(properties, domain)
 
                     stats["properties_found"] += len(properties)
                     logger.info(f"Found {len(properties)} properties from {domain}")
 
-                    tags = get_all_tags(adagents_data)
+                    tags = get_all_tags(fetch_result)
                     stats["tags_found"] += len(tags)
                     logger.info(f"Found {len(tags)} unique tags from {domain}")
 

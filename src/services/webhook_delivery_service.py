@@ -268,7 +268,17 @@ class WebhookDeliveryService:
                 next_expected_at = (datetime.now(UTC) + timedelta(seconds=next_expected_interval_seconds)).isoformat()
 
             # Build AdCP compliant payload with new fields
-            delivery_payload = {
+            totals: dict[str, Any] = {
+                "impressions": impressions,
+                "spend": round(spend, 2),
+            }
+            media_buy_delivery: dict[str, Any] = {
+                "media_buy_id": media_buy_id,
+                "status": status,
+                "totals": totals,
+                "by_package": by_package or [],
+            }
+            delivery_payload: dict[str, Any] = {
                 "adcp_version": get_adcp_version(),
                 "notification_type": notification_type,
                 "is_adjusted": is_adjusted,  # New field for late data
@@ -278,17 +288,7 @@ class WebhookDeliveryService:
                     "end": reporting_period_end.isoformat(),
                 },
                 "currency": currency,
-                "media_buy_deliveries": [
-                    {
-                        "media_buy_id": media_buy_id,
-                        "status": status,
-                        "totals": {
-                            "impressions": impressions,
-                            "spend": round(spend, 2),
-                        },
-                        "by_package": by_package or [],
-                    }
-                ],
+                "media_buy_deliveries": [media_buy_delivery],
             }
 
             # Add optional fields
@@ -296,9 +296,6 @@ class WebhookDeliveryService:
                 delivery_payload["next_expected_at"] = next_expected_at
 
             # Add optional metrics to totals dict
-            # We know structure is valid as we just created it above
-            media_buy_delivery = delivery_payload["media_buy_deliveries"][0]  # type: ignore[index]
-            totals: dict[str, Any] = media_buy_delivery["totals"]
             if clicks is not None:
                 totals["clicks"] = clicks
             if ctr is not None:

@@ -148,7 +148,7 @@ class TenantConfigRepository:
                 Principal.principal_id.in_(principal_ids),
             )
         ).all()
-        return dict(rows)  # type: ignore[arg-type]
+        return dict[str, str]((principal_id, name) for principal_id, name in rows)
 
     # ------------------------------------------------------------------
     # Approval-policy writes

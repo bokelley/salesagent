@@ -190,18 +190,20 @@ class DashboardService:
         revenue_data = []
 
         for i in range(days):
-            date = today - timedelta(days=days - 1 - i)
+            day = today - timedelta(days=days - 1 - i)
 
-            daily_buys = repo.list_in_flight_on_date(date, statuses=["active", "completed"])
+            daily_buys = repo.list_in_flight_on_date(day, statuses=["active", "completed"])
 
-            daily_revenue = 0
+            daily_revenue = 0.0
             for buy in daily_buys:
-                if buy.start_date and buy.end_date:
-                    days_in_flight = (buy.end_date - buy.start_date).days + 1  # type: ignore[operator]
+                start_date = type_cast(date | None, buy.start_date)
+                end_date = type_cast(date | None, buy.end_date)
+                if start_date and end_date:
+                    days_in_flight = (end_date - start_date).days + 1
                     if days_in_flight > 0:
                         daily_revenue += float(buy.budget or 0) / days_in_flight
 
-            revenue_data.append({"date": date.isoformat(), "revenue": round(daily_revenue, 2)})
+            revenue_data.append({"date": day.isoformat(), "revenue": round(daily_revenue, 2)})
 
         return revenue_data
 

@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import String, and_, create_engine, delete, func, or_, select, text
+from sqlalchemy import String, and_, create_engine, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.adapters.gam_inventory_discovery import (
@@ -744,15 +744,14 @@ class GAMInventoryService:
             self.db.commit()
 
         try:
+            gam_inventory_mapper = inspect(GAMInventory)
             if to_insert:
                 logger.info(f"📝 Starting bulk insert of {len(to_insert)} items...")
-                # SQLAlchemy accepts model class but mypy expects Mapper type
-                self.db.bulk_insert_mappings(GAMInventory, to_insert)  # type: ignore[arg-type]
+                self.db.bulk_insert_mappings(gam_inventory_mapper, to_insert)
                 logger.info(f"✅ Batch inserted {len(to_insert)} items")
             if to_update:
                 logger.info(f"📝 Starting bulk update of {len(to_update)} items...")
-                # SQLAlchemy accepts model class but mypy expects Mapper type
-                self.db.bulk_update_mappings(GAMInventory, to_update)  # type: ignore[arg-type]
+                self.db.bulk_update_mappings(gam_inventory_mapper, to_update)
                 logger.info(f"✅ Batch updated {len(to_update)} items")
             logger.info("💾 Committing batch transaction (120s timeout)...")
             _commit_with_timeout()

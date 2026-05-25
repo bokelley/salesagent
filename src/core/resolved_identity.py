@@ -193,12 +193,12 @@ def resolve_identity(
             tenant_id = token_tenant.get("tenant_id", tenant_id)
 
     # Wrap raw dict in TenantContext if possible (both paths produce typed model)
-    tenant_model = tenant_context
+    tenant_model: Any = tenant_context
     if isinstance(tenant_context, dict) and "tenant_id" in tenant_context:
         from src.core.tenant_context import TenantContext
 
         try:
-            tenant_model = TenantContext.from_dict(tenant_context)  # type: ignore[assignment]  # TenantContext is a dict-compatible proxy
+            tenant_model = TenantContext.from_dict(tenant_context)
         except Exception:
             tenant_model = tenant_context  # Keep dict if model construction fails
 

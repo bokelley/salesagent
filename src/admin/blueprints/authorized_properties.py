@@ -664,9 +664,9 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
                 # Note: Tenant.metadata field may not exist in model definition
                 # SQLAlchemy allows dynamic attributes; mypy doesn't recognize this
                 if not isinstance(tenant.metadata, dict):
-                    tenant.metadata = {}  # type: ignore[assignment,misc]
+                    tenant.metadata = {}  # type: ignore[assignment,misc]  # blocked by SQLAlchemy Base.metadata collision
 
-                metadata: dict[str, Any] = tenant.metadata  # type: ignore[assignment]
+                metadata: dict[str, Any] = tenant.metadata  # type: ignore[assignment]  # blocked by SQLAlchemy Base.metadata collision
 
                 # Update last sync timestamp (rate limiting)
                 metadata["last_property_sync"] = datetime.now(UTC).isoformat()

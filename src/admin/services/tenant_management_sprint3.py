@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from src.admin.api_schemas.tenant_management import (
     AuditLogEntry,
@@ -404,7 +404,8 @@ def compute_pacing(buy: MediaBuy) -> str | None:
     started always return None per the spec.
     """
     today = datetime.now(UTC).date()
-    if buy.start_date is None or buy.start_date > today:  # type: ignore[operator]
+    start_date = cast(date | None, buy.start_date)
+    if start_date is None or start_date > today:
         return None
     # Stub: when delivered metrics land, replace with the real ratio.
     return None
