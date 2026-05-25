@@ -44,8 +44,10 @@ from typing import Any
 
 from adcp.signing import sign_request
 from adcp.signing.constants import WEBHOOK_TAG
-from adcp.signing.crypto import ALG_ED25519, ALG_ES256, load_private_key_pem
+from adcp.signing.crypto import ALG_ED25519, ALG_ES256, PrivateKey, b64url_encode, load_private_key_pem
 from cachetools import TTLCache
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +297,12 @@ def _load_active_signing_credential_uncached(*, tenant_id: str, signing_mode: st
             raise SigningConfigurationError(f"failed to read PEM at {pem_path}: {exc}") from exc
         # Read alg + key_id INSIDE the session — once we exit, the row
         # is detached and any further attribute access is fragile.
-        alg = _alg_for_jwk(row.public_jwk)
+        alg = alg_for_public_jwk(row.public_jwk)
+        try:
+            private_key = load_private_key_pem(pem_bytes)
+        except (TypeError, ValueError) as exc:
+            raise SigningConfigurationError(f"failed to load PEM at {pem_path}: {exc}") from exc
+        _validate_private_key_matches_row(private_key, alg=alg, public_jwk=row.public_jwk, key_id=row.key_id)
         return LoadedSigningCredential(key_id=row.key_id, alg=alg, pem_bytes=pem_bytes)
 
 
@@ -478,7 +485,7 @@ def _build_rfc9421_headers(
     return signed.as_dict()
 
 
-def _alg_for_jwk(jwk: Mapping[str, Any]) -> str:
+def alg_for_public_jwk(jwk: Mapping[str, Any]) -> str:
     """Map a stored public JWK to the signing alg :func:`sign_request` expects.
 
     The JWK ``alg`` field is OPTIONAL at storage time — operators that
@@ -500,3 +507,56 @@ def _alg_for_jwk(jwk: Mapping[str, Any]) -> str:
             f"unsupported JWK (kty={kty_raw!r}, crv={crv_raw!r}); expected Ed25519 or P-256"
         )
     return alg
+
+
+def _validate_private_key_matches_row(
+    private_key: PrivateKey,
+    *,
+    alg: str,
+    public_jwk: Mapping[str, Any],
+    key_id: str,
+) -> None:
+    _validate_public_jwk_metadata(public_jwk)
+
+    if public_jwk.get("kid") != key_id:
+        raise SigningConfigurationError("key_id/public_jwk.kid mismatch")
+
+    if alg == ALG_ED25519:
+        if not isinstance(private_key, ed25519.Ed25519PrivateKey):
+            raise SigningConfigurationError("alg/private_key mismatch: expected Ed25519 private key")
+        x = b64url_encode(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        )
+        if public_jwk.get("kty") != "OKP" or public_jwk.get("crv") != "Ed25519" or public_jwk.get("x") != x:
+            raise SigningConfigurationError("public_jwk does not match private key")
+        return
+    if alg == ALG_ES256:
+        if not isinstance(private_key, ec.EllipticCurvePrivateKey):
+            raise SigningConfigurationError("alg/private_key mismatch: expected EC P-256 private key")
+        numbers = private_key.public_key().public_numbers()
+        x = b64url_encode(numbers.x.to_bytes(32, "big"))
+        y = b64url_encode(numbers.y.to_bytes(32, "big"))
+        if (
+            public_jwk.get("kty") != "EC"
+            or public_jwk.get("crv") != "P-256"
+            or public_jwk.get("x") != x
+            or public_jwk.get("y") != y
+        ):
+            raise SigningConfigurationError("public_jwk does not match private key")
+        return
+    raise SigningConfigurationError(f"unsupported alg: {alg}")
+
+
+def _validate_public_jwk_metadata(public_jwk: Mapping[str, Any]) -> None:
+    if public_jwk.get("use") != "sig":
+        raise SigningConfigurationError("public_jwk.use must be 'sig'")
+
+    key_ops = public_jwk.get("key_ops")
+    if not isinstance(key_ops, (list, tuple)) or "verify" not in key_ops:
+        raise SigningConfigurationError("public_jwk.key_ops must include 'verify'")
+
+    if public_jwk.get("adcp_use") != WEBHOOK_SIGNING_PURPOSE:
+        raise SigningConfigurationError("public_jwk.adcp_use must be 'webhook-signing'")

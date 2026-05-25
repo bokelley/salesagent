@@ -17,6 +17,11 @@ Two amendments stack onto the SDK's default capabilities response:
    Omitted when the tenant has zero partners (the schema's
    ``min_length=1`` on ``Portfolio.publisher_domains`` requires it).
 
+3. **``webhook_signing``** (AdCP 3.x). The SDK exposes a native
+   capability block for RFC 9421 webhook signing, but the data is
+   tenant-specific: only tenants with an active, locally usable
+   ``TenantSigningCredential`` can safely advertise it.
+
 Importing this module monkey-patches
 :meth:`adcp.decisioning.handler.PlatformHandler.get_adcp_capabilities`.
 Remove the ``status`` shim once the upstream SDK adds envelope status
@@ -35,6 +40,12 @@ from adcp.server.tenant_router import current_tenant
 logger = logging.getLogger(__name__)
 
 _ORIGINAL = PlatformHandler.get_adcp_capabilities
+
+_WEBHOOK_SIGNING_PROFILE = "adcp/webhook-signing/v1"
+
+
+def _webhook_signing_unsupported() -> dict[str, Any]:
+    return {"supported": False, "legacy_hmac_fallback": True}
 
 
 def _publisher_domains_for_current_tenant() -> list[str]:
@@ -66,6 +77,45 @@ def _publisher_domains_for_current_tenant() -> list[str]:
         return []
 
 
+def _webhook_signing_for_current_tenant() -> dict[str, Any]:
+    """Return the tenant-specific AdCP webhook-signing capability block."""
+    tenant = current_tenant()
+    if tenant is None or not getattr(tenant, "id", None):
+        return _webhook_signing_unsupported()
+
+    from src.services.webhook_signing import (
+        SIGNING_MODE_RFC9421,
+        SigningConfigurationError,
+        load_active_signing_credential,
+    )
+
+    try:
+        snapshot = load_active_signing_credential(tenant_id=tenant.id, signing_mode=SIGNING_MODE_RFC9421)
+        if snapshot is None:
+            return _webhook_signing_unsupported()
+    except SigningConfigurationError:
+        logger.warning(
+            "webhook signing credential for tenant %r is active but not usable; advertising unsupported",
+            tenant.id,
+            exc_info=True,
+        )
+        return _webhook_signing_unsupported()
+    except Exception:
+        logger.warning(
+            "webhook signing capability lookup failed for tenant %r; advertising unsupported",
+            tenant.id,
+            exc_info=True,
+        )
+        return _webhook_signing_unsupported()
+
+    return {
+        "supported": True,
+        "profile": _WEBHOOK_SIGNING_PROFILE,
+        "algorithms": [snapshot.alg],
+        "legacy_hmac_fallback": True,
+    }
+
+
 async def _get_adcp_capabilities_patched(
     self: PlatformHandler,
     params: Any = None,
@@ -83,6 +133,8 @@ async def _get_adcp_capabilities_patched(
         portfolio = result.setdefault("portfolio", {})
         if isinstance(portfolio, dict):
             portfolio["publisher_domains"] = domains
+
+    result["webhook_signing"] = _webhook_signing_for_current_tenant()
 
     return result
 

@@ -29,7 +29,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.signing.crypto import ALG_ED25519
+from adcp.signing.crypto import ALG_ED25519, ALG_ES256
 from adcp.signing.keygen import generate_signing_keypair
 
 from src.services.webhook_signing import (
@@ -38,6 +38,7 @@ from src.services.webhook_signing import (
     SIGNING_MODE_RFC9421,
     LoadedSigningCredential,
     SigningConfigurationError,
+    alg_for_public_jwk,
     build_auth_headers,
     invalidate_credential_cache,
     load_active_signing_credential,
@@ -79,6 +80,16 @@ def ed25519_snapshot(ed25519_keypair):
 def ed25519_jwk(ed25519_keypair):
     """The public JWK for the matching keypair, for the verifier roundtrip."""
     return ed25519_keypair[1]
+
+
+def test_alg_for_public_jwk_maps_supported_webhook_keys() -> None:
+    assert alg_for_public_jwk({"kty": "OKP", "crv": "Ed25519"}) == ALG_ED25519
+    assert alg_for_public_jwk({"kty": "EC", "crv": "P-256"}) == ALG_ES256
+
+
+def test_alg_for_public_jwk_rejects_unsupported_key_types() -> None:
+    with pytest.raises(SigningConfigurationError, match="unsupported JWK"):
+        alg_for_public_jwk({"kty": "RSA", "n": "..."})
 
 
 # ---------------------------------------------------------------------------
@@ -385,11 +396,13 @@ class TestLoadActiveSigningCredential:
         monkeypatch.setenv("WEBHOOK_SIGNING_KEYS_DIR", str(tmp_path))
 
     @staticmethod
-    def _row(tmp_path, *, backend="local_pem", jwk=None):
+    def _row(tmp_path, *, backend="local_pem", jwk=None, pem_bytes=None):
         """Build a fake ORM row that quacks like TenantSigningCredential."""
+        default_pem_bytes, default_jwk = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
         if jwk is None:
-            _, jwk = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
-        pem_bytes = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")[0]
+            jwk = default_jwk
+        if pem_bytes is None:
+            pem_bytes = default_pem_bytes
         pem_path = tmp_path / "key.pem"
         pem_path.write_bytes(pem_bytes)
         row = MagicMock()
@@ -445,6 +458,60 @@ class TestLoadActiveSigningCredential:
             mock_repo_cls.return_value.get_active.return_value = row
             with patch("src.core.database.database_session.get_db_session"):
                 with pytest.raises(SigningConfigurationError, match="failed to read PEM"):
+                    load_active_signing_credential(tenant_id="t1", signing_mode=SIGNING_MODE_RFC9421)
+
+    def test_malformed_pem_file_fails_closed(self, tmp_path):
+        row = self._row(tmp_path, pem_bytes=b"not a pem file")
+        with patch("src.core.database.repositories.TenantSigningCredentialRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.get_active.return_value = row
+            with patch("src.core.database.database_session.get_db_session"):
+                with pytest.raises(SigningConfigurationError, match="failed to load PEM"):
+                    load_active_signing_credential(tenant_id="t1", signing_mode=SIGNING_MODE_RFC9421)
+
+    def test_pem_algorithm_mismatch_fails_closed(self, tmp_path):
+        _, ed25519_jwk = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
+        es256_pem = generate_signing_keypair(alg="es256", purpose="webhook-signing")[0]
+        row = self._row(tmp_path, jwk=ed25519_jwk, pem_bytes=es256_pem)
+        with patch("src.core.database.repositories.TenantSigningCredentialRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.get_active.return_value = row
+            with patch("src.core.database.database_session.get_db_session"):
+                with pytest.raises(SigningConfigurationError, match="alg/private_key mismatch"):
+                    load_active_signing_credential(tenant_id="t1", signing_mode=SIGNING_MODE_RFC9421)
+
+    def test_public_jwk_mismatch_fails_closed(self, tmp_path):
+        pem_bytes, _ = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
+        _, other_jwk = generate_signing_keypair(alg="ed25519", purpose="webhook-signing")
+        row = self._row(tmp_path, jwk=other_jwk, pem_bytes=pem_bytes)
+        with patch("src.core.database.repositories.TenantSigningCredentialRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.get_active.return_value = row
+            with patch("src.core.database.database_session.get_db_session"):
+                with pytest.raises(SigningConfigurationError, match="public_jwk does not match private key"):
+                    load_active_signing_credential(tenant_id="t1", signing_mode=SIGNING_MODE_RFC9421)
+
+    def test_key_id_public_jwk_kid_mismatch_fails_closed(self, tmp_path):
+        row = self._row(tmp_path)
+        row.key_id = "wrong-kid"
+        with patch("src.core.database.repositories.TenantSigningCredentialRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.get_active.return_value = row
+            with patch("src.core.database.database_session.get_db_session"):
+                with pytest.raises(SigningConfigurationError, match="key_id/public_jwk.kid mismatch"):
+                    load_active_signing_credential(tenant_id="t1", signing_mode=SIGNING_MODE_RFC9421)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("use", "enc", "public_jwk.use"),
+            ("key_ops", ["sign"], "public_jwk.key_ops"),
+            ("adcp_use", "request-signing", "public_jwk.adcp_use"),
+        ],
+    )
+    def test_public_jwk_metadata_mismatch_fails_closed(self, tmp_path, field, value, message):
+        row = self._row(tmp_path)
+        row.public_jwk = {**row.public_jwk, field: value}
+        with patch("src.core.database.repositories.TenantSigningCredentialRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.get_active.return_value = row
+            with patch("src.core.database.database_session.get_db_session"):
+                with pytest.raises(SigningConfigurationError, match=message):
                     load_active_signing_credential(tenant_id="t1", signing_mode=SIGNING_MODE_RFC9421)
 
     def test_unsupported_jwk_fails_closed(self, tmp_path):
