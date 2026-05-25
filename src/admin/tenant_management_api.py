@@ -635,6 +635,9 @@ _ADAPTER_CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
         "supports_forecasting": True,
         "supports_pricing_recommendations": False,
         "supported_pricing_models": ["cpm", "vcpm", "cpc", "flat_rate"],
+        "supports_inventory_configuration_authoring": True,
+        "supports_signal_mapping_authoring": True,
+        "supports_materialization_preview": False,
         "candidate_generation": "hierarchy_rollup_recent_delivery",
         "search_limits": {"default_page_size": 50, "max_page_size": 100},
         "normalization_notes": [
@@ -648,6 +651,9 @@ _ADAPTER_CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
         "supported_signal_types": ["custom_targeting", "audience_segment"],
         "supports_forecasting": False,
         "supports_pricing_recommendations": False,
+        "supports_inventory_configuration_authoring": False,
+        "supports_signal_mapping_authoring": False,
+        "supports_materialization_preview": False,
         "candidate_generation": "placement_package_rollup",
         "search_limits": {"default_page_size": 50, "max_page_size": 100},
         "normalization_notes": ["FreeWheel inventory setup is normalized around placement/package concepts."],
@@ -658,6 +664,9 @@ _ADAPTER_CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
         "supported_signal_types": ["key_value", "audience_segment"],
         "supports_forecasting": False,
         "supports_pricing_recommendations": False,
+        "supports_inventory_configuration_authoring": False,
+        "supports_signal_mapping_authoring": False,
+        "supports_materialization_preview": False,
         "candidate_generation": "supply_tag_rollup",
         "search_limits": {"default_page_size": 50, "max_page_size": 100},
         "normalization_notes": [
@@ -670,6 +679,9 @@ _ADAPTER_CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
         "supported_signal_types": ["custom_targeting", "audience_segment"],
         "supports_forecasting": True,
         "supports_pricing_recommendations": True,
+        "supports_inventory_configuration_authoring": False,
+        "supports_signal_mapping_authoring": False,
+        "supports_materialization_preview": False,
         "candidate_generation": "deterministic_sample_objects",
         "search_limits": {"default_page_size": 50, "max_page_size": 100},
         "normalization_notes": ["Mock contracts return deterministic sample objects for local and CI setup flows."],
@@ -680,6 +692,9 @@ _ADAPTER_CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
         "supported_signal_types": [],
         "supports_forecasting": False,
         "supports_pricing_recommendations": False,
+        "supports_inventory_configuration_authoring": False,
+        "supports_signal_mapping_authoring": False,
+        "supports_materialization_preview": False,
         "candidate_generation": "zone_creative_size_rollup",
         "search_limits": {"default_page_size": 50, "max_page_size": 100},
         "normalization_notes": ["Broadstreet setup is normalized around zones and supported creative sizes."],
@@ -719,7 +734,64 @@ _ADAPTER_FEATURE_CONTRACTS: dict[str, dict[str, str]] = {
         "reason": "Sales Agent cannot import audience segments for this adapter.",
         "remediation": "Use contextual signals or configure audience mappings outside Sales Agent.",
     },
+    "inventory_configuration_authoring": {
+        "reason": "Storefront cannot yet author useful inventory configurations from this adapter's synced objects.",
+        "remediation": "Use the embedded admin UI or manually configured products until setup-authoring support lands.",
+    },
+    "signal_mapping_authoring": {
+        "reason": "Storefront cannot yet author buyer-facing signal mappings from this adapter's native objects.",
+        "remediation": "Use the embedded admin UI or manually configured signals until setup-authoring support lands.",
+    },
+    "materialization_preview": {
+        "reason": "Sales Agent does not yet expose a pre-publish materialization preview for this adapter.",
+        "remediation": "Validate authored setup through connection tests and existing status/sync endpoints.",
+    },
 }
+
+_SHARED_TENANT_OPERATIONS: tuple[dict[str, str], ...] = (
+    {
+        "method": "POST",
+        "path": "/tenants/preview-adapter",
+        "root_path": "/api/v1/tenant-management/tenants/preview-adapter",
+        "operationId": "post__api_v1_tenant-management_tenants_preview-adapter",
+    },
+    {
+        "method": "POST",
+        "path": "/tenants/provision",
+        "root_path": "/api/v1/tenant-management/tenants/provision",
+        "operationId": "post__api_v1_tenant-management_tenants_provision",
+    },
+    {
+        "method": "GET",
+        "path": "/tenants/{tenant_id}/status",
+        "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/status",
+        "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_status",
+    },
+    {
+        "method": "POST",
+        "path": "/tenants/{tenant_id}/refresh",
+        "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/refresh",
+        "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_refresh",
+    },
+    {
+        "method": "GET",
+        "path": "/tenants/{tenant_id}/sync-history",
+        "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/sync-history",
+        "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_sync-history",
+    },
+    {
+        "method": "PUT",
+        "path": "/tenants/{tenant_id}/adapter-config",
+        "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/adapter-config",
+        "operationId": "put__api_v1_tenant-management_tenants_{tenant_id}_adapter-config",
+    },
+    {
+        "method": "POST",
+        "path": "/tenants/{tenant_id}/adapter-config/test-connection",
+        "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/adapter-config/test-connection",
+        "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_adapter-config_test-connection",
+    },
+)
 
 
 def _tenant_management_url(path: str) -> str:
@@ -771,6 +843,9 @@ def _unsupported_features(
         "webhooks": summary.supports_webhooks,
         "custom_targeting": summary.supports_custom_targeting,
         "audiences": "audience_segment" in supported_signal_types,
+        "inventory_configuration_authoring": bool(profile.get("supports_inventory_configuration_authoring")),
+        "signal_mapping_authoring": bool(profile.get("supports_signal_mapping_authoring")),
+        "materialization_preview": bool(profile.get("supports_materialization_preview")),
     }
     unsupported_features: list[AdapterUnsupportedFeature] = []
     for feature, supported in feature_checks.items():
@@ -813,6 +888,9 @@ def _build_adapter_capabilities(adapter_type: str, adapter_class: Any) -> Adapte
         or caps.supports_realtime_reporting
         or caps.reporting_bundled_with_inventory,
         supports_pricing_recommendations=bool(profile.get("supports_pricing_recommendations")),
+        supports_inventory_configuration_authoring=bool(profile.get("supports_inventory_configuration_authoring")),
+        supports_signal_mapping_authoring=bool(profile.get("supports_signal_mapping_authoring")),
+        supports_materialization_preview=bool(profile.get("supports_materialization_preview")),
         sync_streams=list(profile.get("sync_streams", [])),
         supported_object_types=list(profile.get("supported_object_types", [])),
         supported_signal_types=supported_signal_types,
@@ -872,6 +950,22 @@ def _auth_error_responses() -> dict[str, Any]:
         "401": _api_error_response("Tenant management API key is missing or invalid."),
         "403": _api_error_response("Tenant management API key is not authorized."),
     }
+
+
+def _openapi_ref_for_root_operation(operation: dict[str, str]) -> str:
+    escaped_path = operation["root_path"].replace("~", "~0").replace("/", "~1")
+    return f"../tenant-management-openapi.json#/paths/{escaped_path}/{operation['method'].lower()}"
+
+
+def _shared_tenant_operation_refs() -> list[dict[str, str]]:
+    """Return root OpenAPI operation refs for shared tenant-management setup paths."""
+    return [
+        {
+            **operation,
+            "openapi_ref": _openapi_ref_for_root_operation(operation),
+        }
+        for operation in _SHARED_TENANT_OPERATIONS
+    ]
 
 
 def _adapter_runtime_config_model(adapter_type: str) -> type[Any] | None:
@@ -1067,14 +1161,9 @@ def _build_adapter_openapi_document(adapter_type: str, adapter_class: Any) -> di
         "x-salesagent-search-limits": profile.get("search_limits", {}),
         "x-salesagent-normalization-notes": profile.get("normalization_notes", []),
         "x-salesagent-shared-tenant-endpoints": [
-            "POST /tenants/preview-adapter",
-            "POST /tenants/provision",
-            "GET /tenants/{tenant_id}/status",
-            "POST /tenants/{tenant_id}/refresh",
-            "GET /tenants/{tenant_id}/sync-history",
-            "PUT /tenants/{tenant_id}/adapter-config",
-            "POST /tenants/{tenant_id}/adapter-config/test-connection",
+            f"{operation['method']} {operation['path']}" for operation in _SHARED_TENANT_OPERATIONS
         ],
+        "x-salesagent-shared-tenant-operations": _shared_tenant_operation_refs(),
     }
 
 

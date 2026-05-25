@@ -211,9 +211,17 @@ class TestTenantManagementAPIIntegration:
         assert body["supports_inventory_sync"] is True
         assert body["supports_reporting_sync"] is True
         assert body["supports_reporting"] is True
+        assert body["supports_inventory_profiles"] is True
+        assert body["supports_inventory_configuration_authoring"] is False
+        assert body["supports_signal_mapping_authoring"] is False
+        assert body["supports_materialization_preview"] is False
         assert body["sync_streams"] == ["inventory", "reporting"]
         assert "placement" in body["supported_object_types"]
         assert "audience_segment" in body["supported_signal_types"]
+        assert any(
+            feature["feature"] == "inventory_configuration_authoring" for feature in body["unsupported_features"]
+        )
+        assert any(feature["feature"] == "signal_mapping_authoring" for feature in body["unsupported_features"])
         pricing_gap = next(
             feature for feature in body["unsupported_features"] if feature["feature"] == "pricing_recommendations"
         )
@@ -231,8 +239,12 @@ class TestTenantManagementAPIIntegration:
         assert response.json["type"] == "google_ad_manager"
         assert response.json["supports_forecasting"] is True
         assert response.json["supports_custom_targeting"] is True
+        assert response.json["supports_inventory_configuration_authoring"] is True
+        assert response.json["supports_signal_mapping_authoring"] is True
+        assert response.json["supports_materialization_preview"] is False
         assert response.json["sync_streams"] == ["inventory", "custom_targeting", "advertisers"]
         assert "flat_rate" in response.json["supported_pricing_models"]
+        assert any(feature["feature"] == "materialization_preview" for feature in response.json["unsupported_features"])
 
     def test_get_adapter_openapi_returns_component_contract(self, client, mock_api_key_auth):
         """Adapter OpenAPI docs stay adapter-specific and link to shared tenant operations."""
@@ -250,6 +262,19 @@ class TestTenantManagementAPIIntegration:
         assert document["x-salesagent-shared-openapi"] == "../tenant-management-openapi.json"
         assert "GAM 1x1" in " ".join(document["x-salesagent-normalization-notes"])
         assert "POST /tenants/provision" in document["x-salesagent-shared-tenant-endpoints"]
+        shared_operations = document["x-salesagent-shared-tenant-operations"]
+        provision_operation = next(
+            operation for operation in shared_operations if operation["path"] == "/tenants/provision"
+        )
+        assert provision_operation == {
+            "method": "POST",
+            "path": "/tenants/provision",
+            "root_path": "/api/v1/tenant-management/tenants/provision",
+            "operationId": "post__api_v1_tenant-management_tenants_provision",
+            "openapi_ref": (
+                "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1provision/post"
+            ),
+        }
         assert document["security"] == [{"TenantManagementApiKey": []}]
         assert "TenantManagementApiKey" in document["components"]["securitySchemes"]
 

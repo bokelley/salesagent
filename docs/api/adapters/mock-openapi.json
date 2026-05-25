@@ -531,6 +531,57 @@
     "PUT /tenants/{tenant_id}/adapter-config",
     "POST /tenants/{tenant_id}/adapter-config/test-connection"
   ],
+  "x-salesagent-shared-tenant-operations": [
+    {
+      "method": "POST",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1preview-adapter/post",
+      "operationId": "post__api_v1_tenant-management_tenants_preview-adapter",
+      "path": "/tenants/preview-adapter",
+      "root_path": "/api/v1/tenant-management/tenants/preview-adapter"
+    },
+    {
+      "method": "POST",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1provision/post",
+      "operationId": "post__api_v1_tenant-management_tenants_provision",
+      "path": "/tenants/provision",
+      "root_path": "/api/v1/tenant-management/tenants/provision"
+    },
+    {
+      "method": "GET",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1{tenant_id}~1status/get",
+      "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_status",
+      "path": "/tenants/{tenant_id}/status",
+      "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/status"
+    },
+    {
+      "method": "POST",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1{tenant_id}~1refresh/post",
+      "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_refresh",
+      "path": "/tenants/{tenant_id}/refresh",
+      "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/refresh"
+    },
+    {
+      "method": "GET",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1{tenant_id}~1sync-history/get",
+      "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_sync-history",
+      "path": "/tenants/{tenant_id}/sync-history",
+      "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/sync-history"
+    },
+    {
+      "method": "PUT",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1{tenant_id}~1adapter-config/put",
+      "operationId": "put__api_v1_tenant-management_tenants_{tenant_id}_adapter-config",
+      "path": "/tenants/{tenant_id}/adapter-config",
+      "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/adapter-config"
+    },
+    {
+      "method": "POST",
+      "openapi_ref": "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1{tenant_id}~1adapter-config~1test-connection/post",
+      "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_adapter-config_test-connection",
+      "path": "/tenants/{tenant_id}/adapter-config/test-connection",
+      "root_path": "/api/v1/tenant-management/tenants/{tenant_id}/adapter-config/test-connection"
+    }
+  ],
   "x-salesagent-supported-object-types": [
     "placement",
     "package",
