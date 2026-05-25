@@ -235,7 +235,7 @@ class TestTenantManagementAPIIntegration:
         assert "flat_rate" in response.json["supported_pricing_models"]
 
     def test_get_adapter_openapi_returns_component_contract(self, client, mock_api_key_auth):
-        """Adapter OpenAPI docs are component-focused and avoid advertising unimplemented paths as live."""
+        """Adapter OpenAPI docs stay adapter-specific and link to shared tenant operations."""
         response = client.get(
             "/api/v1/tenant-management/adapters/google_ad_manager/openapi.json",
             headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
@@ -246,69 +246,64 @@ class TestTenantManagementAPIIntegration:
         assert document["openapi"] == "3.1.0"
         assert document["info"]["version"] == "2026-05-01"
         assert document["x-salesagent-adapter"] == "google_ad_manager"
+        assert document["x-salesagent-adapter-contract-kind"] == "adapter-specific-supplement"
+        assert document["x-salesagent-shared-openapi"] == "../tenant-management-openapi.json"
         assert "GAM 1x1" in " ".join(document["x-salesagent-normalization-notes"])
-        assert document["x-salesagent-common-tenant-endpoints"]["live"]
+        assert "POST /tenants/provision" in document["x-salesagent-shared-tenant-endpoints"]
         assert document["security"] == [{"TenantManagementApiKey": []}]
         assert "TenantManagementApiKey" in document["components"]["securitySchemes"]
-        assert (
-            "GET /tenants/{tenant_id}/inventory-configuration-candidates"
-            in document["x-salesagent-common-tenant-endpoints"]["contract_components_only"]
-        )
 
         schemas = document["components"]["schemas"]
         for schema_name in (
             "AdapterConfig",
+            "AdapterRuntimeConfig",
             "AdapterCapabilities",
+            "AdapterSettingsSchemaResponse",
+            "AdapterSettingsValidationResponse",
             "ApiError",
-            "TestConnectionResponse",
-            "PreviewAdapterResponse",
-            "TenantStatusResponse",
-            "SetupTaskItem",
-            "StatusSyncsBlock",
-            "AdServerObjectSearchRequest",
-            "AdServerObjectSearchResponse",
-            "AdServerObject",
-            "CreativeFormatClassification",
-            "InventoryConfigurationCandidate",
-            "InventoryConfigurationCandidateListResponse",
-            "InventoryConfigurationWrite",
-            "InventoryConfigurationResponse",
-            "InventoryConfigurationPreviewRequest",
-            "InventoryConfigurationPreviewResponse",
-            "SignalCandidate",
-            "SignalMappingWrite",
-            "SignalMappingResponse",
-            "SignalMappingPreviewRequest",
-            "SignalMappingPreviewResponse",
-            "ReportingForecastSummary",
-            "PricingRecommendation",
-            "PricingRecommendationResponse",
-            "WebhookEvent",
             "UnsupportedFeature",
         ):
             assert schema_name in schemas
 
-        operations = document["x-salesagent-common-tenant-operations"]
-        assert (
-            operations["live"]["POST /tenants/{tenant_id}/adapter-config/test-connection"]["response"]
-            == "#/components/schemas/TestConnectionResponse"
-        )
-        assert schemas["PreviewAdapterRequest"]["properties"]["adapter"] == {
-            "$ref": "#/components/schemas/AdapterConfig"
+        repeated_shared_schema_names = {
+            "TestConnectionResponse",
+            "PreviewAdapterRequest",
+            "PreviewAdapterResponse",
+            "ProvisionTenantRequest",
+            "ProvisionTenantResponse",
+            "TenantStatusResponse",
+            "SetupTaskItem",
+            "StatusSyncsBlock",
+            "AdServerObjectSearchRequest",
+            "InventoryConfigurationCandidate",
+            "SignalCandidate",
+            "PricingRecommendation",
+            "WebhookEvent",
         }
-        assert schemas["ProvisionTenantRequest"]["properties"]["adapter"] == {
-            "$ref": "#/components/schemas/AdapterConfig"
-        }
-        assert (
-            operations["contract_components_only"]["GET /tenants/{tenant_id}/ad-server-objects/search"]["response"]
-            == "#/components/schemas/AdServerObjectSearchResponse"
-        )
-        for planned_endpoint in document["x-salesagent-common-tenant-endpoints"]["contract_components_only"]:
-            assert planned_endpoint in operations["contract_components_only"]
-        assert "/tenants/{tenant_id}/inventory-configuration-candidates" not in document["paths"]
+        assert repeated_shared_schema_names.isdisjoint(schemas)
 
-    def test_adapter_contract_signal_capabilities_are_consistent(self, client, mock_api_key_auth):
-        """Signal schemas and capabilities use the same adapter support decision."""
+        paths = document["paths"]
+        assert "/adapters/google_ad_manager/config-schema" in paths
+        assert "/tenants/{tenant_id}/adapters/google_ad_manager/config" in paths
+        assert "/tenants/{tenant_id}/adapters/google_ad_manager/config:validate" in paths
+        assert "/tenants/{tenant_id}/inventory-configuration-candidates" not in paths
+
+    def test_adapter_openapi_mock_has_no_runtime_config_paths(self, client, mock_api_key_auth):
+        """Mock has no adapter runtime config supplement."""
+        response = client.get(
+            "/api/v1/tenant-management/adapters/mock/openapi.json",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+
+        assert response.status_code == 200
+        document = response.json
+        assert "AdapterRuntimeConfig" not in document["components"]["schemas"]
+        assert list(document["paths"]) == ["/adapters/mock/capabilities", "/adapters/mock/openapi.json"]
+
+    def test_adapter_contract_signal_capabilities_do_not_duplicate_shared_signal_schemas(
+        self, client, mock_api_key_auth
+    ):
+        """Signal support is a capability; shared signal schemas live in the root spec."""
         for adapter_type in ("mock", "broadstreet"):
             capabilities_response = client.get(
                 f"/api/v1/tenant-management/adapters/{adapter_type}/capabilities",
@@ -322,14 +317,14 @@ class TestTenantManagementAPIIntegration:
             assert capabilities_response.status_code == 200
             assert openapi_response.status_code == 200
             capabilities_body = capabilities_response.json
-            signal_type_schema = openapi_response.json["components"]["schemas"]["SignalCandidate"]["properties"]["type"]
+            schemas = openapi_response.json["components"]["schemas"]
 
             assert capabilities_body["supported_signal_types"] == []
             assert capabilities_body["supports_audiences"] is False
             assert any(
                 feature["feature"] == "custom_targeting" for feature in capabilities_body["unsupported_features"]
             )
-            assert "enum" not in signal_type_schema
+            assert "SignalCandidate" not in schemas
 
     def test_get_adapter_contract_unknown_type_returns_404(self, client, mock_api_key_auth):
         """Unknown and parked adapters are not published as contract surfaces."""
