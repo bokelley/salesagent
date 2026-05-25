@@ -281,8 +281,8 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
         if rate_str:
             try:
                 rate = float(rate_str)
-            except ValueError:
-                raise ValueError(f"Invalid rate value for pricing option {index}")
+            except ValueError as e:
+                raise ValueError(f"Invalid rate value for pricing option {index}") from e
 
         # Validate rate is required for fixed pricing
         if is_fixed and rate is None:
@@ -307,8 +307,8 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
                             price_guidance[percentile] = float(value_str)
                         except ValueError:
                             pass
-            except ValueError:
-                raise ValueError(f"Invalid floor price value for pricing option {index}")
+            except ValueError as e:
+                raise ValueError(f"Invalid floor price value for pricing option {index}") from e
 
         # Parse min_spend_per_package
         min_spend = None

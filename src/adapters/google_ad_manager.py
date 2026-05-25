@@ -158,11 +158,11 @@ class GoogleAdManager(AdServerAdapter):
             # Check if it's numeric (as string or int)
             try:
                 int(advertiser_id)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
                 raise ValueError(
                     f"GAM advertiser_id must be numeric (got: '{advertiser_id}'). "
                     f"Check principal platform_mappings configuration."
-                )
+                ) from e
 
         # advertiser_id is only required for order/campaign operations, not inventory sync
 

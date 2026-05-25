@@ -407,7 +407,7 @@ class GAMReportingService:
             return data
 
         except Exception as e:
-            raise Exception(f"Error running GAM report: {str(e)}")
+            raise Exception(f"Error running GAM report: {str(e)}") from e
 
     def _process_report_data(
         self, raw_data: list[dict[str, Any]], granularity: str, requested_tz: str

@@ -86,12 +86,12 @@ def decrypt_api_key(ciphertext: str) -> str:
     try:
         decrypted = fernet.decrypt(ciphertext.encode())
         return decrypted.decode()
-    except InvalidToken:
+    except InvalidToken as e:
         logger.error("Failed to decrypt API key - invalid token or wrong encryption key")
-        raise ValueError("Invalid encrypted data or wrong encryption key")
+        raise ValueError("Invalid encrypted data or wrong encryption key") from e
     except Exception as e:
         logger.error(f"Unexpected error during decryption: {e}")
-        raise ValueError(f"Decryption failed: {e}")
+        raise ValueError(f"Decryption failed: {e}") from e
 
 
 def is_encrypted(value: str | None) -> bool:

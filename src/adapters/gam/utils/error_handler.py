@@ -272,7 +272,9 @@ def with_retry(
                         logger.error(
                             f"{op_name} failed with {gam_error.error_type.value}: {str(gam_error)}", extra=error_dict
                         )
-                        raise gam_error
+                        if gam_error is e:
+                            raise
+                        raise gam_error from e
 
             # All retries exhausted
             if last_exception is None:

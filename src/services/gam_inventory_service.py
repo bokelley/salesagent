@@ -764,7 +764,7 @@ class GAMInventoryService:
             self.db.rollback()
             raise TimeoutError(
                 "Database commit timed out after 120s - possible lost connection, lock contention, or large transaction"
-            )
+            ) from e
         except (OperationalError, DBAPIError) as e:
             # Connection errors - log and re-raise with context
             logger.error(f"❌ Database connection error during batch write: {e}")
@@ -776,7 +776,7 @@ class GAMInventoryService:
                 "Database connection lost during batch write. This can happen in long-running syncs if the connection times out.",
                 params=None,
                 orig=e.orig if hasattr(e, "orig") and e.orig is not None else Exception("Unknown error"),
-            )
+            ) from e
         except Exception as e:
             logger.error(f"❌ Batch write failed: {e}", exc_info=True)
             logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")

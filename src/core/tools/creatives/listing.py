@@ -91,13 +91,13 @@ def _list_creatives_impl(
     if created_after:
         try:
             created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
-        except ValueError:
-            raise AdCPValidationError(f"Invalid created_after date format: {created_after}")
+        except ValueError as e:
+            raise AdCPValidationError(f"Invalid created_after date format: {created_after}") from e
     if created_before:
         try:
             created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
-        except ValueError:
-            raise AdCPValidationError(f"Invalid created_before date format: {created_before}")
+        except ValueError as e:
+            raise AdCPValidationError(f"Invalid created_before date format: {created_before}") from e
 
     # Validate sort_order is valid Literal
     from typing import Literal

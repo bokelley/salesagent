@@ -345,7 +345,7 @@ class GAMTargetingManager:
 
         except Exception as e:
             logger.error(f"Failed to get/create custom targeting value '{value_name}': {e}", exc_info=True)
-            raise ValueError(f"Custom targeting value lookup/creation failed for '{value_name}': {e}")
+            raise ValueError(f"Custom targeting value lookup/creation failed for '{value_name}': {e}") from e
 
     def _build_custom_targeting_structure(
         self, custom_targeting_dict: dict[str, Any], logical_operator: str = "AND"

@@ -534,7 +534,7 @@ class GAMOrdersManager:
                     except (ValueError, AdCPNotFoundError, AdCPAdapterError) as e:
                         error_msg = f"Format lookup failed for '{format_display}': {e}"
                         log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                        raise ValueError(error_msg) from e
 
                     # Check if format type is supported by product
                     # adcp 3.12: Format.type removed. Infer from format_id string.

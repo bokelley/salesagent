@@ -166,4 +166,4 @@ except Exception as e:
             print("Fallback direct update successful")
         except Exception as ex:
             print(f"Fallback failed: {ex}")
-            raise e
+            raise

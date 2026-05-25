@@ -46,7 +46,7 @@ def mock_config(tenant_id, product_id, **kwargs):
                             raise ValueError(f"{field_name} must be at most {max_val}")
                         return value
                     except (ValueError, TypeError) as e:
-                        raise ValueError(f"Invalid value for {field_name}: {e}")
+                        raise ValueError(f"Invalid value for {field_name}: {e}") from e
 
                 def parse_float(field_name, default, min_val=None, max_val=None):
                     try:
@@ -57,7 +57,7 @@ def mock_config(tenant_id, product_id, **kwargs):
                             raise ValueError(f"{field_name} must be at most {max_val}")
                         return value
                     except (ValueError, TypeError) as e:
-                        raise ValueError(f"Invalid value for {field_name}: {e}")
+                        raise ValueError(f"Invalid value for {field_name}: {e}") from e
 
                 # Traffic simulation (with validation)
                 config["daily_impressions"] = parse_int("daily_impressions", 100000, min_val=0)

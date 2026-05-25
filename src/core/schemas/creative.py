@@ -183,7 +183,7 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
             values["format_id"] = upgrade_legacy_format_id(format_val)
             values.pop("format", None)
         except ValueError as e:
-            raise ValueError(f"Invalid format_id: {e}")
+            raise ValueError(f"Invalid format_id: {e}") from e
 
     assets = values.get("assets")
     if isinstance(assets, dict):

@@ -1653,7 +1653,7 @@ async def _validate_and_convert_format_ids(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
                 f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
-            )
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
@@ -1811,7 +1811,7 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise AdCPValidationError(error_msg, recovery="terminal")
+            raise AdCPValidationError(error_msg, recovery="terminal") from e
 
     # Validate principal exists BEFORE creating context (foreign key constraint)
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
@@ -2173,7 +2173,7 @@ async def _create_media_buy_impl(
                                 package_pricing_info_by_index[idx] = pricing_info
                             except AdCPError as e:
                                 # Re-raise pricing validation errors
-                                raise ValueError(str(e))
+                                raise ValueError(str(e)) from e
 
             # Validate minimum product spend (legacy + new pricing_options)
             if currency_limit.min_package_budget:
@@ -4285,7 +4285,7 @@ async def _create_media_buy_impl(
 
         raise AdCPAdapterError(
             f"Failed to create media buy: {str(e)}", details={"error_code": "MEDIA_BUY_CREATION_ERROR"}
-        )
+        ) from e
 
 
 # Unified update tools

@@ -72,7 +72,7 @@ class WebhookVerifier:
         try:
             webhook_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         except ValueError as e:
-            raise WebhookVerificationError(f"Invalid timestamp format: {e}")
+            raise WebhookVerificationError(f"Invalid timestamp format: {e}") from e
 
         # Ensure timezone-aware
         if webhook_time.tzinfo is None:

@@ -200,7 +200,7 @@ def init_db_ci():
                         tenant_id = existing_tenant.tenant_id
                         print(f"   Using existing tenant (ID: {tenant_id})")
                     else:
-                        raise ValueError("Failed to create or find CI test tenant")
+                        raise ValueError("Failed to create or find CI test tenant") from e
 
                 # Now create principal + dependencies in separate transaction
                 # Query again for principal (may have been created by other container)
@@ -542,7 +542,7 @@ def init_db_ci():
                     if existing_iso:
                         iso_tenant_id = existing_iso.tenant_id
                     else:
-                        raise ValueError("Failed to create or find isolation tenant")
+                        raise ValueError("Failed to create or find isolation tenant") from e
 
             # Create principal for isolation tenant
             stmt_iso_principal = select(Principal).filter_by(access_token="iso-test-token")

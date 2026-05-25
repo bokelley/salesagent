@@ -139,8 +139,8 @@ class AdCPSchemaValidator:
                 try:
                     with open(cache_path) as f:
                         return json.load(f)
-                except (json.JSONDecodeError, OSError):
-                    raise SchemaDownloadError(f"Offline mode enabled but cached index is invalid: {cache_path}")
+                except (json.JSONDecodeError, OSError) as e:
+                    raise SchemaDownloadError(f"Offline mode enabled but cached index is invalid: {cache_path}") from e
             raise SchemaDownloadError("Offline mode enabled but no valid cached index found")
 
         # Load cached metadata (ETag, Last-Modified, content hash)
@@ -217,7 +217,7 @@ class AdCPSchemaValidator:
                 with open(cache_path) as f:
                     return json.load(f)
 
-            raise SchemaDownloadError(f"Failed to download schema index: {e}")
+            raise SchemaDownloadError(f"Failed to download schema index: {e}") from e
 
     async def _download_schema(self, schema_ref: str) -> dict[str, Any]:
         """
@@ -238,8 +238,8 @@ class AdCPSchemaValidator:
                 try:
                     with open(cache_path) as f:
                         return json.load(f)
-                except (json.JSONDecodeError, OSError):
-                    raise SchemaDownloadError(f"Offline mode enabled but cached schema is invalid: {cache_path}")
+                except (json.JSONDecodeError, OSError) as e:
+                    raise SchemaDownloadError(f"Offline mode enabled but cached schema is invalid: {cache_path}") from e
             raise SchemaDownloadError(f"Offline mode enabled but no valid cached schema: {schema_ref}")
 
         # Load cached metadata (ETag, Last-Modified, content hash)
@@ -323,7 +323,7 @@ class AdCPSchemaValidator:
                 with open(cache_path) as f:
                     return json.load(f)
 
-            raise SchemaDownloadError(f"Failed to download schema {schema_ref}: {e}")
+            raise SchemaDownloadError(f"Failed to download schema {schema_ref}: {e}") from e
 
     async def get_schema_index(self) -> dict[str, Any]:
         """Get the schema index, using cache when possible."""
@@ -599,7 +599,7 @@ class AdCPSchemaValidator:
             # Re-raise schema validation errors without wrapping them
             raise
         except Exception as e:
-            raise SchemaValidationError(f"Unexpected error validating {context}: {e}", [str(e)])
+            raise SchemaValidationError(f"Unexpected error validating {context}: {e}", [str(e)]) from e
 
 
 # Decorator functions for easy integration with tests

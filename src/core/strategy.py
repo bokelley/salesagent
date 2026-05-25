@@ -360,8 +360,8 @@ class SimulationContext:
                     "message": f"Jumped to {event}",
                     "current_time": self.current_time.isoformat(),
                 }
-            except ValueError:
-                raise SimulationError(f"Unknown jump event: {event}")
+            except ValueError as e:
+                raise SimulationError(f"Unknown jump event: {event}") from e
 
     def _advance_time(self, duration_str: str) -> dict[str, Any]:
         """Advance simulation time by duration."""

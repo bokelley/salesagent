@@ -281,11 +281,11 @@ class FreeWheelReportingClient:
             response.raise_for_status()
             try:
                 payload = response.json()
-            except ValueError:
+            except ValueError as e:
                 # CSV fallback — not implemented yet, kept TODO for day-of-scope
                 raise ReportingResultFormatUnsupported(
                     "Result body was not JSON; CSV/Parquet parsing pending live verification."
-                )
+                ) from e
             rows = payload.get("rows") or payload.get("results") or payload.get("data") or payload
             if isinstance(rows, list):
                 return rows
