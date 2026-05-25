@@ -14,6 +14,26 @@ from src.core.database.models import AdapterConfig, GAMInventory, Tenant
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
+def _create_gam_targeting_values_tenant(factory_session, *, tenant_id: str, key_id: str) -> None:
+    from tests.factories import AdapterConfigFactory, TenantFactory
+    from tests.helpers.targeting_values import create_custom_targeting_key_row
+
+    tenant = TenantFactory(
+        tenant_id=tenant_id,
+        name=f"Targeting Values {tenant_id}",
+        subdomain=tenant_id.replace("_", "-"),
+        ad_server="google_ad_manager",
+    )
+    AdapterConfigFactory(
+        tenant=tenant,
+        adapter_type="google_ad_manager",
+        gam_network_code="123456",
+        gam_refresh_token="test_refresh_token",
+    )
+    create_custom_targeting_key_row(tenant, key_id)
+    factory_session.commit()
+
+
 def test_get_targeting_values_endpoint(authenticated_admin_session, integration_db):
     """Test /api/tenant/{id}/targeting/values/{key_id} queries GAM and returns values."""
     # integration_db fixture sets up the database environment
@@ -188,6 +208,55 @@ def test_get_targeting_values_empty_result(authenticated_admin_session, integrat
     data = response.json
     assert data["count"] == 0
     assert data["values"] == []
+
+
+def test_get_targeting_values_live_fetch_failure_returns_502(authenticated_admin_session, factory_session):
+    """Cache-miss live GAM failures should be distinguishable from local server errors."""
+    from src.admin.blueprints import inventory as inventory_blueprint
+
+    inventory_blueprint._TARGETING_VALUES_LIVE_FETCH_RATE.clear()
+    tenant_id = "live_fetch_failure_values"
+    key_id = "17304127"
+    _create_gam_targeting_values_tenant(factory_session, tenant_id=tenant_id, key_id=key_id)
+
+    with patch("src.adapters.gam_inventory_discovery.GAMInventoryDiscovery") as mock_gam_class:
+        with patch("googleads.ad_manager.AdManagerClient"):
+            with patch("googleads.oauth2.GoogleRefreshTokenClient"):
+                mock_gam_instance = MagicMock()
+                mock_gam_instance.discover_custom_targeting_values_for_key.side_effect = RuntimeError("GAM down")
+                mock_gam_class.return_value = mock_gam_instance
+
+                response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/targeting/values/{key_id}")
+
+    assert response.status_code == 502
+    assert response.json == {"error": "GAM unreachable, try again", "source": "live_failed"}
+
+
+def test_get_targeting_values_refresh_is_rate_limited(authenticated_admin_session, factory_session):
+    """Explicit refreshes should not allow unlimited live GAM calls for one tenant."""
+    from src.admin.blueprints import inventory as inventory_blueprint
+
+    inventory_blueprint._TARGETING_VALUES_LIVE_FETCH_RATE.clear()
+    tenant_id = "refresh_rate_limited_values"
+    key_id = "17304128"
+    _create_gam_targeting_values_tenant(factory_session, tenant_id=tenant_id, key_id=key_id)
+
+    with patch("src.adapters.gam_inventory_discovery.GAMInventoryDiscovery") as mock_gam_class:
+        with patch("googleads.ad_manager.AdManagerClient"):
+            with patch("googleads.oauth2.GoogleRefreshTokenClient"):
+                mock_gam_instance = MagicMock()
+                mock_gam_instance.discover_custom_targeting_values_for_key.return_value = []
+                mock_gam_class.return_value = mock_gam_instance
+
+                responses = [
+                    authenticated_admin_session.get(f"/api/tenant/{tenant_id}/targeting/values/{key_id}?refresh=1")
+                    for _ in range(11)
+                ]
+
+    assert [response.status_code for response in responses[:10]] == [200] * 10
+    assert responses[10].status_code == 429
+    assert "retry_after_seconds" in responses[10].json
+    assert mock_gam_instance.discover_custom_targeting_values_for_key.call_count == 10
 
 
 def test_get_targeting_values_tenant_isolation(authenticated_admin_session, integration_db):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -101,6 +102,24 @@ def sync_targeting_values_for_key(
 ) -> list[dict]:
     """Fetch one key's values from GAM, cache them, and return response dicts."""
     gam_values = discovery.discover_custom_targeting_values_for_key(key_id, max_values=max_values)
+    return persist_targeting_values_for_key(
+        repo,
+        key_id=key_id,
+        key_row=key_row,
+        gam_values=gam_values,
+        sync_time=sync_time,
+    )
+
+
+def persist_targeting_values_for_key(
+    repo: GAMSyncRepository,
+    *,
+    key_id: str,
+    key_row: GAMInventory,
+    gam_values: Sequence[Any],
+    sync_time: datetime | None = None,
+) -> list[dict]:
+    """Cache already-fetched GAM values and return response dicts."""
     key_display_name = (key_row.inventory_metadata or {}).get("display_name") or key_row.name
     synced_at = sync_time or datetime.now(UTC)
     returned_value_ids = {str(gam_value.id) for gam_value in gam_values}

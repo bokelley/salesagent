@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import String, func, or_, select
@@ -14,7 +15,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.services.targeting_values import cached_targeting_values as _cached_targeting_values
-from src.services.targeting_values import sync_targeting_values_for_key, targeting_values_synced_empty
+from src.services.targeting_values import persist_targeting_values_for_key, targeting_values_synced_empty
 from src.services.targeting_values import upsert_targeting_value_row as _upsert_targeting_value_row  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,36 @@ _CAPABILITY_KINDS = {
 
 _SAFEFRAME_MODES = {"unknown", "supported", "required", "disabled"}
 _RENDER_MODES = ("image", "html", "js", "vast")
+_TARGETING_VALUES_LIVE_FETCH_RATE: dict[str, list[float]] = {}
+_TARGETING_VALUES_LIVE_FETCH_WINDOW_SECONDS = 60.0
+_TARGETING_VALUES_LIVE_FETCH_LIMIT = 10
+
+
+def _check_targeting_values_live_fetch_rate(tenant_id: str) -> bool:
+    """Return True when this tenant may perform another live GAM value fetch."""
+    now = time.monotonic()
+    entries = _TARGETING_VALUES_LIVE_FETCH_RATE.setdefault(tenant_id, [])
+    cutoff = now - _TARGETING_VALUES_LIVE_FETCH_WINDOW_SECONDS
+    while entries and entries[0] < cutoff:
+        entries.pop(0)
+    if len(entries) >= _TARGETING_VALUES_LIVE_FETCH_LIMIT:
+        return False
+    entries.append(now)
+    return True
+
+
+def _live_targeting_values_failed_response(tenant_id: str, key_id: str, exc: Exception):
+    logger.warning(
+        "Live GAM targeting value fetch failed for tenant=%s key_id=%s: %s",
+        tenant_id,
+        key_id,
+        exc,
+        exc_info=True,
+    )
+    return (
+        jsonify({"error": "GAM unreachable, try again", "source": "live_failed"}),
+        502,
+    )
 
 
 @inventory_bp.route("/tenant/<tenant_id>/targeting")
@@ -334,14 +365,29 @@ def get_targeting_values(tenant_id, key_id):
             # Create inventory discovery instance
             gam_client = GAMInventoryDiscovery(client=gam_ad_manager_client, tenant_id=tenant_id)
 
+            if not _check_targeting_values_live_fetch_rate(tenant_id):
+                return (
+                    jsonify(
+                        {
+                            "error": "Too many live targeting value refreshes. Please wait before trying again.",
+                            "retry_after_seconds": int(_TARGETING_VALUES_LIVE_FETCH_WINDOW_SECONDS),
+                        }
+                    ),
+                    429,
+                )
+
             # Persist values so subsequent calls hit cache and tenants without
             # live GAM (demo, dev) can still browse the values they've fetched.
-            values = sync_targeting_values_for_key(
+            try:
+                gam_values = gam_client.discover_custom_targeting_values_for_key(key_id, max_values=1000)
+            except Exception as exc:
+                return _live_targeting_values_failed_response(tenant_id, key_id, exc)
+
+            values = persist_targeting_values_for_key(
                 gam_sync_repo,
                 key_id=key_id,
                 key_row=key_row,
-                discovery=gam_client,
-                max_values=1000,
+                gam_values=gam_values,
             )
             db_session.commit()
 
