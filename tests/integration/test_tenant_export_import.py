@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, insert, select, text
 
 from src.core.database.models import (
     AdapterConfig,
     AuditLog,
+    Base,
     Creative,
     CurrencyLimit,
     MediaBuy,
@@ -142,12 +143,47 @@ def _count_rows(session, tenant_id: str) -> dict[str, int]:
     }
 
 
+def _proposal_table():
+    return Base.metadata.tables["proposals"]
+
+
+def _insert_proposal(
+    session,
+    *,
+    tenant_id: str,
+    account_suffix: str = "buyer",
+    proposal_id: str = "prop_export_001",
+    state: str = "committed",
+):
+    proposals = _proposal_table()
+    session.execute(
+        insert(proposals).values(
+            account_id=f"{tenant_id}:{account_suffix}",
+            proposal_id=proposal_id,
+            state=state,
+            recipes={"brief": "connected tv"},
+            proposal_payload={"proposal_id": proposal_id, "allocations": []},
+            expires_at=None,
+            media_buy_id=None,
+            recipe_schema_version=1,
+        )
+    )
+
+
+def _proposal_rows(session, tenant_id: str) -> list[dict]:
+    proposals = _proposal_table()
+    return [
+        dict(row)
+        for row in session.execute(select(proposals).where(proposals.c.tenant_id == tenant_id)).mappings().all()
+    ]
+
+
 class TestDiscoverTenantScopedTables:
     """Sanity-check the reflection helper without touching the DB."""
 
     def test_includes_direct_tenant_id_tables(self):
         names = {t.name for t in discover_tenant_scoped_tables()}
-        for expected in ("principals", "products", "media_buys", "creatives", "audit_logs"):
+        for expected in ("principals", "products", "media_buys", "creatives", "audit_logs", "proposals"):
             assert expected in names, f"{expected} should be tenant-scoped"
 
     def test_includes_transitive_tables(self):
@@ -210,6 +246,62 @@ class TestRoundTrip:
 
             assert summary["tenant_id"] == "rt_basic"
             assert summary["rows"] > 0
+
+
+class TestProposalPortability:
+    """Proposal rows should travel with tenant export/import bundles."""
+
+    def test_round_trip_preserves_proposals_without_inserting_generated_tenant_id(self, integration_db):
+        with _ExportEnv() as env:
+            session = env.get_session()
+            _seed_tenant(session, "rt_prop")
+            _insert_proposal(session, tenant_id="rt_prop", proposal_id="prop_roundtrip")
+            session.commit()
+
+            bundle = export_tenant(session.connection(), "rt_prop")
+            session.commit()
+
+            proposal_rows = bundle["tables"]["proposals"]
+            assert len(proposal_rows) == 1
+            assert proposal_rows[0]["tenant_id"] == "rt_prop"
+
+            delete_tenant_data(session.connection(), "rt_prop")
+            session.commit()
+
+            summary = import_tenant(session.connection(), bundle)
+            session.commit()
+
+            restored = _proposal_rows(session, "rt_prop")
+            assert len(restored) == 1
+            assert restored[0]["account_id"] == "rt_prop:buyer"
+            assert restored[0]["proposal_id"] == "prop_roundtrip"
+            assert restored[0]["tenant_id"] == "rt_prop"
+            assert summary["tables"]["proposals"] == 1
+
+    def test_retarget_rewrites_proposal_account_id_prefix(self, integration_db):
+        from tests.factories import TenantFactory
+
+        with _ExportEnv() as env:
+            session = env.get_session()
+            source = TenantFactory(tenant_id="rt_prop_src", name="Proposal Source")
+            session.commit()
+            _insert_proposal(session, tenant_id=source.tenant_id, proposal_id="prop_clone")
+            session.commit()
+
+            bundle = export_tenant(session.connection(), source.tenant_id)
+            session.commit()
+            bundle["tenant"]["subdomain"] = "pub-rt-prop-dst"
+
+            import_tenant(session.connection(), bundle, target_tenant_id="rt_prop_dst")
+            session.commit()
+
+            source_rows = _proposal_rows(session, "rt_prop_src")
+            dst_rows = _proposal_rows(session, "rt_prop_dst")
+            assert len(source_rows) == 1
+            assert len(dst_rows) == 1
+            assert source_rows[0]["account_id"] == "rt_prop_src:buyer"
+            assert dst_rows[0]["account_id"] == "rt_prop_dst:buyer"
+            assert dst_rows[0]["proposal_id"] == "prop_clone"
 
 
 class TestCollisionModes:

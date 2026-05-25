@@ -69,21 +69,10 @@ SCHEMA_VERSION = 1
 TENANTS_TABLE = "tenants"
 
 # Tables that are global, not tenant-owned, and must never appear in a bundle.
-#
-# ``proposals`` is excluded because the row schema includes a
-# ``tenant_id GENERATED ALWAYS AS (split_part(account_id, ':', 1)) STORED``
-# column that Postgres rejects on direct INSERT. Tenant export's bulk-insert
-# path can't write a value for it; the alternative (strip the column on
-# import + let it auto-derive) is real but proposals are ephemeral state
-# (drafts expire fast, committed proposals get consumed) — exporting them
-# during a tenant move would carry stale in-flight state that the target's
-# ``PgProposalStore`` should re-mint via fresh ``get_products`` calls.
-# Revisit if proposal data turns out to need cross-deployment portability.
 EXCLUDED_TABLES: frozenset[str] = frozenset(
     {
         "superadmin_config",
         "alembic_version",
-        "proposals",
     }
 )
 
@@ -225,7 +214,7 @@ def _autoincrement_pk_column(table: Table) -> Column | None:
 def _globally_unique_string_pk_column(table: Table) -> Column | None:
     """Return single-column non-composite string PK, or None.
 
-    These IDs (``media_buy_id``, ``proposal_id``, ``context_id``, etc.) are
+    These IDs (``media_buy_id``, ``context_id``, etc.) are
     globally unique by their PK constraint — they collide on same-deployment
     clones even when ``tenant_id`` is rewritten. Composite PKs that include
     ``tenant_id`` (e.g. ``products(tenant_id, product_id)``) don't qualify
@@ -498,6 +487,7 @@ def _retarget_tenant_id(bundle: dict[str, Any], new_tenant_id: str) -> dict[str,
     where stale embedded references would matter, grep the JSON content of
     the bundle before importing.
     """
+    source_tenant_id = bundle["tenant"]["tenant_id"]
     new = dict(bundle)
     new["tenant"] = dict(bundle["tenant"], tenant_id=new_tenant_id)
     new_tables: dict[str, list[dict[str, Any]]] = {}
@@ -506,11 +496,37 @@ def _retarget_tenant_id(bundle: dict[str, Any], new_tenant_id: str) -> dict[str,
         for row in rows:
             if "tenant_id" in row:
                 row = dict(row, tenant_id=new_tenant_id)
+            if name == "proposals" and "account_id" in row:
+                row = dict(
+                    row,
+                    account_id=_retarget_proposal_account_id(
+                        row["account_id"],
+                        source_tenant_id=source_tenant_id,
+                        target_tenant_id=new_tenant_id,
+                    ),
+                )
             rewritten.append(row)
         new_tables[name] = rewritten
     new["tables"] = new_tables
     new["source"] = dict(bundle.get("source", {}), retargeted_to=new_tenant_id)
     return new
+
+
+def _retarget_proposal_account_id(account_id: Any, *, source_tenant_id: str, target_tenant_id: str) -> str:
+    """Rewrite the tenant prefix in PgProposalStore compound account IDs.
+
+    ``proposals.tenant_id`` is generated from ``split_part(account_id, ':', 1)``.
+    Retargeting only the generated ``tenant_id`` bundle field is insufficient;
+    Postgres recomputes it from ``account_id`` on insert.
+    """
+    if not isinstance(account_id, str):
+        raise ValueError(f"proposal account_id must be a string, got {type(account_id).__name__}")
+    prefix, separator, suffix = account_id.partition(":")
+    if prefix != source_tenant_id:
+        raise ValueError(f"proposal account_id={account_id!r} does not belong to source tenant {source_tenant_id!r}")
+    if not separator:
+        return target_tenant_id
+    return f"{target_tenant_id}:{suffix}"
 
 
 def import_tenant(
@@ -622,7 +638,8 @@ def import_tenant(
                 table.name,
                 sorted(unknown),
             )
-        return {k: v for k, v in row.items() if k in cols}
+        insertable_cols = {c.name for c in table.columns if c.computed is None}
+        return {k: v for k, v in row.items() if k in insertable_cols}
 
     connection.execute(insert(tenants_table).values(**_filtered(tenants_table, tenant_row)))
 
@@ -638,10 +655,9 @@ def import_tenant(
     #   ...): strip from rows, let Postgres re-allocate from the sequence,
     #   capture old→new via INSERT ... RETURNING. Lazy: map filled per-table.
     #
-    # - Single-column non-composite string PKs (proposals.proposal_id,
-    #   media_buys.media_buy_id, contexts.context_id, ...): mint fresh
-    #   opaque IDs up-front, store the map eagerly, rewrite both this row's
-    #   PK and any inbound FK references.
+    # - Single-column non-composite string PKs (media_buys.media_buy_id,
+    #   contexts.context_id, ...): mint fresh opaque IDs up-front, store the
+    #   map eagerly, rewrite both this row's PK and any inbound FK references.
     #
     # The FK rewrite loop is unified — it walks `table.foreign_keys` and
     # consults a single dict keyed by parent table name. New FK references
