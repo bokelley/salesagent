@@ -800,6 +800,13 @@ def _tenant_management_url(path: str) -> str:
     return f"{script_root}/api/v1/tenant-management{path}"
 
 
+def _shared_tenant_management_openapi_url() -> str:
+    """Return the shared Tenant Management OpenAPI URL for static exports or live responses."""
+    if has_request_context():
+        return _tenant_management_url("/docs/openapi.json")
+    return "../tenant-management-openapi.json"
+
+
 def _canonical_catalog_adapter_type(adapter_type: str) -> str | None:
     """Resolve public adapter aliases to catalog keys."""
     normalized = adapter_type.lower()
@@ -954,7 +961,7 @@ def _auth_error_responses() -> dict[str, Any]:
 
 def _openapi_ref_for_root_operation(operation: dict[str, str]) -> str:
     escaped_path = operation["root_path"].replace("~", "~0").replace("/", "~1")
-    return f"../tenant-management-openapi.json#/paths/{escaped_path}/{operation['method'].lower()}"
+    return f"{_shared_tenant_management_openapi_url()}#/paths/{escaped_path}/{operation['method'].lower()}"
 
 
 def _shared_tenant_operation_refs() -> list[dict[str, str]]:
@@ -1145,7 +1152,7 @@ def _build_adapter_openapi_document(adapter_type: str, adapter_class: Any) -> di
         "servers": [{"url": _tenant_management_url("")}],
         "externalDocs": {
             "description": "Shared Tenant Management API OpenAPI document.",
-            "url": "../tenant-management-openapi.json",
+            "url": _shared_tenant_management_openapi_url(),
         },
         "paths": _adapter_specific_paths(adapter_type, metadata),
         "components": components,
@@ -1153,7 +1160,7 @@ def _build_adapter_openapi_document(adapter_type: str, adapter_class: Any) -> di
         "x-salesagent-adapter": adapter_type,
         "x-salesagent-adapter-contract-kind": "adapter-specific-supplement",
         "x-salesagent-contract-version": _ADAPTER_CONTRACT_VERSION,
-        "x-salesagent-shared-openapi": "../tenant-management-openapi.json",
+        "x-salesagent-shared-openapi": _shared_tenant_management_openapi_url(),
         "x-salesagent-sync-streams": capabilities.sync_streams,
         "x-salesagent-supported-object-types": capabilities.supported_object_types,
         "x-salesagent-supported-signal-types": capabilities.supported_signal_types,

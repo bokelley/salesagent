@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Integration tests for the Tenant Management API - tests with actual database."""
 
+from urllib.parse import urljoin
+
 import pytest
 from flask import Flask
 from sqlalchemy import delete
@@ -259,7 +261,18 @@ class TestTenantManagementAPIIntegration:
         assert document["info"]["version"] == "2026-05-01"
         assert document["x-salesagent-adapter"] == "google_ad_manager"
         assert document["x-salesagent-adapter-contract-kind"] == "adapter-specific-supplement"
-        assert document["x-salesagent-shared-openapi"] == "../tenant-management-openapi.json"
+        shared_openapi_url = document["x-salesagent-shared-openapi"]
+        assert shared_openapi_url == "/api/v1/tenant-management/docs/openapi.json"
+        assert document["externalDocs"]["url"] == shared_openapi_url
+        shared_path = urljoin(
+            "http://localhost/api/v1/tenant-management/adapters/google_ad_manager/openapi.json",
+            shared_openapi_url,
+        ).removeprefix("http://localhost")
+        shared_response = client.get(
+            shared_path,
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        )
+        assert shared_response.status_code == 200
         assert "GAM 1x1" in " ".join(document["x-salesagent-normalization-notes"])
         assert "POST /tenants/provision" in document["x-salesagent-shared-tenant-endpoints"]
         shared_operations = document["x-salesagent-shared-tenant-operations"]
@@ -271,9 +284,7 @@ class TestTenantManagementAPIIntegration:
             "path": "/tenants/provision",
             "root_path": "/api/v1/tenant-management/tenants/provision",
             "operationId": "post__api_v1_tenant-management_tenants_provision",
-            "openapi_ref": (
-                "../tenant-management-openapi.json#/paths/~1api~1v1~1tenant-management~1tenants~1provision/post"
-            ),
+            "openapi_ref": (f"{shared_openapi_url}#/paths/~1api~1v1~1tenant-management~1tenants~1provision/post"),
         }
         assert document["security"] == [{"TenantManagementApiKey": []}]
         assert "TenantManagementApiKey" in document["components"]["securitySchemes"]
