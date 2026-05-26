@@ -10,8 +10,9 @@ def test_initialize_application_calls_init_telemetry():
         patch("src.core.startup.instrument_sqlalchemy"),
     ):
         from src.core.startup import initialize_application
+
         initialize_application()
-        mock_init_tel.assert_called_once()
+        mock_init_tel.assert_called_once_with()
 
 
 def test_initialize_application_calls_instrument_sqlalchemy():
@@ -23,5 +24,6 @@ def test_initialize_application_calls_instrument_sqlalchemy():
         patch("src.core.startup.instrument_sqlalchemy") as mock_instrument,
     ):
         from src.core.startup import initialize_application
+
         initialize_application()
-        mock_instrument.assert_called_once()
+        mock_instrument.assert_called_once_with()

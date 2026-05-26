@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -82,7 +82,7 @@ async def test_middleware_extracts_traceparent_header():
         }
         await middleware(scope, AsyncMock(), capturing_send)
 
-        mock_propagate.extract.assert_called_once()
+        mock_propagate.extract.assert_called_once_with(ANY)
 
 
 @pytest.mark.asyncio
