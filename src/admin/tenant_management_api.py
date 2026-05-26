@@ -172,6 +172,7 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
+_WHOLESALE_PROFILE_MANAGED_BY = "wholesale_products_api"
 
 # OpenAPI spec is served by spectree under the blueprint's `path="docs"`:
 #   spec:       {blueprint_prefix}/docs/openapi.json
@@ -1157,6 +1158,116 @@ def _validation_issues_for_wholesale_product(
     return issues
 
 
+def _publisher_property_validation_issues(
+    session,
+    tenant_id: str,
+    req: WholesaleProductRequest,
+) -> list[WholesaleValidationIssue]:
+    authorized = TenantConfigRepository(session, tenant_id).list_authorized_properties()
+    properties_by_domain: dict[str, list[Any]] = {}
+    for prop in authorized:
+        properties_by_domain.setdefault(prop.publisher_domain.lower(), []).append(prop)
+
+    issues: list[WholesaleValidationIssue] = []
+    for idx, selector in enumerate(req.inventory.publisher_properties):
+        field_prefix = f"inventory.publisher_properties.{idx}"
+        domain = selector.publisher_domain.lower()
+        domain_properties = properties_by_domain.get(domain, [])
+        if not domain_properties:
+            issues.append(
+                WholesaleValidationIssue(
+                    code="publisher_domain_not_authorized",
+                    field=f"{field_prefix}.publisher_domain",
+                    message=(
+                        f"Publisher domain {selector.publisher_domain!r} has no authorized properties for this tenant."
+                    ),
+                )
+            )
+            continue
+
+        if selector.selection_type == "by_id":
+            authorized_ids = {prop.property_id for prop in domain_properties}
+            missing_ids = sorted(set(selector.property_ids or []) - authorized_ids)
+            if missing_ids:
+                issues.append(
+                    WholesaleValidationIssue(
+                        code="publisher_property_not_authorized",
+                        field=f"{field_prefix}.property_ids",
+                        message=f"Publisher property id(s) are not authorized for {selector.publisher_domain}: "
+                        f"{', '.join(missing_ids)}.",
+                    )
+                )
+        elif selector.selection_type == "by_tag":
+            authorized_tags = {tag for prop in domain_properties for tag in (prop.tags or [])}
+            missing_tags = sorted(set(selector.property_tags or []) - authorized_tags)
+            if missing_tags:
+                issues.append(
+                    WholesaleValidationIssue(
+                        code="publisher_property_tag_not_authorized",
+                        field=f"{field_prefix}.property_tags",
+                        message=f"Publisher property tag(s) are not authorized for {selector.publisher_domain}: "
+                        f"{', '.join(missing_tags)}.",
+                    )
+                )
+    return issues
+
+
+def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None:
+    from src.admin.blueprints.products import get_creative_formats
+
+    try:
+        formats = get_creative_formats(tenant_id=tenant_id)
+    except Exception:
+        logger.warning("Unable to validate wholesale creative format IDs for tenant %s", tenant_id, exc_info=True)
+        return None
+
+    refs: set[tuple[str, str]] = set()
+    for fmt in formats:
+        raw_format_id = fmt.get("format_id") or {}
+        if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
+            raw_format_id = {"agent_url": fmt["agent_url"], "id": fmt["id"]}
+        agent_url = raw_format_id.get("agent_url")
+        format_id = raw_format_id.get("id")
+        if agent_url and format_id:
+            refs.add((str(agent_url), str(format_id)))
+    return refs
+
+
+def _creative_format_validation_issues(
+    tenant_id: str,
+    req: WholesaleProductRequest,
+) -> list[WholesaleValidationIssue]:
+    if not req.inventory.creative_formats:
+        return []
+
+    catalog_refs = _catalog_creative_format_refs(tenant_id)
+    if not catalog_refs:
+        return [
+            WholesaleValidationIssue(
+                code="creative_format_catalog_unavailable",
+                field="inventory.creative_formats",
+                message="Creative format catalog is unavailable, so format IDs could not be verified.",
+                severity="warning",
+            )
+        ]
+
+    issues: list[WholesaleValidationIssue] = []
+    for idx, creative_format in enumerate(req.inventory.creative_formats):
+        raw_format_id = _format_id_dict(creative_format.format_id)
+        if (raw_format_id["agent_url"], raw_format_id["id"]) not in catalog_refs:
+            issues.append(
+                WholesaleValidationIssue(
+                    code="creative_format_not_found",
+                    field=f"inventory.creative_formats.{idx}.format_id",
+                    message=(
+                        f"Creative format {raw_format_id['agent_url']}#{raw_format_id['id']} "
+                        "was not found in the discovered creative format catalog."
+                    ),
+                )
+            )
+    return issues
+
+
 def _selector_exists(session, tenant_id: str, adapter_type: str, selector: InventoryExecutionSelector) -> bool | None:
     """Return True/False when cache existence is checkable, or None when not cached."""
     if adapter_type == "google_ad_manager":
@@ -1198,6 +1309,8 @@ def _validate_wholesale_product(
     check_selector_cache: bool,
 ) -> WholesaleProductValidationResponse:
     issues = _validation_issues_for_wholesale_product(req, adapter_type)
+    issues.extend(_publisher_property_validation_issues(session, tenant_id, req))
+    issues.extend(_creative_format_validation_issues(tenant_id, req))
     if check_selector_cache:
         for idx, selector in enumerate(req.inventory.execution.selectors):
             exists = _selector_exists(session, tenant_id, adapter_type, selector)
@@ -1217,6 +1330,37 @@ def _validate_wholesale_product(
     )
 
 
+def _wholesale_profile_constraints(
+    req: WholesaleProductRequest,
+    product_id: str,
+    format_ids: list[dict[str, str]],
+) -> dict[str, Any]:
+    return {
+        "formats": [fmt["id"] for fmt in format_ids],
+        "channels": req.channels or [],
+        "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
+        "managed_by": _WHOLESALE_PROFILE_MANAGED_BY,
+        "owner_product_id": product_id,
+    }
+
+
+def _is_wholesale_owned_profile(profile: InventoryProfile, product_id: str) -> bool:
+    constraints = profile.constraints or {}
+    return (
+        constraints.get("managed_by") == _WHOLESALE_PROFILE_MANAGED_BY
+        and constraints.get("owner_product_id") == product_id
+    )
+
+
+def _inventory_profile_conflict(product_id: str):
+    return _api_error(
+        "inventory_profile_conflict",
+        f"Inventory profile {product_id!r} already exists and is not managed by the wholesale products API.",
+        409,
+        details={"inventory_profile_id": product_id},
+    )
+
+
 def _build_wholesale_product_models(
     tenant_id: str,
     product_id: str,
@@ -1228,6 +1372,7 @@ def _build_wholesale_product_models(
     publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
     inventory_config = _execution_inventory_config(req.inventory.execution)
     implementation_config = _wholesale_implementation_config(req, adapter_type)
+    profile_constraints = _wholesale_profile_constraints(req, product_id, format_ids)
 
     profile = existing_profile or InventoryProfile(
         tenant_id=tenant_id,
@@ -1238,11 +1383,7 @@ def _build_wholesale_product_models(
         format_ids=format_ids,
         publisher_properties=publisher_properties,
         targeting_template=req.targeting_capabilities or {},
-        constraints={
-            "formats": [fmt["id"] for fmt in format_ids],
-            "channels": req.channels or [],
-            "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
-        },
+        constraints=profile_constraints,
     )
     profile.name = req.name
     profile.description = req.description
@@ -1250,11 +1391,7 @@ def _build_wholesale_product_models(
     profile.format_ids = format_ids
     profile.publisher_properties = publisher_properties
     profile.targeting_template = req.targeting_capabilities or {}
-    profile.constraints = {
-        "formats": [fmt["id"] for fmt in format_ids],
-        "channels": req.channels or [],
-        "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
-    }
+    profile.constraints = profile_constraints
 
     product = Product(
         tenant_id=tenant_id,
@@ -1291,6 +1428,7 @@ def _update_product_from_wholesale_request(
     format_ids = _creative_format_id_dicts(req.inventory.creative_formats)
     publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
     implementation_config = _wholesale_implementation_config(req, adapter_type)
+    profile_constraints = _wholesale_profile_constraints(req, product.product_id, format_ids)
 
     product.name = req.name
     product.description = req.description
@@ -1320,11 +1458,7 @@ def _update_product_from_wholesale_request(
         profile.format_ids = format_ids
         profile.publisher_properties = publisher_properties
         profile.targeting_template = req.targeting_capabilities or {}
-        profile.constraints = {
-            "formats": [fmt["id"] for fmt in format_ids],
-            "channels": req.channels or [],
-            "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
-        }
+        profile.constraints = profile_constraints
 
 
 def _buyer_projection(req: WholesaleProductRequest, product_id: str) -> dict[str, Any]:
@@ -1921,6 +2055,8 @@ def create_wholesale_product(tenant_id: str):
             return _api_error("wholesale_product_exists", f"Wholesale product {product_id!r} already exists", 409)
         profile_repo = InventoryProfileRepository(session, tenant_id)
         existing_profile = profile_repo.get_by_id(product_id)
+        if existing_profile is not None and not _is_wholesale_owned_profile(existing_profile, product_id):
+            return _inventory_profile_conflict(product_id)
         product, profile = _build_wholesale_product_models(
             tenant_id,
             product_id,
@@ -1971,7 +2107,7 @@ def get_wholesale_product(tenant_id: str, product_id: str):
 @require_tenant_management_api_key
 @spec.validate(
     json=WholesaleProductRequest,
-    resp=Response(HTTP_200=WholesaleProductResponse, HTTP_400=ApiError, HTTP_404=ApiError),
+    resp=Response(HTTP_200=WholesaleProductResponse, HTTP_400=ApiError, HTTP_404=ApiError, HTTP_409=ApiError),
 )
 def put_wholesale_product(tenant_id: str, product_id: str):
     """Replace one wholesale product."""
@@ -2001,6 +2137,10 @@ def put_wholesale_product(tenant_id: str, product_id: str):
         product = product_repo.get_by_id_with_pricing(product_id)
         if product is None:
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
+        if product.inventory_profile is not None and not _is_wholesale_owned_profile(
+            product.inventory_profile, product_id
+        ):
+            return _inventory_profile_conflict(product_id)
         _update_product_from_wholesale_request(product, req, adapter_type)
         product_repo.replace_pricing_options(product, _pricing_option_rows(tenant_id, product_id, req.pricing_options))
         session.commit()
@@ -2036,8 +2176,10 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
         product_name = product.name
         allowed_principal_ids = product.allowed_principal_ids or None
         profile_pk = product.inventory_profile_id
+        profile = product.inventory_profile
+        delete_profile = profile is not None and _is_wholesale_owned_profile(profile, product_id)
         product_repo.delete(product)
-        if profile_pk is not None and not product_repo.list_by_inventory_profile(profile_pk):
+        if delete_profile and profile_pk is not None and not product_repo.list_by_inventory_profile(profile_pk):
             profile = InventoryProfileRepository(session, tenant_id).get_by_pk(profile_pk)
             if profile is not None:
                 InventoryProfileRepository(session, tenant_id).delete(profile)

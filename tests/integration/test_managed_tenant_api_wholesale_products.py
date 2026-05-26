@@ -13,6 +13,9 @@ from tests.factories import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
     GAMInventoryFactory,
+    InventoryProfileFactory,
+    PricingOptionFactory,
+    ProductFactory,
     PublisherPartnerFactory,
     TenantFactory,
 )
@@ -38,6 +41,12 @@ def bound_factories(integration_db):
     with bind_factories_to_session() as session:
         session.info["management_api_caller"] = True
         yield session
+
+
+@pytest.fixture(autouse=True)
+def creative_format_catalog_unavailable():
+    with patch("src.admin.blueprints.products.get_creative_formats", return_value=[]):
+        yield
 
 
 @pytest.fixture
@@ -378,6 +387,11 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
     )
     assert detail.status_code == 200, detail.get_data(as_text=True)
     assert detail.get_json()["inventory"]["creative_formats"][0]["slot_requirements"][0]["slot_id"] == "leaderboard"
+    detail_selectors = detail.get_json()["inventory"]["execution"]["selectors"]
+    assert detail_selectors[1]["options"] == {"include_descendants": True}
+
+    list_selectors = listing.get_json()["wholesale_products"][0]["inventory"]["execution"]["selectors"]
+    assert list_selectors[1]["options"] == {"include_descendants": True}
 
     deleted = client.delete(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/homepage_takeover",
@@ -390,3 +404,136 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_profile_backed_generic_selectors_round_trip_without_legacy_gam_keys(
+    management_api_client,
+    bound_factories,
+):
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_wholesale_springserve",
+        subdomain="wholesale-springserve",
+        ad_server="springserve",
+        is_embedded=True,
+    )
+    AdapterConfigFactory(tenant=tenant, adapter_type="springserve")
+    publisher_properties = [
+        {"publisher_domain": "wonderstruck.com", "selection_type": "by_id", "property_ids": ["wonderstruck_site"]}
+    ]
+    format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        profile_id="springserve_homepage",
+        inventory_config={
+            "adapter": "springserve",
+            "selectors": [
+                {
+                    "selector_type": "zone",
+                    "external_id": "zone_123",
+                    "name": "Homepage Zone",
+                    "options": {"priority": "high"},
+                }
+            ],
+            "format_bindings": [
+                {
+                    "format_id": format_ids[0],
+                    "adapter_config": {"creative_template": "standard_display"},
+                }
+            ],
+        },
+        format_ids=format_ids,
+        publisher_properties=publisher_properties,
+    )
+    product = ProductFactory(
+        tenant=tenant,
+        product_id="springserve_homepage",
+        name="SpringServe Homepage",
+        implementation_config={"adapter": "springserve", "status": "active"},
+        inventory_profile=profile,
+        properties=publisher_properties,
+        property_tags=None,
+    )
+    PricingOptionFactory(product=product)
+    bound_factories.commit()
+
+    detail = client.get(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products/springserve_homepage",
+        headers=auth_headers,
+    )
+
+    assert detail.status_code == 200, detail.get_data(as_text=True)
+    execution = detail.get_json()["inventory"]["execution"]
+    assert execution["adapter"] == "springserve"
+    assert execution["selectors"] == [
+        {
+            "selector_type": "zone",
+            "external_id": "zone_123",
+            "name": "Homepage Zone",
+            "options": {"priority": "high"},
+        }
+    ]
+    assert execution["format_bindings"][0]["adapter_config"] == {"creative_template": "standard_display"}
+
+
+def test_wholesale_validation_checks_authorized_publisher_properties(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+    payload["inventory"]["publisher_properties"][0]["property_ids"] = ["raptive_site"]
+
+    validation = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+        headers=auth_headers,
+        json=payload,
+    )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert body["valid"] is False
+    assert {issue["code"] for issue in body["issues"]} >= {"publisher_property_not_authorized"}
+
+
+def test_wholesale_validation_checks_discovered_creative_formats(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_formats",
+        return_value=[
+            {
+                "format_id": {
+                    "agent_url": "https://creative.adcontextprotocol.org",
+                    "id": "display_300x250",
+                },
+                "name": "Display 300x250",
+            }
+        ],
+    ):
+        validation = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert body["valid"] is False
+    assert {issue["code"] for issue in body["issues"]} >= {"creative_format_not_found"}
+
+
+def test_wholesale_create_rejects_existing_unowned_inventory_profile(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    InventoryProfileFactory(
+        tenant=gam_tenant,
+        profile_id="homepage_takeover",
+        constraints={"formats": ["display_300x250"]},
+    )
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=_wholesale_payload(),
+    )
+
+    assert created.status_code == 409, created.get_data(as_text=True)
+    assert created.get_json()["error"] == "inventory_profile_conflict"
