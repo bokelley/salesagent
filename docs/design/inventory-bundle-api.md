@@ -1,0 +1,630 @@
+# Inventory Bundle API
+
+**Status:** Draft
+**Last updated:** 2026-05-26
+
+## Summary
+
+Inventory bundles are the durable inventory primitive that a storefront uses to
+compose wholesale products. They answer four separate questions:
+
+1. **Where can this run?** Publisher properties plus ad-server inventory selectors.
+2. **What creative can a buyer send?** Accepted creative format IDs and optional slot requirements.
+3. **What composition is allowed?** Targeting and optimization capabilities for this bundle.
+4. **How does the adapter execute it?** Adapter-specific selector and format-binding configuration.
+
+Pricing is intentionally not owned by the inventory bundle. Pricing belongs to
+the product or offer that references the bundle, because the same bundle can be
+sold multiple ways.
+
+The existing database model is `InventoryProfile`. The API should expose this
+as **inventory bundles** while preserving the internal table name until a
+separate migration is worth the churn.
+
+## Core Model
+
+```json
+{
+  "bundle_id": "homepage_takeover",
+  "name": "Homepage Takeover",
+  "description": "High-impact homepage package.",
+  "status": "active",
+
+  "publisher_properties": [
+    {
+      "publisher_domain": "example.com",
+      "selection_type": "all"
+    }
+  ],
+
+  "creative_formats": [
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "homepage_takeover"
+      },
+      "slot_requirements": [
+        {
+          "slot_id": "leaderboard",
+          "name": "Leaderboard",
+          "asset_type": "image",
+          "width": 970,
+          "height": 250,
+          "required": true
+        },
+        {
+          "slot_id": "rail",
+          "name": "Right rail",
+          "asset_type": "image",
+          "width": 300,
+          "height": 600,
+          "required": true
+        }
+      ]
+    }
+  ],
+
+  "targeting_capabilities": {
+    "allowed_dimensions": ["geo", "device", "audience"],
+    "blocked_dimensions": ["postal_code"],
+    "required_dimensions": []
+  },
+
+  "optimization_capabilities": {
+    "allowed_goals": ["impressions", "viewability"],
+    "supported_pacing": ["even", "asap"]
+  },
+
+  "inventory_execution": {
+    "adapter": "google_ad_manager",
+    "selectors": [
+      {
+        "selector_type": "placement",
+        "external_id": "123456"
+      },
+      {
+        "selector_type": "ad_unit",
+        "external_id": "654321",
+        "options": {
+          "include_descendants": true
+        }
+      }
+    ],
+    "format_bindings": [
+      {
+        "format_id": {
+          "agent_url": "https://creative.adcontextprotocol.org",
+          "id": "homepage_takeover"
+        },
+        "adapter_config": {
+          "creative_placeholders": [
+            {"slot_id": "leaderboard", "size": "970x250"},
+            {"slot_id": "rail", "size": "300x600"}
+          ],
+          "roadblocking": "as_many_as_possible"
+        }
+      }
+    ]
+  },
+
+  "created_at": "2026-05-26T00:00:00Z",
+  "updated_at": "2026-05-26T00:00:00Z",
+  "etag": "..."
+}
+```
+
+### Field Ownership
+
+| Field | Owner | Visible in `get_products` | Notes |
+|---|---|---:|---|
+| `bundle_id`, `name`, `description` | Bundle | Yes, via product projection | Buyer-facing merchandising text. |
+| `publisher_properties` | Bundle | Yes | AdCP publisher-property selector shape. |
+| `creative_formats` | Bundle | Yes as `format_ids`; slot details when schema allows | Buyer knows what creative to submit. |
+| `targeting_capabilities` | Bundle | Yes | Narrows what buyer/storefront can compose. |
+| `optimization_capabilities` | Bundle | Yes | Narrows package optimization and pacing choices. |
+| `inventory_execution` | Bundle | No | Internal/storefront-authoring only; not buyer-facing. |
+| `pricing_options` | Product | Yes | Same bundle may have multiple commercial offers. |
+| `forecast` | Product, optionally derived from bundle | Yes | Forecast can be offer-specific. |
+
+## Storefront API Surface
+
+The embedding storefront needs two classes of API:
+
+1. **Authoring APIs** to create and manage bundles/products.
+2. **Discovery APIs** to know what an adapter supports, search synced inventory,
+   list publisher properties, and choose creative formats.
+
+All endpoints use the same API-key auth as the existing composition API.
+
+### Inventory Sync
+
+```http
+POST /api/v1/tenants/{tenant_id}/inventory/sync
+GET  /api/v1/tenants/{tenant_id}/inventory/sync
+```
+
+The POST starts or requests a refresh of the tenant's adapter inventory cache.
+The GET returns the latest sync state:
+
+```json
+{
+  "adapter": "google_ad_manager",
+  "status": "succeeded",
+  "started_at": "2026-05-26T00:00:00Z",
+  "finished_at": "2026-05-26T00:00:20Z",
+  "counts": {
+    "ad_unit": 1200,
+    "placement": 85
+  },
+  "scope_pending": false,
+  "errors": {}
+}
+```
+
+Adapter-specific setup pages can keep their existing endpoints, but the
+embedding storefront needs this generic sync surface so it does not need to
+special-case every adapter.
+
+### Adapter Capability Discovery
+
+```http
+GET /api/v1/tenants/{tenant_id}/inventory/adapter-capabilities
+```
+
+Returns the adapter-specific selector vocabulary, searchable fields, execution
+binding requirements, and broad composition capabilities.
+
+```json
+{
+  "adapter": "google_ad_manager",
+  "label": "Google Ad Manager",
+  "selector_types": [
+    {
+      "selector_type": "ad_unit",
+      "label": "Ad unit",
+      "supports_hierarchy": true,
+      "supports_include_descendants": true,
+      "search_fields": ["external_id", "name", "path"],
+      "metadata_fields": ["path", "status", "sizes"]
+    },
+    {
+      "selector_type": "placement",
+      "label": "Placement",
+      "supports_hierarchy": false,
+      "supports_include_descendants": false,
+      "search_fields": ["external_id", "name"],
+      "metadata_fields": ["ad_unit_ids", "status"]
+    }
+  ],
+  "creative_binding_schema": {
+    "requires_format_bindings": false,
+    "binding_modes": ["size_placeholder", "creative_template", "roadblock"]
+  },
+  "targeting_capabilities": {
+    "dimensions": ["geo", "device", "audience", "custom"],
+    "signal_backed_dimensions": ["audience", "custom"]
+  },
+  "optimization_capabilities": {
+    "allowed_goals": ["impressions", "clicks", "viewability"],
+    "supported_pacing": ["even", "asap"]
+  },
+  "pricing_capabilities": {
+    "pricing_models": ["cpm", "vcpm", "cpc", "flat_rate"]
+  },
+  "sync": {
+    "has_synced_inventory": true,
+    "last_synced_at": "2026-05-26T00:00:00Z"
+  }
+}
+```
+
+### Inventory Selector Search
+
+```http
+GET /api/v1/tenants/{tenant_id}/inventory/selectors
+```
+
+Query parameters:
+
+| Param | Meaning |
+|---|---|
+| `selector_type` | Optional. Adapter selector type such as `ad_unit`, `placement`, `zone`, `supply_tag`. |
+| `q` | Optional search string. |
+| `parent_id` | Optional hierarchy parent. |
+| `format_id` | Optional filter for selectors known to support a format. |
+| `limit` | Page size, default 50. |
+| `cursor` | Opaque pagination cursor. |
+
+Response:
+
+```json
+{
+  "selectors": [
+    {
+      "selector_type": "ad_unit",
+      "external_id": "654321",
+      "name": "Homepage",
+      "path": ["Root", "Homepage"],
+      "parent_id": "111",
+      "metadata": {
+        "status": "active",
+        "sizes": ["970x250", "300x250"]
+      },
+      "supported_format_ids": [
+        {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_970x250"}
+      ]
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+This endpoint reads only from synced local caches. It must not call the ad
+server live during storefront autocomplete.
+
+### Publisher Property Discovery
+
+```http
+GET /api/v1/tenants/{tenant_id}/inventory/publisher-properties
+```
+
+Returns the publisher domains and property selectors that can be used in a
+bundle. This is deliberately separate from ad-server selectors: publisher
+properties are the AdCP supply identity that buyers see, while ad-server
+selectors are execution details.
+
+```json
+{
+  "publisher_domains": [
+    {
+      "publisher_domain": "example.com",
+      "display_name": "Example Media",
+      "verification_status": "verified",
+      "source": "manual"
+    }
+  ],
+  "properties": [
+    {
+      "publisher_domain": "example.com",
+      "property_id": "site_123",
+      "name": "Example Homepage",
+      "property_type": "website",
+      "tags": ["all_inventory", "homepage"]
+    }
+  ],
+  "allowed_selectors": [
+    {
+      "publisher_domain": "example.com",
+      "selection_type": "all"
+    },
+    {
+      "publisher_domain": "example.com",
+      "selection_type": "by_tag",
+      "property_tags": ["all_inventory", "homepage"]
+    },
+    {
+      "publisher_domain": "example.com",
+      "selection_type": "by_id",
+      "property_ids": ["site_123"]
+    }
+  ]
+}
+```
+
+This endpoint should use tenant-scoped `PublisherPartner` and
+`AuthorizedProperty` data. It must not infer publisher domains from the agent
+URL on embedded/shared-agent deployments.
+
+### Creative Format Discovery
+
+```http
+GET /api/v1/tenants/{tenant_id}/creative-formats
+```
+
+Returns creative formats available for bundle authoring. Internally this should
+share implementation with the AdCP `list_creative_formats` tool so the
+storefront and buyers see the same format vocabulary.
+
+```json
+{
+  "formats": [
+    {
+      "format_id": {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_300x250"
+      },
+      "name": "Display 300x250",
+      "type": "display",
+      "assets": [
+        {
+          "asset_type": "image",
+          "width": 300,
+          "height": 250,
+          "required": true
+        }
+      ],
+      "is_standard": true
+    }
+  ]
+}
+```
+
+For composite formats, the response should expose the slots/assets that the
+buyer must provide. The bundle can further narrow these formats, but it should
+not invent a format shape that is unavailable from the creative-format catalog.
+
+### Inventory Bundle CRUD
+
+Preferred external path:
+
+```http
+GET    /api/v1/tenants/{tenant_id}/inventory-bundles
+POST   /api/v1/tenants/{tenant_id}/inventory-bundles
+GET    /api/v1/tenants/{tenant_id}/inventory-bundles/{bundle_id}
+PUT    /api/v1/tenants/{tenant_id}/inventory-bundles/{bundle_id}
+DELETE /api/v1/tenants/{tenant_id}/inventory-bundles/{bundle_id}
+```
+
+Compatibility path:
+
+```http
+/api/v1/tenants/{tenant_id}/inventory-profiles
+```
+
+`inventory-profiles` can remain as an alias for existing clients, but new docs
+and clients should use `inventory-bundles`.
+
+### Bundle Validation
+
+```http
+POST /api/v1/tenants/{tenant_id}/inventory-bundles:validate
+```
+
+Validates without persisting:
+
+- publisher domains are authorized for the tenant
+- selector types are valid for the tenant adapter
+- selector IDs exist in the local inventory cache
+- creative formats are syntactically valid
+- format bindings satisfy the adapter binding schema
+- targeting and optimization capabilities do not exceed adapter capabilities
+
+### Product or Offer CRUD
+
+Products remain the commercial wrappers around bundles:
+
+```http
+GET    /api/v1/tenants/{tenant_id}/products
+POST   /api/v1/tenants/{tenant_id}/products
+GET    /api/v1/tenants/{tenant_id}/products/{product_id}
+PUT    /api/v1/tenants/{tenant_id}/products/{product_id}
+DELETE /api/v1/tenants/{tenant_id}/products/{product_id}
+```
+
+Product write shape:
+
+```json
+{
+  "product_id": "homepage_takeover_fixed",
+  "inventory_bundle_id": "homepage_takeover",
+  "name": "Homepage Takeover",
+  "description": "Fixed-price homepage takeover.",
+  "delivery_type": "guaranteed",
+  "pricing_options": [
+    {
+      "pricing_model": "cpm",
+      "currency": "USD",
+      "is_fixed": true,
+      "rate": 40
+    }
+  ],
+  "forecast": {
+    "impressions": 1000000
+  }
+}
+```
+
+The existing `inventory_profile_id` field should be accepted as an alias during
+migration.
+
+## `get_products` Projection
+
+`get_products` returns buyer/composer-facing data from `Product + InventoryBundle`.
+It must not expose adapter execution selectors by default.
+
+Projection rules:
+
+| `get_products` field | Source |
+|---|---|
+| `product_id`, `name`, `description` | Product, with bundle fallback where appropriate |
+| `publisher_properties` | Bundle |
+| `format_ids` | Bundle `creative_formats[].format_id` |
+| `pricing_options` | Product |
+| `property_targeting_allowed` | Product plus bundle capabilities |
+| `signal_targeting_allowed` | Product plus bundle capabilities |
+| `targeting_capabilities` | Bundle, if supported by schema extension |
+| `optimization_capabilities` | Bundle, if supported by schema extension |
+| `forecast` | Product |
+| `allowed_actions` | Product plus adapter |
+
+## Adapter Coverage
+
+### Google Ad Manager
+
+Selector types:
+
+| Selector | Source | Notes |
+|---|---|---|
+| `ad_unit` | `GAMInventory` cache | Hierarchical. Supports `include_descendants`. May carry sizes in metadata. |
+| `placement` | `GAMInventory` cache | Group of ad units. Useful for packages curated in GAM. |
+
+Execution binding:
+
+- `ad_unit` and `placement` selectors map to line item inventory targeting.
+- Format bindings map accepted creative formats to GAM creative placeholders,
+  sizes, optional creative templates, and optional roadblocking.
+- Multi-slot formats such as takeovers are one creative format with multiple
+  placeholders, not one format per ad unit.
+
+Capabilities:
+
+- Pricing models currently include CPM, VCPM, CPC, FLAT_RATE.
+- Targeting is constrained by GAM targeting support and tenant custom targeting
+  config.
+
+### FreeWheel
+
+Selector types:
+
+| Selector | Source | Notes |
+|---|---|---|
+| `site` | `freewheel_inventory` | Business/top-level inventory grouping. |
+| `site_section` | `freewheel_inventory` | Sub-section inventory grouping. |
+| `video_group` | `freewheel_inventory` | Publisher-curated video/audience grouping. |
+| `series` | `freewheel_inventory` | Specific content series. |
+| `ad_unit_package` | `freewheel_inventory` | Slot package such as pre/mid/post-roll. Often closest to buyer-facing placement. |
+
+Execution binding:
+
+- Bundle selectors map into `FreeWheelProductConfig` fields:
+  `site_ids`, `site_section_ids`, `video_group_ids`, `series_ids`,
+  `ad_unit_package_id`.
+- Creative formats are VAST/video-oriented by default.
+- Standard attributes and value lists should be exposed as targeting/signal
+  selector sources, not as inventory selectors unless they define supply.
+
+Capabilities:
+
+- Optimization/pacing should reflect what the FreeWheel write path can
+  actually materialize.
+- Some live write/reporting scopes are still pending; capability responses
+  should include `available=false` or `scope_pending=true` per feature rather
+  than pretending support is complete.
+
+### Broadstreet
+
+Selector types:
+
+| Selector | Source | Notes |
+|---|---|---|
+| `zone` | Broadstreet inventory manager | Primary inventory placement concept. |
+
+Execution binding:
+
+- Bundle selectors map to `BroadstreetProductConfig.targeted_zone_ids`.
+- Format bindings map to Broadstreet templates and supported ad formats:
+  display, HTML, text.
+- Zone dimensions can infer simple display format compatibility, but the bundle
+  still explicitly declares accepted formats.
+
+Capabilities:
+
+- Pricing models are CPM and FLAT_RATE.
+- Pacing maps to Broadstreet delivery rate values such as EVEN, FRONTLOADED,
+  ASAP.
+
+### SpringServe
+
+Selector types:
+
+| Selector | Source | Notes |
+|---|---|---|
+| `supply_partner` | `springserve_inventory` | Top-level seller relationship. |
+| `supply_router` | `springserve_inventory` | Natural bundle root when publishers curate supply routes. |
+| `supply_tag` | `springserve_inventory` | Per-property supply unit; maps most directly to demand tag supply. |
+
+Execution binding:
+
+- Bundle selectors map into `SpringServeProductConfig.supply_tag_ids` and
+  related future fields as the adapter matures.
+- The tenant `demand_class` controls whether buyers send hosted creative assets
+  or a third-party tag URL.
+- KV/value-list entities should be exposed as signals or targeting selectors,
+  not inventory selectors unless the publisher uses them as supply partitions.
+
+Capabilities:
+
+- Capability responses should reflect tenant config such as
+  `enable_key_value_targeting`.
+- SpringServe supply read scope can be pending; selector search should return a
+  clear sync/scope state when no cache is available.
+
+### Mock
+
+Mock is the conformance adapter. It should support every generic selector and
+capability path needed by tests:
+
+- selector search with placements and ad-unit-like groupings
+- display, video, and composite test formats
+- targeting and optimization capability validation
+- deterministic validation errors
+
+## UI and Setup Flow
+
+The setup flow should be driven by the same APIs the embedding storefront uses.
+
+1. Connect adapter credentials.
+2. Run inventory sync.
+3. Call `GET /inventory/adapter-capabilities`.
+4. Use `GET /inventory/publisher-properties` for publisher-domain/property
+   selection.
+5. Use `GET /creative-formats` for accepted creative-format selection.
+6. Use `GET /inventory/selectors` for searchable ad-server inventory pickers.
+7. Create inventory bundles with publisher properties, creative formats,
+   targeting capabilities, optimization capabilities, and execution bindings.
+8. Create products/offers that reference bundles and add pricing.
+9. Verify `get_products` returns the buyer-facing projection.
+
+The Admin UI should stop treating products as the primary place to select
+publisher domains and ad-server inventory. Product forms should either:
+
+- select an existing bundle, then configure commercial terms, or
+- launch bundle creation inline and return to product pricing.
+
+## Validation Rules
+
+- Bundle `publisher_properties` must be non-empty.
+- Bundle `creative_formats` must be non-empty.
+- Bundle `inventory_execution.adapter` must match the tenant adapter.
+- Every selector must use a selector type advertised by
+  `adapter-capabilities`.
+- Every selector ID must exist in the local synced inventory cache unless the
+  selector type explicitly allows manual entry.
+- Bundle targeting/optimization capabilities must be subsets of adapter-level
+  capabilities.
+- Products must reference exactly one active bundle.
+- Products must own pricing. Bundles must not own pricing options.
+
+## Migration Plan
+
+1. Add schemas for `InventoryBundleCreate`, `InventoryBundleUpdate`,
+   `InventoryBundleRead`, `InventorySelectorRead`, and
+   `AdapterInventoryCapabilitiesRead`.
+2. Add `/inventory-bundles` routes as aliases around `InventoryProfile`.
+3. Expand `InventoryProfile` JSON usage:
+   - `format_ids` remains accepted for simple formats.
+   - `creative_formats` can be stored in `constraints` or a new JSON column in
+     a later migration. Short term, derive `creative_formats` from `format_ids`
+     when slot details are absent.
+   - `inventory_config` becomes the persisted representation of
+     `inventory_execution.selectors` and `format_bindings`.
+4. Implement adapter capability providers for GAM, FreeWheel, Broadstreet,
+   SpringServe, and Mock.
+5. Implement normalized selector search over each adapter's local cache.
+6. Add generic inventory sync, publisher-property, and creative-format
+   discovery endpoints.
+7. Update product API to accept `inventory_bundle_id` while retaining
+   `inventory_profile_id` as an alias.
+8. Update Admin UI forms to create bundles first and products second.
+9. Update `get_products` projection tests for bundle-derived formats,
+   publisher properties, and capabilities.
+
+## Open Decisions
+
+- Whether `creative_formats.slot_requirements` should be an AdCP extension or
+  remain a composition API authoring field until the protocol has a standard
+  slot model.
+- Whether adapter `format_bindings` should be visible to all embedding
+  storefront clients or only to operator-admin clients.
+- Whether the long-term database model should rename
+  `inventory_profiles` to `inventory_bundles` or keep the internal name.
