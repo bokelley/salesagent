@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -133,6 +134,161 @@ def test_signal_capabilities_and_candidates_surface_adapter_mapping_templates(ma
         "key_id": "key_interest",
         "value_id": "val_sports",
     }
+
+
+def test_signal_candidates_support_camel_case_params_and_lazy_refresh_values(management_api_client, bound_factories):
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_signals_gam_lazy_values",
+        name="Lazy Values",
+        subdomain="lazy-values-signals",
+        ad_server="google_ad_manager",
+        is_embedded=True,
+    )
+    configure_google_ad_manager_adapter(tenant)
+    GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="custom_targeting_key",
+        inventory_id="key_lazy_interest",
+        name="Interest",
+        path=["Custom Targeting", "Interest"],
+        inventory_metadata={"type": "PREDEFINED"},
+    )
+    bound_factories.commit()
+
+    from src.adapters.gam_inventory_discovery import CustomTargetingValue
+
+    discovery = MagicMock()
+    discovery.discover_custom_targeting_values_for_key.return_value = [
+        CustomTargetingValue(
+            id="val_lazy_sports",
+            custom_targeting_key_id="key_lazy_interest",
+            name="Sports",
+            display_name="Sports",
+            match_type="EXACT",
+            status="ACTIVE",
+        )
+    ]
+
+    with patch("src.admin.tenant_management_api.build_gam_inventory_discovery", return_value=discovery):
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/signals/candidates"
+            "?candidateType=custom_targeting_value&parentId=key_lazy_interest&q=Sports",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["count"] == 1
+    assert body["candidates"][0]["external_id"] == "val_lazy_sports"
+    assert body["candidates"][0]["adapter_config_template"] == {
+        "type": "passthrough",
+        "kind": "custom_key_value",
+        "key_id": "key_lazy_interest",
+        "value_id": "val_lazy_sports",
+    }
+    discovery.discover_custom_targeting_values_for_key.assert_called_once_with("key_lazy_interest", max_values=1000)
+
+
+def test_signal_value_candidates_query_miss_does_not_refresh_cached_values(management_api_client, bound_factories):
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_signals_gam_cached_query_miss",
+        name="Cached Query Miss",
+        subdomain="cached-query-miss-signals",
+        ad_server="google_ad_manager",
+        is_embedded=True,
+    )
+    configure_google_ad_manager_adapter(tenant)
+    GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="custom_targeting_key",
+        inventory_id="key_cached_interest",
+        name="Interest",
+        path=["Custom Targeting", "Interest"],
+        inventory_metadata={"type": "PREDEFINED"},
+    )
+    GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="custom_targeting_value",
+        inventory_id="val_cached_sports",
+        name="Sports",
+        path=["Custom Targeting", "Interest", "Sports"],
+        inventory_metadata={"custom_targeting_key_id": "key_cached_interest"},
+    )
+    bound_factories.commit()
+
+    with patch("src.admin.tenant_management_api.build_gam_inventory_discovery") as build_discovery:
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/signals/candidates"
+            "?candidate_type=custom_targeting_value&parent_id=key_cached_interest&q=Travel",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.get_json()["count"] == 0
+    build_discovery.assert_not_called()
+
+
+def test_signal_value_candidates_synced_empty_key_does_not_refresh(management_api_client, bound_factories):
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_signals_gam_synced_empty",
+        name="Synced Empty",
+        subdomain="synced-empty-signals",
+        ad_server="google_ad_manager",
+        is_embedded=True,
+    )
+    configure_google_ad_manager_adapter(tenant)
+    GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="custom_targeting_key",
+        inventory_id="key_empty_interest",
+        name="Interest",
+        path=["Custom Targeting", "Interest"],
+        inventory_metadata={
+            "type": "PREDEFINED",
+            "values_synced_empty": True,
+            "values_last_synced_at": "2026-05-22T00:00:00+00:00",
+        },
+    )
+    bound_factories.commit()
+
+    with patch("src.admin.tenant_management_api.build_gam_inventory_discovery") as build_discovery:
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/signals/candidates"
+            "?candidate_type=custom_targeting_value&parent_id=key_empty_interest&q=Sports",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.get_json()["count"] == 0
+    build_discovery.assert_not_called()
+
+
+def test_signal_key_candidates_ignore_null_path_parts(management_api_client, gam_tenant, bound_factories):
+    client, auth_headers = management_api_client
+    GAMInventoryFactory(
+        tenant=gam_tenant,
+        inventory_type="custom_targeting_key",
+        inventory_id="key_null_path",
+        name="Null Path Key",
+        path=[None, "Null Path Key"],
+        inventory_metadata={"type": "PREDEFINED"},
+    )
+    bound_factories.commit()
+
+    response = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/signals/candidates"
+        "?candidate_type=custom_targeting_key&q=Null",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["count"] == 1
+    assert body["candidates"][0]["external_id"] == "key_null_path"
+    assert body["candidates"][0]["path"] == ["Null Path Key"]
 
 
 def test_signal_mapping_crud_round_trips_execution_config_and_buyer_discovery(management_api_client, gam_tenant):

@@ -8,6 +8,7 @@ from pydantic import AnyUrl
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPAdapterError
+from src.core.schemas import Format, FormatId, url
 
 
 class TestCacheKeyAcceptsAnyUrl:
@@ -198,6 +199,82 @@ class TestCreativeAgentRegistry:
         # Fix for salesagent-kwws: silent return [] masked failures as 'no formats'
         with pytest.raises(AdCPAdapterError, match="Unexpected submitted status"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
+
+    @pytest.mark.asyncio
+    async def test_fetch_formats_from_agent_falls_back_on_sdk_schema_parse_error(self):
+        """SDK schema failures should use raw MCP parsing instead of returning no formats."""
+        registry = CreativeAgentRegistry()
+
+        test_agent = CreativeAgent(
+            agent_url="https://test-agent.example.com/mcp",
+            name="Test Agent",
+            enabled=True,
+            priority=1,
+        )
+
+        mock_client = Mock()
+        mock_agent_client = Mock()
+        mock_result = Mock()
+        mock_result.status = "failed"
+        mock_result.error = (
+            "Failed to parse response: Response doesn't match expected schema ListCreativeFormatsResponse"
+        )
+        mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
+        mock_client.agent = Mock(return_value=mock_agent_client)
+
+        fallback_format = Format(
+            format_id=FormatId(id="display_generative", agent_url=url("https://creative.adcontextprotocol.org")),
+            name="Display Banner",
+        )
+        registry._fetch_formats_raw_mcp = AsyncMock(return_value=[fallback_format])
+
+        formats = await registry._fetch_formats_from_agent(mock_client, test_agent)
+
+        assert formats == [fallback_format]
+        registry._fetch_formats_raw_mcp.assert_called_once_with(test_agent, request_args={})
+
+    @pytest.mark.asyncio
+    async def test_fetch_formats_from_agent_schema_parse_fallback_preserves_filters(self):
+        """Raw MCP fallback must not drop list_creative_formats filters."""
+        registry = CreativeAgentRegistry()
+
+        test_agent = CreativeAgent(
+            agent_url="https://test-agent.example.com/mcp",
+            name="Test Agent",
+            enabled=True,
+            priority=1,
+        )
+
+        mock_client = Mock()
+        mock_agent_client = Mock()
+        mock_result = Mock()
+        mock_result.status = "failed"
+        mock_result.error = (
+            "Failed to parse response: Response doesn't match expected schema ListCreativeFormatsResponse"
+        )
+        mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
+        mock_client.agent = Mock(return_value=mock_agent_client)
+        registry._fetch_formats_raw_mcp = AsyncMock(return_value=[])
+
+        formats = await registry._fetch_formats_from_agent(
+            mock_client,
+            test_agent,
+            max_width=300,
+            min_height=200,
+            asset_types=["image"],
+            name_search="banner",
+        )
+
+        assert formats == []
+        registry._fetch_formats_raw_mcp.assert_called_once_with(
+            test_agent,
+            request_args={
+                "max_width": 300,
+                "min_height": 200,
+                "asset_types": ["image"],
+                "name_search": "banner",
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_formats_from_agent_handles_auth_error(self):

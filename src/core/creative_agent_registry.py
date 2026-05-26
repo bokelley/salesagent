@@ -374,15 +374,23 @@ class CreativeAgentRegistry:
                 # return TextContent with JSON. Also falls back when the SDK fails
                 # with generic errors (e.g., "no running event loop" → "No error
                 # details provided") that indicate an SDK-level transport issue.
-                sdk_transport_error = (
-                    "structuredContent" in str(error_msg)
-                    or "No error details provided" in str(error_msg)
-                    or "no running event loop" in str(error_msg)
-                    or "Failed to connect" in str(error_msg)
+                error_text = str(error_msg)
+                sdk_transport_error = any(
+                    marker in error_text
+                    for marker in (
+                        "structuredContent",
+                        "No error details provided",
+                        "no running event loop",
+                        "Failed to connect",
+                        "Failed to parse response",
+                        "doesn't match expected schema",
+                    )
                 )
                 if sdk_transport_error:
-                    logger.warning(f"adcp SDK transport issue, falling back to raw HTTP: {error_msg}")
-                    return await self._fetch_formats_raw_mcp(agent)
+                    suffix = "..." if len(error_text) > 1000 else ""
+                    logger.warning(f"adcp SDK transport issue, falling back to raw HTTP: {error_text[:1000]}{suffix}")
+                    request_args = request.model_dump(mode="json", exclude_none=True)
+                    return await self._fetch_formats_raw_mcp(agent, request_args=request_args)
 
                 logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
                 debug_info = getattr(result, "debug_info", None)
@@ -406,7 +414,11 @@ class CreativeAgentRegistry:
             logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
             raise RuntimeError(str(e.message)) from e
 
-    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
+    async def _fetch_formats_raw_mcp(
+        self,
+        agent: CreativeAgent,
+        request_args: dict[str, Any] | None = None,
+    ) -> list[Format]:
         """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
 
         The adcp SDK 3.6.0 requires structuredContent in MCP responses, but some
@@ -445,7 +457,7 @@ class CreativeAgentRegistry:
                         json={
                             "jsonrpc": "2.0",
                             "method": "tools/call",
-                            "params": {"name": "list_creative_formats", "arguments": {}},
+                            "params": {"name": "list_creative_formats", "arguments": request_args or {}},
                             "id": 1,
                         },
                         headers=headers,

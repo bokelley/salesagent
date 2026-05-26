@@ -183,7 +183,11 @@ from src.services.protocol_change_webhooks import (
     notify_signal_catalog_changed,
 )
 from src.services.recent_buyers_service import compute_recent_buyers
-from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
+from src.services.targeting_values import (
+    build_gam_inventory_discovery,
+    sync_targeting_values_for_key,
+    targeting_values_synced_empty,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1564,6 +1568,15 @@ def _candidate_default_signal(
     }
 
 
+def _candidate_path(raw_path: Any) -> list[str] | None:
+    """Return a candidate path safe for the public schema."""
+    if raw_path is None:
+        return None
+    path = raw_path if isinstance(raw_path, list) else [raw_path]
+    clean_path = [str(part) for part in path if part is not None]
+    return clean_path or None
+
+
 def _gam_signal_candidate(row: GAMInventory) -> SignalCandidateSummary:
     metadata = dict(row.inventory_metadata or {})
     parent_id = metadata.get("parent_id") or metadata.get("custom_targeting_key_id")
@@ -1598,7 +1611,7 @@ def _gam_signal_candidate(row: GAMInventory) -> SignalCandidateSummary:
         external_id=row.inventory_id,
         name=row.name,
         parent_id=str(parent_id) if parent_id is not None else None,
-        path=list(row.path or []) or None,
+        path=_candidate_path(row.path),
         mapping_kind=mapping_kind,
         adapter_config_template=adapter_config,
         default_signal=default_signal,
@@ -1692,7 +1705,11 @@ def _signal_candidate_rows(
     if adapter_type == "google_ad_manager":
         repo = GAMSyncRepository(session, tenant_id)
         if candidate_type == "custom_targeting_value" and parent_id:
-            rows = _filter_candidates_by_query(repo.list_values_for_key(parent_id), q)
+            cached_rows = repo.list_values_for_key(parent_id)
+            if not cached_rows:
+                _refresh_candidate_targeting_values_if_available(session, tenant_id, repo, parent_id)
+                cached_rows = repo.list_values_for_key(parent_id)
+            rows = _filter_candidates_by_query(cached_rows, q)
             page = rows[offset : offset + limit]
         else:
             page = repo.search_inventory(candidate_type, q=q, parent_id=parent_id, offset=offset, limit=limit)
@@ -1716,6 +1733,45 @@ def _signal_candidate_rows(
         )
         return [_freewheel_signal_candidate(row) for row in rows]
     return []
+
+
+def _refresh_candidate_targeting_values_if_available(
+    session,
+    tenant_id: str,
+    repo: GAMSyncRepository,
+    key_id: str,
+) -> None:
+    """Best-effort lazy cache fill for GAM custom targeting value candidates."""
+    key_row = repo.find_inventory_item("custom_targeting_key", key_id)
+    if key_row is None or targeting_values_synced_empty(key_row):
+        return
+
+    adapter_config = TenantConfigRepository(session, tenant_id).get_adapter_config()
+    if (
+        adapter_config is None
+        or adapter_config.adapter_type != "google_ad_manager"
+        or not adapter_config.gam_network_code
+        or not AdapterConfigRepository.has_gam_credentials(adapter_config)
+    ):
+        return
+
+    try:
+        discovery = build_gam_inventory_discovery(adapter_config, tenant_id)
+        sync_targeting_values_for_key(
+            repo,
+            key_id=key_id,
+            key_row=key_row,
+            discovery=discovery,
+            max_values=1000,
+        )
+        session.flush()
+    except Exception:
+        session.rollback()
+        logger.exception(
+            "Lazy targeting value candidate refresh failed for tenant_id=%s key_id=%s",
+            tenant_id,
+            key_id,
+        )
 
 
 def _required_signal_config_fields(kind: str) -> tuple[str, ...]:
@@ -2575,9 +2631,9 @@ def get_signal_adapter_capabilities(tenant_id: str):
 @spec.validate(resp=Response(HTTP_200=ListSignalCandidatesResponse, HTTP_400=ApiError, HTTP_404=ApiError))
 def list_signal_candidates(tenant_id: str):
     """Search cached adapter signal candidates for signal-mapping setup."""
-    candidate_type = request.args.get("candidate_type")
+    candidate_type = request.args.get("candidate_type") or request.args.get("candidateType")
     q = request.args.get("q")
-    parent_id = request.args.get("parent_id")
+    parent_id = request.args.get("parent_id") or request.args.get("parentId")
     try:
         limit = min(max(int(request.args.get("limit", "50")), 1), 100)
         offset = max(int(request.args.get("cursor", "0")), 0)
@@ -2612,6 +2668,7 @@ def list_signal_candidates(tenant_id: str):
             offset=offset,
             limit=limit + 1,
         )
+        session.commit()
         page_rows = rows[:limit]
         next_cursor = str(offset + limit) if len(rows) > limit else None
         response = ListSignalCandidatesResponse(

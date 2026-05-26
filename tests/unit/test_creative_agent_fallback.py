@@ -52,7 +52,7 @@ class TestStructuredContentFallbackTrigger:
             patch.object(registry, "_fetch_formats_raw_mcp", new_callable=AsyncMock, return_value=[]) as mock_fallback,
         ):
             await registry._fetch_formats_from_agent(mock_client, agent)
-            mock_fallback.assert_called_once_with(agent)
+            mock_fallback.assert_called_once_with(agent, request_args={})
 
     @pytest.mark.asyncio
     async def test_failed_status_with_other_error_raises_value_error(self, registry, agent):

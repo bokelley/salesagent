@@ -76,7 +76,7 @@ services:
     ports:
       - "127.0.0.1:${ADCP_SALES_PORT:-8092}:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1 && test -s /var/run/nginx.pid"]
       interval: 10s
       timeout: 5s
       retries: 5

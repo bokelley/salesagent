@@ -79,7 +79,7 @@ services:
     ports:
       - "${CONDUCTOR_PORT:?CONDUCTOR_PORT is required (set per worktree by Conductor) — refusing to fall back to 8000 and risk colliding with another worktree}:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1 && test -s /var/run/nginx.pid"]
       interval: 30s
       timeout: 10s
       retries: 3
