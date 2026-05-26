@@ -19,12 +19,9 @@ def instrument_sqlalchemy() -> None:
     if not is_tracing_enabled():
         return
 
-    try:
-        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
-        SQLAlchemyInstrumentor().instrument()
-    except ImportError:
-        pass
+    SQLAlchemyInstrumentor().instrument()
 
 
 def initialize_application() -> None:

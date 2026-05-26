@@ -78,7 +78,5 @@ def traced(func: Callable) -> Callable:
 
 def _set_identity_attribute(span: Any, args: tuple, kwargs: dict) -> None:
     identity = kwargs.get("identity")
-    if identity is None and len(args) >= 2:
-        identity = args[1]
     if identity is not None and hasattr(identity, "tenant_id"):
         span.set_attribute("salesagent.tenant_id", str(identity.tenant_id))
