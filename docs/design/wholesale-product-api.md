@@ -1,68 +1,121 @@
-# Inventory Bundle API
+# Wholesale Product API
 
 **Status:** Draft
 **Last updated:** 2026-05-26
 
 ## Summary
 
-Inventory bundles are the durable inventory primitive that a storefront uses to
-compose wholesale products. They answer four separate questions:
+Wholesale products are the durable sellable primitive that an embedding
+storefront uses to manage publisher supply. They answer five questions in one
+object:
 
 1. **Where can this run?** Publisher properties plus ad-server inventory selectors.
 2. **What creative can a buyer send?** Accepted creative format IDs and optional slot requirements.
-3. **What composition is allowed?** Targeting and optimization capabilities for this bundle.
-4. **How does the adapter execute it?** Adapter-specific selector and format-binding configuration.
+3. **What does it cost?** Pricing options, delivery type, and forecast.
+4. **What composition is allowed?** Targeting and optimization capabilities.
+5. **How does the adapter execute it?** Adapter-specific selector and format-binding configuration.
 
-Pricing is intentionally not owned by the inventory bundle. Pricing belongs to
-the product or offer that references the bundle, because the same bundle can be
-sold multiple ways.
+An inventory component can still exist internally as a reusable component, but it
+should not be the primary public API noun. The external API should expose
+**wholesale products** because that is the object the storefront is building:
+buyer-facing merchandising plus the supply, pricing, targeting, optimization,
+and adapter execution details needed to materialize it.
 
-The existing database model is `InventoryProfile`. The API should expose this
-as **inventory bundles** while preserving the internal table name until a
-separate migration is worth the churn.
+The existing database models are `Product` and `InventoryProfile`. The first
+implementation can persist the inventory portion in `InventoryProfile` while
+using `Product` for the buyer-facing product, pricing, delivery, and forecast
+fields. That split should remain an implementation detail of the migration.
 
 ## Core Model
 
 ```json
 {
-  "bundle_id": "homepage_takeover",
+  "wholesale_product_id": "homepage_takeover",
   "name": "Homepage Takeover",
   "description": "High-impact homepage package.",
   "status": "active",
+  "delivery_type": "guaranteed",
 
-  "publisher_properties": [
+  "pricing_options": [
     {
-      "publisher_domain": "example.com",
-      "selection_type": "all"
+      "pricing_model": "cpm",
+      "currency": "USD",
+      "is_fixed": true,
+      "rate": 40
     }
   ],
 
-  "creative_formats": [
-    {
-      "format_id": {
-        "agent_url": "https://creative.adcontextprotocol.org",
-        "id": "homepage_takeover"
-      },
-      "slot_requirements": [
+  "forecast": {
+    "impressions": 1000000
+  },
+
+  "inventory": {
+    "publisher_properties": [
+      {
+        "publisher_domain": "example.com",
+        "selection_type": "all"
+      }
+    ],
+
+    "creative_formats": [
+      {
+        "format_id": {
+          "agent_url": "https://creative.adcontextprotocol.org",
+          "id": "homepage_takeover"
+        },
+        "slot_requirements": [
+          {
+            "slot_id": "leaderboard",
+            "name": "Leaderboard",
+            "asset_type": "image",
+            "width": 970,
+            "height": 250,
+            "required": true
+          },
+          {
+            "slot_id": "rail",
+            "name": "Right rail",
+            "asset_type": "image",
+            "width": 300,
+            "height": 600,
+            "required": true
+          }
+        ]
+      }
+    ],
+
+    "execution": {
+      "adapter": "google_ad_manager",
+      "selectors": [
         {
-          "slot_id": "leaderboard",
-          "name": "Leaderboard",
-          "asset_type": "image",
-          "width": 970,
-          "height": 250,
-          "required": true
+          "selector_type": "placement",
+          "external_id": "123456"
         },
         {
-          "slot_id": "rail",
-          "name": "Right rail",
-          "asset_type": "image",
-          "width": 300,
-          "height": 600,
-          "required": true
+          "selector_type": "ad_unit",
+          "external_id": "654321",
+          "options": {
+            "include_descendants": true
+          }
+        }
+      ],
+      "format_bindings": [
+        {
+          "format_id": {
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": "homepage_takeover"
+          },
+          "adapter_config": {
+            "creative_placeholders": [
+              {"slot_id": "leaderboard", "size": "970x250"},
+              {"slot_id": "rail", "size": "300x600"}
+            ],
+            "roadblocking": "as_many_as_possible"
+          }
         }
       ]
     }
-  ],
+  },
 
   "targeting_capabilities": {
     "allowed_dimensions": ["geo", "device", "audience"],
@@ -75,38 +128,6 @@ separate migration is worth the churn.
     "supported_pacing": ["even", "asap"]
   },
 
-  "inventory_execution": {
-    "adapter": "google_ad_manager",
-    "selectors": [
-      {
-        "selector_type": "placement",
-        "external_id": "123456"
-      },
-      {
-        "selector_type": "ad_unit",
-        "external_id": "654321",
-        "options": {
-          "include_descendants": true
-        }
-      }
-    ],
-    "format_bindings": [
-      {
-        "format_id": {
-          "agent_url": "https://creative.adcontextprotocol.org",
-          "id": "homepage_takeover"
-        },
-        "adapter_config": {
-          "creative_placeholders": [
-            {"slot_id": "leaderboard", "size": "970x250"},
-            {"slot_id": "rail", "size": "300x600"}
-          ],
-          "roadblocking": "as_many_as_possible"
-        }
-      }
-    ]
-  },
-
   "created_at": "2026-05-26T00:00:00Z",
   "updated_at": "2026-05-26T00:00:00Z",
   "etag": "..."
@@ -117,20 +138,19 @@ separate migration is worth the churn.
 
 | Field | Owner | Visible in `get_products` | Notes |
 |---|---|---:|---|
-| `bundle_id`, `name`, `description` | Bundle | Yes, via product projection | Buyer-facing merchandising text. |
-| `publisher_properties` | Bundle | Yes | AdCP publisher-property selector shape. |
-| `creative_formats` | Bundle | Yes as `format_ids`; slot details when schema allows | Buyer knows what creative to submit. |
-| `targeting_capabilities` | Bundle | Yes | Narrows what buyer/storefront can compose. |
-| `optimization_capabilities` | Bundle | Yes | Narrows package optimization and pacing choices. |
-| `inventory_execution` | Bundle | No | Internal/storefront-authoring only; not buyer-facing. |
-| `pricing_options` | Product | Yes | Same bundle may have multiple commercial offers. |
-| `forecast` | Product, optionally derived from bundle | Yes | Forecast can be offer-specific. |
+| `wholesale_product_id`, `name`, `description` | Wholesale product | Yes | Buyer-facing merchandising text. |
+| `delivery_type`, `pricing_options`, `forecast` | Wholesale product | Yes | Commercial offer and availability. |
+| `inventory.publisher_properties` | Wholesale product inventory | Yes | AdCP publisher-property selector shape. |
+| `inventory.creative_formats` | Wholesale product inventory | Yes as `format_ids`; slot details when schema allows | Buyer knows what creative to submit. |
+| `targeting_capabilities` | Wholesale product | Yes | Narrows what buyer/storefront can compose. |
+| `optimization_capabilities` | Wholesale product | Yes | Narrows package optimization and pacing choices. |
+| `inventory.execution` | Wholesale product inventory | No | Internal/storefront-authoring only; not buyer-facing. |
 
 ## Storefront API Surface
 
 The embedding storefront needs two classes of API:
 
-1. **Authoring APIs** to create and manage bundles/products.
+1. **Authoring APIs** to create and manage wholesale products.
 2. **Discovery APIs** to know what an adapter supports, search synced inventory,
    list publisher properties, and choose creative formats.
 
@@ -151,9 +171,8 @@ Responsibility split:
 | Adapter credentials and network binding | Host platform | Tenant Management API |
 | Inventory sync trigger/status | Host platform or setup UI | Generic inventory setup API |
 | Publisher domains/properties | Publisher or host setup UI | Generic publisher-property API |
-| Inventory bundles | Publisher or host setup UI | Generic inventory-bundle API |
+| Wholesale products | Publisher or host setup UI | Generic wholesale-product API |
 | Signal mappings | Publisher or host setup UI | Generic signal setup API |
-| Priced products/offers | Publisher or host setup UI | Generic product API |
 
 The embedded setup UI needs to guide a publisher through adapter-specific
 objects without exposing raw adapter implementation as the public contract. The
@@ -167,7 +186,7 @@ API should therefore expose:
   consequences before publishing
 
 This is the layer missing from issue 600: the primitives already exist
-(`InventoryProfile`, `TenantSignal`, profile-backed `Product`), but the
+(`Product`, `InventoryProfile`, `TenantSignal`), but the
 candidate/preview/operator-read setup contract is incomplete.
 
 ### Inventory Sync
@@ -303,7 +322,7 @@ GET /api/v1/tenants/{tenant_id}/inventory/publisher-properties
 ```
 
 Returns the publisher domains and property selectors that can be used in a
-bundle. This is deliberately separate from ad-server selectors: publisher
+wholesale product's inventory. This is deliberately separate from ad-server selectors: publisher
 properties are the AdCP supply identity that buyers see, while ad-server
 selectors are execution details.
 
@@ -355,7 +374,7 @@ URL on embedded/shared-agent deployments.
 GET /api/v1/tenants/{tenant_id}/creative-formats
 ```
 
-Returns creative formats available for bundle authoring. Internally this should
+Returns creative formats available for wholesale product authoring. Internally this should
 share implementation with the AdCP `list_creative_formats` tool so the
 storefront and buyers see the same format vocabulary.
 
@@ -384,7 +403,7 @@ storefront and buyers see the same format vocabulary.
 ```
 
 For composite formats, the response should expose the slots/assets that the
-buyer must provide. The bundle can further narrow these formats, but it should
+buyer must provide. The wholesale product can further narrow these formats, but it should
 not invent a format shape that is unavailable from the creative-format catalog.
 
 ### Signal Candidate Discovery
@@ -504,7 +523,7 @@ can inspect, diff, edit, and explain what it wrote.
 ### Setup Preview and Validation
 
 ```http
-POST /api/v1/tenants/{tenant_id}/inventory-bundles:preview
+POST /api/v1/tenants/{tenant_id}/wholesale-products:preview
 POST /api/v1/tenants/{tenant_id}/signals/mappings:preview
 POST /api/v1/tenants/{tenant_id}/composition:validate
 ```
@@ -548,31 +567,33 @@ Example:
 }
 ```
 
-### Inventory Bundle CRUD
+### Wholesale Product CRUD
 
 Preferred external path:
 
 ```http
-GET    /api/v1/tenants/{tenant_id}/inventory-bundles
-POST   /api/v1/tenants/{tenant_id}/inventory-bundles
-GET    /api/v1/tenants/{tenant_id}/inventory-bundles/{bundle_id}
-PUT    /api/v1/tenants/{tenant_id}/inventory-bundles/{bundle_id}
-DELETE /api/v1/tenants/{tenant_id}/inventory-bundles/{bundle_id}
+GET    /api/v1/tenants/{tenant_id}/wholesale-products
+POST   /api/v1/tenants/{tenant_id}/wholesale-products
+GET    /api/v1/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
+PUT    /api/v1/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
+DELETE /api/v1/tenants/{tenant_id}/wholesale-products/{wholesale_product_id}
 ```
 
-Compatibility path:
+Existing inventory-component path:
 
 ```http
 /api/v1/tenants/{tenant_id}/inventory-profiles
 ```
 
-`inventory-profiles` can remain as an alias for existing clients, but new docs
-and clients should use `inventory-bundles`.
+`inventory-profiles` can remain for existing clients that explicitly manage
+reusable inventory components. It should not be the primary embedded/storefront
+API, and new wholesale-product clients should only use it indirectly through
+the nested `inventory` field.
 
-### Bundle Validation
+### Wholesale Product Validation
 
 ```http
-POST /api/v1/tenants/{tenant_id}/inventory-bundles:validate
+POST /api/v1/tenants/{tenant_id}/wholesale-products:validate
 ```
 
 Validates without persisting:
@@ -584,9 +605,12 @@ Validates without persisting:
 - format bindings satisfy the adapter binding schema
 - targeting and optimization capabilities do not exceed adapter capabilities
 
-### Product or Offer CRUD
+### Compatibility with Existing Product APIs
 
-Products remain the commercial wrappers around bundles:
+The existing composition API already exposes `/products`. During migration,
+`/wholesale-products` should be the preferred embedded/storefront path and
+`/products` should remain a compatibility path for existing internal clients
+and AdCP-product terminology:
 
 ```http
 GET    /api/v1/tenants/{tenant_id}/products
@@ -596,12 +620,13 @@ PUT    /api/v1/tenants/{tenant_id}/products/{product_id}
 DELETE /api/v1/tenants/{tenant_id}/products/{product_id}
 ```
 
-Product write shape:
+The compatibility write shape should accept the old profile linkage while the
+new wholesale-product path accepts the nested `inventory` shape:
 
 ```json
 {
   "product_id": "homepage_takeover_fixed",
-  "inventory_bundle_id": "homepage_takeover",
+  "inventory_profile_id": "homepage_takeover_inventory",
   "name": "Homepage Takeover",
   "description": "Fixed-price homepage takeover.",
   "delivery_type": "guaranteed",
@@ -619,28 +644,28 @@ Product write shape:
 }
 ```
 
-The existing `inventory_profile_id` field should be accepted as an alias during
-migration.
+Longer term, the compatibility endpoint can be a thin alias over the same
+service that powers `/wholesale-products`.
 
 ## `get_products` Projection
 
-`get_products` returns buyer/composer-facing data from `Product + InventoryBundle`.
+`get_products` returns buyer/composer-facing data from `WholesaleProduct`.
 It must not expose adapter execution selectors by default.
 
 Projection rules:
 
 | `get_products` field | Source |
 |---|---|
-| `product_id`, `name`, `description` | Product, with bundle fallback where appropriate |
-| `publisher_properties` | Bundle |
-| `format_ids` | Bundle `creative_formats[].format_id` |
-| `pricing_options` | Product |
-| `property_targeting_allowed` | Product plus bundle capabilities |
-| `signal_targeting_allowed` | Product plus bundle capabilities |
-| `targeting_capabilities` | Bundle, if supported by schema extension |
-| `optimization_capabilities` | Bundle, if supported by schema extension |
-| `forecast` | Product |
-| `allowed_actions` | Product plus adapter |
+| `product_id`, `name`, `description` | Wholesale product |
+| `publisher_properties` | `inventory.publisher_properties` |
+| `format_ids` | `inventory.creative_formats[].format_id` |
+| `pricing_options` | Wholesale product |
+| `property_targeting_allowed` | Wholesale product capabilities |
+| `signal_targeting_allowed` | Wholesale product capabilities |
+| `targeting_capabilities` | Wholesale product, if supported by schema extension |
+| `optimization_capabilities` | Wholesale product, if supported by schema extension |
+| `forecast` | Wholesale product |
+| `allowed_actions` | Wholesale product plus adapter |
 
 ## Adapter Coverage
 
@@ -691,7 +716,7 @@ Selector types:
 
 Execution binding:
 
-- Bundle selectors map into `FreeWheelProductConfig` fields:
+- Wholesale product selectors map into `FreeWheelProductConfig` fields:
   `site_ids`, `site_section_ids`, `video_group_ids`, `series_ids`,
   `ad_unit_package_id`.
 - Creative formats are VAST/video-oriented by default.
@@ -720,10 +745,10 @@ Selector types:
 
 Execution binding:
 
-- Bundle selectors map to `BroadstreetProductConfig.targeted_zone_ids`.
+- Wholesale product selectors map to `BroadstreetProductConfig.targeted_zone_ids`.
 - Format bindings map to Broadstreet templates and supported ad formats:
   display, HTML, text.
-- Zone dimensions can infer simple display format compatibility, but the bundle
+- Zone dimensions can infer simple display format compatibility, but the wholesale product
   still explicitly declares accepted formats.
 
 Capabilities:
@@ -742,12 +767,12 @@ Selector types:
 | Selector | Source | Notes |
 |---|---|---|
 | `supply_partner` | `springserve_inventory` | Top-level seller relationship. |
-| `supply_router` | `springserve_inventory` | Natural bundle root when publishers curate supply routes. |
+| `supply_router` | `springserve_inventory` | Natural wholesale product root when publishers curate supply routes. |
 | `supply_tag` | `springserve_inventory` | Per-property supply unit; maps most directly to demand tag supply. |
 
 Execution binding:
 
-- Bundle selectors map into `SpringServeProductConfig.supply_tag_ids` and
+- Wholesale product selectors map into `SpringServeProductConfig.supply_tag_ids` and
   related future fields as the adapter matures.
 - The tenant `demand_class` controls whether buyers send hosted creative assets
   or a third-party tag URL.
@@ -785,16 +810,20 @@ The setup flow should be driven by the same APIs the embedding storefront uses.
    selection.
 5. Use `GET /creative-formats` for accepted creative-format selection.
 6. Use `GET /inventory/selectors` for searchable ad-server inventory pickers.
-7. Create inventory bundles with publisher properties, creative formats,
-   targeting capabilities, optimization capabilities, and execution bindings.
-8. Create products/offers that reference bundles and add pricing.
-9. Verify `get_products` returns the buyer-facing projection.
+7. Create wholesale products with publisher properties, creative formats,
+   pricing, targeting capabilities, optimization capabilities, and execution
+   bindings.
+8. Verify `get_products` returns the buyer-facing projection.
 
-The Admin UI should stop treating products as the primary place to select
-publisher domains and ad-server inventory. Product forms should either:
+The Admin UI should treat the existing product editor as the wholesale-product
+editor. It needs to bring the inventory selection into the same flow as
+pricing, targeting, optimization, forecast, and buyer-facing copy. A first cut
+can still store the inventory selection in `InventoryProfile`, but the UI
+should present one sellable wholesale product rather than two separate concepts.
 
-- select an existing bundle, then configure commercial terms, or
-- launch bundle creation inline and return to product pricing.
+The current inventory-profile screens can remain as an advanced/reusable
+inventory-selection editor during migration, but embedded setup should use the
+new wholesale-product APIs directly.
 
 For embedded tenants specifically:
 
@@ -806,35 +835,35 @@ For embedded tenants specifically:
   server IDs when a synced selector cache is available.
 - Shared-agent deployments must not infer publisher domains from agent URLs.
 - Native adapter details can be shown as explanation/evidence, but the saved
-  object should still be the generic bundle/signal/product shape.
+  object should still be the generic wholesale-product/signal shape.
 
 ## Validation Rules
 
-- Bundle `publisher_properties` must be non-empty.
-- Bundle `creative_formats` must be non-empty.
-- Bundle `inventory_execution.adapter` must match the tenant adapter.
+- Wholesale product `inventory.publisher_properties` must be non-empty.
+- Wholesale product `inventory.creative_formats` must be non-empty.
+- Wholesale product `inventory.execution.adapter` must match the tenant adapter.
 - Every selector must use a selector type advertised by
   `adapter-capabilities`.
 - Every selector ID must exist in the local synced inventory cache unless the
   selector type explicitly allows manual entry.
-- Bundle targeting/optimization capabilities must be subsets of adapter-level
+- Wholesale product targeting/optimization capabilities must be subsets of adapter-level
   capabilities.
-- Products must reference exactly one active bundle.
-- Products must own pricing. Bundles must not own pricing options.
+- Wholesale products must own pricing options.
 
 ## Migration Plan
 
-1. Add schemas for `InventoryBundleCreate`, `InventoryBundleUpdate`,
-   `InventoryBundleRead`, `InventorySelectorRead`, and
+1. Add schemas for `WholesaleProductCreate`, `WholesaleProductUpdate`,
+   `WholesaleProductRead`, `InventorySelectorRead`, and
    `AdapterInventoryCapabilitiesRead`.
-2. Add `/inventory-bundles` routes as aliases around `InventoryProfile`.
-3. Expand `InventoryProfile` JSON usage:
+2. Add `/wholesale-products` routes backed by the existing `Product` service
+   plus the linked `InventoryProfile` storage for `inventory`.
+3. Expand `InventoryProfile` JSON usage for the nested `inventory` object:
    - `format_ids` remains accepted for simple formats.
    - `creative_formats` can be stored in `constraints` or a new JSON column in
      a later migration. Short term, derive `creative_formats` from `format_ids`
      when slot details are absent.
    - `inventory_config` becomes the persisted representation of
-     `inventory_execution.selectors` and `format_bindings`.
+     `inventory.execution.selectors` and `format_bindings`.
 4. Implement adapter capability providers for GAM, FreeWheel, Broadstreet,
    SpringServe, and Mock.
 5. Implement normalized selector search over each adapter's local cache.
@@ -842,10 +871,10 @@ For embedded tenants specifically:
    discovery endpoints.
 7. Add signal candidate, signal mapping, and setup preview endpoints backed by
    `TenantSignal`.
-8. Update product API to accept `inventory_bundle_id` while retaining
-   `inventory_profile_id` as an alias.
-9. Update Admin UI forms to create bundles first and products second.
-10. Update `get_products` projection tests for bundle-derived formats,
+8. Keep `/products` and `inventory_profile_id` compatibility while steering
+   embedded clients to `/wholesale-products`.
+9. Update Admin UI forms so product authoring is wholesale-product authoring.
+10. Update `get_products` projection tests for inventory-derived formats,
    publisher properties, and capabilities.
 
 ## Open Decisions
@@ -855,5 +884,5 @@ For embedded tenants specifically:
   slot model.
 - Whether adapter `format_bindings` should be visible to all embedding
   storefront clients or only to operator-admin clients.
-- Whether the long-term database model should rename
-  `inventory_profiles` to `inventory_bundles` or keep the internal name.
+- Whether the long-term database model should keep `InventoryProfile` as a
+  reusable inventory component or fold the fields directly into `Product`.
