@@ -50,9 +50,11 @@ to `dev-tenant-management-key-change-me`.
 5. Look up publisher domains and property IDs/tags through AAO.
 6. Search cached ad-server selectors.
 7. Discover creative formats.
-8. Validate and preview a wholesale product draft.
-9. Create or update the wholesale product.
-10. Confirm buyer-facing discovery through AdCP `get_products`.
+8. Optionally configure buyer-facing signal mappings through the
+   [Embedded Signal Mapping API](embedded-signals-api.md).
+9. Validate and preview a wholesale product draft.
+10. Create or update the wholesale product.
+11. Confirm buyer-facing discovery through AdCP `get_products`.
 
 The host product owns which of these steps are automated and which are surfaced
 to a publisher in setup UI.
@@ -488,6 +490,8 @@ streams they expose.
   adapter setup UI. Do not depend on per-adapter OpenAPI files.
 - Use `GET /tenants/{tenant_id}/inventory/adapter-capabilities` to render the
   product authoring UI for a specific tenant.
+- Use `GET /tenants/{tenant_id}/signals/adapter-capabilities` when the
+  storefront also manages buyer-facing signal mappings.
 - Use `publisher-properties:lookup` at product setup time for each publisher
   domain the user adds.
 - Prefer `selection_type: "all"` or `selection_type: "by_tag"` for large
@@ -501,5 +505,6 @@ streams they expose.
 
 - [Embedded Mode Operational Reference](embedded-mode-operational.md)
 - [Embedded Mode Identity Contract](embedded-mode-identity-contract.md)
+- [Embedded Signal Mapping API](embedded-signals-api.md)
 - [Wholesale Product API design notes](../design/wholesale-product-api.md)
 - [Tenant Management OpenAPI YAML](../api/tenant-management-openapi.yaml)

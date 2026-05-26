@@ -23,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.admin.api_schemas.composition import TenantSignalCreate
 from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
 
@@ -994,6 +995,117 @@ class ListInventorySelectorsResponse(BaseModel):
     selectors: list[InventorySelectorSummary]
     count: int
     next_cursor: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Signal mapping authoring — embedded storefront API
+# ---------------------------------------------------------------------------
+
+
+SignalValueType = Literal["binary", "categorical", "numeric"]
+
+
+class SignalMappingKindCapability(BaseModel):
+    """One adapter mapping kind that can back a buyer-facing signal."""
+
+    model_config = _config()
+
+    mapping_kind: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=200)
+    description: str | None = None
+    candidate_type: str | None = Field(default=None, max_length=80)
+    supports_search: bool = True
+    supports_parent_filter: bool = False
+    adapter_config_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class SignalAdapterCapabilitiesResponse(BaseModel):
+    """Tenant-specific adapter capabilities for signal mapping authoring."""
+
+    model_config = _config()
+
+    adapter: str
+    supports_signal_mapping_authoring: bool
+    mapping_kinds: list[SignalMappingKindCapability] = Field(default_factory=list)
+    value_types: list[str] = Field(default_factory=lambda: ["binary", "categorical", "numeric"])
+
+
+class SignalCandidateSummary(BaseModel):
+    """One synced adapter object that can help create a signal mapping."""
+
+    model_config = _config()
+
+    candidate_type: str
+    external_id: str
+    name: str | None = None
+    parent_id: str | None = None
+    path: list[str] | None = None
+    mapping_kind: str | None = None
+    adapter_config_template: dict[str, Any] | None = None
+    default_signal: dict[str, Any] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ListSignalCandidatesResponse(BaseModel):
+    """Search/list response for adapter signal candidates."""
+
+    model_config = _config()
+
+    candidates: list[SignalCandidateSummary]
+    count: int
+    next_cursor: str | None = None
+
+
+class SignalMappingRequest(TenantSignalCreate):
+    """Create/update body for operator-authored signal mappings."""
+
+    tags: list[str] = Field(default_factory=list)
+
+
+class SignalMappingResponse(SignalMappingRequest):
+    """Signal mapping as persisted and returned to embedder clients."""
+
+    etag: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ListSignalMappingsResponse(BaseModel):
+    """List response for signal mappings."""
+
+    model_config = _config()
+
+    signals: list[SignalMappingResponse]
+    count: int
+
+
+class DeleteSignalMappingResponse(BaseModel):
+    """Delete response for signal mappings."""
+
+    model_config = _config()
+
+    success: bool
+    message: str
+
+
+class SignalMappingValidationIssue(BaseModel):
+    """One validation issue for a signal mapping draft."""
+
+    model_config = _config()
+
+    code: str
+    message: str
+    field: str | None = None
+    severity: Literal["error", "warning"] = "error"
+
+
+class SignalMappingValidationResponse(BaseModel):
+    """Validation result for signal mapping authoring."""
+
+    model_config = _config()
+
+    valid: bool
+    issues: list[SignalMappingValidationIssue] = Field(default_factory=list)
 
 
 class PublisherDomainSummary(BaseModel):

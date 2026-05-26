@@ -883,6 +883,21 @@ components:
       - url
       title: CreateWebhookSubscriptionRequest
       type: object
+    DeleteSignalMappingResponse.f44f287:
+      additionalProperties: false
+      description: Delete response for signal mappings.
+      properties:
+        message:
+          title: Message
+          type: string
+        success:
+          title: Success
+          type: boolean
+      required:
+      - success
+      - message
+      title: DeleteSignalMappingResponse
+      type: object
     DeleteWholesaleProductResponse.f44f287:
       additionalProperties: false
       description: Delete response for wholesale products.
@@ -1815,6 +1830,221 @@ components:
       - request_count
       - resolved_via
       title: RecentBuyer
+      type: object
+    ListSignalCandidatesResponse.f44f287:
+      additionalProperties: false
+      description: Search/list response for adapter signal candidates.
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/ListSignalCandidatesResponse.f44f287.SignalCandidateSummary'
+          title: Candidates
+          type: array
+        count:
+          title: Count
+          type: integer
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Next Cursor
+      required:
+      - candidates
+      - count
+      title: ListSignalCandidatesResponse
+      type: object
+    ListSignalCandidatesResponse.f44f287.SignalCandidateSummary:
+      additionalProperties: false
+      description: One synced adapter object that can help create a signal mapping.
+      properties:
+        adapter_config_template:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Adapter Config Template
+        candidate_type:
+          title: Candidate Type
+          type: string
+        default_signal:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Default Signal
+        external_id:
+          title: External Id
+          type: string
+        mapping_kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Mapping Kind
+        metadata:
+          additionalProperties: true
+          title: Metadata
+          type: object
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Name
+        parent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Parent Id
+        path:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Path
+      required:
+      - candidate_type
+      - external_id
+      title: SignalCandidateSummary
+      type: object
+    ListSignalMappingsResponse.f44f287:
+      additionalProperties: false
+      description: List response for signal mappings.
+      properties:
+        count:
+          title: Count
+          type: integer
+        signals:
+          items:
+            $ref: '#/components/schemas/ListSignalMappingsResponse.f44f287.SignalMappingResponse'
+          title: Signals
+          type: array
+      required:
+      - signals
+      - count
+      title: ListSignalMappingsResponse
+      type: object
+    ListSignalMappingsResponse.f44f287.SignalMappingResponse:
+      additionalProperties: false
+      description: Signal mapping as persisted and returned to embedder clients.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          description: "Adapter-specific resolution map. Operator-authored, opaque\
+            \ to storefront. Examples: GAM custom KV \u2192 {kind: 'custom_key_value',\
+            \ key_id: '...', value_ids: {...}}; GAM audience \u2192 {kind: 'audience_segment',\
+            \ segment_id: '...'}; Freewheel \u2192 {kind: 'audience_item', audience_item_id:\
+            \ '...'}."
+          title: Adapter Config
+          type: object
+        categories:
+          description: Taxonomy when value_type='categorical'
+          items:
+            type: string
+          title: Categories
+          type: array
+        created_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        data_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Data Provider
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Etag
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        range:
+          anyOf:
+          - $ref: '#/components/schemas/ListSignalMappingsResponse.f44f287.SignalRange'
+          - type: 'null'
+          default: null
+          description: Bounds when value_type='numeric'
+        signal_id:
+          description: Stable AdCP signal_id. Use only letters, numbers, underscores,
+            and hyphens.
+          maxLength: 200
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Signal Id
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        targeting_dimension:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: AdCP-standard dimension this signal narrows (audience, contextual,
+            weather, ...)
+          title: Targeting Dimension
+        updated_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        value_type:
+          enum:
+          - binary
+          - categorical
+          - numeric
+          title: Value Type
+          type: string
+      required:
+      - signal_id
+      - name
+      - value_type
+      title: SignalMappingResponse
+      type: object
+    ListSignalMappingsResponse.f44f287.SignalRange:
+      additionalProperties: false
+      description: Numeric bounds for a ``value_type='numeric'`` signal.
+      properties:
+        max:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Max
+        min:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min
+      title: SignalRange
       type: object
     ListSyncHistoryResponse.f44f287:
       additionalProperties: false
@@ -3880,6 +4110,333 @@ components:
       required:
       - notes
       title: RejectWorkflowRequest
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287:
+      additionalProperties: false
+      description: Tenant-specific adapter capabilities for signal mapping authoring.
+      properties:
+        adapter:
+          title: Adapter
+          type: string
+        mapping_kinds:
+          items:
+            $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindCapability'
+          title: Mapping Kinds
+          type: array
+        supports_signal_mapping_authoring:
+          title: Supports Signal Mapping Authoring
+          type: boolean
+        value_types:
+          items:
+            type: string
+          title: Value Types
+          type: array
+      required:
+      - adapter
+      - supports_signal_mapping_authoring
+      title: SignalAdapterCapabilitiesResponse
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindCapability:
+      additionalProperties: false
+      description: One adapter mapping kind that can back a buyer-facing signal.
+      properties:
+        adapter_config_schema:
+          additionalProperties: true
+          title: Adapter Config Schema
+          type: object
+        candidate_type:
+          anyOf:
+          - maxLength: 80
+            type: string
+          - type: 'null'
+          default: null
+          title: Candidate Type
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        label:
+          maxLength: 200
+          minLength: 1
+          title: Label
+          type: string
+        mapping_kind:
+          maxLength: 80
+          minLength: 1
+          title: Mapping Kind
+          type: string
+        supports_parent_filter:
+          default: false
+          title: Supports Parent Filter
+          type: boolean
+        supports_search:
+          default: true
+          title: Supports Search
+          type: boolean
+      required:
+      - mapping_kind
+      - label
+      title: SignalMappingKindCapability
+      type: object
+    SignalMappingRequest.f44f287:
+      additionalProperties: false
+      description: Create/update body for operator-authored signal mappings.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          description: "Adapter-specific resolution map. Operator-authored, opaque\
+            \ to storefront. Examples: GAM custom KV \u2192 {kind: 'custom_key_value',\
+            \ key_id: '...', value_ids: {...}}; GAM audience \u2192 {kind: 'audience_segment',\
+            \ segment_id: '...'}; Freewheel \u2192 {kind: 'audience_item', audience_item_id:\
+            \ '...'}."
+          title: Adapter Config
+          type: object
+        categories:
+          description: Taxonomy when value_type='categorical'
+          items:
+            type: string
+          title: Categories
+          type: array
+        data_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Data Provider
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        range:
+          anyOf:
+          - $ref: '#/components/schemas/SignalMappingRequest.f44f287.SignalRange'
+          - type: 'null'
+          default: null
+          description: Bounds when value_type='numeric'
+        signal_id:
+          description: Stable AdCP signal_id. Use only letters, numbers, underscores,
+            and hyphens.
+          maxLength: 200
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Signal Id
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        targeting_dimension:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: AdCP-standard dimension this signal narrows (audience, contextual,
+            weather, ...)
+          title: Targeting Dimension
+        value_type:
+          enum:
+          - binary
+          - categorical
+          - numeric
+          title: Value Type
+          type: string
+      required:
+      - signal_id
+      - name
+      - value_type
+      title: SignalMappingRequest
+      type: object
+    SignalMappingRequest.f44f287.SignalRange:
+      additionalProperties: false
+      description: Numeric bounds for a ``value_type='numeric'`` signal.
+      properties:
+        max:
+          anyOf:
+          - type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Max
+        min:
+          anyOf:
+          - type: number
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min
+      title: SignalRange
+      type: object
+    SignalMappingResponse.f44f287:
+      additionalProperties: false
+      description: Signal mapping as persisted and returned to embedder clients.
+      properties:
+        adapter_config:
+          additionalProperties: true
+          description: "Adapter-specific resolution map. Operator-authored, opaque\
+            \ to storefront. Examples: GAM custom KV \u2192 {kind: 'custom_key_value',\
+            \ key_id: '...', value_ids: {...}}; GAM audience \u2192 {kind: 'audience_segment',\
+            \ segment_id: '...'}; Freewheel \u2192 {kind: 'audience_item', audience_item_id:\
+            \ '...'}."
+          title: Adapter Config
+          type: object
+        categories:
+          description: Taxonomy when value_type='categorical'
+          items:
+            type: string
+          title: Categories
+          type: array
+        created_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        data_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Data Provider
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Etag
+        name:
+          maxLength: 200
+          minLength: 1
+          title: Name
+          type: string
+        range:
+          anyOf:
+          - $ref: '#/components/schemas/SignalMappingResponse.f44f287.SignalRange'
+          - type: 'null'
+          default: null
+          description: Bounds when value_type='numeric'
+        signal_id:
+          description: Stable AdCP signal_id. Use only letters, numbers, underscores,
+            and hyphens.
+          maxLength: 200
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Signal Id
+          type: string
+        tags:
+          items:
+            type: string
+          title: Tags
+          type: array
+        targeting_dimension:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: AdCP-standard dimension this signal narrows (audience, contextual,
+            weather, ...)
+          title: Targeting Dimension
+        updated_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        value_type:
+          enum:
+          - binary
+          - categorical
+          - numeric
+          title: Value Type
+          type: string
+      required:
+      - signal_id
+      - name
+      - value_type
+      title: SignalMappingResponse
+      type: object
+    SignalMappingResponse.f44f287.SignalRange:
+      additionalProperties: false
+      description: Numeric bounds for a ``value_type='numeric'`` signal.
+      properties:
+        max:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Max
+        min:
+          anyOf:
+          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+            type: string
+          - type: 'null'
+          default: null
+          title: Min
+      title: SignalRange
+      type: object
+    SignalMappingValidationResponse.f44f287:
+      additionalProperties: false
+      description: Validation result for signal mapping authoring.
+      properties:
+        issues:
+          items:
+            $ref: '#/components/schemas/SignalMappingValidationResponse.f44f287.SignalMappingValidationIssue'
+          title: Issues
+          type: array
+        valid:
+          title: Valid
+          type: boolean
+      required:
+      - valid
+      title: SignalMappingValidationResponse
+      type: object
+    SignalMappingValidationResponse.f44f287.SignalMappingValidationIssue:
+      additionalProperties: false
+      description: One validation issue for a signal mapping draft.
+      properties:
+        code:
+          title: Code
+          type: string
+        field:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Field
+        message:
+          title: Message
+          type: string
+        severity:
+          default: error
+          enum:
+          - error
+          - warning
+          title: Severity
+          type: string
+      required:
+      - code
+      - message
+      title: SignalMappingValidationIssue
       type: object
     SpringServeSettings.f44f287:
       additionalProperties: false
@@ -7595,6 +8152,331 @@ paths:
           description: Unprocessable Content
       summary: "Fan out a refresh across all sync types \u2014 collapses N per-sync\
         \ triggers into one call."
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSignalMappingsResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: List signal mappings for an embedded tenant.
+      tags: []
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_signals
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalMappingRequest.f44f287'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Create one signal mapping backed by TenantSignal.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals/adapter-capabilities:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals_adapter-capabilities
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Return the tenant adapter's signal-mapping authoring capabilities.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals/candidates:
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals_candidates
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSignalCandidatesResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Search cached adapter signal candidates for signal-mapping setup.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals/{signal_id}:
+    delete:
+      description: ''
+      operationId: delete__api_v1_tenant-management_tenants_{tenant_id}_signals_{signal_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: signal_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSignalMappingResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Delete one signal mapping if no active media buy references it.
+      tags: []
+    get:
+      description: ''
+      operationId: get__api_v1_tenant-management_tenants_{tenant_id}_signals_{signal_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: signal_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Get one signal mapping.
+      tags: []
+    put:
+      description: ''
+      operationId: put__api_v1_tenant-management_tenants_{tenant_id}_signals_{signal_id}
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      - description: ''
+        in: path
+        name: signal_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalMappingRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingResponse.f44f287'
+          description: OK
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Replace one signal mapping.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/signals:validate:
+    post:
+      description: ''
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_signals:validate
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalMappingRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalMappingValidationResponse.f44f287'
+          description: OK
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Validate a signal mapping draft without persisting it.
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/status:
     get:

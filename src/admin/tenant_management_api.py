@@ -52,6 +52,7 @@ from src.admin.api_schemas.tenant_management import (
     CreateWebhookSubscriptionRequest,
     CreativeBindingSchema,
     CreativeFormatSummary,
+    DeleteSignalMappingResponse,
     DeleteWholesaleProductResponse,
     FormatIdRef,
     FreeWheelAdapterConfig,
@@ -71,6 +72,8 @@ from src.admin.api_schemas.tenant_management import (
     ListInventorySelectorsResponse,
     ListMediaBuysResponse,
     ListRecentBuyersResponse,
+    ListSignalCandidatesResponse,
+    ListSignalMappingsResponse,
     ListSyncHistoryResponse,
     ListTenantsResponse,
     ListWebhooksResponse,
@@ -93,6 +96,13 @@ from src.admin.api_schemas.tenant_management import (
     RefreshConflictResponse,
     RefreshResponse,
     RejectWorkflowRequest,
+    SignalAdapterCapabilitiesResponse,
+    SignalCandidateSummary,
+    SignalMappingKindCapability,
+    SignalMappingRequest,
+    SignalMappingResponse,
+    SignalMappingValidationIssue,
+    SignalMappingValidationResponse,
     SpringServeAdapterConfig,
     SpringServeSettings,
     TargetingValuesRefreshResponse,
@@ -151,20 +161,27 @@ from src.core.database.models import (
     SpringServeInventory,
     SyncJob,
     Tenant,
+    TenantSignal,
 )
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.signal_usage import SignalUsageRepository
 from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.core.domain_config import get_tenant_url
 from src.core.security.url_validator import check_url_ssrf
 from src.services.aao_lookup_service import get_publisher_partner_status
 from src.services.agent_url_resolver import resolve_agent_url
 from src.services.property_discovery_service import get_property_discovery_service
-from src.services.protocol_change_webhooks import notify_account_status_changed, notify_product_catalog_changed
+from src.services.protocol_change_webhooks import (
+    notify_account_status_changed,
+    notify_product_catalog_changed,
+    notify_signal_catalog_changed,
+)
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
 
@@ -926,6 +943,138 @@ _WHOLESALE_SELECTOR_CAPABILITIES: dict[str, list[InventorySelectorTypeCapability
 }
 
 
+_SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
+    "google_ad_manager": [
+        SignalMappingKindCapability(
+            mapping_kind="audience_segment",
+            label="GAM Audience Segment",
+            description="Google Ad Manager audience segment exposed as a binary buyer-facing signal.",
+            candidate_type="audience_segment",
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "segment_id"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "audience_segment"},
+                    "segment_id": {"type": "string"},
+                    "mode": {"enum": ["include", "exclude"]},
+                },
+            },
+        ),
+        SignalMappingKindCapability(
+            mapping_kind="custom_key_value",
+            label="GAM Custom Targeting Value",
+            description="Google Ad Manager custom targeting key/value exposed as a binary buyer-facing signal.",
+            candidate_type="custom_targeting_value",
+            supports_parent_filter=True,
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "key_id", "value_id"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "custom_key_value"},
+                    "key_id": {"type": "string"},
+                    "value_id": {"type": "string"},
+                    "mode": {"enum": ["include", "exclude"]},
+                },
+            },
+        ),
+        SignalMappingKindCapability(
+            mapping_kind="gam_targeting_groups",
+            label="GAM Targeting Groups",
+            description="Advanced GAM targeting widget groups exposed as one exclusive signal.",
+            candidate_type=None,
+            supports_search=False,
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "groups"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "gam_targeting_groups"},
+                    "groups": {"type": "array", "minItems": 1},
+                    "mode": {"enum": ["include", "exclude"]},
+                },
+            },
+        ),
+    ],
+    "freewheel": [
+        SignalMappingKindCapability(
+            mapping_kind="freewheel_viewership_profile",
+            label="FreeWheel Viewership Profile",
+            description="FreeWheel viewership profile ID exposed as a binary buyer-facing signal.",
+            candidate_type="standard_attribute",
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "profile_id"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "freewheel_viewership_profile"},
+                    "profile_id": {"type": "string"},
+                    "mode": {"enum": ["include", "exclude"]},
+                },
+            },
+        ),
+        SignalMappingKindCapability(
+            mapping_kind="freewheel_audience_item",
+            label="FreeWheel Audience Item",
+            description="FreeWheel Data Suite audience item ID exposed as a binary buyer-facing signal.",
+            candidate_type=None,
+            supports_search=False,
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "item_id"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "freewheel_audience_item"},
+                    "item_id": {"type": "string"},
+                    "mode": {"enum": ["include", "exclude"]},
+                },
+            },
+        ),
+        SignalMappingKindCapability(
+            mapping_kind="freewheel_custom_kv",
+            label="FreeWheel Custom Criterion",
+            description="FreeWheel custom key/value exposed as a binary buyer-facing signal.",
+            candidate_type=None,
+            supports_search=False,
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "key", "value_id"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "freewheel_custom_kv"},
+                    "key": {"type": "string"},
+                    "value_id": {"type": "string"},
+                    "mode": {"enum": ["include", "exclude"]},
+                },
+            },
+        ),
+    ],
+    "springserve": [
+        SignalMappingKindCapability(
+            mapping_kind="springserve_value_list",
+            label="SpringServe Value List",
+            description="SpringServe key/value-list pair exposed as a binary buyer-facing signal.",
+            candidate_type="value_list",
+            supports_parent_filter=True,
+            adapter_config_schema={
+                "type": "object",
+                "required": ["kind", "key_id", "value_list_id"],
+                "properties": {
+                    "type": {"const": "passthrough"},
+                    "kind": {"const": "springserve_value_list"},
+                    "key_id": {"type": "string"},
+                    "key_name": {"type": "string"},
+                    "value_list_id": {"type": "string"},
+                },
+            },
+        ),
+    ],
+    "broadstreet": [],
+    "mock": [],
+}
+
+
 def _tenant_adapter_type(tenant: Tenant, adapter: AdapterConfig | None = None) -> str:
     """Return the canonical adapter type for a tenant."""
     configured = adapter.adapter_type if adapter is not None else tenant.ad_server
@@ -943,6 +1092,21 @@ def _require_tenant_for_authoring(session, tenant_id: str) -> tuple[Tenant | Non
 
 def _supported_selector_types(adapter_type: str) -> set[str]:
     return {cap.selector_type for cap in _WHOLESALE_SELECTOR_CAPABILITIES.get(adapter_type, [])}
+
+
+def _supported_signal_mapping_kinds(adapter_type: str) -> set[str]:
+    return {cap.mapping_kind for cap in _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, [])}
+
+
+def _supported_signal_candidate_types(adapter_type: str) -> set[str]:
+    candidate_types = {
+        cap.candidate_type for cap in _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, []) if cap.candidate_type
+    }
+    if adapter_type == "google_ad_manager":
+        candidate_types.add("custom_targeting_key")
+    if adapter_type == "springserve":
+        candidate_types.add("key")
+    return candidate_types
 
 
 def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, str]:
@@ -1327,6 +1491,430 @@ def _validate_wholesale_product(
                 )
     return WholesaleProductValidationResponse(
         valid=not any(issue.severity == "error" for issue in issues), issues=issues
+    )
+
+
+def _signal_mapping_response(signal: TenantSignal) -> SignalMappingResponse:
+    range_body = None
+    if signal.range_min is not None or signal.range_max is not None:
+        range_body = {"min": signal.range_min, "max": signal.range_max}
+    return SignalMappingResponse(
+        signal_id=signal.signal_id,
+        name=signal.name,
+        description=signal.description,
+        value_type=cast(Any, signal.value_type),
+        categories=list(signal.categories or []),
+        tags=list(signal.tags or []),
+        range=range_body,
+        adapter_config=dict(signal.adapter_config or {}),
+        data_provider=signal.data_provider,
+        targeting_dimension=signal.targeting_dimension,
+        etag=signal.etag,
+        created_at=signal.created_at,
+        updated_at=signal.updated_at,
+    )
+
+
+def _refresh_signal_etag(signal: TenantSignal) -> None:
+    signal.etag = uuid.uuid4().hex
+
+
+def _notify_signal_mapping_changed(tenant_id: str, action: str, signal_id: str, signal_name: str) -> None:
+    notify_signal_catalog_changed(
+        tenant_id=tenant_id,
+        action=action,
+        signal_id=signal_id,
+        data={"name": signal_name},
+    )
+
+
+def _set_signal_fields(signal: TenantSignal, req: SignalMappingRequest) -> None:
+    signal.name = req.name
+    signal.description = req.description
+    signal.value_type = req.value_type
+    signal.categories = list(req.categories or [])
+    signal.tags = list(req.tags or [])
+    signal.range_min = req.range.min if req.range else None
+    signal.range_max = req.range.max if req.range else None
+    signal.adapter_config = dict(req.adapter_config or {})
+    signal.data_provider = req.data_provider
+    signal.targeting_dimension = req.targeting_dimension
+    _refresh_signal_etag(signal)
+
+
+def _slug_fragment(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug[:80] or "signal"
+
+
+def _candidate_default_signal(
+    *,
+    signal_id_prefix: str,
+    name: str,
+    external_id: str,
+    adapter_config: dict[str, Any],
+    targeting_dimension: str = "audience",
+) -> dict[str, Any]:
+    return {
+        "signal_id": f"{signal_id_prefix}_{_slug_fragment(name or external_id)}",
+        "name": name or external_id,
+        "value_type": "binary",
+        "adapter_config": adapter_config,
+        "targeting_dimension": targeting_dimension,
+    }
+
+
+def _gam_signal_candidate(row: GAMInventory) -> SignalCandidateSummary:
+    metadata = dict(row.inventory_metadata or {})
+    parent_id = metadata.get("parent_id") or metadata.get("custom_targeting_key_id")
+    adapter_config: dict[str, Any] | None = None
+    mapping_kind: str | None = None
+    default_signal: dict[str, Any] | None = None
+    if row.inventory_type == "audience_segment":
+        mapping_kind = "audience_segment"
+        adapter_config = {"type": "passthrough", "kind": "audience_segment", "segment_id": row.inventory_id}
+        default_signal = _candidate_default_signal(
+            signal_id_prefix="audience",
+            name=row.name,
+            external_id=row.inventory_id,
+            adapter_config=adapter_config,
+        )
+    elif row.inventory_type == "custom_targeting_value" and parent_id:
+        mapping_kind = "custom_key_value"
+        adapter_config = {
+            "type": "passthrough",
+            "kind": "custom_key_value",
+            "key_id": str(parent_id),
+            "value_id": row.inventory_id,
+        }
+        default_signal = _candidate_default_signal(
+            signal_id_prefix="kv",
+            name=row.name,
+            external_id=row.inventory_id,
+            adapter_config=adapter_config,
+        )
+    return SignalCandidateSummary(
+        candidate_type=row.inventory_type,
+        external_id=row.inventory_id,
+        name=row.name,
+        parent_id=str(parent_id) if parent_id is not None else None,
+        path=list(row.path or []) or None,
+        mapping_kind=mapping_kind,
+        adapter_config_template=adapter_config,
+        default_signal=default_signal,
+        metadata=metadata,
+    )
+
+
+def _springserve_signal_candidate(row: SpringServeInventory) -> SignalCandidateSummary:
+    metadata = dict(row.raw_json or {})
+    adapter_config: dict[str, Any] | None = None
+    mapping_kind: str | None = None
+    default_signal: dict[str, Any] | None = None
+    if row.entity_type == "value_list" and row.key_id:
+        mapping_kind = "springserve_value_list"
+        adapter_config = {
+            "type": "passthrough",
+            "kind": "springserve_value_list",
+            "key_id": row.key_id,
+            "key_name": metadata.get("key_name") or metadata.get("keyName"),
+            "value_list_id": row.entity_id,
+        }
+        adapter_config = {key: value for key, value in adapter_config.items() if value is not None}
+        default_signal = _candidate_default_signal(
+            signal_id_prefix="ss",
+            name=row.name or row.entity_id,
+            external_id=row.entity_id,
+            adapter_config=adapter_config,
+        )
+    return SignalCandidateSummary(
+        candidate_type=row.entity_type,
+        external_id=row.entity_id,
+        name=row.name,
+        parent_id=row.key_id or row.supply_router_id or row.supply_partner_id,
+        mapping_kind=mapping_kind,
+        adapter_config_template=adapter_config,
+        default_signal=default_signal,
+        metadata=metadata,
+    )
+
+
+def _freewheel_signal_candidate(row: FreeWheelInventory) -> SignalCandidateSummary:
+    metadata = dict(row.raw_json or {})
+    raw_id = str(metadata.get("id") or row.entity_id.split(":")[-1])
+    adapter_config: dict[str, Any] | None = None
+    mapping_kind: str | None = None
+    default_signal: dict[str, Any] | None = None
+    if row.parent_id in {"viewership_profiles", "viewership_profile", "viewershipProfileIds"}:
+        mapping_kind = "freewheel_viewership_profile"
+        adapter_config = {"type": "passthrough", "kind": "freewheel_viewership_profile", "profile_id": raw_id}
+        default_signal = _candidate_default_signal(
+            signal_id_prefix="fw_viewership",
+            name=row.name or raw_id,
+            external_id=raw_id,
+            adapter_config=adapter_config,
+        )
+    return SignalCandidateSummary(
+        candidate_type=row.entity_type,
+        external_id=row.entity_id,
+        name=row.name,
+        parent_id=row.parent_id,
+        mapping_kind=mapping_kind,
+        adapter_config_template=adapter_config,
+        default_signal=default_signal,
+        metadata=metadata,
+    )
+
+
+def _filter_candidates_by_query(rows: list[Any], q: str | None) -> list[Any]:
+    if not q:
+        return rows
+    needle = q.lower()
+    return [
+        row
+        for row in rows
+        if needle in str(getattr(row, "name", "") or "").lower()
+        or needle in str(getattr(row, "inventory_id", "") or getattr(row, "entity_id", "")).lower()
+    ]
+
+
+def _signal_candidate_rows(
+    session,
+    tenant_id: str,
+    adapter_type: str,
+    candidate_type: str,
+    *,
+    q: str | None,
+    parent_id: str | None,
+    offset: int,
+    limit: int,
+) -> list[SignalCandidateSummary]:
+    if adapter_type == "google_ad_manager":
+        repo = GAMSyncRepository(session, tenant_id)
+        if candidate_type == "custom_targeting_value" and parent_id:
+            rows = _filter_candidates_by_query(repo.list_values_for_key(parent_id), q)
+            page = rows[offset : offset + limit]
+        else:
+            page = repo.search_inventory(candidate_type, q=q, parent_id=parent_id, offset=offset, limit=limit)
+        return [_gam_signal_candidate(row) for row in page]
+    if adapter_type == "springserve":
+        rows = SpringServeInventoryRepository(session, tenant_id).search(
+            candidate_type,
+            q=q,
+            parent_id=parent_id,
+            offset=offset,
+            limit=limit,
+        )
+        return [_springserve_signal_candidate(row) for row in rows]
+    if adapter_type == "freewheel":
+        rows = FreeWheelInventoryRepository(session, tenant_id).search(
+            candidate_type,
+            q=q,
+            parent_id=parent_id,
+            offset=offset,
+            limit=limit,
+        )
+        return [_freewheel_signal_candidate(row) for row in rows]
+    return []
+
+
+def _required_signal_config_fields(kind: str) -> tuple[str, ...]:
+    return {
+        "audience_segment": ("segment_id",),
+        "custom_key_value": ("key_id", "value_id"),
+        "gam_targeting_groups": ("groups",),
+        "springserve_value_list": ("key_id", "value_list_id"),
+        "freewheel_viewership_profile": ("profile_id",),
+        "freewheel_audience_item": ("item_id",),
+        "freewheel_custom_kv": ("key", "value_id"),
+    }.get(kind, ())
+
+
+def _signal_config_atoms(adapter_config: dict[str, Any]) -> list[dict[str, Any]]:
+    if adapter_config.get("type") == "composed":
+        criteria = adapter_config.get("criteria")
+        if isinstance(criteria, list):
+            return [criterion for criterion in criteria if isinstance(criterion, dict)]
+        return []
+    return [adapter_config]
+
+
+def _validate_signal_config_shape(
+    req: SignalMappingRequest,
+    adapter_type: str,
+) -> list[SignalMappingValidationIssue]:
+    issues: list[SignalMappingValidationIssue] = []
+    if req.value_type == "categorical" and not req.categories:
+        issues.append(
+            SignalMappingValidationIssue(
+                code="missing_categories",
+                field="categories",
+                message="categories is required when value_type='categorical'.",
+            )
+        )
+    if req.value_type == "numeric":
+        if req.range is None:
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="missing_range",
+                    field="range",
+                    message="range is required when value_type='numeric'.",
+                )
+            )
+        elif req.range.min is not None and req.range.max is not None and req.range.min > req.range.max:
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="invalid_range",
+                    field="range",
+                    message="range.min must be less than or equal to range.max.",
+                )
+            )
+
+    atoms = _signal_config_atoms(req.adapter_config)
+    if req.adapter_config.get("type") == "composed" and not atoms:
+        issues.append(
+            SignalMappingValidationIssue(
+                code="invalid_composed_config",
+                field="adapter_config.criteria",
+                message="adapter_config.type='composed' requires a non-empty criteria list.",
+            )
+        )
+    if not atoms:
+        issues.append(
+            SignalMappingValidationIssue(
+                code="missing_adapter_config",
+                field="adapter_config",
+                message="adapter_config must declare an adapter mapping kind.",
+            )
+        )
+        return issues
+
+    supported_kinds = _supported_signal_mapping_kinds(adapter_type)
+    for atom_idx, atom in enumerate(atoms):
+        field_prefix = "adapter_config" if len(atoms) == 1 else f"adapter_config.criteria.{atom_idx}"
+        kind = atom.get("kind")
+        if kind not in supported_kinds:
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="unsupported_signal_mapping_kind",
+                    field=f"{field_prefix}.kind",
+                    message=f"Signal mapping kind {kind!r} is not supported for adapter {adapter_type!r}.",
+                )
+            )
+            continue
+        if atom.get("mode", "include") not in {"include", "exclude"}:
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="invalid_signal_mapping_mode",
+                    field=f"{field_prefix}.mode",
+                    message="mode must be either 'include' or 'exclude'.",
+                )
+            )
+        for required_field in _required_signal_config_fields(str(kind)):
+            if not atom.get(required_field):
+                issues.append(
+                    SignalMappingValidationIssue(
+                        code="missing_signal_mapping_field",
+                        field=f"{field_prefix}.{required_field}",
+                        message=f"Signal mapping kind {kind!r} requires {required_field}.",
+                    )
+                )
+    return issues
+
+
+def _gam_signal_config_exists(session, tenant_id: str, atom: dict[str, Any]) -> tuple[bool | None, str | None]:
+    repo = GAMSyncRepository(session, tenant_id)
+    kind = atom.get("kind")
+    if kind == "audience_segment":
+        if repo.count_inventory("audience_segment") == 0:
+            return None, None
+        return repo.find_inventory_item("audience_segment", str(atom.get("segment_id"))) is not None, "segment_id"
+    if kind == "custom_key_value":
+        key_id = str(atom.get("key_id") or "")
+        value_id = str(atom.get("value_id") or "")
+        if repo.count_inventory("custom_targeting_key") == 0:
+            return None, None
+        if repo.find_inventory_item("custom_targeting_key", key_id) is None:
+            return False, "key_id"
+        values = repo.list_values_for_key(key_id)
+        if not values:
+            return None, None
+        return any(row.inventory_id == value_id for row in values), "value_id"
+    return None, None
+
+
+def _springserve_signal_config_exists(session, tenant_id: str, atom: dict[str, Any]) -> tuple[bool | None, str | None]:
+    if atom.get("kind") != "springserve_value_list":
+        return None, None
+    repo = SpringServeInventoryRepository(session, tenant_id)
+    if not repo.search("value_list", limit=1):
+        return None, None
+    value_list_id = str(atom.get("value_list_id") or "")
+    rows = repo.search("value_list", q=value_list_id, limit=2)
+    return any(row.entity_id == value_list_id for row in rows), "value_list_id"
+
+
+def _freewheel_signal_config_exists(session, tenant_id: str, atom: dict[str, Any]) -> tuple[bool | None, str | None]:
+    repo = FreeWheelInventoryRepository(session, tenant_id)
+    if atom.get("kind") != "freewheel_viewership_profile":
+        return None, None
+    if not repo.search("standard_attribute", parent_id="viewership_profiles", limit=1):
+        return None, None
+    profile_id = str(atom.get("profile_id") or "")
+    rows = repo.search("standard_attribute", q=profile_id, parent_id="viewership_profiles", limit=2)
+    return (
+        any(str((row.raw_json or {}).get("id") or row.entity_id.split(":")[-1]) == profile_id for row in rows),
+        "profile_id",
+    )
+
+
+def _signal_config_cache_issues(
+    session,
+    tenant_id: str,
+    req: SignalMappingRequest,
+    adapter_type: str,
+) -> list[SignalMappingValidationIssue]:
+    issues: list[SignalMappingValidationIssue] = []
+    cache_checkers = {
+        "google_ad_manager": _gam_signal_config_exists,
+        "springserve": _springserve_signal_config_exists,
+        "freewheel": _freewheel_signal_config_exists,
+    }
+    checker = cache_checkers.get(adapter_type)
+    if checker is None:
+        return issues
+    for atom_idx, atom in enumerate(_signal_config_atoms(req.adapter_config)):
+        exists, field = checker(session, tenant_id, atom)
+        if exists is False:
+            prefix = (
+                "adapter_config"
+                if req.adapter_config.get("type") != "composed"
+                else f"adapter_config.criteria.{atom_idx}"
+            )
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="signal_mapping_candidate_not_found",
+                    field=f"{prefix}.{field}" if field else prefix,
+                    message="Signal mapping target was not found in the synced ad-server cache.",
+                )
+            )
+    return issues
+
+
+def _validate_signal_mapping(
+    session,
+    tenant_id: str,
+    req: SignalMappingRequest,
+    adapter_type: str,
+    *,
+    check_candidate_cache: bool,
+) -> SignalMappingValidationResponse:
+    issues = _validate_signal_config_shape(req, adapter_type)
+    if check_candidate_cache and not any(issue.severity == "error" for issue in issues):
+        issues.extend(_signal_config_cache_issues(session, tenant_id, req, adapter_type))
+    return SignalMappingValidationResponse(
+        valid=not any(issue.severity == "error" for issue in issues),
+        issues=issues,
     )
 
 
@@ -1960,6 +2548,253 @@ def list_creative_formats_for_authoring(tenant_id: str):
         count=len(response_formats),
     )
     return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals/adapter-capabilities", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=SignalAdapterCapabilitiesResponse, HTTP_404=ApiError))
+def get_signal_adapter_capabilities(tenant_id: str):
+    """Return the tenant adapter's signal-mapping authoring capabilities."""
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        mapping_kinds = _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, [])
+        response = SignalAdapterCapabilitiesResponse(
+            adapter=adapter_type,
+            supports_signal_mapping_authoring=bool(mapping_kinds),
+            mapping_kinds=mapping_kinds,
+        )
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals/candidates", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListSignalCandidatesResponse, HTTP_400=ApiError, HTTP_404=ApiError))
+def list_signal_candidates(tenant_id: str):
+    """Search cached adapter signal candidates for signal-mapping setup."""
+    candidate_type = request.args.get("candidate_type")
+    q = request.args.get("q")
+    parent_id = request.args.get("parent_id")
+    try:
+        limit = min(max(int(request.args.get("limit", "50")), 1), 100)
+        offset = max(int(request.args.get("cursor", "0")), 0)
+    except ValueError:
+        return _api_error("invalid_pagination", "limit and cursor must be integers", 400)
+
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        supported = _supported_signal_candidate_types(adapter_type)
+        resolved_candidate_type = candidate_type or (sorted(supported)[0] if supported else None)
+        if resolved_candidate_type is None:
+            response = ListSignalCandidatesResponse(candidates=[], count=0)
+            return jsonify(response.model_dump())
+        if resolved_candidate_type not in supported:
+            return _api_error(
+                "unsupported_signal_candidate_type",
+                f"Signal candidate type {resolved_candidate_type!r} is not supported for adapter {adapter_type!r}",
+                400,
+                details={"supported_candidate_types": sorted(supported)},
+            )
+        rows = _signal_candidate_rows(
+            session,
+            tenant_id,
+            adapter_type,
+            resolved_candidate_type,
+            q=q,
+            parent_id=parent_id,
+            offset=offset,
+            limit=limit + 1,
+        )
+        page_rows = rows[:limit]
+        next_cursor = str(offset + limit) if len(rows) > limit else None
+        response = ListSignalCandidatesResponse(
+            candidates=page_rows,
+            count=len(page_rows),
+            next_cursor=next_cursor,
+        )
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals:validate", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=SignalMappingRequest,
+    resp=Response(HTTP_200=SignalMappingValidationResponse, HTTP_404=ApiError),
+)
+def validate_signal_mapping(tenant_id: str):
+    """Validate a signal mapping draft without persisting it."""
+    req: SignalMappingRequest = _validated_json_payload()
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        response = _validate_signal_mapping(session, tenant_id, req, adapter_type, check_candidate_cache=True)
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListSignalMappingsResponse, HTTP_400=ApiError, HTTP_404=ApiError))
+def list_signal_mappings(tenant_id: str):
+    """List signal mappings for an embedded tenant."""
+    updated_since_raw = request.args.get("updated_since")
+    updated_since: datetime | None = None
+    if updated_since_raw:
+        try:
+            updated_since = datetime.fromisoformat(updated_since_raw.replace("Z", "+00:00"))
+        except ValueError:
+            return _api_error("invalid_updated_since", "updated_since must be an ISO-8601 datetime", 400)
+    with get_db_session() as session:
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        signals = TenantSignalRepository(session, tenant_id).list_all(updated_since=updated_since)
+        response = ListSignalMappingsResponse(
+            signals=[_signal_mapping_response(signal) for signal in signals],
+            count=len(signals),
+        )
+        return jsonify(response.model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=SignalMappingRequest,
+    resp=Response(HTTP_201=SignalMappingResponse, HTTP_400=ApiError, HTTP_404=ApiError, HTTP_409=ApiError),
+)
+def create_signal_mapping(tenant_id: str):
+    """Create one signal mapping backed by TenantSignal."""
+    req: SignalMappingRequest = _validated_json_payload()
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        validation = _validate_signal_mapping(session, tenant_id, req, adapter_type, check_candidate_cache=True)
+        if not validation.valid:
+            return _api_error(
+                "invalid_signal_mapping",
+                "Signal mapping failed validation",
+                400,
+                details={"issues": [issue.model_dump() for issue in validation.issues]},
+            )
+        repo = TenantSignalRepository(session, tenant_id)
+        if repo.get_by_id(req.signal_id) is not None:
+            return _api_error("signal_mapping_exists", f"Signal mapping {req.signal_id!r} already exists", 409)
+        signal = TenantSignal(
+            tenant_id=tenant_id,
+            signal_id=req.signal_id,
+            name=req.name,
+            description=req.description,
+            value_type=req.value_type,
+            categories=list(req.categories or []),
+            tags=list(req.tags or []),
+            range_min=req.range.min if req.range else None,
+            range_max=req.range.max if req.range else None,
+            adapter_config=dict(req.adapter_config or {}),
+            data_provider=req.data_provider,
+            targeting_dimension=req.targeting_dimension,
+        )
+        _refresh_signal_etag(signal)
+        repo.add(signal)
+        session.commit()
+        _notify_signal_mapping_changed(tenant_id, "created", signal.signal_id, signal.name)
+        return jsonify(_signal_mapping_response(signal).model_dump(mode="json")), 201
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals/<signal_id>", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=SignalMappingResponse, HTTP_404=ApiError))
+def get_signal_mapping(tenant_id: str, signal_id: str):
+    """Get one signal mapping."""
+    with get_db_session() as session:
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        signal = TenantSignalRepository(session, tenant_id).get_by_id(signal_id)
+        if signal is None:
+            return _api_error("signal_mapping_not_found", f"Signal mapping {signal_id!r} was not found", 404)
+        return jsonify(_signal_mapping_response(signal).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals/<signal_id>", methods=["PUT"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=SignalMappingRequest,
+    resp=Response(HTTP_200=SignalMappingResponse, HTTP_400=ApiError, HTTP_404=ApiError),
+)
+def put_signal_mapping(tenant_id: str, signal_id: str):
+    """Replace one signal mapping."""
+    req: SignalMappingRequest = _validated_json_payload()
+    if req.signal_id != signal_id:
+        return _api_error("signal_id_mismatch", "Path signal_id must match body signal_id", 400)
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        validation = _validate_signal_mapping(session, tenant_id, req, adapter_type, check_candidate_cache=True)
+        if not validation.valid:
+            return _api_error(
+                "invalid_signal_mapping",
+                "Signal mapping failed validation",
+                400,
+                details={"issues": [issue.model_dump() for issue in validation.issues]},
+            )
+        signal = TenantSignalRepository(session, tenant_id).get_by_id(signal_id)
+        if signal is None:
+            return _api_error("signal_mapping_not_found", f"Signal mapping {signal_id!r} was not found", 404)
+        _set_signal_fields(signal, req)
+        session.commit()
+        _notify_signal_mapping_changed(tenant_id, "updated", signal.signal_id, signal.name)
+        return jsonify(_signal_mapping_response(signal).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/signals/<signal_id>", methods=["DELETE"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=DeleteSignalMappingResponse, HTTP_404=ApiError, HTTP_409=ApiError))
+def delete_signal_mapping(tenant_id: str, signal_id: str):
+    """Delete one signal mapping if no active media buy references it."""
+    confirm_referenced = request.args.get("confirm_referenced", "").lower() in {"1", "true", "yes"}
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        repo = TenantSignalRepository(session, tenant_id)
+        signal = repo.get_by_id(signal_id)
+        if signal is None:
+            return _api_error("signal_mapping_not_found", f"Signal mapping {signal_id!r} was not found", 404)
+        active_references = SignalUsageRepository(session, tenant_id).count_references(signal_id)
+        if active_references and not confirm_referenced:
+            return _api_error(
+                "signal_mapping_in_use",
+                f"Signal mapping {signal_id!r} is referenced by {active_references} active media buy(s).",
+                409,
+                details={"active_references": active_references},
+            )
+        signal_name = signal.name
+        repo.delete(signal)
+        session.commit()
+        _notify_signal_mapping_changed(tenant_id, "deleted", signal_id, signal_name)
+        response = DeleteSignalMappingResponse(success=True, message=f"Signal mapping {signal_id!r} deleted")
+        return jsonify(response.model_dump())
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/wholesale-products:validate", methods=["POST"])

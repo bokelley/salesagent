@@ -11,6 +11,7 @@ The Prebid Sales Agent is the Prebid.org reference implementation of an AdCP-com
 - **[Single-Tenant](deployment/single-tenant.md)** - Standard deployment (recommended)
 - **[Multi-Tenant](deployment/multi-tenant.md)** - Multiple publishers on one deployment
 - **[Embedded Wholesale Products API](integration/embedded-wholesale-products-api.md)** - API-only setup flow for embedded storefronts creating wholesale products
+- **[Embedded Signal Mapping API](integration/embedded-signals-api.md)** - API-only setup flow for embedded storefronts managing buyer-facing signal mappings
 
 ### Cloud Walkthroughs
 

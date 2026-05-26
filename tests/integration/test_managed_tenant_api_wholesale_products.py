@@ -5,9 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from flask import Flask
 
-from src.admin.tenant_management_api import tenant_management_api
 from src.services.aao_lookup_service import PublisherPartnerStatus
 from tests.factories import (
     AdapterConfigFactory,
@@ -19,7 +17,11 @@ from tests.factories import (
     PublisherPartnerFactory,
     TenantFactory,
 )
-from tests.helpers.managed_tenant_api import bind_factories_to_session, install_management_api_key
+from tests.helpers.managed_tenant_api import (
+    bind_factories_to_session,
+    configure_google_ad_manager_adapter,
+    make_management_api_test_client,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -29,11 +31,7 @@ API_KEY = "sk-managed-tenant-wholesale-test-key"
 
 @pytest.fixture
 def management_api_client(integration_db):
-    api_key = install_management_api_key(API_KEY)
-    application = Flask(__name__)
-    application.config["TESTING"] = True
-    application.register_blueprint(tenant_management_api)
-    return application.test_client(), {"X-Tenant-Management-API-Key": api_key}
+    return make_management_api_test_client(API_KEY)
 
 
 @pytest.fixture
@@ -59,14 +57,7 @@ def gam_tenant(bound_factories):
         is_embedded=True,
         public_agent_url="https://interchange.io",
     )
-    AdapterConfigFactory(
-        tenant=tenant,
-        adapter_type="google_ad_manager",
-        gam_network_code="12345",
-        gam_service_account_email="sa@example.com",
-        gam_auth_method="service_account",
-        gam_service_account_json_plaintext='{"type":"service_account"}',
-    )
+    configure_google_ad_manager_adapter(tenant)
     PublisherPartnerFactory(
         tenant=tenant,
         publisher_domain="wonderstruck.com",
@@ -217,14 +208,7 @@ def test_publisher_properties_lookup_enables_api_only_product_authoring(manageme
         is_embedded=True,
         public_agent_url="https://interchange.io",
     )
-    AdapterConfigFactory(
-        tenant=tenant,
-        adapter_type="google_ad_manager",
-        gam_network_code="12345",
-        gam_service_account_email="sa@example.com",
-        gam_auth_method="service_account",
-        gam_service_account_json_plaintext='{"type":"service_account"}',
-    )
+    configure_google_ad_manager_adapter(tenant)
     GAMInventoryFactory(
         tenant=tenant,
         inventory_type="ad_unit",
