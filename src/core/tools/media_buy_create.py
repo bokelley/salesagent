@@ -876,7 +876,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     stmt_product = (
                         select(ProductModel)
                         .filter_by(tenant_id=tenant_id, product_id=product_id)
-                        .options(selectinload(ProductModel.pricing_options))
+                        .options(
+                            selectinload(ProductModel.pricing_options),
+                            selectinload(ProductModel.inventory_profile),
+                        )
                     )
                     product = session.scalars(stmt_product).first()
 
@@ -971,7 +974,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     from src.core.schemas import FormatId as FormatIdType
 
                     format_ids_list: list[FormatIdType] = []
-                    formats = product.format_ids or []
+                    formats = product.effective_format_ids or []
 
                     logger.debug(f"[APPROVAL] Converting {len(formats)} formats for package {package_id}")
 
