@@ -15,7 +15,6 @@ from adcp import (
     AdagentsNotFoundError,
     AdagentsTimeoutError,
     AdagentsValidationError,
-    fetch_adagents,
     get_all_properties,
     get_all_tags,
 )
@@ -32,6 +31,7 @@ from src.services._adagents_shapes import (
 from src.services._adagents_shapes import (
     get_authorized_properties_by_agent as get_properties_by_agent,
 )
+from src.services.adagents_fetch import fetch_adagents_permissive as fetch_adagents
 
 logger = logging.getLogger(__name__)
 
@@ -327,13 +327,13 @@ class PropertyDiscoveryService:
         stats: dict[str, Any],
     ) -> None:
         """Batch-check and create/update property records."""
-        property_ids_to_check = []
-        properties_data = []
+        properties_by_id: dict[str, dict[str, Any]] = {}
         for prop in properties:
             property_id = self._generate_property_id(tenant_id, domain, prop)
             if property_id:
-                property_ids_to_check.append(property_id)
-                properties_data.append((property_id, prop))
+                properties_by_id[property_id] = prop
+
+        property_ids_to_check = list(properties_by_id)
 
         stmt_props: Select[tuple[AuthorizedProperty]] = select(AuthorizedProperty).where(
             AuthorizedProperty.tenant_id == tenant_id,
@@ -342,7 +342,7 @@ class PropertyDiscoveryService:
         existing_properties_objs = list(session.scalars(stmt_props).all())
         existing_properties: dict[str, AuthorizedProperty] = {p.property_id: p for p in existing_properties_objs}
 
-        for property_id, prop in properties_data:
+        for property_id, prop in properties_by_id.items():
             was_created = self._create_or_update_property(
                 session, tenant_id, domain, prop, property_id, existing_properties
             )
@@ -375,6 +375,10 @@ class PropertyDiscoveryService:
 
         Returns None if property is invalid (missing required fields).
         """
+        source_property_id = (prop_data.get("property_id") or "").strip()
+        if source_property_id:
+            return re.sub(r"[^a-zA-Z0-9_-]+", "_", source_property_id)[:100]
+
         property_type = prop_data.get("property_type")
         if not property_type:
             logger.warning(f"Property missing property_type: {prop_data}")

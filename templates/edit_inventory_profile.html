@@ -781,6 +781,7 @@ function makePublisherRow(prop) {
         property_ids: propertyIds.slice(),
         available_tags: propertyTags.slice(),
         available_properties: [],
+        id_filter: '',
         status: '',
         statusMessage: '',
         is_authorized: null,
@@ -791,12 +792,7 @@ function makePublisherRow(prop) {
 function initialPublisherRows() {
     const saved = existingProfile.publisher_properties || [];
     if (saved.length) return saved.map(makePublisherRow);
-    if (!DEFAULT_PUBLISHER_DOMAIN) return [];
-    return [makePublisherRow({
-        publisher_domain: DEFAULT_PUBLISHER_DOMAIN,
-        property_tags: ['all_inventory'],
-        selection_type: 'by_tag',
-    })];
+    return [];
 }
 
 function publisherRowById(id) {
@@ -869,8 +865,22 @@ function renderIdEditor(row) {
             </div>
         `;
     }
+    const query = (row.id_filter || '').trim().toLowerCase();
+    const matched = query
+        ? properties.filter(prop => {
+            const haystack = [
+                prop.property_id || '',
+                prop.name || '',
+                (prop.tags || []).join(' '),
+                prop.publisher_domain || '',
+            ].join(' ').toLowerCase();
+            return haystack.includes(query);
+        })
+        : properties;
+    const visible = matched.slice(0, 200);
+    const hiddenCount = matched.length - visible.length;
     const selected = new Set(row.property_ids);
-    const options = properties.map(prop => {
+    const options = visible.map(prop => {
         const propertyId = prop.property_id || '';
         const label = prop.name || propertyId;
         const tags = (prop.tags || []).length ? ` · ${(prop.tags || []).join(', ')}` : '';
@@ -884,7 +894,32 @@ function renderIdEditor(row) {
             </label>
         `;
     }).join('');
-    return `<div class="prop-id-list">${options}</div>`;
+    return `
+        <div class="prop-row__field">
+            <label>Find property IDs</label>
+            <input type="search" data-id-filter value="${_escAttr(row.id_filter || '')}" placeholder="Search ${properties.length} properties by name, ID, or tag">
+            <span class="hint">
+                Showing ${visible.length} of ${matched.length} matching properties${hiddenCount > 0 ? '; keep typing to narrow the list' : ''}.
+            </span>
+        </div>
+        <div class="prop-id-list">${options || '<div class="tree-picker__empty">No matching properties.</div>'}</div>
+    `;
+}
+
+function applyLookupDefaultTags(row) {
+    const available = row.available_tags || [];
+    if (!available.length || row.mode !== 'tags') return;
+
+    const hasOnlyFallback = row.tags.length === 1 && row.tags[0] === 'all_inventory' && !available.includes('all_inventory');
+    if (row.tags.length && !hasOnlyFallback) return;
+
+    if (available.includes('all_inventory')) {
+        row.tags = ['all_inventory'];
+    } else if (available.length === 1) {
+        row.tags = [available[0]];
+    } else {
+        row.tags = [];
+    }
 }
 
 function renderPublisherRows() {
@@ -936,9 +971,7 @@ async function lookupPublisherRow(row, forceRefresh = false) {
         row.is_authorized = !!data.is_authorized;
         row.available_tags = data.property_tags || [];
         row.available_properties = data.properties || [];
-        if (!row.tags.length && row.available_tags.includes('all_inventory')) {
-            row.tags = ['all_inventory'];
-        }
+        applyLookupDefaultTags(row);
     } catch (err) {
         row.status = 'error';
         row.statusMessage = err.message || String(err);
@@ -965,7 +998,7 @@ function addPublisherDomainFromInput() {
     }
     const row = makePublisherRow({
         publisher_domain: domain,
-        property_tags: ['all_inventory'],
+        property_tags: [],
         selection_type: 'by_tag',
     });
     publisherRows.push(row);
@@ -1043,6 +1076,18 @@ function initializePublisherRows() {
             row.tags = splitCsv(e.target.value).map(tag => _normalizeTag(tag)).filter(Boolean);
         } else if (e.target.matches('[data-ids-input]')) {
             row.property_ids = splitCsv(e.target.value);
+        } else if (e.target.matches('[data-id-filter]')) {
+            row.id_filter = e.target.value || '';
+            const editor = rowNode.querySelector('[data-row-editor]');
+            if (editor) {
+                editor.innerHTML = renderIdEditor(row);
+                const filter = editor.querySelector('[data-id-filter]');
+                if (filter) {
+                    filter.focus();
+                    filter.setSelectionRange(filter.value.length, filter.value.length);
+                }
+            }
+            return;
         }
         syncPublisherPropertiesHidden();
         recomputeValidityDebounced();

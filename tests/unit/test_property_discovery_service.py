@@ -443,6 +443,68 @@ class TestPropertyDiscoveryService:
         mock_db_patcher.stop()
 
     @pytest.mark.asyncio
+    async def test_sync_properties_deduplicates_generated_property_id_collisions(self):
+        """Large managed files can contain equivalent identifiers that map to
+        the same generated AuthorizedProperty primary key. The batch writer
+        should collapse those before adding ORM rows so one publisher file
+        cannot trigger an autoflush duplicate-key failure."""
+        mock_db_patcher, mock_session = MockSetup.create_mock_db_session()
+
+        def create_mock_scalars():
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = None
+            mock_scalars.all.return_value = []
+            return mock_scalars
+
+        mock_session.scalars.side_effect = lambda *args: create_mock_scalars()
+
+        mock_adagents_data = {
+            "authorized_agents": [
+                {
+                    "url": "https://interchange.io",
+                    "authorization_type": "publisher_properties",
+                    "publisher_properties": {"publisher_domains": ["a.example.com"]},
+                }
+            ],
+        }
+        duplicate_property = {
+            "property_type": "website",
+            "name": "Duplicate Site",
+            "identifiers": [{"type": "domain", "value": "duplicate.example.com"}],
+            "tags": ["managed"],
+        }
+
+        with patch("src.services.property_discovery_service.fetch_adagents", new_callable=AsyncMock) as mock_fetch:
+            with patch("src.services.property_discovery_service.get_properties_by_agent") as mock_by_agent:
+                with patch("src.services.property_discovery_service.get_all_tags") as mock_tags:
+                    mock_fetch.return_value = mock_adagents_data
+                    mock_by_agent.return_value = [duplicate_property, duplicate_property.copy()]
+                    mock_tags.return_value = ["managed"]
+
+                    stats = await self.service.sync_properties_from_adagents(
+                        "tenant1",
+                        ["cafemedia.com"],
+                        agent_url="https://interchange.io",
+                    )
+
+        assert stats["domains_synced"] == 1
+        assert stats["properties_found"] == 2
+        assert stats["properties_created"] == 1
+        assert len(stats["errors"]) == 0
+
+        mock_db_patcher.stop()
+
+    def test_generate_property_id_preserves_source_property_id(self):
+        prop = {
+            "property_id": "5ec7d024f67e7555ae952e77",
+            "property_type": "website",
+            "name": "BikeRide",
+            "identifiers": [{"type": "domain", "value": "bikeride.com"}],
+        }
+
+        assert self.service._generate_property_id("tenant1", "cafemedia.com", prop) == "5ec7d024f67e7555ae952e77"
+
+    @pytest.mark.asyncio
     async def test_sync_properties_unbound_entry_no_top_level_yields_zero(self):
         """Raptive-class file (in its blocked variant): bare entry for our
         agent but no top-level ``properties[]``. Permissive fallback has

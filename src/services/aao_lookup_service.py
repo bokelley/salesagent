@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from adcp import fetch_adagents, get_all_properties
+from adcp import get_all_properties
 from adcp.adagents import fetch_agent_authorizations_from_directory, validate_adagents_structure
 
 from src.services._adagents_shapes import (
@@ -24,6 +24,7 @@ from src.services._adagents_shapes import (
     is_bare_entry,
     top_level_properties,
 )
+from src.services.adagents_fetch import fetch_adagents_permissive as fetch_adagents
 
 logger = logging.getLogger(__name__)
 
