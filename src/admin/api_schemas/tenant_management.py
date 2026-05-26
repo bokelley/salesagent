@@ -18,7 +18,6 @@ from pydantic import (
     ConfigDict,
     EmailStr,
     Field,
-    RootModel,
     SecretStr,
     field_validator,
     model_validator,
@@ -406,7 +405,6 @@ class AdapterCapabilitiesResponse(AdapterCapabilitiesSummary):
 
     type: str = Field(..., description="Adapter type identifier.")
     contract_version: str = Field(..., description="Version of this adapter's tenant-management contract.")
-    openapi_url: str = Field(..., description="Adapter-specific OpenAPI reference URL.")
     supports_audiences: bool = False
     supports_forecasting: bool = False
     supports_reporting: bool = False
@@ -418,10 +416,6 @@ class AdapterCapabilitiesResponse(AdapterCapabilitiesSummary):
     supported_object_types: list[str] = Field(default_factory=list)
     supported_signal_types: list[str] = Field(default_factory=list)
     unsupported_features: list[AdapterUnsupportedFeature] = Field(default_factory=list)
-
-
-class AdapterOpenApiDocument(RootModel[dict[str, Any]]):
-    """OpenAPI document returned by ``GET /adapters/{adapter_type}/openapi.json``."""
 
 
 class AdapterCatalogEntry(BaseModel):
@@ -442,7 +436,6 @@ class AdapterCatalogEntry(BaseModel):
     )
     default_channels: list[str] = Field(default_factory=list)
     contract_version: str = Field(..., description="Version of this adapter's tenant-management contract.")
-    openapi_url: str = Field(..., description="Adapter-specific OpenAPI reference URL.")
     capabilities_url: str = Field(..., description="Adapter-specific capabilities URL.")
     capabilities: AdapterCapabilitiesSummary
     connection_schema: dict[str, Any] = Field(

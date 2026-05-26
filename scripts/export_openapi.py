@@ -16,7 +16,6 @@ Usage::
 
     uv run python scripts/export_openapi.py
     # writes docs/api/tenant-management-openapi.{json,yaml}
-    # and docs/api/adapters/{adapter_type}-openapi.{json,yaml}
 
 The structural test
 ``tests/unit/test_openapi_export_in_sync.py`` regenerates the spec at
@@ -40,11 +39,8 @@ import yaml  # type: ignore[import-untyped, unused-ignore] # noqa: E402
 from flask import Flask  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "docs" / "api"
-ADAPTER_OUT_DIR = OUT_DIR / "adapters"
 JSON_PATH = OUT_DIR / "tenant-management-openapi.json"
 YAML_PATH = OUT_DIR / "tenant-management-openapi.yaml"
-ADAPTER_MANIFEST_JSON_PATH = OUT_DIR / "adapter-contracts-manifest.json"
-ADAPTER_MANIFEST_YAML_PATH = OUT_DIR / "adapter-contracts-manifest.yaml"
 
 # Repo-root copies follow the Stripe/Twilio convention so SDK generators,
 # Swagger UI loaders, and humans browsing the repo find the spec where
@@ -78,30 +74,6 @@ def build_spec() -> dict:
         return dict(spec.spec)
 
 
-def build_adapter_specs() -> dict[str, dict]:
-    """Build every published adapter-specific OpenAPI contract."""
-    from src.admin.tenant_management_api import build_adapter_openapi_documents
-
-    return build_adapter_openapi_documents()
-
-
-def build_adapter_manifest(adapter_specs: dict[str, dict]) -> dict:
-    """Return the generated adapter-contract manifest."""
-    from src.admin.tenant_management_api import _ADAPTER_CONTRACT_VERSION
-
-    return {
-        "contract_version": _ADAPTER_CONTRACT_VERSION,
-        "adapters": [
-            {
-                "type": adapter_type,
-                "openapi_json": f"adapters/{adapter_type}-openapi.json",
-                "openapi_yaml": f"adapters/{adapter_type}-openapi.yaml",
-            }
-            for adapter_type in sorted(adapter_specs)
-        ],
-    }
-
-
 def _write_openapi_pair(spec_dict: dict, json_path: Path, yaml_path: Path) -> list[Path]:
     json_text = json.dumps(spec_dict, indent=2, sort_keys=True) + "\n"
     yaml_spec = json.loads(json_text)
@@ -114,29 +86,11 @@ def _write_openapi_pair(spec_dict: dict, json_path: Path, yaml_path: Path) -> li
 
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    ADAPTER_OUT_DIR.mkdir(parents=True, exist_ok=True)
     spec_dict = build_spec()
-    adapter_specs = build_adapter_specs()
 
     written = []
     written.extend(_write_openapi_pair(spec_dict, JSON_PATH, YAML_PATH))
     written.extend(_write_openapi_pair(spec_dict, ROOT_JSON_PATH, ROOT_YAML_PATH))
-    written.extend(
-        _write_openapi_pair(
-            build_adapter_manifest(adapter_specs), ADAPTER_MANIFEST_JSON_PATH, ADAPTER_MANIFEST_YAML_PATH
-        )
-    )
-
-    expected_adapter_paths: set[Path] = set()
-    for adapter_type, adapter_spec in adapter_specs.items():
-        json_path = ADAPTER_OUT_DIR / f"{adapter_type}-openapi.json"
-        yaml_path = ADAPTER_OUT_DIR / f"{adapter_type}-openapi.yaml"
-        written.extend(_write_openapi_pair(adapter_spec, json_path, yaml_path))
-        expected_adapter_paths.update({json_path, yaml_path})
-
-    for stale_path in ADAPTER_OUT_DIR.glob("*-openapi.*"):
-        if stale_path not in expected_adapter_paths:
-            stale_path.unlink()
 
     for path in written:
         print(f"wrote {path.relative_to(REPO_ROOT)}")

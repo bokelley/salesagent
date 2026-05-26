@@ -173,11 +173,6 @@
             "default": null,
             "title": "Inventory Entity Label"
           },
-          "openapi_url": {
-            "description": "Adapter-specific OpenAPI reference URL.",
-            "title": "Openapi Url",
-            "type": "string"
-          },
           "reporting_bundled_with_inventory": {
             "default": false,
             "title": "Reporting Bundled With Inventory",
@@ -301,8 +296,7 @@
         },
         "required": [
           "type",
-          "contract_version",
-          "openapi_url"
+          "contract_version"
         ],
         "title": "AdapterCapabilitiesResponse",
         "type": "object"
@@ -722,12 +716,6 @@
           "configured"
         ],
         "title": "AdapterConfigResponse",
-        "type": "object"
-      },
-      "AdapterOpenApiDocument.f44f287": {
-        "additionalProperties": true,
-        "description": "OpenAPI document returned by ``GET /adapters/{adapter_type}/openapi.json``.",
-        "title": "AdapterOpenApiDocument",
         "type": "object"
       },
       "AdapterSettingsSchemaResponse.f44f287": {
@@ -1718,11 +1706,6 @@
             "title": "Name",
             "type": "string"
           },
-          "openapi_url": {
-            "description": "Adapter-specific OpenAPI reference URL.",
-            "title": "Openapi Url",
-            "type": "string"
-          },
           "tier": {
             "default": "live",
             "description": "Whether this adapter is meant for production use. ``live`` = real ad-server integration intended for production pickers. ``test`` = simulated/dev-only adapter (Mock) \u2014 embedders should filter these out of production UI by default.",
@@ -1744,7 +1727,6 @@
           "name",
           "description",
           "contract_version",
-          "openapi_url",
           "capabilities_url",
           "capabilities",
           "connection_schema"
@@ -5755,57 +5737,6 @@
           }
         },
         "summary": "Return the detailed tenant-management contract capabilities for one adapter.",
-        "tags": []
-      }
-    },
-    "/api/v1/tenant-management/adapters/{adapter_type}/openapi.json": {
-      "get": {
-        "description": "",
-        "operationId": "get__api_v1_tenant-management_adapters_{adapter_type}_openapi.json",
-        "parameters": [
-          {
-            "description": "",
-            "in": "path",
-            "name": "adapter_type",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdapterOpenApiDocument.f44f287"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError.f44f287"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidationError.6a07bef"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        },
-        "summary": "Return the adapter-specific tenant-management contract OpenAPI document.",
         "tags": []
       }
     },

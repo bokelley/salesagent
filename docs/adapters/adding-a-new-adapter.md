@@ -269,6 +269,10 @@ Mandatory minimums:
 - [ ] `make openapi` — regenerates `docs/api/tenant-management-openapi.{json,yaml}`.
       The `test_committed_openapi_json_matches_live_spec` unit test will
       fail otherwise.
+- [ ] Do not add adapter-specific OpenAPI artifacts. New embedded setup
+      capabilities belong in the generic tenant-management/composition APIs:
+      adapter capabilities, config-schema, wholesale products, selector
+      discovery, signal mapping, and preview/validation.
 
 ---
 
@@ -358,4 +362,4 @@ These caught us during FW. Watch for them.
 | `tests/integration/test_tenant_management_api_integration.py` | Catalog assertion (extend existing) |
 | `docs/adapters/<name>/README.md` | Adapter-specific doc |
 | `docs/adapters/README.md` | Index update |
-| `docs/api/tenant-management-openapi.{json,yaml}` | Regenerated via `make openapi` |
+| `docs/api/tenant-management-openapi.{json,yaml}` | Canonical generated API spec, regenerated via `make openapi` |

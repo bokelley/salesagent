@@ -163,6 +163,17 @@ Generated OpenAPI is still useful for client typing, but it should describe a
 small generic setup contract rather than requiring the storefront to learn a
 different write model for every ad server.
 
+The issue-600 adapter-specific OpenAPI direction has been removed. It was brand
+new, had no downstream consumers, and split setup across one speculative
+contract per ad server. The durable API surface is:
+
+- `GET /api/v1/tenant-management/adapters`
+- `GET /api/v1/tenant-management/adapters/{adapter_type}/capabilities`
+- `GET /api/v1/tenant-management/adapters/{adapter_type}/config-schema`
+- generic wholesale product / inventory profile authoring APIs
+- generic selector, publisher-property, creative-format, signal, and
+  preview/validation APIs as they are promoted from setup internals
+
 Responsibility split:
 
 | Responsibility | Owner | API family |
@@ -876,6 +887,9 @@ For embedded tenants specifically:
 9. Update Admin UI forms so product authoring is wholesale-product authoring.
 10. Update `get_products` projection tests for inventory-derived formats,
    publisher properties, and capabilities.
+11. Do not add adapter-specific OpenAPI artifacts. New setup endpoints should
+    land in the generic setup API and be represented in the tenant-management
+    OpenAPI, not per-adapter contracts.
 
 ## Open Decisions
 
