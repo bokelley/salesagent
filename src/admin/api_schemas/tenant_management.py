@@ -1045,6 +1045,32 @@ class PublisherPropertiesResponse(BaseModel):
     allowed_selectors: list[AllowedPublisherSelector]
 
 
+class LookupPublisherPropertiesRequest(BaseModel):
+    """Resolve and cache one publisher domain's AAO property structure."""
+
+    model_config = _config()
+
+    publisher_domain: str = Field(..., min_length=1, max_length=500)
+    force_refresh: bool = False
+
+
+class PublisherPropertiesLookupResponse(PublisherPropertiesResponse):
+    """Domain lookup response plus the synced property mapping surface."""
+
+    model_config = _config()
+
+    publisher_domain: str
+    agent_url: str
+    is_authorized: bool
+    aao_status: Literal["authorized", "unbound", "pending", "no_properties", "unreachable"]
+    error: str | None = None
+    total_properties: int
+    authorized_properties: int
+    property_ids: list[str]
+    property_tags: list[str]
+    sync: dict[str, Any] | None = None
+
+
 class CreativeFormatSummary(BaseModel):
     """Creative format option exposed to the embedding storefront."""
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from flask import Flask
 
 from src.admin.tenant_management_api import tenant_management_api
+from src.services.aao_lookup_service import PublisherPartnerStatus
 from tests.factories import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
@@ -193,6 +196,118 @@ def test_inventory_discovery_surfaces_adapter_selectors_and_publisher_properties
     assert body["domains"][0]["publisher_domain"] == "wonderstruck.com"
     assert body["properties"][0]["property_id"] == "wonderstruck_site"
     assert {selector["selection_type"] for selector in body["allowed_selectors"]} == {"all", "by_id", "by_tag"}
+
+
+def test_publisher_properties_lookup_enables_api_only_product_authoring(management_api_client, bound_factories):
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_wholesale_api_only_lookup",
+        name="Wonderstruck API Only",
+        subdomain="wonderstruck-api-only",
+        ad_server="google_ad_manager",
+        is_embedded=True,
+        public_agent_url="https://interchange.io",
+    )
+    AdapterConfigFactory(
+        tenant=tenant,
+        adapter_type="google_ad_manager",
+        gam_network_code="12345",
+        gam_service_account_email="sa@example.com",
+        gam_auth_method="service_account",
+        gam_service_account_json_plaintext='{"type":"service_account"}',
+    )
+    GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="ad_unit",
+        inventory_id="au_api_only_home",
+        name="API Only Homepage Ad Unit",
+        path=["Wonderstruck", "API Only Homepage"],
+        inventory_metadata={"parent_id": None, "sizes": [{"width": 970, "height": 250}]},
+    )
+    GAMInventoryFactory(
+        tenant=tenant,
+        inventory_type="placement",
+        inventory_id="pl_api_only_homepage_takeover",
+        name="API Only Homepage Takeover Placement",
+        path=["Wonderstruck", "API Only Homepage Takeover"],
+        inventory_metadata={"parent_id": None, "targeted_ad_unit_ids": ["au_api_only_home"]},
+    )
+    bound_factories.commit()
+
+    status = PublisherPartnerStatus(
+        publisher_domain="wonderstruck.org",
+        total_properties=1,
+        authorized_properties=1,
+        status="unbound",
+        aao_onboarding_url="https://agenticadvertising.org/publisher/wonderstruck.org",
+        error="Publisher's entry has no authorization_type.",
+    )
+    adagents = {
+        "properties": [
+            {
+                "property_id": "wonderstruck_home",
+                "property_type": "website",
+                "name": "Wonderstruck Home",
+                "identifiers": [{"type": "domain", "value": "wonderstruck.org"}],
+                "tags": ["all_inventory", "premium"],
+            }
+        ],
+        "authorized_agents": [{"url": "https://interchange.io"}],
+    }
+
+    with (
+        patch("src.admin.tenant_management_api.check_url_ssrf", return_value=(True, "")),
+        patch("src.admin.tenant_management_api.get_publisher_partner_status", AsyncMock(return_value=status)),
+        patch("src.services.property_discovery_service.fetch_adagents", AsyncMock(return_value=adagents)),
+        patch("src.services.property_discovery_service.get_all_tags", return_value=["all_inventory", "premium"]),
+    ):
+        lookup = client.post(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/inventory/publisher-properties:lookup",
+            headers=auth_headers,
+            json={"publisher_domain": "https://Wonderstruck.org/", "force_refresh": True},
+        )
+
+    assert lookup.status_code == 200, lookup.get_data(as_text=True)
+    lookup_body = lookup.get_json()
+    assert lookup_body["publisher_domain"] == "wonderstruck.org"
+    assert lookup_body["aao_status"] == "unbound"
+    assert lookup_body["property_ids"] == ["wonderstruck_home"]
+    assert lookup_body["property_tags"] == ["all_inventory", "premium"]
+    assert lookup_body["domains"][0]["publisher_domain"] == "wonderstruck.org"
+    assert {selector["selection_type"] for selector in lookup_body["allowed_selectors"]} == {"all", "by_id", "by_tag"}
+
+    payload = _wholesale_payload(
+        wholesale_product_id="api_only_homepage_takeover",
+        name="API Only Homepage Takeover",
+    )
+    payload["inventory"]["publisher_properties"] = [
+        {
+            "publisher_domain": "wonderstruck.org",
+            "selection_type": "by_id",
+            "property_ids": ["wonderstruck_home"],
+        }
+    ]
+    payload["inventory"]["execution"]["selectors"] = [
+        {
+            "selector_type": "placement",
+            "external_id": "pl_api_only_homepage_takeover",
+        },
+        {
+            "selector_type": "ad_unit",
+            "external_id": "au_api_only_home",
+            "options": {"include_descendants": True},
+        },
+    ]
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=payload,
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+    created_body = created.get_json()
+    assert created_body["product_id"] == "api_only_homepage_takeover"
+    assert created_body["inventory"]["publisher_properties"][0]["publisher_domain"] == "wonderstruck.org"
 
 
 def test_wholesale_product_crud_persists_product_inventory_and_pricing(management_api_client, gam_tenant):

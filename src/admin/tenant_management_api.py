@@ -76,6 +76,7 @@ from src.admin.api_schemas.tenant_management import (
     ListWebhooksResponse,
     ListWholesaleProductsResponse,
     ListWorkflowsResponse,
+    LookupPublisherPropertiesRequest,
     MediaBuyDetail,
     MockAdapterConfig,
     PreviewAdapterRequest,
@@ -84,6 +85,7 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionTenantRequest,
     ProvisionTenantResponse,
     PublisherDomainSummary,
+    PublisherPropertiesLookupResponse,
     PublisherPropertiesResponse,
     PublisherPropertySelector,
     PublisherPropertySummary,
@@ -158,7 +160,10 @@ from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_tenant_url
+from src.core.security.url_validator import check_url_ssrf
+from src.services.aao_lookup_service import get_publisher_partner_status
 from src.services.agent_url_resolver import resolve_agent_url
+from src.services.property_discovery_service import get_property_discovery_service
 from src.services.protocol_change_webhooks import notify_account_status_changed, notify_product_catalog_changed
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
@@ -1592,6 +1597,97 @@ def list_inventory_selectors(tenant_id: str):
         return jsonify(response.model_dump())
 
 
+def _publisher_properties_response(
+    repo: TenantConfigRepository,
+    *,
+    publisher_domain: str | None = None,
+) -> PublisherPropertiesResponse:
+    """Build the publisher-property authoring shape for one domain or all domains."""
+    partners = [
+        partner
+        for partner in repo.list_publisher_partners()
+        if publisher_domain is None or partner.publisher_domain == publisher_domain
+    ]
+    properties = [
+        prop
+        for prop in repo.list_authorized_properties()
+        if publisher_domain is None or prop.publisher_domain == publisher_domain
+    ]
+    tags = repo.list_property_tags()
+
+    domains_by_name: dict[str, PublisherDomainSummary] = {}
+    for partner in partners:
+        domains_by_name[partner.publisher_domain] = PublisherDomainSummary(
+            publisher_domain=partner.publisher_domain,
+            display_name=partner.display_name,
+            is_verified=partner.is_verified,
+            sync_status=partner.sync_status,
+            total_properties=partner.total_properties,
+            authorized_properties=partner.authorized_properties,
+        )
+    for prop in properties:
+        domains_by_name.setdefault(
+            prop.publisher_domain,
+            PublisherDomainSummary(
+                publisher_domain=prop.publisher_domain,
+                display_name=prop.publisher_domain,
+                is_verified=prop.verification_status == "verified",
+                sync_status=prop.verification_status,
+            ),
+        )
+
+    property_summaries = [
+        PublisherPropertySummary(
+            property_id=prop.property_id,
+            publisher_domain=prop.publisher_domain,
+            property_type=prop.property_type,
+            name=prop.name,
+            identifiers=prop.identifiers or [],
+            tags=prop.tags or [],
+            verification_status=prop.verification_status,
+        )
+        for prop in properties
+    ]
+
+    allowed_selectors: list[AllowedPublisherSelector] = []
+    for domain in sorted(domains_by_name):
+        domain_properties = [prop for prop in properties if prop.publisher_domain == domain]
+        allowed_selectors.append(
+            AllowedPublisherSelector(
+                publisher_domain=domain,
+                selection_type="all",
+                label=f"All properties on {domain}",
+            )
+        )
+        if domain_properties:
+            allowed_selectors.append(
+                AllowedPublisherSelector(
+                    publisher_domain=domain,
+                    selection_type="by_id",
+                    property_ids=[prop.property_id for prop in domain_properties],
+                    label=f"Selected properties on {domain}",
+                )
+            )
+        domain_tags = sorted({tag for prop in domain_properties for tag in (prop.tags or [])})
+        if not domain_tags:
+            domain_tags = sorted(tag.tag_id for tag in tags)
+        if domain_tags:
+            allowed_selectors.append(
+                AllowedPublisherSelector(
+                    publisher_domain=domain,
+                    selection_type="by_tag",
+                    property_tags=domain_tags,
+                    label=f"Tagged properties on {domain}",
+                )
+            )
+
+    return PublisherPropertiesResponse(
+        domains=sorted(domains_by_name.values(), key=lambda domain: domain.publisher_domain),
+        properties=property_summaries,
+        allowed_selectors=allowed_selectors,
+    )
+
+
 @tenant_management_api.route("/tenants/<tenant_id>/inventory/publisher-properties", methods=["GET"])
 @require_tenant_management_api_key
 @spec.validate(resp=Response(HTTP_200=PublisherPropertiesResponse, HTTP_404=ApiError))
@@ -1602,83 +1698,92 @@ def list_publisher_properties_for_authoring(tenant_id: str):
         if error is not None:
             return error
         assert tenant is not None
-        repo = TenantConfigRepository(session, tenant_id)
-        partners = repo.list_publisher_partners()
-        properties = repo.list_authorized_properties()
-        tags = repo.list_property_tags()
-
-        domains_by_name: dict[str, PublisherDomainSummary] = {}
-        for partner in partners:
-            domains_by_name[partner.publisher_domain] = PublisherDomainSummary(
-                publisher_domain=partner.publisher_domain,
-                display_name=partner.display_name,
-                is_verified=partner.is_verified,
-                sync_status=partner.sync_status,
-                total_properties=partner.total_properties,
-                authorized_properties=partner.authorized_properties,
-            )
-        for prop in properties:
-            domains_by_name.setdefault(
-                prop.publisher_domain,
-                PublisherDomainSummary(
-                    publisher_domain=prop.publisher_domain,
-                    display_name=prop.publisher_domain,
-                    is_verified=prop.verification_status == "verified",
-                    sync_status=prop.verification_status,
-                ),
-            )
-
-        property_summaries = [
-            PublisherPropertySummary(
-                property_id=prop.property_id,
-                publisher_domain=prop.publisher_domain,
-                property_type=prop.property_type,
-                name=prop.name,
-                identifiers=prop.identifiers or [],
-                tags=prop.tags or [],
-                verification_status=prop.verification_status,
-            )
-            for prop in properties
-        ]
-
-        allowed_selectors: list[AllowedPublisherSelector] = []
-        for domain in sorted(domains_by_name):
-            domain_properties = [prop for prop in properties if prop.publisher_domain == domain]
-            allowed_selectors.append(
-                AllowedPublisherSelector(
-                    publisher_domain=domain,
-                    selection_type="all",
-                    label=f"All properties on {domain}",
-                )
-            )
-            if domain_properties:
-                allowed_selectors.append(
-                    AllowedPublisherSelector(
-                        publisher_domain=domain,
-                        selection_type="by_id",
-                        property_ids=[prop.property_id for prop in domain_properties],
-                        label=f"Selected properties on {domain}",
-                    )
-                )
-            domain_tags = sorted({tag for prop in domain_properties for tag in (prop.tags or [])})
-            if not domain_tags:
-                domain_tags = sorted(tag.tag_id for tag in tags)
-            if domain_tags:
-                allowed_selectors.append(
-                    AllowedPublisherSelector(
-                        publisher_domain=domain,
-                        selection_type="by_tag",
-                        property_tags=domain_tags,
-                        label=f"Tagged properties on {domain}",
-                    )
-                )
-
-        response = PublisherPropertiesResponse(
-            domains=sorted(domains_by_name.values(), key=lambda domain: domain.publisher_domain),
-            properties=property_summaries,
-            allowed_selectors=allowed_selectors,
-        )
+        response = _publisher_properties_response(TenantConfigRepository(session, tenant_id))
         return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/inventory/publisher-properties:lookup", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=LookupPublisherPropertiesRequest,
+    resp=Response(HTTP_200=PublisherPropertiesLookupResponse, HTTP_400=ApiError, HTTP_404=ApiError),
+)
+def lookup_publisher_properties_for_authoring(tenant_id: str):
+    """Resolve one publisher domain through AAO and cache its property IDs/tags."""
+    req: LookupPublisherPropertiesRequest = _validated_json_payload()
+
+    from src.admin.blueprints.publisher_partners import (
+        _normalize_publisher_domain_input,
+        _persist_status,
+        _validate_publisher_domain,
+    )
+
+    publisher_domain = _normalize_publisher_domain_input(req.publisher_domain)
+    if not publisher_domain:
+        return _api_error("publisher_domain_required", "publisher_domain is required", 400)
+    is_valid_domain, domain_error = _validate_publisher_domain(publisher_domain)
+    if not is_valid_domain:
+        return _api_error("invalid_publisher_domain", domain_error, 400)
+    ssrf_ok, ssrf_error = check_url_ssrf(f"https://{publisher_domain}")
+    if not ssrf_ok:
+        return _api_error("invalid_publisher_domain", f"Refused: {ssrf_error}", 400)
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        agent_url = resolve_agent_url(tenant)
+        if not agent_url:
+            return _api_error(
+                "agent_url_not_configured",
+                "Agent URL not configured (set public_agent_url, virtual_host, or SALES_AGENT_DOMAIN)",
+                400,
+            )
+
+        repo = TenantConfigRepository(session, tenant_id)
+        partner = repo.get_publisher_partner_by_domain(publisher_domain)
+        if partner is None:
+            partner = repo.create_publisher_partner(publisher_domain)
+
+        import asyncio
+
+        status = asyncio.run(get_publisher_partner_status(publisher_domain, agent_url, force_refresh=req.force_refresh))
+        _persist_status(partner, status)
+        session.commit()
+
+    sync_stats: dict[str, Any] | None = None
+    if status.status in {"authorized", "unbound"}:
+        sync_stats = get_property_discovery_service().sync_properties_from_adagents_sync(
+            tenant_id,
+            publisher_domains=[publisher_domain],
+            dry_run=False,
+            agent_url=agent_url,
+        )
+
+    with get_db_session() as session:
+        response = _publisher_properties_response(
+            TenantConfigRepository(session, tenant_id),
+            publisher_domain=publisher_domain,
+        )
+
+    property_ids = [prop.property_id for prop in response.properties]
+    property_tags = sorted({tag for prop in response.properties for tag in prop.tags})
+    lookup_response = PublisherPropertiesLookupResponse(
+        **response.model_dump(),
+        publisher_domain=publisher_domain,
+        agent_url=agent_url,
+        is_authorized=status.status in {"authorized", "unbound"},
+        aao_status=status.status,
+        error=status.error,
+        total_properties=status.total_properties,
+        authorized_properties=status.authorized_properties,
+        property_ids=property_ids,
+        property_tags=property_tags,
+        sync=sync_stats,
+    )
+    return jsonify(lookup_response.model_dump())
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/creative-formats", methods=["GET"])
