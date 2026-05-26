@@ -45,6 +45,8 @@ from adcp.types.generated_poc.media_buy.get_products_response import (
 )
 
 from core.platforms._delegate import _build_identity, _coerce_to_request_model, translate_adcp_errors
+from src.core.embedded_runtime import mark_compose_disabled, publisher_owns_compose_products
+from src.core.exceptions import AdCPNotImplementedInEmbeddedError
 from src.core.tools.products import _get_products_impl
 
 
@@ -124,6 +126,9 @@ class SalesAgentProposalManager:
         req_model = _coerce_to_request_model(req, GetProductsRequest)
         response = await _get_products_impl(req_model, identity)
 
+        if not publisher_owns_compose_products():
+            return mark_compose_disabled(response)
+
         # Decorate brief-mode responses with a v1 proposal (#352).
         # ``buying_mode='wholesale'`` and ``buying_mode='refine'`` opt out
         # of curated proposals per the AdCP spec; brief is the only mode
@@ -168,6 +173,12 @@ class SalesAgentProposalManager:
         ``ProposalStore`` is wired to load the prior draft by
         ``proposal_id`` from the refine entry.
         """
+        if not publisher_owns_compose_products():
+            raise AdCPNotImplementedInEmbeddedError(
+                "refine_products is managed by the embedding storefront for this instance.",
+                details={"capability": "compose_products"},
+            )
+
         identity = _build_identity(ctx)
         req_model = _coerce_to_request_model(req, GetProductsRequest)
         response = await _get_products_impl(req_model, identity)

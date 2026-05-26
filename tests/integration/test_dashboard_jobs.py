@@ -4,7 +4,7 @@ Covers the three-job dashboard widget introduced in #471 — the operator's
 persistent workbench, not a setup wizard:
 
 * Discovery: bundles + signals (the primary job)
-* Composition: products (open-instance only; hidden for embedded)
+* Composition: products (hidden when storefront-owned)
 * Delivery: light link card
 
 Always shown — jobs are ongoing. Distinct from the hygiene gate.
@@ -49,7 +49,7 @@ def _sub(job: dict, key: str) -> dict:
 
 
 class TestThreeJobsShape:
-    """The widget surfaces three jobs (or two for embedded) — always present."""
+    """The widget surfaces jobs according to embedded capability ownership."""
 
     def test_open_instance_returns_all_three_jobs(self, factory_session):
         tenant = TenantFactory(is_embedded=False)
@@ -60,7 +60,22 @@ class TestThreeJobsShape:
         assert job_keys == ["discovery", "composition", "delivery"]
         assert result["is_embedded"] is False
 
-    def test_embedded_hides_composition_keeps_discovery_and_delivery(self, factory_session):
+    def test_embedded_publisher_owned_keeps_all_three_jobs(self, monkeypatch, factory_session):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+        # Need management_api_caller flag for direct embedded-tenant inserts.
+        factory_session.info["management_api_caller"] = True
+        tenant = TenantFactory(is_embedded=True)
+
+        result = SetupChecklistService(tenant.tenant_id).get_dashboard_jobs()
+
+        job_keys = [j["key"] for j in result["jobs"]]
+        assert job_keys == ["discovery", "composition", "delivery"]
+        assert result["is_embedded"] is True
+
+    def test_embedded_storefront_owned_hides_composition(self, monkeypatch, factory_session):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"compose_products":"storefront"}')
         # Need management_api_caller flag for direct embedded-tenant inserts.
         factory_session.info["management_api_caller"] = True
         tenant = TenantFactory(is_embedded=True)
@@ -124,7 +139,7 @@ class TestDiscoveryJob:
 
 
 class TestCompositionJob:
-    """Composition surfaces product count. Hidden for embedded."""
+    """Composition surfaces product count when publisher-owned."""
 
     def test_open_instance_shows_product_count(self, factory_session):
         tenant = TenantFactory(is_embedded=False)

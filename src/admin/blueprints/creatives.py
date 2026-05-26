@@ -49,6 +49,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import require_capability_blueprint
 from src.core.database.repositories.uow import AdminCreativeUoW
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
@@ -58,6 +59,7 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 creatives_bp = Blueprint("creatives", __name__)
+creatives_bp.before_request(require_capability_blueprint("creative_approval"))
 
 # Global ThreadPoolExecutor for async AI review (managed lifecycle)
 _ai_review_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai_review_")

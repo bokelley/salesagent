@@ -82,6 +82,14 @@ class TestCapabilityOwnerEmbeddedInstance:
         monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
         assert capability_owner("inventory_sync") == "storefront"
 
+    def test_new_runtime_capabilities_default_to_publisher_on_embedded(self, monkeypatch):
+        """New runtime gates are opt-in storefront ownership, not embedded defaults."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.delenv("EMBEDDED_CAPABILITIES", raising=False)
+
+        assert capability_owner("compose_products") == "publisher"
+        assert capability_owner("campaign_approval") == "publisher"
+
     def test_inventory_sync_publisher_opt_in(self, monkeypatch):
         monkeypatch.setenv("MANAGED_INSTANCE", "true")
         monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"inventory_sync": "publisher"}')

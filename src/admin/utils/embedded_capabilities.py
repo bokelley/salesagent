@@ -44,6 +44,12 @@ from typing import Literal
 from src.admin.utils.embedded_mode_auth import is_managed_instance
 
 CapabilityOwner = Literal["publisher", "storefront"]
+INTEGRATION_CAPABILITIES: tuple[str, ...] = (
+    "slack",
+    "ai_services",
+    "creative_agents",
+    "signals_agents",
+)
 
 # Retrofit dict for capabilities that pre-existed the
 # "everything-defaults-to-publisher" rule and shipped as
@@ -98,6 +104,11 @@ def publisher_owns(name: str) -> bool:
     """Sugar for ``capability_owner(name) == "publisher"``. Used in
     Jinja gates: ``{% if publisher_owns('creative_approval') %}``."""
     return capability_owner(name) == "publisher"
+
+
+def publisher_owns_any(names: tuple[str, ...] | list[str]) -> bool:
+    """Return True when at least one named workflow remains publisher-owned."""
+    return any(publisher_owns(name) for name in names)
 
 
 def require_capability_blueprint(capability: str):

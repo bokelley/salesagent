@@ -9,7 +9,8 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import require_auth, require_tenant_access
+from src.admin.utils import require_tenant_access
+from src.admin.utils.embedded_capabilities import capability_owned_response, publisher_owns
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -41,24 +42,23 @@ operations_bp = Blueprint("operations", __name__)
 
 
 @operations_bp.route("/reporting", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def reporting(tenant_id):
     """Display GAM reporting dashboard."""
     # Import needed for this function
-    from flask import render_template, session
+    from flask import render_template
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Tenant
-
-    # Verify tenant access
-    if session.get("role") != "super_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
 
     with get_db_session() as db_session:
         tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
 
         if not tenant_obj:
             return "Tenant not found", 404
+
+        if tenant_obj.is_embedded:
+            return capability_owned_response("reporting")
 
         # Convert to dict for template compatibility
         tenant = {
@@ -313,6 +313,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Context as DBContext
     from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
+
+    if not publisher_owns("campaign_approval"):
+        return capability_owned_response("campaign_approval")
 
     try:
         action = request.form.get("action")  # "approve" or "reject"
@@ -637,9 +640,16 @@ def trigger_delivery_webhook(tenant_id, media_buy_id, **kwargs):
     """Trigger a delivery report webhook for a media buy manually."""
     from flask import flash, redirect, url_for
 
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
     from src.services.delivery_webhook_scheduler import get_delivery_webhook_scheduler
 
     try:
+        with get_db_session() as db_session:
+            tenant_obj = TenantConfigRepository(db_session, tenant_id).get_tenant()
+            if tenant_obj and tenant_obj.is_embedded:
+                return capability_owned_response("reporting")
+
         # Trigger webhook using scheduler - pass IDs to avoid detached instance errors
         scheduler = get_delivery_webhook_scheduler()
         success = asyncio.run(scheduler.trigger_report_for_media_buy_by_id(media_buy_id, tenant_id))

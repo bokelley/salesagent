@@ -229,3 +229,30 @@ class TestAIServiceFactory:
             assert isinstance(model, OpenAIChatModel)
             # API key is NOT set in environment (we pass it directly to Provider)
             assert os.environ.get("OPENAI_API_KEY") is None
+
+    def test_storefront_owned_ai_services_reports_disabled(self, monkeypatch):
+        """Embedded storefront ownership disables built-in AI calls at runtime."""
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"ai_services": "storefront"}')
+
+        factory = AIServiceFactory()
+
+        assert factory.is_ai_enabled({"api_key": "tenant-key"}) is False
+        effective = factory.get_effective_config({"api_key": "tenant-key"})
+        assert effective["ai_services_enabled"] is False
+        assert effective["has_api_key"] is False
+
+    def test_storefront_owned_ai_services_refuses_model_creation(self, monkeypatch):
+        """Call sites that still try to instantiate AI get a typed embedded-mode error."""
+        from src.core.exceptions import AdCPNotImplementedInEmbeddedError
+
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"ai_services": "storefront"}')
+
+        factory = AIServiceFactory()
+
+        with pytest.raises(AdCPNotImplementedInEmbeddedError) as exc_info:
+            factory.create_model({"api_key": "tenant-key"})
+
+        assert exc_info.value.error_code == "NOT_IMPLEMENTED_IN_EMBEDDED"
+        assert exc_info.value.details == {"capability": "ai_services"}

@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import capability_owned_response, publisher_owns
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 products_bp = Blueprint("products", __name__)
+
+
+def _require_compose_products():
+    if not publisher_owns("compose_products"):
+        return capability_owned_response("compose_products")
+    return None
 
 
 def _normalize_catalog_acl(ids: list[str] | None) -> list[str] | None:
@@ -465,6 +472,9 @@ def list_products(tenant_id):
                 .all()
             )
 
+            if not products and not publisher_owns("compose_products"):
+                return render_template("_embedded_locked_page.html", tenant=tenant), 403
+
             # Get inventory details for all products (breakdown by type)
             inventory_details = {}
             for product in products:
@@ -718,6 +728,9 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 def add_product(tenant_id):
     """Add a new product - adapter-specific form."""
+    if not publisher_owns("compose_products"):
+        return capability_owned_response("compose_products")
+
     # Get tenant's adapter type and currencies
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -1362,6 +1375,9 @@ def add_product(tenant_id):
 def edit_product(tenant_id, product_id):
     """Edit an existing product."""
     from sqlalchemy import select
+
+    if response := _require_compose_products():
+        return response
 
     # Get tenant's adapter type and currencies
     with get_db_session() as db_session:
@@ -2179,6 +2195,9 @@ def edit_product(tenant_id, product_id):
 @require_tenant_access(role=("admin", "member"), allow_embedded_writes=True)
 def delete_product(tenant_id, product_id):
     """Delete a product."""
+    if response := _require_compose_products():
+        return response
+
     try:
         with get_db_session() as db_session:
             # Find the product
@@ -2276,6 +2295,9 @@ def assign_inventory_to_product(tenant_id, product_id):
         "is_primary": false  # optional, default false
     }
     """
+    if response := _require_compose_products():
+        return response
+
     try:
         from src.core.database.models import GAMInventory, ProductInventoryMapping
 
@@ -2447,6 +2469,9 @@ def get_product_inventory(tenant_id, product_id):
 @require_tenant_access(api_mode=True, role=("admin", "member"), allow_embedded_writes=True)
 def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
     """Remove an inventory assignment from a product (API endpoint)."""
+    if response := _require_compose_products():
+        return response
+
     try:
         from src.core.database.models import ProductInventoryMapping
 

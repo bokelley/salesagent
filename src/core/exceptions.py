@@ -283,3 +283,11 @@ class AdCPServiceUnavailableError(AdCPError):
     status_code = 503
     error_code = "SERVICE_UNAVAILABLE"
     recovery: RecoveryHint = "transient"
+
+
+class AdCPNotImplementedInEmbeddedError(AdCPError):
+    """Workflow is intentionally owned by the embedding storefront (501)."""
+
+    status_code = 501
+    error_code = "NOT_IMPLEMENTED_IN_EMBEDDED"
+    recovery: RecoveryHint = "terminal"

@@ -33,6 +33,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPNotFoundError,
+    AdCPNotImplementedInEmbeddedError,
     AdCPProductNotFoundError,
     AdCPTermsRejectedError,
     AdCPValidationError,
@@ -92,6 +93,22 @@ def _validate_measurement_terms(req: "CreateMediaBuyRequest") -> None:
             )
 
 
+def _effective_manual_approval_required(
+    *,
+    tenant_approval_required: bool,
+    adapter_approval_required: bool,
+    publisher_owns_campaign: bool | None = None,
+) -> bool:
+    """Apply the embedded campaign_approval gate to manual approval checks."""
+    owns_approval = publisher_owns_campaign_approval() if publisher_owns_campaign is None else publisher_owns_campaign
+    if not owns_approval:
+        raise AdCPNotImplementedInEmbeddedError(
+            "Campaign approval is managed by the embedding storefront.",
+            details={"capability": "campaign_approval"},
+        )
+    return owns_approval and (tenant_approval_required or adapter_approval_required)
+
+
 class PackageAssignmentDict(TypedDict):
     """Internal dict format for passing package assignments to adapters."""
 
@@ -148,6 +165,7 @@ from src.core.context_manager import get_context_manager
 from src.core.database.models import MediaBuy
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
+from src.core.embedded_runtime import publisher_owns_campaign_approval
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -2497,8 +2515,12 @@ async def _create_media_buy_impl(
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
         tenant_approval_required = tenant.get("human_review_required", True)
         adapter_approval_required = adapter.manual_approval_required
-        # Tenant setting takes precedence - if tenant requires approval, it's required
-        manual_approval_required = tenant_approval_required or adapter_approval_required
+        campaign_approval_owned = publisher_owns_campaign_approval()
+        manual_approval_required = _effective_manual_approval_required(
+            tenant_approval_required=tenant_approval_required,
+            adapter_approval_required=adapter_approval_required,
+            publisher_owns_campaign=campaign_approval_owned,
+        )
         manual_approval_operations = adapter.manual_approval_operations
 
         # DEBUG: Log manual approval settings
@@ -3069,7 +3091,7 @@ async def _create_media_buy_impl(
 
         # Check if either tenant or product disables auto-creation
         # Skip in dry_run mode - we're only validating, not creating workflow
-        if not testing_ctx.dry_run and (not auto_create_enabled or not product_auto_create):
+        if not testing_ctx.dry_run and campaign_approval_owned and (not auto_create_enabled or not product_auto_create):
             reason = "Tenant configuration" if not auto_create_enabled else "Product configuration"
             # Type narrowing: step and persistent_ctx exist in non-dry_run mode
             assert step is not None and persistent_ctx is not None

@@ -236,6 +236,33 @@ class _PatchContext:
         self._p_uow.stop()
 
 
+class TestEmbeddedCampaignApprovalGate:
+    def test_storefront_owned_campaign_approval_fails_closed(self):
+        from src.core.exceptions import AdCPNotImplementedInEmbeddedError
+        from src.core.tools.media_buy_create import _effective_manual_approval_required
+
+        with pytest.raises(AdCPNotImplementedInEmbeddedError) as exc_info:
+            _effective_manual_approval_required(
+                tenant_approval_required=True,
+                adapter_approval_required=True,
+                publisher_owns_campaign=False,
+            )
+
+        assert exc_info.value.details == {"capability": "campaign_approval"}
+
+    def test_publisher_owned_campaign_approval_preserves_manual_approval(self):
+        from src.core.tools.media_buy_create import _effective_manual_approval_required
+
+        assert (
+            _effective_manual_approval_required(
+                tenant_approval_required=True,
+                adapter_approval_required=False,
+                publisher_owns_campaign=True,
+            )
+            is True
+        )
+
+
 # ===========================================================================
 # HIGH_RISK Tests
 # ===========================================================================

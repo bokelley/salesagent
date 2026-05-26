@@ -327,6 +327,7 @@ _TASK_CAPABILITY: dict[str, str] = {
     "gemini_api_key": "ai_services",
     "creative_approval_guidelines": "creative_approval",
     "signals_agent": "signals_agents",
+    "products_created": "compose_products",
 }
 
 

@@ -16,9 +16,10 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
-from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPNotFoundError, AdCPNotImplementedInEmbeddedError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
+from src.core.tools.creatives._sync import _effective_approval_mode
 from src.core.tools.creatives._workflow import _send_creative_notifications
 from tests.harness import make_mock_uow
 
@@ -77,6 +78,23 @@ def _make_creative_uow(assignment_repo=None):
         }
     )
     return mock_uow, mock_assignment_repo
+
+
+class TestEmbeddedCreativeApprovalGate:
+    def test_storefront_owned_creative_approval_fails_closed(self, monkeypatch):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval": "storefront"}')
+
+        with pytest.raises(AdCPNotImplementedInEmbeddedError) as exc_info:
+            _effective_approval_mode("ai-powered")
+
+        assert exc_info.value.details == {"capability": "creative_approval"}
+
+    def test_publisher_owned_creative_approval_preserves_mode(self, monkeypatch):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval": "publisher"}')
+
+        assert _effective_approval_mode("ai-powered") == "ai-powered"
 
 
 # ========================================================================

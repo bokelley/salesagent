@@ -18,7 +18,12 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.embedded_capabilities import capability_owned_response, publisher_owns
+from src.admin.utils.embedded_capabilities import (
+    INTEGRATION_CAPABILITIES,
+    capability_owned_response,
+    publisher_owns,
+    publisher_owns_any,
+)
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 
@@ -169,6 +174,9 @@ def integrations_page(tenant_id):
         if not tenant:
             flash("Tenant not found", "error")
             return redirect(url_for("core.index"))
+
+        if not publisher_owns_any(INTEGRATION_CAPABILITIES):
+            return render_template("_embedded_locked_page.html", tenant=tenant), 403
 
         # AI config drives the Status banner + the legacy-key migration
         # alert. Same shape ``tenant_settings`` loads — kept in sync so

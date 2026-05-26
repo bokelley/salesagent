@@ -3,6 +3,7 @@
 {% block title %}Products - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
 {% block content %}
+{% set can_manage_products = publisher_owns('compose_products') %}
 <!-- Product Design Guide -->
 <div class="sa-banner sa-banner--info" style="margin-bottom: var(--sa-space-4);">
     <div class="sa-banner__icon">📚</div>
@@ -26,11 +27,13 @@
         <p class="empty-state-message">
             You haven't created any products yet. Create your first product to start offering inventory to buyers.
         </p>
+        {% if can_manage_products %}
         <div class="empty-state-actions">
             <a href="{{ url_for('products.add_product', tenant_id=tenant_id) }}" class="btn btn-primary btn-large">
                 Create Your First Product
             </a>
         </div>
+        {% endif %}
     </div>
     {% else %}
     <!-- Has products - show normal list -->
@@ -46,7 +49,9 @@
                     <i class="fas fa-th-large"></i>
                 </button>
             </div>
+            {% if can_manage_products %}
             <a href="{{ url_for('products.add_product', tenant_id=tenant_id) }}" class="btn btn-primary">Add Product</a>
+            {% endif %}
         </div>
     </header>
 
@@ -120,8 +125,12 @@
                     {% endif %}
 
                     <div class="product-card-actions">
+                        {% if can_manage_products %}
                         <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}" class="btn btn-secondary btn-sm" style="flex: 1;">Edit</a>
                         <button onclick="deleteProduct('{{ product.product_id }}', '{{ product.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                        {% else %}
+                        <span style="color: var(--sa-text-muted); font-size: var(--sa-font-size-sm);">Managed by storefront</span>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -267,8 +276,12 @@
                 </td>
                 <td>
                     <div style="display: flex; gap: 0.5rem;">
+                        {% if can_manage_products %}
                         <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}" class="btn btn-secondary btn-sm">Edit</a>
                         <button onclick="deleteProduct('{{ product.product_id }}', '{{ product.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                        {% else %}
+                        <span style="color: var(--sa-text-muted); font-size: var(--sa-font-size-sm);">Managed by storefront</span>
+                        {% endif %}
                     </div>
                 </td>
             </tr>

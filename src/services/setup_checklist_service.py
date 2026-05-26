@@ -26,6 +26,12 @@ from src.core.database.models import (
     TenantAuthConfig,
     TenantSignal,
 )
+from src.core.embedded_runtime import (
+    publisher_owns_ai_services,
+    publisher_owns_compose_products,
+    publisher_owns_creative_approval,
+    publisher_owns_runtime_capability,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -697,6 +703,10 @@ class SetupChecklistService:
         if ad_server_fully_configured:
             stmt = select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
             product_count = session.scalar(stmt) or 0
+        else:
+            product_count = 0
+
+        if ad_server_fully_configured:
             tasks.append(
                 SetupTask(
                     key="products_created",
@@ -753,24 +763,25 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Creative Approval Guidelines
-        # Only count as configured if user has set auto-approve formats (explicit configuration)
-        # Default human_review_required=True doesn't count as "configured"
-        has_approval_config = bool(tenant.auto_approve_format_ids)
-        tasks.append(
-            SetupTask(
-                key="creative_approval_guidelines",
-                name="Creative Approval Guidelines",
-                description="Configure auto-approval rules and manual review settings",
-                is_complete=has_approval_config,
-                action_url=self._route_url("settings.policies_page"),
-                details=(
-                    "Auto-approval formats configured"
-                    if has_approval_config
-                    else "Using default (manual review required)"
-                ),
+        if publisher_owns_creative_approval():
+            # 2. Creative Approval Guidelines
+            # Only count as configured if user has set auto-approve formats (explicit configuration)
+            # Default human_review_required=True doesn't count as "configured"
+            has_approval_config = bool(tenant.auto_approve_format_ids)
+            tasks.append(
+                SetupTask(
+                    key="creative_approval_guidelines",
+                    name="Creative Approval Guidelines",
+                    description="Configure auto-approval rules and manual review settings",
+                    is_complete=has_approval_config,
+                    action_url=self._route_url("settings.policies_page"),
+                    details=(
+                        "Auto-approval formats configured"
+                        if has_approval_config
+                        else "Using default (manual review required)"
+                    ),
+                )
             )
-        )
 
         # 3. Naming Conventions
         # Only count line_item_name_template as custom (order_name_template has server_default)
@@ -847,19 +858,20 @@ class SetupChecklistService:
             )
         )
 
-        # 5. Slack Integration
-        slack_webhook = tenant.slack_webhook_url
-        slack_configured = bool(slack_webhook)
-        tasks.append(
-            SetupTask(
-                key="slack_integration",
-                name="Slack Integration",
-                description="Configure Slack webhooks for order notifications",
-                is_complete=slack_configured,
-                action_url=self._route_url("settings.integrations_page"),
-                details="Slack notifications enabled" if slack_configured else "No Slack integration",
+        if publisher_owns_runtime_capability("slack"):
+            # 5. Slack Integration
+            slack_webhook = tenant.slack_webhook_url
+            slack_configured = bool(slack_webhook)
+            tasks.append(
+                SetupTask(
+                    key="slack_integration",
+                    name="Slack Integration",
+                    description="Configure Slack webhooks for order notifications",
+                    is_complete=slack_configured,
+                    action_url=self._route_url("settings.integrations_page"),
+                    details="Slack notifications enabled" if slack_configured else "No Slack integration",
+                )
             )
-        )
 
         # 6. Tenant CNAME (Virtual Host)
         virtual_host = tenant.virtual_host
@@ -906,33 +918,37 @@ class SetupChecklistService:
                 )
             )
 
-        # 1. Signals Discovery Agent
-        signals_enabled = tenant.enable_axe_signals or False
-        tasks.append(
-            SetupTask(
-                key="signals_agent",
-                name="Signals Discovery Agent",
-                description="Enable AXE signals for advanced targeting",
-                is_complete=signals_enabled,
-                action_url=self._route_url("settings.integrations_page"),
-                details="AXE signals enabled" if signals_enabled else "AXE signals not configured",
+        if publisher_owns_runtime_capability("signals_agents"):
+            # 1. Signals Discovery Agent
+            signals_enabled = tenant.enable_axe_signals or False
+            tasks.append(
+                SetupTask(
+                    key="signals_agent",
+                    name="Signals Discovery Agent",
+                    description="Enable AXE signals for advanced targeting",
+                    is_complete=signals_enabled,
+                    action_url=self._route_url("settings.integrations_page"),
+                    details="AXE signals enabled" if signals_enabled else "AXE signals not configured",
+                )
             )
-        )
 
-        # 2. Gemini AI Features (Optional - Tenant-Specific)
-        gemini_configured = bool(tenant.gemini_api_key)
-        tasks.append(
-            SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
-                description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
-                action_url=self._route_url("settings.integrations_page"),
-                details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
-                ),
+        if publisher_owns_ai_services():
+            # 2. Gemini AI Features (Optional - Tenant-Specific)
+            gemini_configured = bool(tenant.gemini_api_key)
+            tasks.append(
+                SetupTask(
+                    key="gemini_api_key",
+                    name="Gemini AI Features",
+                    description="Enable AI-assisted product recommendations and creative policy checks",
+                    is_complete=gemini_configured,
+                    action_url=self._route_url("settings.integrations_page"),
+                    details=(
+                        "AI features enabled"
+                        if gemini_configured
+                        else "Optional: Configure Gemini API key for AI features"
+                    ),
+                )
             )
-        )
 
         # 3. Multiple Currencies
         stmt = select(func.count()).select_from(CurrencyLimit).where(CurrencyLimit.tenant_id == self.tenant_id)
@@ -1009,7 +1025,7 @@ class SetupChecklistService:
             )
 
         # 3. Currency Limits - Only show after ad server is configured
-        if ad_server_fully_configured:
+        if ad_server_fully_configured and (publisher_owns_compose_products() or product_count > 0):
             tasks.append(
                 SetupTask(
                     key="currency_limits",
@@ -1087,7 +1103,7 @@ class SetupChecklistService:
                 )
 
         # 5. Products Created - Only show after ad server is configured
-        if ad_server_fully_configured:
+        if ad_server_fully_configured and (publisher_owns_compose_products() or product_count > 0):
             tasks.append(
                 SetupTask(
                     key="products_created",
@@ -1140,24 +1156,25 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Creative Approval Guidelines
-        # Only count as configured if user has set auto-approve formats (explicit configuration)
-        # Default human_review_required=True doesn't count as "configured"
-        has_approval_config = bool(tenant.auto_approve_format_ids)
-        tasks.append(
-            SetupTask(
-                key="creative_approval_guidelines",
-                name="Creative Approval Guidelines",
-                description="Configure auto-approval rules and manual review settings",
-                is_complete=has_approval_config,
-                action_url=self._route_url("settings.policies_page"),
-                details=(
-                    "Auto-approval formats configured"
-                    if has_approval_config
-                    else "Using default (manual review required)"
-                ),
+        if publisher_owns_creative_approval():
+            # 2. Creative Approval Guidelines
+            # Only count as configured if user has set auto-approve formats (explicit configuration)
+            # Default human_review_required=True doesn't count as "configured"
+            has_approval_config = bool(tenant.auto_approve_format_ids)
+            tasks.append(
+                SetupTask(
+                    key="creative_approval_guidelines",
+                    name="Creative Approval Guidelines",
+                    description="Configure auto-approval rules and manual review settings",
+                    is_complete=has_approval_config,
+                    action_url=self._route_url("settings.policies_page"),
+                    details=(
+                        "Auto-approval formats configured"
+                        if has_approval_config
+                        else "Using default (manual review required)"
+                    ),
+                )
             )
-        )
 
         # 3. Naming Conventions
         # Only count line_item_name_template as custom (order_name_template has server_default)
@@ -1223,18 +1240,19 @@ class SetupChecklistService:
             )
         )
 
-        # 5. Slack Integration
-        slack_configured = bool(tenant.slack_webhook_url)
-        tasks.append(
-            SetupTask(
-                key="slack_integration",
-                name="Slack Integration",
-                description="Configure Slack webhooks for order notifications",
-                is_complete=slack_configured,
-                action_url=self._route_url("settings.integrations_page"),
-                details="Slack notifications enabled" if slack_configured else "No Slack integration",
+        if publisher_owns_runtime_capability("slack"):
+            # 5. Slack Integration
+            slack_configured = bool(tenant.slack_webhook_url)
+            tasks.append(
+                SetupTask(
+                    key="slack_integration",
+                    name="Slack Integration",
+                    description="Configure Slack webhooks for order notifications",
+                    is_complete=slack_configured,
+                    action_url=self._route_url("settings.integrations_page"),
+                    details="Slack notifications enabled" if slack_configured else "No Slack integration",
+                )
             )
-        )
 
         # 6. Custom Domain
         has_custom_domain = bool(tenant.virtual_host)
@@ -1279,33 +1297,37 @@ class SetupChecklistService:
                 )
             )
 
-        # 1. Signals Discovery Agent
-        signals_enabled = tenant.enable_axe_signals or False
-        tasks.append(
-            SetupTask(
-                key="signals_agent",
-                name="Signals Discovery Agent",
-                description="Enable AXE signals for advanced targeting",
-                is_complete=signals_enabled,
-                action_url=self._route_url("settings.integrations_page"),
-                details="AXE signals enabled" if signals_enabled else "AXE signals not configured",
+        if publisher_owns_runtime_capability("signals_agents"):
+            # 1. Signals Discovery Agent
+            signals_enabled = tenant.enable_axe_signals or False
+            tasks.append(
+                SetupTask(
+                    key="signals_agent",
+                    name="Signals Discovery Agent",
+                    description="Enable AXE signals for advanced targeting",
+                    is_complete=signals_enabled,
+                    action_url=self._route_url("settings.integrations_page"),
+                    details="AXE signals enabled" if signals_enabled else "AXE signals not configured",
+                )
             )
-        )
 
-        # 2. Gemini AI Features
-        gemini_configured = bool(tenant.gemini_api_key)
-        tasks.append(
-            SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
-                description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
-                action_url=self._route_url("settings.integrations_page"),
-                details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
-                ),
+        if publisher_owns_ai_services():
+            # 2. Gemini AI Features
+            gemini_configured = bool(tenant.gemini_api_key)
+            tasks.append(
+                SetupTask(
+                    key="gemini_api_key",
+                    name="Gemini AI Features",
+                    description="Enable AI-assisted product recommendations and creative policy checks",
+                    is_complete=gemini_configured,
+                    action_url=self._route_url("settings.integrations_page"),
+                    details=(
+                        "AI features enabled"
+                        if gemini_configured
+                        else "Optional: Configure Gemini API key for AI features"
+                    ),
+                )
             )
-        )
 
         # 3. Multiple Currencies
         multiple_currencies = currency_count > 1
@@ -1427,11 +1449,11 @@ class SetupChecklistService:
                 ],
             }
 
-            # Composition job — hidden entirely for embedded. The storefront
-            # owns composition; surfacing it on a publisher dashboard would
-            # mislead.
+            # Composition job — hidden when the storefront owns composition;
+            # otherwise embedded publishers may still manage legacy/open
+            # product catalogs.
             composition_job: dict[str, Any] | None = None
-            if not tenant.is_embedded:
+            if publisher_owns_compose_products():
                 composition_job = {
                     "key": "composition",
                     "name": "Composition",
@@ -1450,9 +1472,13 @@ class SetupChecklistService:
                 "key": "delivery",
                 "name": "Delivery",
                 "tagline": "Fulfill the orders you've sold.",
-                "action_url": self._route_url("operations.reporting"),
+                "action_url": None if tenant.is_embedded else self._route_url("operations.reporting"),
                 "action_label": "Reporting",
-                "note": "Approvals, pacing, and exceptions live in the pipeline below.",
+                "note": (
+                    "Delivery status is surfaced by the storefront."
+                    if tenant.is_embedded
+                    else "Approvals, pacing, and exceptions live in the pipeline below."
+                ),
             }
 
             jobs: list[dict[str, Any]] = [discovery_job]

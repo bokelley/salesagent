@@ -170,6 +170,9 @@
                building blocks: Products = Inventory + Signals + price. Promoted
                to top nav per #451 — these are the operator's ongoing work,
                not one-time setup. #}
+            {% set _nav_product_count = nav_product_count|default(0)|int %}
+            {% set _show_products = publisher_owns('compose_products') or _nav_product_count > 0 %}
+            {% set _show_integrations = publisher_owns_any(integration_capabilities) %}
             {% set _navlinks = [
                 ('Dashboard',  '',                     ''),
                 ('Media Buys', '/media-buys',          '/media-buy'),
@@ -181,12 +184,19 @@
                 ('Reports',    '/reporting',           '/reporting'),
             ] %}
             {% for label, href, active_prefix in _navlinks %}
+                {% if
+                    (label != 'Products' or _show_products)
+                    and (label != 'Creatives' or publisher_owns('creative_approval'))
+                    and (label != 'Workflows' or publisher_owns('campaign_approval'))
+                    and (label != 'Reports' or not embedded_view)
+                %}
                 {% set _href = _tprefix + href %}
                 {% set _is_active = (
                     (active_prefix == '' and (_path == _tprefix or _path == _tprefix + '/'))
                     or (active_prefix != '' and _path.startswith(_tprefix + active_prefix))
                 ) %}
                 <a class="sa-nav-action{% if _is_active %} is-active{% endif %}" href="{{ _href }}"{% if _is_active %} aria-current="page"{% endif %}>{{ label }}</a>
+                {% endif %}
             {% endfor %}
             {# Configure is active on every tenant-scoped page that isn't
                one of the primary nav sections — so Settings sub-pages
@@ -197,12 +207,12 @@
                 _path == _tprefix
                 or _path == _tprefix + '/'
                 or _path.startswith(_tprefix + '/media-buy')
-                or _path.startswith(_tprefix + '/products')
+                or (_show_products and _path.startswith(_tprefix + '/products'))
                 or _path.startswith(_tprefix + '/inventory-profiles')
                 or _path.startswith(_tprefix + '/signals')
-                or _path.startswith(_tprefix + '/creatives')
-                or _path.startswith(_tprefix + '/workflows')
-                or _path.startswith(_tprefix + '/reporting')
+                or (publisher_owns('creative_approval') and _path.startswith(_tprefix + '/creatives'))
+                or (publisher_owns('campaign_approval') and _path.startswith(_tprefix + '/workflows'))
+                or (not embedded_view and _path.startswith(_tprefix + '/reporting'))
             ) %}
             {% set _configure_active = _path.startswith(_tprefix + '/') and not _is_primary_section %}
             <div class="sa-menu" data-sa-menu>
@@ -228,7 +238,9 @@
 
                     <div class="sa-menu__group-label">Workspace</div>
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings/policies/">Policies &amp; Workflows</a>
+                    {% if _show_integrations %}
                     <a class="sa-menu__item" role="menuitem" href="{{ _tprefix }}/settings/integrations/">Integrations</a>
+                    {% endif %}
                     {% if not embedded_view %}
                     {# Signing keys: dead code on embedded — storefront signs under
                        its own domain. Sprint 7 Phase 4c hard-hide. #}

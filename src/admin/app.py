@@ -589,10 +589,10 @@ def create_app(config=None):
     def inject_context():
         """Make the script_name (e.g., /admin) and current tenant available in all templates."""
         from flask import g, session
-        from sqlalchemy import select
+        from sqlalchemy import func, select
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.domain_config import get_sales_agent_domain, get_support_email
         from src.core.version import get_build_info
 
@@ -641,6 +641,10 @@ def create_app(config=None):
                     tenant = db_session.scalars(stmt).first()
                     if tenant:
                         context["tenant"] = tenant
+                        context["nav_product_count"] = (
+                            db_session.scalar(select(func.count()).select_from(Product).filter_by(tenant_id=tenant_id))
+                            or 0
+                        )
             except Exception as e:
                 logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
 
@@ -667,10 +671,17 @@ def create_app(config=None):
         # gate subsections that have been taken over by the storefront on
         # this embedded instance — e.g. ``{% if publisher_owns('slack') %}``.
         # No-op on open instances (always returns publisher-owned).
-        from src.admin.utils.embedded_capabilities import capability_owner, publisher_owns
+        from src.admin.utils.embedded_capabilities import (
+            INTEGRATION_CAPABILITIES,
+            capability_owner,
+            publisher_owns,
+            publisher_owns_any,
+        )
 
         context["capability_owner"] = capability_owner
+        context["integration_capabilities"] = INTEGRATION_CAPABILITIES
         context["publisher_owns"] = publisher_owns
+        context["publisher_owns_any"] = publisher_owns_any
 
         return context
 

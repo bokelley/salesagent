@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.embedded_capabilities import require_capability_blueprint
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
@@ -18,6 +19,7 @@ from src.core.database.repositories.workflow import WorkflowRepository
 logger = logging.getLogger(__name__)
 
 workflows_bp = Blueprint("workflows", __name__)
+workflows_bp.before_request(require_capability_blueprint("campaign_approval"))
 
 
 @workflows_bp.route("/<tenant_id>/workflows")

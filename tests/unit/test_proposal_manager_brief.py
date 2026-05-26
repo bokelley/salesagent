@@ -17,7 +17,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from core.proposal.manager import _build_v1_brief_proposal, _first_pricing_option_id
+import pytest
+
+from core.proposal.manager import SalesAgentProposalManager, _build_v1_brief_proposal, _first_pricing_option_id
+from src.core.embedded_runtime import mark_compose_disabled
+from src.core.exceptions import AdCPNotImplementedInEmbeddedError
 
 
 def _mock_product(product_id: str, pricing_option_id: str | None = "cpm_usd_fixed") -> Any:
@@ -138,3 +142,29 @@ class TestFirstPricingOptionId:
             pass
 
         assert _first_pricing_option_id(BareProduct()) is None
+
+
+class TestEmbeddedComposeGate:
+    def test_mark_compose_disabled_emits_products_only_contract(self) -> None:
+        response = SimpleNamespace(products=[_mock_product("prod_a")], proposals=[object()])
+
+        gated = mark_compose_disabled(response)
+
+        assert gated.proposals == []
+        assert not hasattr(gated, "capabilities")
+
+    @pytest.mark.asyncio
+    async def test_refine_refuses_when_storefront_owns_compose(self, monkeypatch) -> None:
+        import core.proposal.manager as manager_mod
+
+        monkeypatch.setattr(manager_mod, "publisher_owns_compose_products", lambda: False)
+
+        with pytest.raises(AdCPNotImplementedInEmbeddedError) as exc_info:
+            await SalesAgentProposalManager.refine_products.__wrapped__(  # type: ignore[attr-defined]
+                SalesAgentProposalManager(),
+                object(),
+                object(),
+            )
+
+        assert exc_info.value.error_code == "NOT_IMPLEMENTED_IN_EMBEDDED"
+        assert exc_info.value.details == {"capability": "compose_products"}

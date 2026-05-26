@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.database.models import Tenant
+from tests.factories import ProductFactory
 from tests.integration._embedded_helpers import (
     cleanup_embedded_test_tenant,
     insert_embedded_test_tenant,
@@ -44,6 +46,19 @@ def open_tenant_id(test_tenant_id):
     """Alias for the visibility-on-open-instance test. Same tenant; the
     distinguishing factor is whether ``MANAGED_INSTANCE`` is set."""
     return test_tenant_id
+
+
+@pytest.fixture
+def embedded_tenant_id(integration_db):
+    tid = insert_embedded_test_tenant(is_embedded=True, external_source="scope3", name_prefix="t_cap")
+    yield tid
+    cleanup_embedded_test_tenant(tid)
+
+
+def _create_product_for_tenant(factory_session, tenant_id: str, product_id: str):
+    tenant = factory_session.get(Tenant, tenant_id)
+    assert tenant is not None
+    return ProductFactory(tenant=tenant, tenant_id=tenant_id, product_id=product_id)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +199,24 @@ def test_tenant_settings_no_longer_renders_integrations_section(embedded_client,
     assert 'id="integrations"' not in body
 
 
+def test_integrations_page_locks_when_every_integration_is_storefront_owned(
+    monkeypatch, embedded_client, open_tenant_id
+):
+    """If every integration subsection is owned by the storefront, the
+    standalone Integrations page should not render an empty shell."""
+    monkeypatch.setenv("MANAGED_INSTANCE", "true")
+    monkeypatch.setenv(
+        "EMBEDDED_CAPABILITIES",
+        '{"slack":"storefront","ai_services":"storefront","creative_agents":"storefront","signals_agents":"storefront"}',
+    )
+
+    resp = embedded_client.get(f"/tenant/{open_tenant_id}/settings/integrations/")
+    assert resp.status_code == 403
+    body = resp.get_data(as_text=True)
+    assert "Platform settings managed by" in body
+    assert "<h2>Integrations</h2>" not in body
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 (#437): Products + Inventory in-page tabs removed
 # ---------------------------------------------------------------------------
@@ -304,6 +337,133 @@ class TestInventorySyncCapabilityGate:
         # three sync buttons; either is the canonical "Sync page rendered"
         # signal and distinguishes from the storefront-owned redirect.
         assert "Inventory sync is only available for Google Ad Manager" in body or "Incremental Sync" in body
+
+
+class TestStorefrontPrimaryNavGates:
+    """Primary nav should match the storefront-owned UI surface."""
+
+    def test_storefront_owned_capabilities_hide_primary_nav_entries(self, monkeypatch, embedded_client, open_tenant_id):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv(
+            "EMBEDDED_CAPABILITIES",
+            '{"compose_products":"storefront","creative_approval":"storefront",'
+            '"campaign_approval":"storefront","slack":"storefront","ai_services":"storefront",'
+            '"creative_agents":"storefront","signals_agents":"storefront"}',
+        )
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert f'href="/tenant/{open_tenant_id}/products/"' not in body
+        assert f'href="/tenant/{open_tenant_id}/creatives/review"' not in body
+        assert f'href="/tenant/{open_tenant_id}/workflows"' not in body
+        assert f'href="/tenant/{open_tenant_id}/settings/integrations/"' not in body
+
+    def test_reports_hidden_on_embedded_view(self, embedded_client, embedded_tenant_id):
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert f'href="/tenant/{embedded_tenant_id}/reporting"' not in body
+
+    def test_dashboard_deal_pipeline_hidden_on_embedded_view(self, embedded_client, embedded_tenant_id):
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert 'class="sa-pipeline"' not in body
+        assert "Offers waiting on you" not in body
+        assert "Unique buyers in market" not in body
+
+
+class TestStorefrontOwnedRouteDefense:
+    """Hidden storefront-owned nav entries also reject stale direct links."""
+
+    def test_empty_products_route_returns_403_when_compose_storefront_owned(
+        self, monkeypatch, embedded_client, open_tenant_id
+    ):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"compose_products":"storefront"}')
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/products/")
+        assert resp.status_code == 403
+        body = resp.get_data(as_text=True)
+        assert "Platform settings managed by" in body
+
+    def test_add_product_route_returns_403_when_compose_storefront_owned(
+        self, monkeypatch, embedded_client, open_tenant_id
+    ):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"compose_products":"storefront"}')
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/products/add")
+        assert resp.status_code == 403
+        assert b"compose_products" in resp.data
+
+    def test_legacy_products_render_read_only_when_compose_storefront_owned(
+        self, monkeypatch, embedded_client, open_tenant_id, factory_session
+    ):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"compose_products":"storefront"}')
+        product = _create_product_for_tenant(factory_session, open_tenant_id, "legacy_product")
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/products/")
+
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "legacy_product" in body
+        assert f"/tenant/{open_tenant_id}/products/{product.product_id}/edit" not in body
+        assert f"deleteProduct('{product.product_id}'" not in body
+        assert "Managed by storefront" in body
+
+    def test_product_mutation_routes_return_403_when_compose_storefront_owned(
+        self, monkeypatch, embedded_client, open_tenant_id, factory_session
+    ):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"compose_products":"storefront"}')
+        product = _create_product_for_tenant(factory_session, open_tenant_id, "blocked_product")
+
+        edit_resp = embedded_client.get(f"/tenant/{open_tenant_id}/products/{product.product_id}/edit")
+        delete_resp = embedded_client.delete(f"/tenant/{open_tenant_id}/products/{product.product_id}/delete")
+        assign_resp = embedded_client.post(
+            f"/tenant/{open_tenant_id}/products/{product.product_id}/inventory",
+            json={"inventory_id": "ad-unit-1", "inventory_type": "ad_unit"},
+        )
+        unassign_resp = embedded_client.delete(f"/tenant/{open_tenant_id}/products/{product.product_id}/inventory/1")
+
+        assert edit_resp.status_code == 403
+        assert delete_resp.status_code == 403
+        assert assign_resp.status_code == 403
+        assert unassign_resp.status_code == 403
+
+    def test_creatives_route_returns_403_when_creative_approval_storefront_owned(
+        self, monkeypatch, embedded_client, open_tenant_id
+    ):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"creative_approval":"storefront"}')
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/creatives/review")
+        assert resp.status_code == 403
+        assert b"creative_approval" in resp.data
+
+    def test_workflows_route_returns_403_when_campaign_approval_storefront_owned(
+        self, monkeypatch, embedded_client, open_tenant_id
+    ):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+        monkeypatch.setenv("EMBEDDED_CAPABILITIES", '{"campaign_approval":"storefront"}')
+
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/workflows")
+        assert resp.status_code == 403
+        assert b"campaign_approval" in resp.data
+
+    def test_reporting_route_uses_tenant_access_not_session_tenant_id(self, embedded_client, open_tenant_id):
+        resp = embedded_client.get(f"/tenant/{open_tenant_id}/reporting")
+        assert resp.status_code == 400
+        assert b"Access denied" not in resp.data
+
+    def test_reporting_route_returns_403_for_embedded_tenant(self, embedded_client, embedded_tenant_id):
+        resp = embedded_client.get(f"/tenant/{embedded_tenant_id}/reporting")
+        assert resp.status_code == 403
+        assert b"Access denied" not in resp.data
+        assert b"reporting" in resp.data
 
 
 # ---------------------------------------------------------------------------

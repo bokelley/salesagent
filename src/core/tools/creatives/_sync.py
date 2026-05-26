@@ -10,7 +10,8 @@ from adcp.types import ContextObject, CreativeAction, Error
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.embedded_runtime import publisher_owns_creative_approval
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotImplementedInEmbeddedError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeAsset, SyncCreativeResult, SyncCreativesResponse
@@ -19,7 +20,11 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _update_existing_creative
 from ._validation import _get_field, _validate_creative_input, check_provenance_required
-from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
+from ._workflow import (
+    _audit_log_sync,
+    _create_sync_workflow_steps,
+    _send_creative_notifications,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +33,16 @@ logger = logging.getLogger(__name__)
 # ``src.core.schemas._asset_type_compat`` so the production sync path and
 # the ``CreativeAsset.__init__`` patch agree.
 from src.core.schemas._asset_type_compat import infer_asset_types as _infer_asset_types  # noqa: E402
+
+
+def _effective_approval_mode(approval_mode: str) -> str:
+    """Return seller-side creative approval mode, failing closed when storefront-owned."""
+    if publisher_owns_creative_approval():
+        return approval_mode
+    raise AdCPNotImplementedInEmbeddedError(
+        "Creative approval is managed by the embedding storefront.",
+        details={"capability": "creative_approval"},
+    )
 
 
 def _sync_creatives_impl(
@@ -127,7 +142,7 @@ def _sync_creatives_impl(
     # approval_mode: "auto-approve", "require-human", "ai-powered"
     logger.info(f"[sync_creatives] Tenant dict keys: {list(tenant.keys())}")
     logger.info(f"[sync_creatives] Tenant approval_mode field: {tenant.get('approval_mode', 'NOT FOUND')}")
-    approval_mode = tenant.get("approval_mode", "require-human")
+    approval_mode = _effective_approval_mode(tenant.get("approval_mode", "require-human"))
     logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)

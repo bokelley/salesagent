@@ -169,60 +169,46 @@ class TestRelevanceThresholdIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Publisher Domains Portfolio (CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01)
+# Publisher Domains Portfolio Source (CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01)
 # ---------------------------------------------------------------------------
-#
-# AdCP v3 retired ``list_authorized_properties`` and moved the portfolio onto
-# ``get_adcp_capabilities``. ``core.platforms._capabilities_envelope`` injects
-# ``portfolio.publisher_domains`` from the per-tenant ``PublisherPartner``
-# table. These tests verify the end-to-end wire shape: factory data → DB →
-# capabilities patch → response dict.
 
 
 class TestPublisherDomainsPortfolioIntegration:
-    """Publisher domains portfolio assembly from real database."""
+    """Publisher domains portfolio source assembly from real database."""
 
-    @pytest.mark.asyncio
-    async def test_publisher_domains_sorted_alphabetically(self, integration_db):
-        """``portfolio.publisher_domains`` is sorted alphabetically regardless
-        of insertion order.
+    def test_publisher_domains_sorted_alphabetically(self, integration_db):
+        """Publisher domains are sorted alphabetically regardless of insertion
+        order.
 
         Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
         """
-        from unittest.mock import MagicMock
+        from src.core.database.repositories.uow import TenantConfigUoW
 
-        from core.platforms._capabilities_envelope import _publisher_domains_for_current_tenant
-
-        with ProductEnv(tenant_id="pub-dom-t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="pub-dom-t1", subdomain="pub-dom-t1")
+        tenant_id = "pub-dom-t1"
+        with ProductEnv(tenant_id=tenant_id, principal_id="p1"):
+            tenant = TenantFactory(tenant_id=tenant_id, subdomain=tenant_id)
             for domain in ["zeta.com", "alpha.com", "mike.com"]:
                 PublisherPartnerFactory(tenant=tenant, publisher_domain=domain)
 
-            tenant_stub = MagicMock()
-            tenant_stub.id = "pub-dom-t1"
-            with patch("core.platforms._capabilities_envelope.current_tenant", return_value=tenant_stub):
-                domains = _publisher_domains_for_current_tenant()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            domains = uow.tenant_config.list_publisher_domains()
 
         assert domains == ["alpha.com", "mike.com", "zeta.com"]
 
-    @pytest.mark.asyncio
-    async def test_publisher_domains_empty_when_no_partners(self, integration_db):
-        """Tenant with zero ``PublisherPartner`` rows yields an empty list so
-        the capabilities patch omits the portfolio block (schema requires
-        ``min_length=1`` on ``publisher_domains``).
+    def test_publisher_domains_empty_when_no_partners(self, integration_db):
+        """Tenant with zero ``PublisherPartner`` rows yields an empty list.
 
         Covers: CONSTR-PUBLISHER-DOMAINS-PORTFOLIO-01
         """
-        from unittest.mock import MagicMock
+        from src.core.database.repositories.uow import TenantConfigUoW
 
-        from core.platforms._capabilities_envelope import _publisher_domains_for_current_tenant
+        tenant_id = "pub-dom-t2"
+        with ProductEnv(tenant_id=tenant_id, principal_id="p1"):
+            TenantFactory(tenant_id=tenant_id, subdomain=tenant_id)
 
-        with ProductEnv(tenant_id="pub-dom-t2", principal_id="p1") as env:
-            TenantFactory(tenant_id="pub-dom-t2", subdomain="pub-dom-t2")
-
-            tenant_stub = MagicMock()
-            tenant_stub.id = "pub-dom-t2"
-            with patch("core.platforms._capabilities_envelope.current_tenant", return_value=tenant_stub):
-                domains = _publisher_domains_for_current_tenant()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            domains = uow.tenant_config.list_publisher_domains()
 
         assert domains == []

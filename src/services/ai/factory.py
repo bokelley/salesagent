@@ -4,6 +4,8 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from src.core.embedded_runtime import publisher_owns_ai_services
+from src.core.exceptions import AdCPNotImplementedInEmbeddedError
 from src.services.ai.config import (
     TenantAIConfig,
     build_model_string,
@@ -101,6 +103,12 @@ class AIServiceFactory:
         Raises:
             ValueError: If no API key is available for the configured provider
         """
+        if not publisher_owns_ai_services():
+            raise AdCPNotImplementedInEmbeddedError(
+                "Built-in AI services are managed by the embedding storefront for this instance.",
+                details={"capability": "ai_services"},
+            )
+
         # Parse tenant config if provided as dict
         if isinstance(tenant_ai_config, dict):
             config = TenantAIConfig.model_validate(tenant_ai_config)
@@ -217,6 +225,9 @@ class AIServiceFactory:
         Returns:
             True if AI calls can be made, False otherwise
         """
+        if not publisher_owns_ai_services():
+            return False
+
         if isinstance(tenant_ai_config, dict):
             config = TenantAIConfig.model_validate(tenant_ai_config)
         elif tenant_ai_config:
@@ -241,6 +252,8 @@ class AIServiceFactory:
         Returns:
             dict with effective provider, model, and whether API key is set
         """
+        ai_services_enabled = publisher_owns_ai_services()
+
         if isinstance(tenant_ai_config, dict):
             config = TenantAIConfig.model_validate(tenant_ai_config)
         elif tenant_ai_config:
@@ -250,7 +263,7 @@ class AIServiceFactory:
 
         provider = config.provider or self._platform_defaults["provider"]
         model = config.model or self._platform_defaults["model"]
-        has_api_key = bool(config.api_key or self._platform_defaults.get("api_key"))
+        has_api_key = ai_services_enabled and bool(config.api_key or self._platform_defaults.get("api_key"))
         has_logfire = bool(config.logfire_token or self._platform_defaults.get("logfire_token"))
 
         return {
@@ -258,6 +271,7 @@ class AIServiceFactory:
             "model": model,
             "has_api_key": has_api_key,
             "has_logfire": has_logfire,
+            "ai_services_enabled": ai_services_enabled,
             "settings": config.settings,
             "source": "tenant" if config.provider else "platform",
         }

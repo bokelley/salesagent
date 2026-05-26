@@ -28,6 +28,7 @@
             <strong>⚠️ Manual Approval Required</strong>
             <p style="margin: 0.5rem 0 0 0;">{{ status_message.message if status_message else "This media buy needs approval before it can proceed." }}</p>
         </div>
+        {% if publisher_owns('campaign_approval') %}
         <div style="display: flex; gap: 0.5rem;">
             <form method="POST" action="{{ url_for('operations.approve_media_buy', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}" style="display: inline;" onsubmit="return handleApprovalSubmit(event, this)">
                 <input type="hidden" name="action" value="approve">
@@ -39,6 +40,7 @@
                 ❌ Reject
             </button>
         </div>
+        {% endif %}
     </div>
 </div>
 {% elif status_message and status_message.type == 'pending_other' %}

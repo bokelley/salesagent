@@ -800,6 +800,7 @@
 {% endif %}
 
 <!-- Three-stage business framing: Incoming · Running · Pipeline -->
+{% if not embedded_view %}
 {% set inc = ledger.incoming %}
 {% set run = ledger.running %}
 {% set pl = ledger.pipeline %}
@@ -913,6 +914,7 @@
         {% endfor %}
     </div>
 </div>
+{% endif %}
 
 <!-- Revenue chart + Needs your attention -->
 <div class="ld-chart-row">

@@ -8,6 +8,7 @@ from adcp.types import ContextObject
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW
+from src.core.embedded_runtime import publisher_owns_creative_approval
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
@@ -29,6 +30,10 @@ def _create_sync_workflow_steps(
     Creates a persistent async context and one workflow step per creative,
     plus ``ObjectWorkflowMapping`` records linking each creative to its step.
     """
+    if not publisher_owns_creative_approval():
+        logger.info("Skipping creative approval workflow steps because storefront owns creative_approval")
+        return
+
     from src.core.context_manager import get_context_manager
 
     ctx_manager = get_context_manager()
@@ -124,6 +129,10 @@ def _send_creative_notifications(
     Only sends for ``require-human`` approval mode.  For ``ai-powered`` mode,
     notifications are sent asynchronously after AI review completes.
     """
+    if not publisher_owns_creative_approval():
+        logger.info("Skipping creative approval notifications because storefront owns creative_approval")
+        return
+
     # Note: For ai-powered mode, notifications are sent AFTER AI review completes (with AI reasoning)
     # Only send immediate notifications for require-human mode or existing creatives with AI review results
     logger.info(
