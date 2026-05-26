@@ -568,7 +568,7 @@ class Product(Base, JSONValidatorMixin):
         """Get GAM implementation config from inventory profile (if set) or product itself.
 
         Returns implementation_config dict with GAM-specific settings.
-        When inventory_profile_id is set, builds config from profile's inventory (auto-updates).
+        When inventory_profile_id is set, overlays profile inventory onto product config (auto-updates).
         When inventory_profile_id is null, returns product's own config (legacy).
 
         Key fields for GAM adapter:
@@ -576,15 +576,21 @@ class Product(Base, JSONValidatorMixin):
         - targeted_placement_ids: List of GAM placement IDs
         - include_descendants: Whether to include child ad units
         """
+        config = dict(self.implementation_config or {})
         if self.inventory_profile_id and self.inventory_profile:
             profile = self.inventory_profile
-            # Build config from profile's inventory configuration
-            return {
-                "targeted_ad_unit_ids": profile.inventory_config.get("ad_units", []),
-                "targeted_placement_ids": profile.inventory_config.get("placements", []),
-                "include_descendants": profile.inventory_config.get("include_descendants", True),
-            }
-        return self.implementation_config or {}
+            inventory_config = profile.inventory_config or {}
+            ad_units = inventory_config.get("ad_units") or []
+            placements = inventory_config.get("placements") or []
+
+            if ad_units:
+                config["targeted_ad_unit_ids"] = [str(ad_unit_id) for ad_unit_id in ad_units]
+            if placements:
+                config["targeted_placement_ids"] = [str(placement_id) for placement_id in placements]
+            if "include_descendants" in inventory_config:
+                config["include_descendants"] = bool(inventory_config.get("include_descendants"))
+
+        return config
 
     __table_args__ = (
         Index("idx_products_tenant", "tenant_id"),

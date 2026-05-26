@@ -500,8 +500,9 @@ class GoogleAdManager(AdServerAdapter):
                 product = db_session.scalars(stmt).first()
                 if product:
                     logger.info(f"Found product: {product.product_id} (name={product.name})")
-                    # Start with product's implementation_config
-                    impl_config = product.implementation_config.copy() if product.implementation_config else {}
+                    # Start with the effective config so profile-backed products
+                    # inherit current inventory targeting from their bundle.
+                    impl_config = product.effective_implementation_config.copy()
                     logger.info(f"Product implementation_config: {impl_config}")
 
                     # Load inventory mappings from ProductInventoryMapping table

@@ -145,6 +145,39 @@ def test_gam_create_profile_backed_product_uses_profile_property_scope(client, f
     assert product.effective_properties == profile.publisher_properties
 
 
+def test_profile_backed_product_effective_gam_config_uses_profile_inventory(factory_session):
+    """Profile-backed products keep line-item settings while inheriting bundle inventory."""
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        inventory_config={
+            "ad_units": ["23313239368"],
+            "placements": ["31999908"],
+            "include_descendants": False,
+        },
+    )
+    product = ProductFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        inventory_profile_id=profile.id,
+        implementation_config={
+            "line_item_type": "PRICE_PRIORITY",
+            "priority": 12,
+            "creative_placeholders": [{"width": 300, "height": 250, "expected_creative_count": 1}],
+        },
+    )
+    factory_session.commit()
+
+    effective_config = product.effective_implementation_config
+
+    assert effective_config["line_item_type"] == "PRICE_PRIORITY"
+    assert effective_config["priority"] == 12
+    assert effective_config["targeted_ad_unit_ids"] == ["23313239368"]
+    assert effective_config["targeted_placement_ids"] == ["31999908"]
+    assert effective_config["include_descendants"] is False
+
+
 def test_gam_product_form_hides_product_property_selector_when_profile_selected(client, factory_session):
     """The GAM product UI points profile-backed products to the profile for properties."""
     tenant = TenantFactory(ad_server="google_ad_manager")

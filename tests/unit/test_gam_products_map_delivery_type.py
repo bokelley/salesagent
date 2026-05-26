@@ -80,6 +80,7 @@ def test_products_map_includes_delivery_type():
     mock_product.product_id = "prod_abc"
     mock_product.delivery_type = "guaranteed"
     mock_product.implementation_config = {"targeted_ad_unit_ids": ["12345"]}
+    mock_product.effective_implementation_config = {"targeted_ad_unit_ids": ["12345"]}
 
     # Create a MediaPackage
     mock_package = Mock()
