@@ -339,15 +339,21 @@ def _format_display_summary(formats: list[dict], limit: int = 2) -> list[str]:
 
 def _authorized_publisher_domains(session, tenant_id: str, tenant: Tenant) -> set[str]:
     """Publisher domains this tenant can author into buyer-visible bundles."""
-    domains = {tenant.primary_domain} if tenant.primary_domain else set()
-    domains.update(
-        d
-        for d in session.scalars(
-            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
-        ).all()
-        if d
+    return set(_bundle_authorable_domains(session, tenant_id, tenant))
+
+
+def _bundle_authorable_domains(session, tenant_id: str, tenant: Tenant) -> list[str]:
+    """Publisher domains available to the wholesale-product inventory layer."""
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    repo = TenantConfigRepository(session, tenant_id)
+    discovered_domains = [prop.publisher_domain for prop in repo.list_authorized_properties() if prop.publisher_domain]
+    discovered_domains.extend(
+        partner.publisher_domain
+        for partner in repo.list_publisher_partners()
+        if partner.publisher_domain and partner.is_verified
     )
-    return domains
+    return _bundle_property_domains(tenant, discovered_domains)
 
 
 def _bundle_property_domains(tenant: Tenant, discovered_domains: Sequence[str]) -> list[str]:
@@ -1142,10 +1148,7 @@ def add_inventory_profile(tenant_id: str):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-        domain_rows = session.scalars(
-            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
-        ).all()
-        tenant_domains = _bundle_property_domains(tenant, domain_rows)
+        tenant_domains = _bundle_authorable_domains(session, tenant_id, tenant)
 
         seed_placement = (request.args.get("seed_placement") or "").strip()
         profile = InventoryProfile(
@@ -1395,15 +1398,10 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-        # Distinct publisher_domains the tenant can author against (#532).
-        # AuthorizedProperty already enforces one row per (tenant, property)
-        # under a domain. We union with the tenant's primary_domain so newly
-        # provisioned tenants (no AuthorizedProperty rows yet) still see at
-        # least one valid option.
-        domain_rows = session.scalars(
-            select(AuthorizedProperty.publisher_domain).where(AuthorizedProperty.tenant_id == tenant_id).distinct()
-        ).all()
-        tenant_domains = _bundle_property_domains(tenant, domain_rows)
+        # Domains the tenant can author against (#532). Verified
+        # PublisherPartner rows are enough for all-property/tag bundle binding;
+        # specific property IDs still require hydrated AuthorizedProperty rows.
+        tenant_domains = _bundle_authorable_domains(session, tenant_id, tenant)
 
         # Initial tag-mode rows for progressive-enhancement render (#532).
         # If the bundle is in tag mode, one row per existing publisher_properties

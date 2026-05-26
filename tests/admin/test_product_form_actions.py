@@ -6,11 +6,14 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from src.admin.app import create_app
+from src.core.database.models import Product
 from tests.factories import (
     AuthorizedPropertyFactory,
     GAMInventoryFactory,
+    InventoryProfileFactory,
     PricingOptionFactory,
     PrincipalFactory,
     ProductFactory,
@@ -88,6 +91,82 @@ def test_gam_edit_product_create_new_profile_links_to_existing_route(client, fac
     assert 'target="_blank"' in body
     assert 'rel="noopener"' in body
     assert 'onclick="openInventoryProfileCreator()"' not in body
+
+
+def test_gam_create_profile_backed_product_uses_profile_property_scope(client, factory_session):
+    """A selected inventory profile supplies publisher properties for GAM products."""
+    from werkzeug.datastructures import MultiDict
+
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    PropertyTagFactory(tenant=tenant, tenant_id=tenant.tenant_id, tag_id="all_inventory", name="All Inventory")
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        publisher_properties=[
+            {
+                "publisher_domain": tenant.primary_domain,
+                "property_tags": ["all_inventory"],
+                "selection_type": "by_tag",
+            }
+        ],
+    )
+    factory_session.commit()
+
+    _auth_session(client, tenant.tenant_id)
+
+    response = client.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=MultiDict(
+            [
+                ("product_id", "profile_backed_product"),
+                ("name", "Profile Backed Product"),
+                ("description", "Uses inventory profile publisher properties"),
+                ("inventory_profile_id", str(profile.id)),
+                ("pricing_model_0", "cpm_fixed"),
+                ("currency_0", "USD"),
+                ("rate_0", "12.50"),
+            ]
+        ),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, response.get_data(as_text=True)
+    factory_session.expire_all()
+    product = factory_session.scalars(
+        select(Product).where(
+            Product.tenant_id == tenant.tenant_id,
+            Product.product_id == "profile_backed_product",
+        )
+    ).first()
+    assert product is not None
+    assert product.inventory_profile_id == profile.id
+    assert product.properties is None
+    assert product.property_tags == []
+    assert product.effective_properties == profile.publisher_properties
+
+
+def test_gam_product_form_hides_product_property_selector_when_profile_selected(client, factory_session):
+    """The GAM product UI points profile-backed products to the profile for properties."""
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    profile = InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id)
+    product = ProductFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        inventory_profile_id=profile.id,
+        property_tags=[],
+    )
+    PricingOptionFactory(product=product, tenant_id=tenant.tenant_id, product_id=product.product_id)
+    factory_session.commit()
+
+    _auth_session(client, tenant.tenant_id)
+
+    response = client.get(f"/tenant/{tenant.tenant_id}/products/{product.product_id}/edit")
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_data(as_text=True)
+    assert 'id="profile-publisher-properties-note"' in body
+    assert "Publisher properties come from the selected inventory profile" in body
+    assert 'id="product-publisher-properties-section" style="display: none;"' in body
 
 
 def test_publishers_copy_button_preserves_default_label_across_repeated_clicks():

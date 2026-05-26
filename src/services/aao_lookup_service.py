@@ -53,6 +53,25 @@ _PLATFORM_AGENT_HOSTS = frozenset(h.strip().lower() for h in _PLATFORM_AGENT_HOS
 _DIRECTORY_MAX_PAGES = 50
 
 
+def is_shared_platform_agent_url(agent_url: str | None) -> bool:
+    """Return true when an agent URL is a shared embedded platform host."""
+    if not agent_url:
+        return False
+
+    from urllib.parse import urlparse
+
+    parsed = urlparse(agent_url)
+    try:
+        _ = parsed.port
+    except ValueError:
+        return False
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return False
+    return _normalize_hostname_for_compare(hostname) in _PLATFORM_AGENT_HOSTS
+
+
 PublisherPartnerStatusKind = Literal[
     "authorized",
     "unbound",

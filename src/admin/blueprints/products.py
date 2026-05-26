@@ -46,6 +46,18 @@ def _catalog_acl_notification_scope(
     return sorted(set(before) | set(after))
 
 
+def _apply_inventory_profile_property_scope(product: Product) -> None:
+    """Let the linked inventory profile supply buyer-visible publisher properties."""
+    product.properties = None
+    product.property_ids = None
+    product.property_tags = []
+
+
+def _profile_backed_product_property_kwargs() -> dict[str, list[str]]:
+    """Product-column placeholder used when inventory profile owns property scope."""
+    return {"property_tags": []}
+
+
 def _format_to_dict(fmt: Format) -> dict:
     """Convert a Format object to a frontend-compatible dict.
 
@@ -1043,7 +1055,9 @@ def add_product(tenant_id):
                 # Handle property authorization (AdCP requirement)
                 # Default to empty property_tags if not specified (satisfies DB constraint)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
+                if product_kwargs.get("inventory_profile_id"):
+                    product_kwargs.update(_profile_backed_product_property_kwargs())
+                elif property_mode == "tags":
                     # Get selected property tags (format: "domain:tag")
                     selected_tags = request.form.getlist("selected_property_tags")
 
@@ -1537,7 +1551,9 @@ def edit_product(tenant_id, product_id):
 
                 # Handle publisher properties (AdCP requirement)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
+                if product.inventory_profile_id:
+                    _apply_inventory_profile_property_scope(product)
+                elif property_mode == "tags":
                     # Get selected property tags (format: "domain:tag")
                     selected_tags = request.form.getlist("selected_property_tags")
                     if selected_tags:

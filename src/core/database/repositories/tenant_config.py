@@ -58,6 +58,15 @@ class TenantConfigRepository:
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
         return list(self._session.scalars(stmt).all())
 
+    def list_authorized_properties(self) -> list[AuthorizedProperty]:
+        """Get authorized properties for the tenant."""
+        stmt = (
+            select(AuthorizedProperty)
+            .filter_by(tenant_id=self._tenant_id)
+            .order_by(AuthorizedProperty.name.asc(), AuthorizedProperty.property_id.asc())
+        )
+        return list(self._session.scalars(stmt).all())
+
     def invalidate_publisher_partner_aao_statuses(self, reason: str) -> None:
         """Clear cached AAO status for all publisher partners in this tenant."""
         tenant = self.get_tenant()

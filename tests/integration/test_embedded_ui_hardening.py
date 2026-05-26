@@ -296,6 +296,7 @@ class TestPublisherPartnershipsEditableOnEmbedded:
         assert "showAddPublisherModal()" in body
         assert 'id="add-publisher-modal"' in body
         assert "syncAllPublishers()" in body
+        assert "syncFromAaoDirectory()" not in body
 
     def test_open_tenant_renders_publisher_partnerships_with_edit_controls(self, embedded_client, open_tenant_id):
         resp = embedded_client.get(f"/tenant/{open_tenant_id}/publishers/")
@@ -303,6 +304,7 @@ class TestPublisherPartnershipsEditableOnEmbedded:
         body = resp.get_data(as_text=True)
         assert "<h2>Publisher partnerships</h2>" in body
         assert "showAddPublisherModal()" in body
+        assert "syncFromAaoDirectory()" in body
 
     def test_settings_page_no_longer_renders_publishers_section(self, embedded_client, embedded_tenant_id):
         """The in-page Settings section is gone — the tab data-attribute

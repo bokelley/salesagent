@@ -18,6 +18,8 @@ def insert_embedded_test_tenant(
     *,
     is_embedded: bool,
     external_source: str | None = None,
+    external_org_id: str | None = None,
+    public_agent_url: str | None = None,
     name_prefix: str = "t_emb",
 ) -> str:
     """Insert a minimal Tenant + USD CurrencyLimit and return its id.
@@ -42,7 +44,8 @@ def insert_embedded_test_tenant(
             policy_settings={},
             is_embedded=is_embedded,
             external_source=external_source if is_embedded else None,
-            external_org_id=f"org_{uuid.uuid4().hex[:8]}" if is_embedded else None,
+            external_org_id=external_org_id or (f"org_{uuid.uuid4().hex[:8]}" if is_embedded else None),
+            public_agent_url=public_agent_url,
         )
         session.add(tenant)
         session.add(CurrencyLimit(tenant_id=tid, currency_code="USD"))

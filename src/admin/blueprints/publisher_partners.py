@@ -653,6 +653,22 @@ def sync_publisher_partners_from_directory(tenant_id: str) -> Response | tuple[R
                     500,
                 )
 
+            from src.services.aao_lookup_service import is_shared_platform_agent_url
+
+            if tenant.is_embedded and is_shared_platform_agent_url(agent_url):
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "AAO directory sync is disabled for embedded tenants using a shared platform "
+                                "agent URL because the directory lookup is platform-wide, not account-scoped. "
+                                "Add publisher domains directly or refresh known publishers."
+                            )
+                        }
+                    ),
+                    409,
+                )
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:

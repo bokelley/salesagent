@@ -230,12 +230,19 @@ Target users based on local weather conditions for maximum relevance.</div>
         </div>
 
         <!-- Publisher Properties -->
-        <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Publisher Properties (AdCP)</h3>
-        <div class="alert alert-info">
-            <strong>Required:</strong> Specify which properties this product covers so buyers can validate against their authorized properties.
+        {% set has_inventory_profile = (form_data and form_data.inventory_profile_id) or (product and product.inventory_profile_id) %}
+        <div id="profile-publisher-properties-note" class="alert alert-info" style="display: {{ 'block' if has_inventory_profile else 'none' }}; margin-top: 2rem;">
+            <strong>Publisher properties come from the selected inventory profile.</strong>
+            Edit the profile to change which publisher properties this wholesale product covers.
         </div>
+        <div id="product-publisher-properties-section" style="display: {{ 'none' if has_inventory_profile else 'block' }};">
+            <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Publisher Properties (AdCP)</h3>
+            <div class="alert alert-info">
+                <strong>Required:</strong> Specify which properties this product covers so buyers can validate against their authorized properties.
+            </div>
 
-        {% include 'components/publisher_properties_selector.html' %}
+            {% include 'components/publisher_properties_selector.html' %}
+        </div>
 
         <!-- Principal Access Control -->
         <h3 style="margin-top: 2rem; border-bottom: 2px solid var(--sa-primary); padding-bottom: 0.5rem;">Principal Access Control</h3>
@@ -1233,6 +1240,8 @@ function handleProfileChange(profileId) {
     const manualSection = document.getElementById('manual-inventory-section');
     const formatsSection = document.getElementById('creative-formats-section');
     const profilePreview = document.getElementById('inventory-profile-preview');
+    const publisherPropertiesSection = document.getElementById('product-publisher-properties-section');
+    const publisherPropertiesNote = document.getElementById('profile-publisher-properties-note');
 
     console.log('Found elements:', {
         manualSection: !!manualSection,
@@ -1247,6 +1256,8 @@ function handleProfileChange(profileId) {
         console.log('Hiding manual sections, showing profile preview');
         if (manualSection) manualSection.style.display = 'none';
         if (formatsSection) formatsSection.style.display = 'none';
+        if (publisherPropertiesSection) publisherPropertiesSection.style.display = 'none';
+        if (publisherPropertiesNote) publisherPropertiesNote.style.display = 'block';
         if (profilePreview) {
             profilePreview.style.display = 'block';
             loadProfilePreview(profileId);
@@ -1256,6 +1267,8 @@ function handleProfileChange(profileId) {
         console.log('Showing manual sections, hiding profile preview');
         if (manualSection) manualSection.style.display = 'block';
         if (formatsSection) formatsSection.style.display = 'block';
+        if (publisherPropertiesSection) publisherPropertiesSection.style.display = 'block';
+        if (publisherPropertiesNote) publisherPropertiesNote.style.display = 'none';
         if (profilePreview) profilePreview.style.display = 'none';
     }
 }

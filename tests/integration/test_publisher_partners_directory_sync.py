@@ -28,12 +28,23 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
 
 
+def _response_json_and_status(response):
+    if isinstance(response, tuple):
+        flask_response, status = response[0], response[1]
+        return flask_response.get_json(), status
+    return response.get_json(), response.status_code
+
+
 @contextmanager
-def _authorized_request_context(app):
-    with app.test_request_context():
+def _authorized_request_context(app, *, headers: dict[str, str] | None = None):
+    with app.test_request_context(method="POST", headers=headers or {}):
+        session["authenticated"] = True
+        session["user"] = {"email": "test@example.com", "is_super_admin": True}
+        session["email"] = "test@example.com"
         session["test_user"] = "test@example.com"
         session["test_user_role"] = "super_admin"
         session["test_user_name"] = "Test Admin"
+        session["test_tenant_id"] = "unused-super-admin"
         yield
 
 
@@ -204,3 +215,40 @@ class TestSyncFromDirectoryUpsert:
             ).first()
             assert survivor is not None
             assert survivor.is_verified is False
+
+    def test_embedded_shared_agent_url_rejects_directory_sync_without_fetching(self, integration_db):
+        from src.admin.app import create_app
+        from src.admin.blueprints.publisher_partners import (
+            sync_publisher_partners_from_directory,
+        )
+        from tests.integration._embedded_helpers import cleanup_embedded_test_tenant, insert_embedded_test_tenant
+
+        tenant_id = insert_embedded_test_tenant(
+            is_embedded=True,
+            external_org_id="org-directory-sync",
+            external_source="scope3",
+            public_agent_url="https://interchange.io",
+            name_prefix="directory_sync",
+        )
+
+        app = create_app()
+        try:
+            headers = {
+                "X-Identity-Email": "operator@example.com",
+                "X-Identity-Org-Id": "org-directory-sync",
+                "X-Identity-Role": "admin",
+                "X-Identity-Source": "scope3",
+            }
+            with _authorized_request_context(app, headers=headers):
+                with patch(
+                    "src.services.aao_lookup_service.fetch_publishers_from_directory",
+                    new=AsyncMock(),
+                ) as directory_fetch:
+                    response = sync_publisher_partners_from_directory(tenant_id)
+
+            body, status = _response_json_and_status(response)
+            assert status == 409
+            assert "platform-wide" in body["error"]
+            directory_fetch.assert_not_awaited()
+        finally:
+            cleanup_embedded_test_tenant(tenant_id)
