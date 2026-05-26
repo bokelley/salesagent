@@ -120,8 +120,10 @@ echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
 #   while the local DB has dropped it — ``--allow-unused-ignores`` keeps
 #   both environments green without thrashing the list.
 # Remove either when upstream ships a fix.
+# ``uv-secure`` is executed through ``uvx``; do not audit that transient tool
+# environment here. This check is for the project's lockfile dependencies.
 IGNORED_VULNS="GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183"
-if uvx uv-secure --no-check-uv-tool --allow-unused-ignores --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
+if uvx uv-secure --no-check-uv-tool --no-check-uv-secure --allow-unused-ignores --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
     echo -e "${GREEN}Security audit passed${NC}"
 else
     echo -e "${RED}Security audit FAILED — run: uvx uv-secure --ignore-vulns $IGNORED_VULNS${NC}"
