@@ -11,7 +11,6 @@ from adcp.types import Format as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.tracing import traced
 
 logger = logging.getLogger(__name__)
 
@@ -36,51 +35,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.format_cache import canonical_format_matches
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
-
-
-def _infer_asset_type(asset_id: str) -> str:
-    """Infer asset type from asset ID naming convention.
-
-    Args:
-        asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
-
-    Returns:
-        Asset type string (image, video, text, url)
-    """
-    asset_lower = asset_id.lower()
-    if "image" in asset_lower or "logo" in asset_lower:
-        return "image"
-    elif "video" in asset_lower or "youtube" in asset_lower:
-        return "video"
-    elif "url" in asset_lower or "click" in asset_lower:
-        return "url"
-    elif "html" in asset_lower:
-        return "html"
-    else:
-        return "text"  # Default to text for headlines, body, captions, etc.
-
-
-# Each adcp Assets variant uses a Literal discriminator for asset_type.
-# Map asset type strings to the correct class.
-_ASSET_TYPE_TO_CLASS: dict[str, type] = {
-    "image": ImageFormatAsset,
-    "video": VideoFormatAsset,
-    "audio": AudioFormatAsset,
-    "text": TextFormatAsset,
-    "html": HtmlFormatAsset,
-    "url": UrlFormatAsset,
-}
-
-
-def _make_asset(asset_id: str, asset_type: str, required: bool) -> Any:
-    """Build the correct FormatAsset variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
-    return cls(
-        item_type="individual",
-        asset_id=asset_id,
-        asset_type=asset_type,
-        required=required,
-    )
+from src.core.tracing import traced
 
 
 @traced

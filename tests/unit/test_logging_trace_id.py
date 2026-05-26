@@ -16,8 +16,13 @@ def test_json_formatter_includes_trace_id_when_span_active():
     with patch("src.core.logging_config.trace.get_current_span", return_value=mock_span):
         formatter = JSONFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="hello", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="hello",
+            args=(),
+            exc_info=None,
         )
         output = json.loads(formatter.format(record))
 
@@ -31,8 +36,13 @@ def test_json_formatter_omits_trace_id_when_no_span():
     with patch("src.core.logging_config.trace.get_current_span", return_value=mock_span):
         formatter = JSONFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="hello", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="hello",
+            args=(),
+            exc_info=None,
         )
         output = json.loads(formatter.format(record))
 
@@ -43,8 +53,13 @@ def test_json_formatter_omits_trace_id_when_otel_not_available():
     with patch("src.core.logging_config.trace", None):
         formatter = JSONFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="hello", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="hello",
+            args=(),
+            exc_info=None,
         )
         output = json.loads(formatter.format(record))
 
