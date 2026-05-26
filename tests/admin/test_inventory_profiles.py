@@ -129,9 +129,10 @@ class TestInventoryProfileCreate:
         assert "Create bundle" in html
         assert "Summary" in html
         assert "Properties" in html
-        assert "all authorized properties" in html
-        assert "Publisher domain" not in html
-        assert "+ Add another site/app" not in html
+        assert "Publisher domain" in html
+        assert "Add domain" in html
+        assert "Domain-first AAO lookup" in html
+        assert "all authorized properties" not in html
         assert 'type="hidden" name="publisher_domain[]"' in html
 
     def test_create_profile_with_tags_saves_to_db(self, client, test_tenant):
@@ -453,9 +454,9 @@ class TestInventoryProfileCreate:
         _auth_session(client, tenant.tenant_id)
         form_response = client.get(f"/tenant/{tenant.tenant_id}/inventory-profiles/add")
         form_html = form_response.data.decode()
-        assert "all authorized properties" in form_html
-        assert "Site/app" not in form_html
-        assert "+ Add another site/app" not in form_html
+        assert "Publisher domain" in form_html
+        assert "Add domain" in form_html
+        assert "Domain-first AAO lookup" in form_html
 
         response = client.post(
             f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
@@ -667,8 +668,8 @@ class TestInventoryProfileEdit:
         assert "Saving..." in html
         assert "KNOWN_PROPERTY_TAGS" in html
         assert "Properties" in html
-        assert "all authorized properties" in html
-        assert "Publisher domain" not in html
+        assert "Publisher domain" in html
+        assert "Domain-first AAO lookup" in html
         assert "Preview" in html  # action moved into formbar
         assert "Duplicate" in html  # action moved into formbar
         # Back link to list page
@@ -964,6 +965,99 @@ class TestInventoryProfileMultiDomain:
             by_domain = {p["publisher_domain"]: p for p in saved.publisher_properties}
             assert sorted(by_domain[tenant.primary_domain]["property_tags"]) == ["news", "premium"]
             assert sorted(by_domain["sports.example.com"]["property_tags"]) == ["premium", "sports"]
+
+    def test_edit_post_with_full_publisher_properties_persists_mixed_tags_and_ids(
+        self, client, test_tenant, factory_session
+    ):
+        """Canonical publisher_properties JSON supports per-domain tags and IDs."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Full JSON", profile_id="full_json")
+        tenant = factory_session.get(Tenant, test_tenant)
+        AuthorizedPropertyFactory(
+            tenant=tenant,
+            tenant_id=test_tenant,
+            publisher_domain="sports.example.com",
+            property_id="sports_home",
+            name="Sports Home",
+        )
+        factory_session.commit()
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data={
+                "name": "Full JSON",
+                "profile_id": "full_json",
+                "description": "domain-first",
+                "targeted_ad_unit_ids": "[]",
+                "targeted_placement_ids": "[]",
+                "formats": json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}]),
+                "property_mode": "full",
+                "publisher_properties": json.dumps(
+                    [
+                        {
+                            "publisher_domain": tenant.primary_domain,
+                            "property_tags": ["all_inventory"],
+                            "selection_type": "by_tag",
+                        },
+                        {
+                            "publisher_domain": "sports.example.com",
+                            "property_ids": ["sports_home"],
+                            "selection_type": "by_id",
+                        },
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            by_domain = {p["publisher_domain"]: p for p in saved.publisher_properties}
+            assert by_domain[tenant.primary_domain]["property_tags"] == ["all_inventory"]
+            assert by_domain["sports.example.com"]["property_ids"] == ["sports_home"]
+
+    def test_edit_post_with_full_publisher_properties_rejects_unknown_property_id(
+        self, client, test_tenant, factory_session
+    ):
+        """Tampered property IDs must already exist for that publisher domain."""
+        _auth_session(client, test_tenant)
+        pk = _create_sample_profile(test_tenant, name="Bad Full JSON", profile_id="bad_full_json")
+        tenant = factory_session.get(Tenant, test_tenant)
+        AuthorizedPropertyFactory(
+            tenant=tenant,
+            tenant_id=test_tenant,
+            publisher_domain="sports.example.com",
+            property_id="sports_home",
+            name="Sports Home",
+        )
+        factory_session.commit()
+
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{pk}/edit",
+            data={
+                "name": "Bad Full JSON",
+                "profile_id": "bad_full_json",
+                "targeted_ad_unit_ids": "[]",
+                "targeted_placement_ids": "[]",
+                "formats": json.dumps([{"agent_url": "https://x", "id": "display_300x250_image"}]),
+                "property_mode": "full",
+                "publisher_properties": json.dumps(
+                    [
+                        {
+                            "publisher_domain": "sports.example.com",
+                            "property_ids": ["attacker_property"],
+                            "selection_type": "by_id",
+                        }
+                    ]
+                ),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+        with get_db_session() as session:
+            saved = session.get(InventoryProfile, pk)
+            assert saved.publisher_properties[0]["property_tags"] == ["all_inventory"]
 
     def test_edit_post_rejects_unauthorized_domain_row(self, client, test_tenant):
         """Tampered edit POST cannot persist an unowned publisher domain."""

@@ -478,9 +478,10 @@ class DirectoryPublisher:
 class DirectorySyncResult:
     """Discovery snapshot from the AAO directory's inverse-lookup endpoint.
 
-    Returned by :func:`fetch_publishers_from_directory` and consumed by the
-    `POST /publisher-partners/sync-from-directory` endpoint to upsert
-    :class:`PublisherPartner` rows.
+    Returned by :func:`fetch_publishers_from_directory`. The admin UI no
+    longer uses this as a setup primitive because embedded tenants can share
+    agent URLs; keep the client helper for low-level SDK coverage and possible
+    future offline tooling.
 
     ``publishers`` carries the full paginated set the directory has indexed
     for our agent_url. ``directory_indexed_at`` is the directory's own

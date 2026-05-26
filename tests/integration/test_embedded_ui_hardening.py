@@ -304,7 +304,7 @@ class TestPublisherPartnershipsEditableOnEmbedded:
         body = resp.get_data(as_text=True)
         assert "<h2>Publisher partnerships</h2>" in body
         assert "showAddPublisherModal()" in body
-        assert "syncFromAaoDirectory()" in body
+        assert "syncFromAaoDirectory()" not in body
 
     def test_settings_page_no_longer_renders_publishers_section(self, embedded_client, embedded_tenant_id):
         """The in-page Settings section is gone — the tab data-attribute

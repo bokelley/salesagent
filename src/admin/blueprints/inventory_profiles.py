@@ -404,6 +404,76 @@ def _parse_tag_publisher_properties(form, default_domain: str, allowed_domains: 
     return publisher_props
 
 
+def _authorized_property_ids_by_domain(session, tenant_id: str) -> dict[str, set[str]]:
+    rows = session.execute(
+        select(AuthorizedProperty.publisher_domain, AuthorizedProperty.property_id).where(
+            AuthorizedProperty.tenant_id == tenant_id
+        )
+    ).all()
+    ids_by_domain: dict[str, set[str]] = {}
+    for domain, property_id in rows:
+        ids_by_domain.setdefault(domain, set()).add(property_id)
+    return ids_by_domain
+
+
+def _parse_full_publisher_properties_json(
+    raw: str,
+    allowed_domains: set[str],
+    authorized_property_ids_by_domain: dict[str, set[str]] | None = None,
+) -> list[dict]:
+    """Parse canonical publisher_properties JSON from the bundle editor."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid publisher properties JSON: {exc}") from exc
+
+    if not isinstance(parsed, list) or not parsed:
+        raise ValueError("Publisher properties are required")
+
+    publisher_props: list[dict] = []
+    for row_idx, prop in enumerate(parsed, start=1):
+        if not isinstance(prop, dict):
+            raise ValueError(f"Row {row_idx}: publisher property must be an object")
+        domain = (prop.get("publisher_domain") or "").strip()
+        if not domain:
+            raise ValueError(f"Row {row_idx}: publisher domain is required")
+        if domain not in allowed_domains:
+            raise ValueError(f"Row {row_idx}: publisher domain '{domain}' is not authorized for this tenant")
+
+        property_ids = [str(item).strip() for item in prop.get("property_ids") or [] if str(item).strip()]
+        property_tags = [str(item).strip().lower() for item in prop.get("property_tags") or [] if str(item).strip()]
+        if not property_ids and not property_tags:
+            raise ValueError(f"Row {row_idx} ({domain}): choose at least one property tag or ID")
+
+        if property_ids and authorized_property_ids_by_domain is not None:
+            valid_ids = authorized_property_ids_by_domain.get(domain, set())
+            invalid_ids = sorted(set(property_ids) - valid_ids)
+            if invalid_ids:
+                raise ValueError(f"Row {row_idx} ({domain}): invalid property IDs: {', '.join(invalid_ids)}")
+
+        bad = next((tag for tag in property_tags if not TAG_PATTERN.match(tag)), None)
+        if bad:
+            raise ValueError(f"Row {row_idx} ({domain}): tag '{bad}' must use lowercase, numbers, underscores.")
+
+        if property_ids:
+            publisher_props.append(
+                {
+                    "publisher_domain": domain,
+                    "property_ids": property_ids,
+                    "selection_type": "by_id",
+                }
+            )
+        else:
+            publisher_props.append(
+                {
+                    "publisher_domain": domain,
+                    "property_tags": property_tags,
+                    "selection_type": "by_tag",
+                }
+            )
+    return publisher_props
+
+
 def _get_inventory_summary(inventory_config: dict) -> str:
     """Generate human-readable inventory summary.
 
@@ -1019,6 +1089,7 @@ def add_inventory_profile(tenant_id: str):
 
                 publisher_domain = tenant.primary_domain
                 allowed_domains = _authorized_publisher_domains(prop_session, tenant_id, tenant)
+                authorized_property_ids_by_domain = _authorized_property_ids_by_domain(prop_session, tenant_id)
 
                 if property_mode == "tags":
                     try:
@@ -1062,9 +1133,13 @@ def add_inventory_profile(tenant_id: str):
                     publisher_properties_json = form_data.get("publisher_properties", "").strip()
                     if publisher_properties_json:
                         try:
-                            publisher_properties = json.loads(publisher_properties_json)
-                        except json.JSONDecodeError as e:
-                            flash(f"Invalid publisher properties JSON: {e}", "error")
+                            publisher_properties = _parse_full_publisher_properties_json(
+                                publisher_properties_json,
+                                allowed_domains,
+                                authorized_property_ids_by_domain,
+                            )
+                        except ValueError as exc:
+                            flash(str(exc), "error")
                             return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
                     if not publisher_properties:
@@ -1268,6 +1343,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
                 publisher_domain = tenant_obj.primary_domain
                 allowed_domains = _authorized_publisher_domains(session, tenant_id, tenant_obj)
+                authorized_property_ids_by_domain = _authorized_property_ids_by_domain(session, tenant_id)
 
                 if property_mode == "tags":
                     # Multi-domain (#532): each row in the editor is a
@@ -1327,10 +1403,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                     publisher_properties_json = form_data.get("publisher_properties", "").strip()
                     if publisher_properties_json:
                         try:
-                            publisher_properties = json.loads(publisher_properties_json)
+                            publisher_properties = _parse_full_publisher_properties_json(
+                                publisher_properties_json,
+                                allowed_domains,
+                                authorized_property_ids_by_domain,
+                            )
                             profile.publisher_properties = publisher_properties
-                        except json.JSONDecodeError as e:
-                            flash(f"Invalid publisher properties JSON: {e}", "error")
+                        except ValueError as exc:
+                            flash(str(exc), "error")
                             return redirect(
                                 url_for(
                                     "inventory_profiles.edit_inventory_profile",

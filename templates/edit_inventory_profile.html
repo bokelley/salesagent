@@ -307,28 +307,62 @@
                             <div>
                                 <h2 class="card__title">Properties</h2>
                                 <p class="card__sub">
-                                    This bundle is available across all authorized properties by default.
-                                    Map properties to placements in inventory setup when a bundle needs narrower scope.
+                                    Add publisher domains, then use AAO lookup to select the property tags or IDs this
+                                    bundle covers.
                                 </p>
                             </div>
                         </div>
                         <div class="card__body">
-                            <input type="hidden" name="property_mode" value="tags">
-                            <div class="prop-rows" id="prop-rows" hidden>
-                                {% for row in tag_rows %}
-                                    <div class="prop-row" data-prop-row>
-                                        <input type="hidden" name="publisher_domain[]" value="{{ row.domain or tenant.primary_domain }}">
-                                        <input type="hidden" name="property_tags[]" value="{{ row.tags or 'all_inventory' }}">
-                                    </div>
-                                {% endfor %}
+                            <input type="hidden" name="property_mode" value="full">
+                            <textarea id="publisher_properties" name="publisher_properties" hidden>{{ profile.publisher_properties | tojson | safe }}</textarea>
+
+                            <div class="domain-lookup">
+                                <div class="domain-lookup__input">
+                                    <label for="publisher-domain-input">Publisher domain</label>
+                                    <input type="text" id="publisher-domain-input" placeholder="espn.com" autocomplete="off">
+                                </div>
+                                <button type="button" class="btn btn-secondary" id="publisher-domain-add">
+                                    Add domain
+                                </button>
+                                <span class="domain-lookup__status" id="publisher-domain-status" aria-live="polite"></span>
                             </div>
+
+                            <div class="prop-rows" id="prop-rows"></div>
                             <div class="reuse-strip">
                                 <span class="reuse-strip__icon" aria-hidden="true">▦</span>
                                 <span>
-                                    <strong>All authorized properties</strong>
-                                    are included. Property-to-placement mapping belongs in inventory setup.
+                                    <strong>Domain-first AAO lookup</strong>
+                                    fetches cached adagents.json structure for the publisher you name. The saved
+                                    bundle stores explicit publisher domains plus property tags or IDs.
                                 </span>
                             </div>
+
+                            <template id="prop-row-template">
+                                <div class="prop-row prop-row--domain" data-prop-row>
+                                    <input type="hidden" name="publisher_domain[]" value="">
+                                    <div class="prop-row__main">
+                                        <div class="prop-row__top">
+                                            <div>
+                                                <div class="prop-row__domain"></div>
+                                                <div class="prop-row__status"></div>
+                                            </div>
+                                            <div class="prop-row__actions">
+                                                <button type="button" class="btn btn-sm btn-secondary" data-lookup-domain>
+                                                    Lookup
+                                                </button>
+                                                <button type="button" class="prop-row__remove" data-remove-row>
+                                                    Remove
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="seg prop-row__mode" aria-label="Property selection mode">
+                                            <button type="button" data-row-mode="tags">Tags</button>
+                                            <button type="button" data-row-mode="ids">Property IDs</button>
+                                        </div>
+                                        <div class="prop-row__editor" data-row-editor></div>
+                                    </div>
+                                </div>
+                            </template>
                         </div>
                     </div>
 
@@ -406,6 +440,8 @@ const INVENTORY_PICKER_LIMIT = {{ inventory_picker_limit | tojson }};
 const INVENTORY_CHIP_REUSE_ENABLED = {{ (not is_create) | tojson }};
 const BUNDLE_ADAPTER_ID = {{ (s.adapter_id or '') | tojson }};
 const KNOWN_PROPERTY_TAGS = new Set({{ known_property_tags | tojson | safe }});
+const SCRIPT_ROOT = '{{ request.script_root }}' || '';
+const DEFAULT_PUBLISHER_DOMAIN = {{ (tenant.primary_domain or '') | tojson }};
 const DEFAULT_CREATIVE_AGENT_URL = 'https://creative.adcontextprotocol.org';
 const GAM_CANONICAL_DISPLAY_FORMAT_IDS = ['display_image', 'display_html', 'display_js'];
 
@@ -714,6 +750,318 @@ function hydratePartialCheckboxes() {
     });
 }
 
+let publisherRows = [];
+let publisherRowSeq = 0;
+
+function nextPublisherRowId() {
+    publisherRowSeq += 1;
+    return `publisher-row-${publisherRowSeq}`;
+}
+
+function normalizePublisherDomain(raw) {
+    return (raw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/+$/, '');
+}
+
+function splitCsv(value) {
+    return (value || '').split(',').map(item => item.trim()).filter(Boolean);
+}
+
+function makePublisherRow(prop) {
+    const propertyIds = prop.property_ids || [];
+    const propertyTags = prop.property_tags || [];
+    return {
+        id: nextPublisherRowId(),
+        domain: normalizePublisherDomain(prop.publisher_domain || DEFAULT_PUBLISHER_DOMAIN),
+        mode: propertyIds.length ? 'ids' : 'tags',
+        tags: propertyTags.slice(),
+        property_ids: propertyIds.slice(),
+        available_tags: propertyTags.slice(),
+        available_properties: [],
+        status: '',
+        statusMessage: '',
+        is_authorized: null,
+        loading: false,
+    };
+}
+
+function initialPublisherRows() {
+    const saved = existingProfile.publisher_properties || [];
+    if (saved.length) return saved.map(makePublisherRow);
+    if (!DEFAULT_PUBLISHER_DOMAIN) return [];
+    return [makePublisherRow({
+        publisher_domain: DEFAULT_PUBLISHER_DOMAIN,
+        property_tags: ['all_inventory'],
+        selection_type: 'by_tag',
+    })];
+}
+
+function publisherRowById(id) {
+    return publisherRows.find(row => row.id === id) || null;
+}
+
+function publisherPropertiesPayload() {
+    return publisherRows.map(row => {
+        const base = { publisher_domain: row.domain };
+        if (row.mode === 'ids') {
+            return {
+                ...base,
+                property_ids: row.property_ids,
+                selection_type: 'by_id',
+            };
+        }
+        return {
+            ...base,
+            property_tags: row.tags.map(tag => tag.toLowerCase()),
+            selection_type: 'by_tag',
+        };
+    });
+}
+
+function syncPublisherPropertiesHidden() {
+    const hidden = document.getElementById('publisher_properties');
+    if (!hidden) return;
+    hidden.value = JSON.stringify(publisherPropertiesPayload());
+    hidden.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function publisherStatusText(row) {
+    if (row.loading) return 'Looking up adagents.json...';
+    if (row.status === 'authorized') {
+        return `${row.available_properties.length} authorized ${row.available_properties.length === 1 ? 'property' : 'properties'} found.`;
+    }
+    if (row.status === 'unbound') {
+        return `${row.available_properties.length} properties found from an unbound AAO entry.`;
+    }
+    if (row.status) {
+        return row.statusMessage || `AAO status: ${row.status}`;
+    }
+    return 'Lookup AAO to load property IDs and tags for this publisher.';
+}
+
+function renderTagEditor(row) {
+    const tagOptions = Array.from(new Set([...(row.available_tags || []), ...(row.tags || [])])).sort();
+    const chips = tagOptions.map(tag => {
+        const selected = row.tags.includes(tag);
+        return `<button type="button" class="tag-pick__chip ${selected ? 'selected' : ''}" data-tag-chip="${_escAttr(tag)}">${_escAttr(tag)}</button>`;
+    }).join('');
+    return `
+        <div class="prop-row__field">
+            <label>Property tags</label>
+            <input type="text" data-tags-input value="${_escAttr(row.tags.join(', '))}" placeholder="all_inventory, premium, sports">
+            <span class="hint">Comma-separated tags for this publisher domain.</span>
+        </div>
+        ${tagOptions.length ? `<div class="tag-pick">${chips}</div>` : ''}
+    `;
+}
+
+function renderIdEditor(row) {
+    const properties = row.available_properties || [];
+    if (!properties.length) {
+        return `
+            <div class="prop-row__field">
+                <label>Property IDs</label>
+                <input type="text" data-ids-input value="${_escAttr(row.property_ids.join(', '))}" placeholder="property_id_1, property_id_2">
+                <span class="hint">Lookup the domain to load named property ID choices from AAO.</span>
+            </div>
+        `;
+    }
+    const selected = new Set(row.property_ids);
+    const options = properties.map(prop => {
+        const propertyId = prop.property_id || '';
+        const label = prop.name || propertyId;
+        const tags = (prop.tags || []).length ? ` · ${(prop.tags || []).join(', ')}` : '';
+        return `
+            <label class="prop-id-option">
+                <input type="checkbox" data-property-id="${_escAttr(propertyId)}" ${selected.has(propertyId) ? 'checked' : ''}>
+                <span>
+                    <strong>${_escAttr(label)}</strong>
+                    <code>${_escAttr(propertyId)}</code>${_escAttr(tags)}
+                </span>
+            </label>
+        `;
+    }).join('');
+    return `<div class="prop-id-list">${options}</div>`;
+}
+
+function renderPublisherRows() {
+    const rowsContainer = document.getElementById('prop-rows');
+    const template = document.getElementById('prop-row-template');
+    if (!rowsContainer || !template) return;
+
+    rowsContainer.innerHTML = '';
+    if (!publisherRows.length) {
+        rowsContainer.innerHTML = '<div class="tree-picker__empty">No publisher domains added yet.</div>';
+        syncPublisherPropertiesHidden();
+        return;
+    }
+
+    publisherRows.forEach(row => {
+        const node = template.content.firstElementChild.cloneNode(true);
+        node.dataset.rowId = row.id;
+        node.querySelector('input[name="publisher_domain[]"]').value = row.domain;
+        node.querySelector('.prop-row__domain').textContent = row.domain;
+        node.querySelector('.prop-row__status').textContent = publisherStatusText(row);
+        node.querySelectorAll('[data-row-mode]').forEach(button => {
+            const active = button.dataset.rowMode === row.mode;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        node.querySelector('[data-row-editor]').innerHTML =
+            row.mode === 'ids' ? renderIdEditor(row) : renderTagEditor(row);
+        rowsContainer.appendChild(node);
+    });
+    syncPublisherPropertiesHidden();
+}
+
+async function lookupPublisherRow(row, forceRefresh = false) {
+    if (!row || !row.domain) return;
+    row.loading = true;
+    row.statusMessage = '';
+    renderPublisherRows();
+    try {
+        const response = await fetch(`${SCRIPT_ROOT}/tenant/{{ tenant_id }}/publisher-properties/lookup`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ publisher_domain: row.domain, force_refresh: forceRefresh }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Lookup failed');
+        row.status = data.aao_status || '';
+        row.statusMessage = data.error || '';
+        row.is_authorized = !!data.is_authorized;
+        row.available_tags = data.property_tags || [];
+        row.available_properties = data.properties || [];
+        if (!row.tags.length && row.available_tags.includes('all_inventory')) {
+            row.tags = ['all_inventory'];
+        }
+    } catch (err) {
+        row.status = 'error';
+        row.statusMessage = err.message || String(err);
+        row.is_authorized = false;
+    } finally {
+        row.loading = false;
+        renderPublisherRows();
+        recomputeValidity();
+        updateDirtyState();
+    }
+}
+
+function addPublisherDomainFromInput() {
+    const input = document.getElementById('publisher-domain-input');
+    const status = document.getElementById('publisher-domain-status');
+    const domain = normalizePublisherDomain(input?.value || '');
+    if (!domain) {
+        if (status) status.textContent = 'Enter a publisher domain.';
+        return;
+    }
+    if (publisherRows.some(row => row.domain === domain)) {
+        if (status) status.textContent = `${domain} is already in this bundle.`;
+        return;
+    }
+    const row = makePublisherRow({
+        publisher_domain: domain,
+        property_tags: ['all_inventory'],
+        selection_type: 'by_tag',
+    });
+    publisherRows.push(row);
+    if (input) input.value = '';
+    if (status) status.textContent = '';
+    renderPublisherRows();
+    recomputeValidity();
+    updateDirtyState();
+    lookupPublisherRow(row);
+}
+
+function initializePublisherRows() {
+    publisherRows = initialPublisherRows();
+    renderPublisherRows();
+
+    const addButton = document.getElementById('publisher-domain-add');
+    const input = document.getElementById('publisher-domain-input');
+    const rowsContainer = document.getElementById('prop-rows');
+
+    if (addButton) addButton.addEventListener('click', addPublisherDomainFromInput);
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            addPublisherDomainFromInput();
+        });
+    }
+    if (!rowsContainer) return;
+
+    rowsContainer.addEventListener('click', (e) => {
+        const rowNode = e.target.closest('[data-row-id]');
+        const row = rowNode ? publisherRowById(rowNode.dataset.rowId) : null;
+        if (!row) return;
+
+        const remove = e.target.closest('[data-remove-row]');
+        if (remove) {
+            publisherRows = publisherRows.filter(item => item.id !== row.id);
+            renderPublisherRows();
+            recomputeValidity();
+            updateDirtyState();
+            return;
+        }
+
+        const lookup = e.target.closest('[data-lookup-domain]');
+        if (lookup) {
+            lookupPublisherRow(row, true);
+            return;
+        }
+
+        const mode = e.target.closest('[data-row-mode]');
+        if (mode) {
+            row.mode = mode.dataset.rowMode === 'ids' ? 'ids' : 'tags';
+            renderPublisherRows();
+            recomputeValidity();
+            updateDirtyState();
+            return;
+        }
+
+        const tagChip = e.target.closest('[data-tag-chip]');
+        if (tagChip) {
+            const tag = tagChip.dataset.tagChip;
+            if (row.tags.includes(tag)) row.tags = row.tags.filter(item => item !== tag);
+            else row.tags.push(tag);
+            renderPublisherRows();
+            recomputeValidity();
+            updateDirtyState();
+        }
+    });
+
+    rowsContainer.addEventListener('input', (e) => {
+        const rowNode = e.target.closest('[data-row-id]');
+        const row = rowNode ? publisherRowById(rowNode.dataset.rowId) : null;
+        if (!row) return;
+        if (e.target.matches('[data-tags-input]')) {
+            row.tags = splitCsv(e.target.value).map(tag => _normalizeTag(tag)).filter(Boolean);
+        } else if (e.target.matches('[data-ids-input]')) {
+            row.property_ids = splitCsv(e.target.value);
+        }
+        syncPublisherPropertiesHidden();
+        recomputeValidityDebounced();
+        updateDirtyState();
+    });
+
+    rowsContainer.addEventListener('change', (e) => {
+        const rowNode = e.target.closest('[data-row-id]');
+        const row = rowNode ? publisherRowById(rowNode.dataset.rowId) : null;
+        if (!row || !e.target.matches('[data-property-id]')) return;
+        const propertyId = e.target.dataset.propertyId;
+        if (e.target.checked && !row.property_ids.includes(propertyId)) row.property_ids.push(propertyId);
+        if (!e.target.checked) row.property_ids = row.property_ids.filter(item => item !== propertyId);
+        syncPublisherPropertiesHidden();
+        recomputeValidity();
+        updateDirtyState();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     seedInventoryNameMaps();
     prePopulateInventoryConfig();
@@ -787,88 +1135,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Multi-domain row editor (#532). Each row is one
-    // `publisher_properties` entry: a domain select + a tags input.
-    // Operators can add more rows for tenants that serve multiple domains.
-    const rowsContainer = document.getElementById('prop-rows');
-    const addRowBtn = document.getElementById('prop-rows-add');
-    const rowTemplate = document.getElementById('prop-row-template');
-
-    function _updateRemoveButtons() {
-        const rows = rowsContainer.querySelectorAll('.prop-row');
-        rows.forEach((r, i) => {
-            const removeBtn = r.querySelector('[data-remove-row]');
-            if (!removeBtn) return;
-            removeBtn.hidden = rows.length === 1;
-        });
-    }
-
-    if (addRowBtn && rowTemplate && rowsContainer) {
-        addRowBtn.addEventListener('click', () => {
-            const fragment = rowTemplate.content.cloneNode(true);
-            rowsContainer.appendChild(fragment);
-            _updateRemoveButtons();
-            // Focus the new row's tags input so the operator can keep typing.
-            const newRow = rowsContainer.querySelector('.prop-row:last-child input[name="property_tags[]"]');
-            if (newRow) newRow.focus();
-        });
-
-        rowsContainer.addEventListener('click', (e) => {
-            const removeBtn = e.target.closest('[data-remove-row]');
-            if (!removeBtn) return;
-            const row = removeBtn.closest('.prop-row');
-            if (row) row.remove();
-            _updateRemoveButtons();
-        });
-
-        _updateRemoveButtons();
-    }
-
-    // Tag-pick chip click handler — appends to whichever tags input is the
-    // most-recently-focused row. (#532)
-    const tagPick = document.getElementById('tag-pick');
-    if (tagPick && rowsContainer) {
-        let lastFocusedTagsInput = rowsContainer.querySelector('input[name="property_tags[]"]');
-        rowsContainer.addEventListener('focusin', (e) => {
-            if (e.target.matches('input[name="property_tags[]"]')) {
-                lastFocusedTagsInput = e.target;
-            }
-        });
-
-        const parseTags = (input) =>
-            (input.value || '').split(',').map(t => t.trim()).filter(Boolean);
-        const writeTags = (input, tags) => { input.value = tags.join(', '); };
-        const syncChipStates = () => {
-            if (!lastFocusedTagsInput) return;
-            const selected = new Set(parseTags(lastFocusedTagsInput));
-            tagPick.querySelectorAll('.tag-pick__chip').forEach(chip => {
-                chip.classList.toggle('selected', selected.has(chip.dataset.tag));
-            });
-        };
-
-        tagPick.addEventListener('click', (e) => {
-            const chip = e.target.closest('.tag-pick__chip');
-            if (!chip) return;
-            if (!lastFocusedTagsInput) {
-                lastFocusedTagsInput = rowsContainer.querySelector('input[name="property_tags[]"]');
-            }
-            if (!lastFocusedTagsInput) return;
-            const tag = chip.dataset.tag;
-            const tags = parseTags(lastFocusedTagsInput);
-            const idx = tags.indexOf(tag);
-            if (idx >= 0) tags.splice(idx, 1);
-            else tags.push(tag);
-            writeTags(lastFocusedTagsInput, tags);
-            syncChipStates();
-            lastFocusedTagsInput.focus();
-        });
-
-        // Sync chip highlights as the operator types in any row.
-        rowsContainer.addEventListener('input', (e) => {
-            if (e.target.matches('input[name="property_tags[]"]')) syncChipStates();
-        });
-        syncChipStates();
-    }
+    initializePublisherRows();
 });
 
 function prePopulateInventoryConfig() {
@@ -1372,8 +1639,38 @@ function computeValidity() {
                 if (!Array.isArray(parsed) || parsed.length === 0) {
                     propertyMessage = 'Publisher properties must be a non-empty array.';
                 } else {
-                    propertyOk = true;
-                    propertyText = parsed.length + ' (legacy JSON)';
+                    let badIdx = -1;
+                    let badReason = '';
+                    for (let i = 0; i < parsed.length; i++) {
+                        const prop = parsed[i] || {};
+                        const domain = (prop.publisher_domain || '').trim();
+                        const tags = prop.property_tags || [];
+                        const ids = prop.property_ids || [];
+                        if (!domain) { badIdx = i; badReason = 'add a publisher domain'; break; }
+                        if (!tags.length && !ids.length) {
+                            badIdx = i;
+                            badReason = `(${domain}): choose at least one property tag or ID`;
+                            break;
+                        }
+                        const bad = tags.find(t => !TAG_PATTERN.test(String(t).toLowerCase()));
+                        if (bad) {
+                            badIdx = i;
+                            badReason = `(${domain}): "${bad}" — use lowercase letters, numbers, and underscores only`;
+                            break;
+                        }
+                    }
+                    if (badIdx >= 0) {
+                        propertyMessage = `Row ${badIdx + 1} ${badReason}.`;
+                    } else {
+                        propertyOk = true;
+                        const domains = new Set(parsed.map(prop => prop.publisher_domain).filter(Boolean));
+                        const tagCount = parsed.reduce((sum, prop) => sum + (prop.property_tags || []).length, 0);
+                        const idCount = parsed.reduce((sum, prop) => sum + (prop.property_ids || []).length, 0);
+                        const parts = [`${domains.size} ${domains.size === 1 ? 'domain' : 'domains'}`];
+                        if (tagCount) parts.push(`${tagCount} ${tagCount === 1 ? 'tag' : 'tags'}`);
+                        if (idCount) parts.push(`${idCount} ${idCount === 1 ? 'ID' : 'IDs'}`);
+                        propertyText = parts.join(' · ');
+                    }
                 }
             } catch (err) {
                 propertyMessage = 'Publisher properties JSON is malformed.';
@@ -1433,7 +1730,7 @@ function computeValidity() {
             // section wrapper so the eye lands somewhere.
             focusId: mode === 'tags'
                 ? null  // resolved at submit time by querying .prop-row inputs
-                : (mode === 'property_ids' ? 'property-ids-section' : 'publisher_properties'),
+                : (mode === 'property_ids' ? 'property-ids-section' : 'publisher-domain-input'),
         }),
     };
     const errors = Object.entries(by).filter(([, v]) => !v.ok);
@@ -1569,8 +1866,7 @@ if (profileForm) {
             const first = state.errors[0][1];
             // Multi-domain tags editor (#532): pick the first row whose tags
             // input is empty or invalid.
-            const isTagsRowError =
-                document.querySelector('input[name="property_mode"]:checked').value === 'tags';
+            const isTagsRowError = _propertyModeChecked() === 'tags';
             let el = null;
             if (isTagsRowError && first.focusId === null) {
                 const rows = _tagRowsFromForm();

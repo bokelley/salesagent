@@ -58,6 +58,24 @@ class TenantConfigRepository:
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
         return list(self._session.scalars(stmt).all())
 
+    def get_publisher_partner_by_domain(self, publisher_domain: str) -> PublisherPartner | None:
+        """Get one publisher partner by domain for the tenant."""
+        stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id, publisher_domain=publisher_domain)
+        return self._session.scalars(stmt).first()
+
+    def create_publisher_partner(self, publisher_domain: str, display_name: str | None = None) -> PublisherPartner:
+        """Create a pending publisher partner for the tenant."""
+        partner = PublisherPartner(
+            tenant_id=self._tenant_id,
+            publisher_domain=publisher_domain,
+            display_name=display_name or publisher_domain,
+            sync_status="pending",
+            is_verified=False,
+        )
+        self._session.add(partner)
+        self._session.flush()
+        return partner
+
     def list_authorized_properties(self) -> list[AuthorizedProperty]:
         """Get authorized properties for the tenant."""
         stmt = (

@@ -108,17 +108,6 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
             <h3 style="margin: 0;">Publisher partners</h3>
             <div style="display: flex; gap: 0.5rem;">
-                {% if embedded_view %}
-                <button class="btn btn-secondary" id="sync-from-directory-btn" disabled
-                    title="Disabled for embedded tenants because the shared platform agent URL returns platform-wide publishers, not account-scoped publishers.">
-                    <span id="sync-from-directory-icon">🌐</span> Sync from AAO directory
-                </button>
-                {% else %}
-                <button onclick="syncFromAaoDirectory()" class="btn btn-secondary" id="sync-from-directory-btn"
-                    title="Discover all publishers that authorize this agent by querying the AAO directory's inverse-lookup. Faster than refreshing each domain individually and discovers publishers you haven't added yet.">
-                    <span id="sync-from-directory-icon">🌐</span> Sync from AAO directory
-                </button>
-                {% endif %}
                 <button onclick="syncAllPublishers()" class="btn btn-secondary" id="sync-publishers-btn">
                     <span id="sync-publishers-icon">🔄</span> Refresh all
                 </button>

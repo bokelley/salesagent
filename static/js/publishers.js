@@ -355,50 +355,6 @@ function syncAllPublishers() {
         });
 }
 
-// Discover publishers via the AAO directory's inverse-lookup endpoint.
-// One call returns every publisher that authorizes this agent (via direct
-// adagents.json, authoritative_location, or ads.txt MANAGERDOMAIN delegation)
-// with verification status already resolved by the directory's crawler —
-// no N-domain HTTP fan-out from this salesagent.
-function syncFromAaoDirectory() {
-    const btn = document.getElementById('sync-from-directory-btn');
-    const icon = document.getElementById('sync-from-directory-icon');
-
-    btn.disabled = true;
-    icon.style.animation = 'spin 1s linear infinite';
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners/sync-from-directory`, {
-        method: 'POST',
-        credentials: 'same-origin',
-    })
-        .then((response) => response.json().then((data) => ({ status: response.status, data })))
-        .then(({ status, data }) => {
-            btn.disabled = false;
-            icon.style.animation = '';
-
-            if (status !== 200 || data.error) {
-                alert('AAO directory sync failed: ' + (data.error || `HTTP ${status}`));
-                return;
-            }
-
-            loadPublishers();
-
-            const indexedAt = data.directory_indexed_at
-                ? new Date(data.directory_indexed_at).toLocaleString()
-                : 'unknown';
-            alert(
-                `Synced ${data.discovered} publishers from AAO directory ` +
-                    `(${data.created} new, ${data.updated} updated).\n\n` +
-                    `Directory snapshot: ${indexedAt}`,
-            );
-        })
-        .catch((error) => {
-            btn.disabled = false;
-            icon.style.animation = '';
-            alert('AAO directory sync failed: ' + error.message);
-        });
-}
-
 // Refresh a single publisher (forces fresh AAO fetch).
 function refreshPublisher(partnerId) {
     const row = document.querySelector(`tr[data-partner-id="${partnerId}"]`);
