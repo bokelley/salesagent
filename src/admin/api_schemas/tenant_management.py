@@ -742,6 +742,332 @@ class PreviewAdapterResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Wholesale product authoring — embedded storefront API
+# ---------------------------------------------------------------------------
+
+
+class FormatIdRef(BaseModel):
+    """AdCP FormatId reference used by wholesale-product authoring."""
+
+    model_config = _config()
+
+    agent_url: str = Field(..., min_length=1, max_length=2048)
+    id: str = Field(..., min_length=1, max_length=255)
+
+
+class WholesalePricingOption(BaseModel):
+    """One pricing option accepted by the buyer-facing product."""
+
+    model_config = _config()
+
+    pricing_model: str = Field(..., min_length=1, max_length=32)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    is_fixed: bool = True
+    rate: Decimal | None = None
+    price_guidance: dict[str, Any] | None = None
+    parameters: dict[str, Any] | None = None
+    min_spend_per_package: Decimal | None = None
+
+
+class PublisherPropertySelector(BaseModel):
+    """AdCP publisher-property selector."""
+
+    model_config = _config()
+
+    publisher_domain: str = Field(..., min_length=1, max_length=255)
+    selection_type: Literal["all", "by_id", "by_tag"] = "all"
+    property_ids: list[str] | None = None
+    property_tags: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_selector_shape(self) -> PublisherPropertySelector:
+        if self.selection_type == "all":
+            return self
+        if self.selection_type == "by_id" and not self.property_ids:
+            raise ValueError("property_ids is required when selection_type='by_id'")
+        if self.selection_type == "by_tag" and not self.property_tags:
+            raise ValueError("property_tags is required when selection_type='by_tag'")
+        return self
+
+
+class WholesaleSlotRequirement(BaseModel):
+    """Optional slot-level requirements for multi-asset formats."""
+
+    model_config = _config()
+
+    slot_id: str = Field(..., min_length=1, max_length=128)
+    name: str | None = Field(default=None, max_length=255)
+    asset_type: str | None = Field(default=None, max_length=64)
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    duration_ms: int | None = Field(default=None, ge=1)
+    required: bool = True
+    requirements: dict[str, Any] | None = None
+
+
+class WholesaleCreativeFormat(BaseModel):
+    """Creative format accepted by a wholesale product."""
+
+    model_config = _config()
+
+    format_id: FormatIdRef
+    slot_requirements: list[WholesaleSlotRequirement] = Field(default_factory=list)
+
+
+class InventoryExecutionSelector(BaseModel):
+    """Adapter selector that tells the ad server where a wholesale product executes."""
+
+    model_config = _config()
+
+    selector_type: str = Field(..., min_length=1, max_length=64)
+    external_id: str = Field(..., min_length=1, max_length=255)
+    name: str | None = Field(default=None, max_length=512)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class WholesaleFormatBinding(BaseModel):
+    """Adapter-specific binding for a buyer-facing creative format."""
+
+    model_config = _config()
+
+    format_id: FormatIdRef
+    adapter_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class WholesaleInventoryExecution(BaseModel):
+    """Adapter execution section of a wholesale product."""
+
+    model_config = _config()
+
+    adapter: str = Field(..., min_length=1, max_length=64)
+    selectors: list[InventoryExecutionSelector] = Field(default_factory=list)
+    format_bindings: list[WholesaleFormatBinding] = Field(default_factory=list)
+
+
+class WholesaleInventory(BaseModel):
+    """Inventory section of a wholesale product."""
+
+    model_config = _config()
+
+    publisher_properties: list[PublisherPropertySelector] = Field(default_factory=list)
+    creative_formats: list[WholesaleCreativeFormat] = Field(default_factory=list)
+    execution: WholesaleInventoryExecution
+
+
+WholesaleProductStatus = Literal["draft", "active", "archived"]
+
+
+class WholesaleProductRequest(BaseModel):
+    """Create/update body for wholesale-product authoring."""
+
+    model_config = _config()
+
+    wholesale_product_id: str | None = Field(default=None, min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str | None = None
+    status: WholesaleProductStatus = "active"
+    delivery_type: str = Field(default="guaranteed", min_length=1, max_length=50)
+    channels: list[str] | None = None
+    pricing_options: list[WholesalePricingOption] = Field(default_factory=list)
+    forecast: dict[str, Any] | None = None
+    inventory: WholesaleInventory
+    targeting_capabilities: dict[str, Any] = Field(default_factory=dict)
+    optimization_capabilities: dict[str, Any] = Field(default_factory=dict)
+    allowed_actions: list[str] | None = None
+    format_options: list[dict[str, Any]] | None = None
+    vendor_metric_optimization: dict[str, Any] | None = None
+    allowed_principal_ids: list[str] | None = None
+
+
+class WholesaleProductResponse(WholesaleProductRequest):
+    """Wholesale product as persisted and returned to embedder clients."""
+
+    wholesale_product_id: str = Field(..., min_length=1, max_length=100)
+    product_id: str = Field(..., min_length=1, max_length=100)
+    inventory_profile_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ListWholesaleProductsResponse(BaseModel):
+    """List response for wholesale products."""
+
+    model_config = _config()
+
+    wholesale_products: list[WholesaleProductResponse]
+    count: int
+
+
+class DeleteWholesaleProductResponse(BaseModel):
+    """Delete response for wholesale products."""
+
+    model_config = _config()
+
+    success: bool
+    message: str
+
+
+class WholesaleValidationIssue(BaseModel):
+    """One validation issue for a wholesale-product draft."""
+
+    model_config = _config()
+
+    code: str
+    message: str
+    field: str | None = None
+    severity: Literal["error", "warning"] = "error"
+
+
+class WholesaleProductValidationResponse(BaseModel):
+    """Validation result for wholesale-product authoring."""
+
+    model_config = _config()
+
+    valid: bool
+    issues: list[WholesaleValidationIssue] = Field(default_factory=list)
+
+
+class WholesaleProductPreviewResponse(BaseModel):
+    """Non-persisted product projection for authoring previews."""
+
+    model_config = _config()
+
+    validation: WholesaleProductValidationResponse
+    buyer_projection: dict[str, Any]
+    adapter_projection: dict[str, Any]
+
+
+class InventorySelectorTypeCapability(BaseModel):
+    """Selector type supported by an adapter for wholesale products."""
+
+    model_config = _config()
+
+    selector_type: str
+    label: str
+    description: str | None = None
+    supports_search: bool = True
+    supports_parent_filter: bool = False
+    option_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreativeBindingSchema(BaseModel):
+    """Format-binding schema advertised by an adapter."""
+
+    model_config = _config()
+
+    selector_type: str | None = None
+    schema_: dict[str, Any] = Field(default_factory=dict, alias="schema")
+
+
+class InventoryAdapterCapabilitiesResponse(BaseModel):
+    """Tenant-specific adapter capabilities for wholesale-product authoring."""
+
+    model_config = _config()
+
+    adapter: str
+    selector_types: list[InventorySelectorTypeCapability]
+    creative_binding_schemas: list[CreativeBindingSchema] = Field(default_factory=list)
+    targeting_capabilities: dict[str, Any] = Field(default_factory=dict)
+    pricing_capabilities: dict[str, Any] = Field(default_factory=dict)
+    optimization_capabilities: dict[str, Any] = Field(default_factory=dict)
+
+
+class InventorySelectorSummary(BaseModel):
+    """One cached ad-server selector candidate."""
+
+    model_config = _config()
+
+    selector_type: str
+    external_id: str
+    name: str | None = None
+    path: list[str] | None = None
+    parent_id: str | None = None
+    status: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ListInventorySelectorsResponse(BaseModel):
+    """Search/list response for ad-server selectors."""
+
+    model_config = _config()
+
+    selectors: list[InventorySelectorSummary]
+    count: int
+    next_cursor: str | None = None
+
+
+class PublisherDomainSummary(BaseModel):
+    """Publisher domain known to this tenant."""
+
+    model_config = _config()
+
+    publisher_domain: str
+    display_name: str | None = None
+    is_verified: bool = False
+    sync_status: str | None = None
+    total_properties: int | None = None
+    authorized_properties: int | None = None
+
+
+class PublisherPropertySummary(BaseModel):
+    """One publisher property available for product mapping."""
+
+    model_config = _config()
+
+    property_id: str
+    publisher_domain: str
+    property_type: str
+    name: str
+    identifiers: list[dict[str, Any]] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    verification_status: str | None = None
+
+
+class AllowedPublisherSelector(BaseModel):
+    """Prebuilt selector option for publisher-property mapping UI."""
+
+    model_config = _config()
+
+    publisher_domain: str
+    selection_type: Literal["all", "by_id", "by_tag"]
+    property_ids: list[str] | None = None
+    property_tags: list[str] | None = None
+    label: str
+
+
+class PublisherPropertiesResponse(BaseModel):
+    """Publisher-domain/property discovery response."""
+
+    model_config = _config()
+
+    domains: list[PublisherDomainSummary]
+    properties: list[PublisherPropertySummary]
+    allowed_selectors: list[AllowedPublisherSelector]
+
+
+class CreativeFormatSummary(BaseModel):
+    """Creative format option exposed to the embedding storefront."""
+
+    model_config = _config()
+
+    format_id: FormatIdRef
+    name: str
+    dimensions: str | None = None
+    asset_types: list[str] = Field(default_factory=list)
+    requirements: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class ListCreativeFormatsForAuthoringResponse(BaseModel):
+    """Creative-format discovery for wholesale-product authoring."""
+
+    model_config = _config()
+
+    creative_formats: list[CreativeFormatSummary]
+    count: int
+
+
+# ---------------------------------------------------------------------------
 # Sprint 1.5 — consolidated tenant status (GET /tenants/{tid}/status)
 # ---------------------------------------------------------------------------
 

@@ -41,6 +41,7 @@ from src.admin.api_schemas.tenant_management import (
     AdapterSettingsValidationResponse,
     AdapterStatusResponse,
     AdapterUnsupportedFeature,
+    AllowedPublisherSelector,
     ApiError,
     ApproveWorkflowRequest,
     BroadstreetAdapterConfig,
@@ -49,20 +50,31 @@ from src.admin.api_schemas.tenant_management import (
     CreateAccountRequest,
     CreateBuyerAdvertiserMappingRequest,
     CreateWebhookSubscriptionRequest,
+    CreativeBindingSchema,
+    CreativeFormatSummary,
+    DeleteWholesaleProductResponse,
+    FormatIdRef,
     FreeWheelAdapterConfig,
     FreeWheelSettings,
     GAMAdapterConfig,
     GoogleAdManagerSettings,
+    InventoryAdapterCapabilitiesResponse,
+    InventoryExecutionSelector,
+    InventorySelectorSummary,
+    InventorySelectorTypeCapability,
     ListAccountsManagedResponse,
     ListAdaptersResponse,
     ListAuditLogResponse,
     ListBuyerAdvertiserMappingsResponse,
+    ListCreativeFormatsForAuthoringResponse,
     ListGamAdvertisersResponse,
+    ListInventorySelectorsResponse,
     ListMediaBuysResponse,
     ListRecentBuyersResponse,
     ListSyncHistoryResponse,
     ListTenantsResponse,
     ListWebhooksResponse,
+    ListWholesaleProductsResponse,
     ListWorkflowsResponse,
     MediaBuyDetail,
     MockAdapterConfig,
@@ -71,6 +83,10 @@ from src.admin.api_schemas.tenant_management import (
     ProvisionedPrincipalResponse,
     ProvisionTenantRequest,
     ProvisionTenantResponse,
+    PublisherDomainSummary,
+    PublisherPropertiesResponse,
+    PublisherPropertySelector,
+    PublisherPropertySummary,
     RecentBuyer,
     RefreshConflictResponse,
     RefreshResponse,
@@ -88,6 +104,16 @@ from src.admin.api_schemas.tenant_management import (
     WebhookSubscriptionSummary,
     WebhookTestDeliveryResult,
     WebhookTestResponse,
+    WholesaleCreativeFormat,
+    WholesaleFormatBinding,
+    WholesaleInventory,
+    WholesaleInventoryExecution,
+    WholesalePricingOption,
+    WholesaleProductPreviewResponse,
+    WholesaleProductRequest,
+    WholesaleProductResponse,
+    WholesaleProductValidationResponse,
+    WholesaleValidationIssue,
     WorkflowDetail,
 )
 from src.admin.api_schemas.tenant_management import (
@@ -106,23 +132,34 @@ from src.admin.services.tenant_status_service import get_tenant_status, invalida
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
+    PRODUCT_REPORTING_CAPABILITIES_DEFAULT,
     Account,
     AdapterConfig,
     AdvertiserRoutingRule,
     CurrencyLimit,
+    FreeWheelInventory,
     GamAdvertiser,
+    GAMInventory,
+    InventoryProfile,
     MediaBuy,
+    PricingOption,
     Principal,
+    Product,
     PropertyTag,
+    SpringServeInventory,
     SyncJob,
     Tenant,
 )
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
+from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
 from src.core.database.repositories.gam_sync import GAMSyncRepository
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_tenant_url
 from src.services.agent_url_resolver import resolve_agent_url
-from src.services.protocol_change_webhooks import notify_account_status_changed
+from src.services.protocol_change_webhooks import notify_account_status_changed, notify_product_catalog_changed
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import build_gam_inventory_discovery, sync_targeting_values_for_key
 
@@ -818,6 +855,524 @@ def _build_adapter_capabilities(adapter_type: str, adapter_class: Any) -> Adapte
     )
 
 
+_WHOLESALE_SELECTOR_CAPABILITIES: dict[str, list[InventorySelectorTypeCapability]] = {
+    "google_ad_manager": [
+        InventorySelectorTypeCapability(
+            selector_type="placement",
+            label="GAM Placement",
+            description="Google Ad Manager placement ID.",
+            option_schema={"type": "object", "properties": {}},
+        ),
+        InventorySelectorTypeCapability(
+            selector_type="ad_unit",
+            label="GAM Ad Unit",
+            description="Google Ad Manager ad unit ID.",
+            supports_parent_filter=True,
+            option_schema={
+                "type": "object",
+                "properties": {"include_descendants": {"type": "boolean", "default": True}},
+            },
+        ),
+    ],
+    "freewheel": [
+        InventorySelectorTypeCapability(selector_type="site", label="FreeWheel Site"),
+        InventorySelectorTypeCapability(
+            selector_type="site_section",
+            label="FreeWheel Site Section",
+            supports_parent_filter=True,
+        ),
+        InventorySelectorTypeCapability(selector_type="site_group", label="FreeWheel Site Group"),
+        InventorySelectorTypeCapability(selector_type="series", label="FreeWheel Series"),
+        InventorySelectorTypeCapability(selector_type="video_group", label="FreeWheel Video Group"),
+        InventorySelectorTypeCapability(selector_type="ad_unit_package", label="FreeWheel Ad Unit Package"),
+        InventorySelectorTypeCapability(
+            selector_type="ad_unit_node",
+            label="FreeWheel Ad Unit Node",
+            supports_parent_filter=True,
+        ),
+        InventorySelectorTypeCapability(selector_type="standard_attribute", label="FreeWheel Standard Attribute"),
+    ],
+    "springserve": [
+        InventorySelectorTypeCapability(selector_type="supply_partner", label="SpringServe Supply Partner"),
+        InventorySelectorTypeCapability(
+            selector_type="supply_router",
+            label="SpringServe Supply Router",
+            supports_parent_filter=True,
+        ),
+        InventorySelectorTypeCapability(
+            selector_type="supply_tag",
+            label="SpringServe Supply Tag",
+            supports_parent_filter=True,
+        ),
+        InventorySelectorTypeCapability(selector_type="key", label="SpringServe Key"),
+        InventorySelectorTypeCapability(
+            selector_type="value_list",
+            label="SpringServe Value List",
+            supports_parent_filter=True,
+        ),
+    ],
+    "broadstreet": [
+        InventorySelectorTypeCapability(selector_type="zone", label="Broadstreet Zone"),
+    ],
+    "mock": [
+        InventorySelectorTypeCapability(selector_type="mock_inventory", label="Mock Inventory"),
+    ],
+}
+
+
+def _tenant_adapter_type(tenant: Tenant, adapter: AdapterConfig | None = None) -> str:
+    """Return the canonical adapter type for a tenant."""
+    configured = adapter.adapter_type if adapter is not None else tenant.ad_server
+    return _canonical_catalog_adapter_type(configured or "mock") or configured or "mock"
+
+
+def _require_tenant_for_authoring(session, tenant_id: str) -> tuple[Tenant | None, AdapterConfig | None, Any]:
+    """Load a tenant plus adapter row for wholesale-product authoring."""
+    tenant = TenantConfigRepository(session, tenant_id).get_tenant()
+    if tenant is None:
+        return None, None, _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+    adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+    return tenant, adapter, None
+
+
+def _supported_selector_types(adapter_type: str) -> set[str]:
+    return {cap.selector_type for cap in _WHOLESALE_SELECTOR_CAPABILITIES.get(adapter_type, [])}
+
+
+def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, str]:
+    if isinstance(format_id, FormatIdRef):
+        return {"agent_url": str(format_id.agent_url), "id": str(format_id.id)}
+    return {"agent_url": str(format_id["agent_url"]), "id": str(format_id["id"])}
+
+
+def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -> list[dict[str, str]]:
+    return [_format_id_dict(fmt.format_id) for fmt in creative_formats]
+
+
+def _publisher_property_dicts(publisher_properties: list[PublisherPropertySelector]) -> list[dict[str, Any]]:
+    return [prop.model_dump(exclude_none=True, mode="json") for prop in publisher_properties]
+
+
+def _pricing_option_rows(
+    tenant_id: str,
+    product_id: str,
+    pricing_options: list[WholesalePricingOption],
+) -> list[PricingOption]:
+    return [
+        PricingOption(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            pricing_model=option.pricing_model,
+            rate=option.rate,
+            currency=option.currency.upper(),
+            is_fixed=option.is_fixed,
+            price_guidance=option.price_guidance,
+            parameters=option.parameters,
+            min_spend_per_package=option.min_spend_per_package,
+        )
+        for option in pricing_options
+    ]
+
+
+def _execution_inventory_config(execution: WholesaleInventoryExecution) -> dict[str, Any]:
+    """Persist execution selectors in legacy GAM keys plus generic selector form."""
+    selectors = [selector.model_dump(mode="json") for selector in execution.selectors]
+    config: dict[str, Any] = {
+        "adapter": execution.adapter,
+        "selectors": selectors,
+        "format_bindings": [binding.model_dump(mode="json") for binding in execution.format_bindings],
+    }
+    if execution.adapter in {"google_ad_manager", "gam"}:
+        ad_units = [selector.external_id for selector in execution.selectors if selector.selector_type == "ad_unit"]
+        placements = [selector.external_id for selector in execution.selectors if selector.selector_type == "placement"]
+        if ad_units:
+            config["ad_units"] = ad_units
+        if placements:
+            config["placements"] = placements
+        if any(selector.options.get("include_descendants") for selector in execution.selectors):
+            config["include_descendants"] = True
+    return config
+
+
+def _wholesale_implementation_config(req: WholesaleProductRequest, adapter_type: str) -> dict[str, Any]:
+    config = _execution_inventory_config(req.inventory.execution)
+    config["adapter"] = adapter_type
+    config["status"] = req.status
+    config["creative_formats"] = [fmt.model_dump(mode="json") for fmt in req.inventory.creative_formats]
+    config["targeting_capabilities"] = req.targeting_capabilities
+    config["optimization_capabilities"] = req.optimization_capabilities
+    return config
+
+
+def _product_status(product: Product) -> str:
+    if product.archived_at is not None:
+        return "archived"
+    return str((product.implementation_config or {}).get("status") or "active")
+
+
+def _pricing_option_schema(option: PricingOption) -> WholesalePricingOption:
+    return WholesalePricingOption(
+        pricing_model=option.pricing_model,
+        rate=option.rate,
+        currency=option.currency,
+        is_fixed=option.is_fixed,
+        price_guidance=option.price_guidance,
+        parameters=option.parameters,
+        min_spend_per_package=option.min_spend_per_package,
+    )
+
+
+def _creative_format_schema(format_id: dict[str, Any], product: Product) -> WholesaleCreativeFormat:
+    creative_formats = (product.implementation_config or {}).get("creative_formats") or []
+    for fmt in creative_formats:
+        raw_format_id = fmt.get("format_id") or {}
+        if raw_format_id.get("agent_url") == format_id.get("agent_url") and raw_format_id.get("id") == format_id.get(
+            "id"
+        ):
+            return WholesaleCreativeFormat(**fmt)
+
+    bindings = (product.implementation_config or {}).get("format_bindings") or []
+    slot_requirements: list[dict[str, Any]] = []
+    for binding in bindings:
+        binding_format = binding.get("format_id") or {}
+        if binding_format.get("agent_url") == format_id.get("agent_url") and binding_format.get("id") == format_id.get(
+            "id"
+        ):
+            slot_requirements = list(binding.get("slot_requirements") or [])
+            break
+    return WholesaleCreativeFormat(
+        format_id=FormatIdRef(agent_url=str(format_id["agent_url"]), id=str(format_id["id"])),
+        slot_requirements=slot_requirements,
+    )
+
+
+def _execution_from_product(product: Product, adapter_type: str) -> WholesaleInventoryExecution:
+    config = dict(product.effective_implementation_config or {})
+    raw_selectors = config.get("selectors")
+    if raw_selectors is None:
+        raw_selectors = []
+        for ad_unit_id in config.get("targeted_ad_unit_ids") or []:
+            raw_selectors.append(
+                {
+                    "selector_type": "ad_unit",
+                    "external_id": str(ad_unit_id),
+                    "options": {"include_descendants": bool(config.get("include_descendants", True))},
+                }
+            )
+        for placement_id in config.get("targeted_placement_ids") or []:
+            raw_selectors.append({"selector_type": "placement", "external_id": str(placement_id), "options": {}})
+
+    selectors = [InventoryExecutionSelector(**selector) for selector in raw_selectors]
+    bindings = [WholesaleFormatBinding(**binding) for binding in config.get("format_bindings") or []]
+    return WholesaleInventoryExecution(adapter=adapter_type, selectors=selectors, format_bindings=bindings)
+
+
+def _wholesale_response_from_product(product: Product, adapter_type: str | None = None) -> WholesaleProductResponse:
+    config = dict(product.implementation_config or {})
+    resolved_adapter = adapter_type or config.get("adapter") or "mock"
+    format_ids = product.effective_format_ids or []
+    publisher_properties = product.effective_properties or []
+    return WholesaleProductResponse(
+        wholesale_product_id=product.product_id,
+        product_id=product.product_id,
+        inventory_profile_id=product.inventory_profile.profile_id if product.inventory_profile else None,
+        name=product.name,
+        description=product.description,
+        status=_product_status(product),
+        delivery_type=product.delivery_type,
+        channels=product.channels,
+        pricing_options=[_pricing_option_schema(option) for option in product.pricing_options or []],
+        forecast=product.forecast,
+        inventory=WholesaleInventory(
+            publisher_properties=[PublisherPropertySelector(**prop) for prop in publisher_properties],
+            creative_formats=[_creative_format_schema(format_id, product) for format_id in format_ids],
+            execution=_execution_from_product(product, resolved_adapter),
+        ),
+        targeting_capabilities=config.get("targeting_capabilities") or {},
+        optimization_capabilities=config.get("optimization_capabilities") or {},
+        allowed_actions=product.allowed_actions,
+        format_options=product.format_options,
+        vendor_metric_optimization=product.vendor_metric_optimization,
+        allowed_principal_ids=product.allowed_principal_ids,
+    )
+
+
+def _validation_issues_for_wholesale_product(
+    req: WholesaleProductRequest,
+    adapter_type: str,
+) -> list[WholesaleValidationIssue]:
+    issues: list[WholesaleValidationIssue] = []
+    if not req.pricing_options:
+        issues.append(
+            WholesaleValidationIssue(
+                code="missing_pricing",
+                field="pricing_options",
+                message="At least one pricing option is required.",
+            )
+        )
+    if not req.inventory.publisher_properties:
+        issues.append(
+            WholesaleValidationIssue(
+                code="missing_publisher_properties",
+                field="inventory.publisher_properties",
+                message="At least one publisher property selector is required.",
+            )
+        )
+    if not req.inventory.creative_formats:
+        issues.append(
+            WholesaleValidationIssue(
+                code="missing_creative_formats",
+                field="inventory.creative_formats",
+                message="At least one creative format is required.",
+            )
+        )
+
+    requested_adapter = (
+        _canonical_catalog_adapter_type(req.inventory.execution.adapter) or req.inventory.execution.adapter
+    )
+    if requested_adapter != adapter_type:
+        issues.append(
+            WholesaleValidationIssue(
+                code="adapter_mismatch",
+                field="inventory.execution.adapter",
+                message=f"Execution adapter {requested_adapter!r} does not match tenant adapter {adapter_type!r}.",
+            )
+        )
+
+    supported = _supported_selector_types(adapter_type)
+    for idx, selector in enumerate(req.inventory.execution.selectors):
+        if selector.selector_type not in supported:
+            issues.append(
+                WholesaleValidationIssue(
+                    code="unsupported_selector_type",
+                    field=f"inventory.execution.selectors.{idx}.selector_type",
+                    message=f"Selector type {selector.selector_type!r} is not supported for adapter {adapter_type!r}.",
+                )
+            )
+    return issues
+
+
+def _selector_exists(session, tenant_id: str, adapter_type: str, selector: InventoryExecutionSelector) -> bool | None:
+    """Return True/False when cache existence is checkable, or None when not cached."""
+    if adapter_type == "google_ad_manager":
+        if GAMSyncRepository(session, tenant_id).count_inventory(selector.selector_type) == 0:
+            return None
+        row = GAMSyncRepository(session, tenant_id).find_inventory_item(selector.selector_type, selector.external_id)
+        return row is not None
+    if adapter_type == "freewheel":
+        freewheel_cache_rows = FreeWheelInventoryRepository(session, tenant_id).search(selector.selector_type, limit=1)
+        if not freewheel_cache_rows:
+            return None
+        freewheel_rows = FreeWheelInventoryRepository(session, tenant_id).search(
+            selector.selector_type,
+            q=selector.external_id,
+            limit=2,
+        )
+        return any(row.entity_id == selector.external_id for row in freewheel_rows)
+    if adapter_type == "springserve":
+        springserve_cache_rows = SpringServeInventoryRepository(session, tenant_id).search(
+            selector.selector_type, limit=1
+        )
+        if not springserve_cache_rows:
+            return None
+        springserve_rows = SpringServeInventoryRepository(session, tenant_id).search(
+            selector.selector_type,
+            q=selector.external_id,
+            limit=2,
+        )
+        return any(row.entity_id == selector.external_id for row in springserve_rows)
+    return None
+
+
+def _validate_wholesale_product(
+    session,
+    tenant_id: str,
+    req: WholesaleProductRequest,
+    adapter_type: str,
+    *,
+    check_selector_cache: bool,
+) -> WholesaleProductValidationResponse:
+    issues = _validation_issues_for_wholesale_product(req, adapter_type)
+    if check_selector_cache:
+        for idx, selector in enumerate(req.inventory.execution.selectors):
+            exists = _selector_exists(session, tenant_id, adapter_type, selector)
+            if exists is False:
+                issues.append(
+                    WholesaleValidationIssue(
+                        code="selector_not_found",
+                        field=f"inventory.execution.selectors.{idx}.external_id",
+                        message=(
+                            f"Selector {selector.selector_type!r}/{selector.external_id!r} "
+                            "was not found in the synced ad-server cache."
+                        ),
+                    )
+                )
+    return WholesaleProductValidationResponse(
+        valid=not any(issue.severity == "error" for issue in issues), issues=issues
+    )
+
+
+def _build_wholesale_product_models(
+    tenant_id: str,
+    product_id: str,
+    req: WholesaleProductRequest,
+    adapter_type: str,
+    existing_profile: InventoryProfile | None = None,
+) -> tuple[Product, InventoryProfile]:
+    format_ids = _creative_format_id_dicts(req.inventory.creative_formats)
+    publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
+    inventory_config = _execution_inventory_config(req.inventory.execution)
+    implementation_config = _wholesale_implementation_config(req, adapter_type)
+
+    profile = existing_profile or InventoryProfile(
+        tenant_id=tenant_id,
+        profile_id=product_id,
+        name=req.name,
+        description=req.description,
+        inventory_config=inventory_config,
+        format_ids=format_ids,
+        publisher_properties=publisher_properties,
+        targeting_template=req.targeting_capabilities or {},
+        constraints={
+            "formats": [fmt["id"] for fmt in format_ids],
+            "channels": req.channels or [],
+            "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
+        },
+    )
+    profile.name = req.name
+    profile.description = req.description
+    profile.inventory_config = inventory_config
+    profile.format_ids = format_ids
+    profile.publisher_properties = publisher_properties
+    profile.targeting_template = req.targeting_capabilities or {}
+    profile.constraints = {
+        "formats": [fmt["id"] for fmt in format_ids],
+        "channels": req.channels or [],
+        "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
+    }
+
+    product = Product(
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=req.name,
+        description=req.description,
+        format_ids=format_ids,
+        targeting_template=req.targeting_capabilities or {},
+        delivery_type=req.delivery_type,
+        channels=req.channels,
+        implementation_config=implementation_config,
+        properties=publisher_properties,
+        property_tags=None,
+        inventory_profile=profile,
+        delivery_measurement={"provider": "publisher"},
+        reporting_capabilities=dict(PRODUCT_REPORTING_CAPABILITIES_DEFAULT),
+        property_targeting_allowed=bool((req.targeting_capabilities or {}).get("allowed_dimensions")),
+        signal_targeting_allowed=bool((req.targeting_capabilities or {}).get("allowed_signals")),
+        forecast=req.forecast,
+        allowed_actions=req.allowed_actions,
+        format_options=req.format_options,
+        vendor_metric_optimization=req.vendor_metric_optimization,
+        archived_at=datetime.now(UTC) if req.status == "archived" else None,
+        allowed_principal_ids=req.allowed_principal_ids,
+    )
+    return product, profile
+
+
+def _update_product_from_wholesale_request(
+    product: Product,
+    req: WholesaleProductRequest,
+    adapter_type: str,
+) -> None:
+    format_ids = _creative_format_id_dicts(req.inventory.creative_formats)
+    publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
+    implementation_config = _wholesale_implementation_config(req, adapter_type)
+
+    product.name = req.name
+    product.description = req.description
+    product.format_ids = format_ids
+    product.targeting_template = req.targeting_capabilities or {}
+    product.delivery_type = req.delivery_type
+    product.channels = req.channels
+    product.implementation_config = implementation_config
+    product.properties = publisher_properties
+    product.property_tags = None
+    product.delivery_measurement = product.delivery_measurement or {"provider": "publisher"}
+    product.reporting_capabilities = product.reporting_capabilities or dict(PRODUCT_REPORTING_CAPABILITIES_DEFAULT)
+    product.property_targeting_allowed = bool((req.targeting_capabilities or {}).get("allowed_dimensions"))
+    product.signal_targeting_allowed = bool((req.targeting_capabilities or {}).get("allowed_signals"))
+    product.forecast = req.forecast
+    product.allowed_actions = req.allowed_actions
+    product.format_options = req.format_options
+    product.vendor_metric_optimization = req.vendor_metric_optimization
+    product.archived_at = datetime.now(UTC) if req.status == "archived" else None
+    product.allowed_principal_ids = req.allowed_principal_ids
+
+    profile = product.inventory_profile
+    if profile is not None:
+        profile.name = req.name
+        profile.description = req.description
+        profile.inventory_config = _execution_inventory_config(req.inventory.execution)
+        profile.format_ids = format_ids
+        profile.publisher_properties = publisher_properties
+        profile.targeting_template = req.targeting_capabilities or {}
+        profile.constraints = {
+            "formats": [fmt["id"] for fmt in format_ids],
+            "channels": req.channels or [],
+            "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
+        }
+
+
+def _buyer_projection(req: WholesaleProductRequest, product_id: str) -> dict[str, Any]:
+    return {
+        "product_id": product_id,
+        "name": req.name,
+        "description": req.description,
+        "delivery_type": req.delivery_type,
+        "format_ids": _creative_format_id_dicts(req.inventory.creative_formats),
+        "publisher_properties": _publisher_property_dicts(req.inventory.publisher_properties),
+        "pricing_options": [option.model_dump(mode="json", exclude_none=True) for option in req.pricing_options],
+        "forecast": req.forecast,
+    }
+
+
+def _adapter_projection(req: WholesaleProductRequest, adapter_type: str) -> dict[str, Any]:
+    config = _execution_inventory_config(req.inventory.execution)
+    return {
+        "adapter": adapter_type,
+        "inventory_config": config,
+        "implementation_config": _wholesale_implementation_config(req, adapter_type),
+    }
+
+
+def _serialize_selector(row: GAMInventory | FreeWheelInventory | SpringServeInventory) -> InventorySelectorSummary:
+    if isinstance(row, GAMInventory):
+        metadata = row.inventory_metadata or {}
+        return InventorySelectorSummary(
+            selector_type=row.inventory_type,
+            external_id=row.inventory_id,
+            name=row.name,
+            path=row.path,
+            parent_id=metadata.get("parent_id"),
+            status=row.status,
+            metadata=metadata,
+        )
+    if isinstance(row, FreeWheelInventory):
+        return InventorySelectorSummary(
+            selector_type=row.entity_type,
+            external_id=row.entity_id,
+            name=row.name,
+            parent_id=row.parent_id,
+            metadata=row.raw_json or {},
+        )
+    return InventorySelectorSummary(
+        selector_type=row.entity_type,
+        external_id=row.entity_id,
+        name=row.name,
+        parent_id=row.supply_router_id or row.supply_partner_id or row.key_id,
+        metadata=row.raw_json or {},
+    )
+
+
 def _adapter_catalog_entry(registry_key: str, adapter_class: Any) -> AdapterCatalogEntry:
     metadata = _ADAPTER_CATALOG_METADATA[registry_key]
     typed_config = _ADAPTER_CONFIG_TYPED.get(registry_key)
@@ -911,6 +1466,486 @@ def get_adapter_contract_capabilities(adapter_type: str):
         return _api_error("adapter_not_found", f"Unknown adapter type: {adapter_type!r}", 404)
 
     return jsonify(_build_adapter_capabilities(canonical_type, adapter_class).model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/inventory/adapter-capabilities", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=InventoryAdapterCapabilitiesResponse, HTTP_404=ApiError))
+def get_inventory_adapter_capabilities(tenant_id: str):
+    """Return the tenant adapter's wholesale-product authoring capabilities."""
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        response = InventoryAdapterCapabilitiesResponse(
+            adapter=adapter_type,
+            selector_types=_WHOLESALE_SELECTOR_CAPABILITIES.get(adapter_type, []),
+            creative_binding_schemas=[
+                CreativeBindingSchema(
+                    selector_type=None,
+                    schema={
+                        "type": "object",
+                        "description": "Adapter-specific creative binding payload persisted with the product.",
+                    },
+                )
+            ],
+            targeting_capabilities={
+                "supports_property_targeting": True,
+                "supports_signal_targeting": adapter_type in {"google_ad_manager", "freewheel", "springserve"},
+            },
+            pricing_capabilities={
+                "supported_pricing_models": list(
+                    _ADAPTER_CONTRACT_PROFILES.get(adapter_type, {}).get("supported_pricing_models", [])
+                )
+            },
+            optimization_capabilities={
+                "supports_forecasting": bool(
+                    _ADAPTER_CONTRACT_PROFILES.get(adapter_type, {}).get("supports_forecasting")
+                ),
+                "supports_pricing_recommendations": bool(
+                    _ADAPTER_CONTRACT_PROFILES.get(adapter_type, {}).get("supports_pricing_recommendations")
+                ),
+            },
+        )
+        return jsonify(response.model_dump(by_alias=True))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/inventory/selectors", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListInventorySelectorsResponse, HTTP_400=ApiError, HTTP_404=ApiError))
+def list_inventory_selectors(tenant_id: str):
+    """Search cached ad-server inventory selectors for wholesale-product setup."""
+    selector_type = request.args.get("selector_type")
+    q = request.args.get("q")
+    parent_id = request.args.get("parent_id")
+    try:
+        limit = min(max(int(request.args.get("limit", "50")), 1), 100)
+        offset = max(int(request.args.get("cursor", "0")), 0)
+    except ValueError:
+        return _api_error("invalid_pagination", "limit and cursor must be integers", 400)
+
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        supported = _supported_selector_types(adapter_type)
+        resolved_selector_type = selector_type or (sorted(supported)[0] if supported else None)
+        if resolved_selector_type is None:
+            response = ListInventorySelectorsResponse(selectors=[], count=0)
+            return jsonify(response.model_dump())
+        if resolved_selector_type not in supported:
+            return _api_error(
+                "unsupported_selector_type",
+                f"Selector type {resolved_selector_type!r} is not supported for adapter {adapter_type!r}",
+                400,
+                details={"supported_selector_types": sorted(supported)},
+            )
+
+        rows: list[GAMInventory | FreeWheelInventory | SpringServeInventory]
+        if adapter_type == "google_ad_manager":
+            rows = cast(
+                list[GAMInventory | FreeWheelInventory | SpringServeInventory],
+                GAMSyncRepository(session, tenant_id).search_inventory(
+                    resolved_selector_type,
+                    q=q,
+                    parent_id=parent_id,
+                    offset=offset,
+                    limit=limit + 1,
+                ),
+            )
+        elif adapter_type == "freewheel":
+            rows = cast(
+                list[GAMInventory | FreeWheelInventory | SpringServeInventory],
+                FreeWheelInventoryRepository(session, tenant_id).search(
+                    resolved_selector_type,
+                    q=q,
+                    parent_id=parent_id,
+                    offset=offset,
+                    limit=limit + 1,
+                ),
+            )
+        elif adapter_type == "springserve":
+            rows = cast(
+                list[GAMInventory | FreeWheelInventory | SpringServeInventory],
+                SpringServeInventoryRepository(session, tenant_id).search(
+                    resolved_selector_type,
+                    q=q,
+                    parent_id=parent_id,
+                    offset=offset,
+                    limit=limit + 1,
+                ),
+            )
+        else:
+            rows = []
+
+        page_rows = rows[:limit]
+        next_cursor = str(offset + limit) if len(rows) > limit else None
+        response = ListInventorySelectorsResponse(
+            selectors=[_serialize_selector(row) for row in page_rows],
+            count=len(page_rows),
+            next_cursor=next_cursor,
+        )
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/inventory/publisher-properties", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=PublisherPropertiesResponse, HTTP_404=ApiError))
+def list_publisher_properties_for_authoring(tenant_id: str):
+    """Return publisher domains, properties, and ready-to-use property selectors."""
+    with get_db_session() as session:
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        repo = TenantConfigRepository(session, tenant_id)
+        partners = repo.list_publisher_partners()
+        properties = repo.list_authorized_properties()
+        tags = repo.list_property_tags()
+
+        domains_by_name: dict[str, PublisherDomainSummary] = {}
+        for partner in partners:
+            domains_by_name[partner.publisher_domain] = PublisherDomainSummary(
+                publisher_domain=partner.publisher_domain,
+                display_name=partner.display_name,
+                is_verified=partner.is_verified,
+                sync_status=partner.sync_status,
+                total_properties=partner.total_properties,
+                authorized_properties=partner.authorized_properties,
+            )
+        for prop in properties:
+            domains_by_name.setdefault(
+                prop.publisher_domain,
+                PublisherDomainSummary(
+                    publisher_domain=prop.publisher_domain,
+                    display_name=prop.publisher_domain,
+                    is_verified=prop.verification_status == "verified",
+                    sync_status=prop.verification_status,
+                ),
+            )
+
+        property_summaries = [
+            PublisherPropertySummary(
+                property_id=prop.property_id,
+                publisher_domain=prop.publisher_domain,
+                property_type=prop.property_type,
+                name=prop.name,
+                identifiers=prop.identifiers or [],
+                tags=prop.tags or [],
+                verification_status=prop.verification_status,
+            )
+            for prop in properties
+        ]
+
+        allowed_selectors: list[AllowedPublisherSelector] = []
+        for domain in sorted(domains_by_name):
+            domain_properties = [prop for prop in properties if prop.publisher_domain == domain]
+            allowed_selectors.append(
+                AllowedPublisherSelector(
+                    publisher_domain=domain,
+                    selection_type="all",
+                    label=f"All properties on {domain}",
+                )
+            )
+            if domain_properties:
+                allowed_selectors.append(
+                    AllowedPublisherSelector(
+                        publisher_domain=domain,
+                        selection_type="by_id",
+                        property_ids=[prop.property_id for prop in domain_properties],
+                        label=f"Selected properties on {domain}",
+                    )
+                )
+            domain_tags = sorted({tag for prop in domain_properties for tag in (prop.tags or [])})
+            if not domain_tags:
+                domain_tags = sorted(tag.tag_id for tag in tags)
+            if domain_tags:
+                allowed_selectors.append(
+                    AllowedPublisherSelector(
+                        publisher_domain=domain,
+                        selection_type="by_tag",
+                        property_tags=domain_tags,
+                        label=f"Tagged properties on {domain}",
+                    )
+                )
+
+        response = PublisherPropertiesResponse(
+            domains=sorted(domains_by_name.values(), key=lambda domain: domain.publisher_domain),
+            properties=property_summaries,
+            allowed_selectors=allowed_selectors,
+        )
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/creative-formats", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListCreativeFormatsForAuthoringResponse, HTTP_404=ApiError))
+def list_creative_formats_for_authoring(tenant_id: str):
+    """Return creative formats usable in wholesale-product authoring."""
+    with get_db_session() as session:
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+
+    from src.admin.blueprints.products import get_creative_formats
+
+    formats = get_creative_formats(
+        tenant_id=tenant_id,
+        name_search=request.args.get("q"),
+        asset_types=request.args.getlist("asset_type") or None,
+    )
+    response_formats: list[CreativeFormatSummary] = []
+    for fmt in formats:
+        raw_format_id = fmt.get("format_id") or {}
+        if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
+            raw_format_id = {"agent_url": fmt["agent_url"], "id": fmt["id"]}
+        if not raw_format_id.get("agent_url") or not raw_format_id.get("id"):
+            continue
+        response_formats.append(
+            CreativeFormatSummary(
+                format_id=FormatIdRef(agent_url=str(raw_format_id["agent_url"]), id=str(raw_format_id["id"])),
+                name=str(fmt.get("name") or raw_format_id["id"]),
+                dimensions=fmt.get("dimensions"),
+                asset_types=list(fmt.get("asset_types") or []),
+                requirements=dict(fmt.get("requirements") or {}),
+                raw=fmt,
+            )
+        )
+    response = ListCreativeFormatsForAuthoringResponse(
+        creative_formats=response_formats,
+        count=len(response_formats),
+    )
+    return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products:validate", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=WholesaleProductRequest,
+    resp=Response(HTTP_200=WholesaleProductValidationResponse, HTTP_404=ApiError),
+)
+def validate_wholesale_product(tenant_id: str):
+    """Validate a wholesale-product draft without persisting it."""
+    req: WholesaleProductRequest = _validated_json_payload()
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        response = _validate_wholesale_product(session, tenant_id, req, adapter_type, check_selector_cache=True)
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products:preview", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=WholesaleProductRequest,
+    resp=Response(HTTP_200=WholesaleProductPreviewResponse, HTTP_404=ApiError),
+)
+def preview_wholesale_product(tenant_id: str):
+    """Preview buyer and adapter projections for a wholesale-product draft."""
+    req: WholesaleProductRequest = _validated_json_payload()
+    product_id = req.wholesale_product_id or "preview"
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        validation = _validate_wholesale_product(session, tenant_id, req, adapter_type, check_selector_cache=True)
+        response = WholesaleProductPreviewResponse(
+            validation=validation,
+            buyer_projection=_buyer_projection(req, product_id),
+            adapter_projection=_adapter_projection(req, adapter_type),
+        )
+        return jsonify(response.model_dump())
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=ListWholesaleProductsResponse, HTTP_404=ApiError))
+def list_wholesale_products(tenant_id: str):
+    """List wholesale products for an embedded tenant."""
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        products = ProductRepository(session, tenant_id).list_all_with_inventory()
+        response = ListWholesaleProductsResponse(
+            wholesale_products=[_wholesale_response_from_product(product, adapter_type) for product in products],
+            count=len(products),
+        )
+        return jsonify(response.model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=WholesaleProductRequest,
+    resp=Response(HTTP_201=WholesaleProductResponse, HTTP_400=ApiError, HTTP_404=ApiError, HTTP_409=ApiError),
+)
+def create_wholesale_product(tenant_id: str):
+    """Create a wholesale product backed by Product + InventoryProfile."""
+    req: WholesaleProductRequest = _validated_json_payload()
+    product_id = req.wholesale_product_id or f"wp_{uuid.uuid4().hex[:12]}"
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        validation = _validate_wholesale_product(session, tenant_id, req, adapter_type, check_selector_cache=True)
+        if not validation.valid:
+            return _api_error(
+                "invalid_wholesale_product",
+                "Wholesale product failed validation",
+                400,
+                details={"issues": [issue.model_dump() for issue in validation.issues]},
+            )
+        product_repo = ProductRepository(session, tenant_id)
+        if product_repo.get_by_id(product_id) is not None:
+            return _api_error("wholesale_product_exists", f"Wholesale product {product_id!r} already exists", 409)
+        profile_repo = InventoryProfileRepository(session, tenant_id)
+        existing_profile = profile_repo.get_by_id(product_id)
+        product, profile = _build_wholesale_product_models(
+            tenant_id,
+            product_id,
+            req,
+            adapter_type,
+            existing_profile=existing_profile,
+        )
+        if existing_profile is None:
+            profile_repo.add(profile)
+            session.flush()
+        product.inventory_profile = profile
+        product.pricing_options = _pricing_option_rows(tenant_id, product_id, req.pricing_options)
+        product_repo.create(product)
+        session.commit()
+
+        from src.admin.services.webhook_publisher import emit_event
+
+        emit_event(tenant_id, "product.created", {"product_id": product.product_id, "name": product.name})
+        notify_product_catalog_changed(
+            tenant_id=tenant_id,
+            action="created",
+            product_id=product.product_id,
+            data={"name": product.name},
+            principal_ids=product.allowed_principal_ids or None,
+        )
+        response = _wholesale_response_from_product(product, adapter_type)
+        return jsonify(response.model_dump(mode="json")), 201
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products/<product_id>", methods=["GET"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=WholesaleProductResponse, HTTP_404=ApiError))
+def get_wholesale_product(tenant_id: str, product_id: str):
+    """Get one wholesale product."""
+    with get_db_session() as session:
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        product = ProductRepository(session, tenant_id).get_by_id_with_pricing(product_id)
+        if product is None:
+            return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products/<product_id>", methods=["PUT"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=WholesaleProductRequest,
+    resp=Response(HTTP_200=WholesaleProductResponse, HTTP_400=ApiError, HTTP_404=ApiError),
+)
+def put_wholesale_product(tenant_id: str, product_id: str):
+    """Replace one wholesale product."""
+    req: WholesaleProductRequest = _validated_json_payload()
+    if req.wholesale_product_id is not None and req.wholesale_product_id != product_id:
+        return _api_error(
+            "wholesale_product_id_mismatch",
+            "Path product_id must match body wholesale_product_id",
+            400,
+        )
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        adapter_type = _tenant_adapter_type(tenant, adapter)
+        validation = _validate_wholesale_product(session, tenant_id, req, adapter_type, check_selector_cache=True)
+        if not validation.valid:
+            return _api_error(
+                "invalid_wholesale_product",
+                "Wholesale product failed validation",
+                400,
+                details={"issues": [issue.model_dump() for issue in validation.issues]},
+            )
+        product_repo = ProductRepository(session, tenant_id)
+        product = product_repo.get_by_id_with_pricing(product_id)
+        if product is None:
+            return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
+        _update_product_from_wholesale_request(product, req, adapter_type)
+        product_repo.replace_pricing_options(product, _pricing_option_rows(tenant_id, product_id, req.pricing_options))
+        session.commit()
+
+        from src.admin.services.webhook_publisher import emit_event
+
+        emit_event(tenant_id, "product.updated", {"product_id": product.product_id, "name": product.name})
+        notify_product_catalog_changed(
+            tenant_id=tenant_id,
+            action="updated",
+            product_id=product.product_id,
+            data={"name": product.name},
+            principal_ids=product.allowed_principal_ids or None,
+        )
+        return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/wholesale-products/<product_id>", methods=["DELETE"])
+@require_tenant_management_api_key
+@spec.validate(resp=Response(HTTP_200=DeleteWholesaleProductResponse, HTTP_404=ApiError))
+def delete_wholesale_product(tenant_id: str, product_id: str):
+    """Delete one wholesale product."""
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+        tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
+        if error is not None:
+            return error
+        assert tenant is not None
+        product_repo = ProductRepository(session, tenant_id)
+        product = product_repo.get_by_id(product_id)
+        if product is None:
+            return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
+        product_name = product.name
+        allowed_principal_ids = product.allowed_principal_ids or None
+        profile_pk = product.inventory_profile_id
+        product_repo.delete(product)
+        if profile_pk is not None and not product_repo.list_by_inventory_profile(profile_pk):
+            profile = InventoryProfileRepository(session, tenant_id).get_by_pk(profile_pk)
+            if profile is not None:
+                InventoryProfileRepository(session, tenant_id).delete(profile)
+        session.commit()
+        notify_product_catalog_changed(
+            tenant_id=tenant_id,
+            action="deleted",
+            product_id=product_id,
+            data={"name": product_name},
+            principal_ids=allowed_principal_ids,
+        )
+        response = DeleteWholesaleProductResponse(success=True, message=f"Wholesale product {product_id!r} deleted")
+        return jsonify(response.model_dump())
 
 
 @tenant_management_api.route("/adapters/google_ad_manager/config-schema", methods=["GET"])
