@@ -136,6 +136,40 @@ The embedding storefront needs two classes of API:
 
 All endpoints use the same API-key auth as the existing composition API.
 
+### Embedded Adapter Setup Boundary
+
+Embedded setup should be candidate-driven, not per-adapter-OpenAPI-driven.
+Generated OpenAPI is still useful for client typing, but it should describe a
+small generic setup contract rather than requiring the storefront to learn a
+different write model for every ad server.
+
+Responsibility split:
+
+| Responsibility | Owner | API family |
+|---|---|---|
+| Tenant lifecycle | Host platform | Tenant Management API |
+| Adapter credentials and network binding | Host platform | Tenant Management API |
+| Inventory sync trigger/status | Host platform or setup UI | Generic inventory setup API |
+| Publisher domains/properties | Publisher or host setup UI | Generic publisher-property API |
+| Inventory bundles | Publisher or host setup UI | Generic inventory-bundle API |
+| Signal mappings | Publisher or host setup UI | Generic signal setup API |
+| Priced products/offers | Publisher or host setup UI | Generic product API |
+
+The embedded setup UI needs to guide a publisher through adapter-specific
+objects without exposing raw adapter implementation as the public contract. The
+API should therefore expose:
+
+- **candidate lists**: normalized objects the user can map
+- **mapping writes**: generic create/update/delete backed by internal models
+- **operator reads**: round-trip the adapter-facing config that the setup UI
+  authored
+- **preview/validation**: show buyer-facing projection plus native adapter
+  consequences before publishing
+
+This is the layer missing from issue 600: the primitives already exist
+(`InventoryProfile`, `TenantSignal`, profile-backed `Product`), but the
+candidate/preview/operator-read setup contract is incomplete.
+
 ### Inventory Sync
 
 ```http
@@ -353,6 +387,167 @@ For composite formats, the response should expose the slots/assets that the
 buyer must provide. The bundle can further narrow these formats, but it should
 not invent a format shape that is unavailable from the creative-format catalog.
 
+### Signal Candidate Discovery
+
+```http
+GET /api/v1/tenants/{tenant_id}/signals/candidates
+```
+
+Returns adapter objects that can become AdCP-visible signals. This endpoint is
+operator/setup-facing; buyer-facing signal discovery still flows through
+`get_signals` after candidates are mapped.
+
+```json
+{
+  "candidates": [
+    {
+      "candidate_id": "gam_custom_key:123:value:456",
+      "name": "Sports Enthusiasts",
+      "description": "GAM custom targeting value under Audience Segment.",
+      "targeting_dimension": "audience",
+      "value_type": "binary",
+      "enumerability": "enumerable",
+      "source": {
+        "adapter": "google_ad_manager",
+        "kind": "custom_key_value",
+        "native_ids": {
+          "key_id": "123",
+          "value_id": "456"
+        }
+      },
+      "mapping": {
+        "state": "unmapped",
+        "signal_id": null
+      },
+      "review": {
+        "required": false,
+        "reasons": []
+      },
+      "evidence": {
+        "confidence": 0.95,
+        "sources": ["synced_custom_targeting"]
+      },
+      "metadata": {}
+    }
+  ]
+}
+```
+
+Candidate fields:
+
+| Field | Meaning |
+|---|---|
+| `candidate_id` | Stable opaque ID for bulk-create and preview. |
+| `targeting_dimension` | Normalized AdCP dimension such as `audience`, `content`, `geo`, `device`, `custom`. |
+| `value_type` | `binary`, `categorical`, or `numeric`. |
+| `enumerability` | `enumerable`, `lazy_enumerable`, `freeform`, or `range`. |
+| `mapping.state` | `unmapped`, `mapped`, `stale`, or `unsupported`. |
+| `source` | Native adapter lineage under a normalized wrapper. |
+| `review` | Flags ambiguous or sensitive mappings before publishing. |
+
+Adapter coverage:
+
+- GAM: audience segments, custom targeting keys/values, and complex targeting
+  groups.
+- FreeWheel: viewership profiles, audience items, custom KV, and standard
+  attributes when synced/available.
+- SpringServe: value lists and KV-like supply metadata when
+  `enable_key_value_targeting` is on.
+- Broadstreet: limited; expose only targeting concepts the adapter can actually
+  materialize.
+- Mock: conformance candidates for binary, categorical, numeric, lazy, and
+  freeform cases.
+
+### Signal Mapping Writes
+
+```http
+GET    /api/v1/tenants/{tenant_id}/signals/mappings
+POST   /api/v1/tenants/{tenant_id}/signals/mappings
+PATCH  /api/v1/tenants/{tenant_id}/signals/mappings/{signal_id}
+DELETE /api/v1/tenants/{tenant_id}/signals/mappings/{signal_id}
+POST   /api/v1/tenants/{tenant_id}/signals/mappings:bulk-create
+```
+
+These endpoints are backed by `TenantSignal`, but unlike buyer-facing
+`get_signals` they must round-trip operator-authored mapping details:
+
+```json
+{
+  "signal_id": "sports_enthusiasts",
+  "name": "Sports Enthusiasts",
+  "description": "Publisher first-party sports audience.",
+  "targeting_dimension": "audience",
+  "value_type": "binary",
+  "categories": [],
+  "data_provider": "publisher_1p",
+  "source_candidate_id": "gam_custom_key:123:value:456",
+  "adapter_config": {
+    "adapter": "google_ad_manager",
+    "kind": "custom_key_value",
+    "key_id": "123",
+    "value_id": "456"
+  },
+  "lineage": {
+    "source": "synced_custom_targeting",
+    "native_ids": {
+      "key_id": "123",
+      "value_id": "456"
+    }
+  }
+}
+```
+
+The existing `/signals` composition endpoints can remain as buyer-friendly
+operator reads, but embedded setup needs this mapping surface so the storefront
+can inspect, diff, edit, and explain what it wrote.
+
+### Setup Preview and Validation
+
+```http
+POST /api/v1/tenants/{tenant_id}/inventory-bundles:preview
+POST /api/v1/tenants/{tenant_id}/signals/mappings:preview
+POST /api/v1/tenants/{tenant_id}/composition:validate
+```
+
+Preview responses should include:
+
+- normalized buyer-facing projection
+- adapter execution summary
+- native adapter payload fragments where safe to expose
+- blocking validation errors
+- warnings and review-required items
+- unsupported targeting/optimization explanations
+- remediation hints
+
+Example:
+
+```json
+{
+  "valid": false,
+  "buyer_projection": {
+    "format_ids": [
+      {"agent_url": "https://creative.adcontextprotocol.org", "id": "homepage_takeover"}
+    ],
+    "publisher_properties": [
+      {"publisher_domain": "example.com", "selection_type": "all"}
+    ]
+  },
+  "adapter_projection": {
+    "adapter": "google_ad_manager",
+    "line_item_inventory": {
+      "targetedPlacementIds": ["123456"]
+    }
+  },
+  "errors": [
+    {
+      "code": "format_binding_missing_placeholder",
+      "message": "homepage_takeover requires a rail creative placeholder."
+    }
+  ],
+  "warnings": []
+}
+```
+
 ### Inventory Bundle CRUD
 
 Preferred external path:
@@ -449,6 +644,12 @@ Projection rules:
 
 ## Adapter Coverage
 
+Adapter setup capability must describe what the embedded setup flow can do
+**now**, not just what the adapter conceptually supports. If an adapter can
+execute a selector shape but does not yet expose synced candidates, the
+capability response should mark candidate discovery unavailable or
+scope-pending.
+
 ### Google Ad Manager
 
 Selector types:
@@ -471,6 +672,10 @@ Capabilities:
 - Pricing models currently include CPM, VCPM, CPC, FLAT_RATE.
 - Targeting is constrained by GAM targeting support and tenant custom targeting
   config.
+- Candidate readiness is strongest here: synced ad units, placements, audience
+  segments, custom targeting keys/values, and lazy value refresh are already
+  present in admin/setup code paths and should be promoted behind the generic
+  APIs.
 
 ### FreeWheel
 
@@ -500,6 +705,10 @@ Capabilities:
 - Some live write/reporting scopes are still pending; capability responses
   should include `available=false` or `scope_pending=true` per feature rather
   than pretending support is complete.
+- Candidate readiness is mixed: inventory sync exists, signal materialization
+  supports declared FreeWheel kinds, but setup APIs still need candidate
+  discovery for audiences, viewership profiles, and custom KV before an
+  embedded storefront can fully self-serve this adapter.
 
 ### Broadstreet
 
@@ -522,6 +731,9 @@ Capabilities:
 - Pricing models are CPM and FLAT_RATE.
 - Pacing maps to Broadstreet delivery rate values such as EVEN, FRONTLOADED,
   ASAP.
+- Candidate readiness should be zone-first. Broadstreet setup can be simpler
+  than GAM/FreeWheel because zones are the primary sellable selector and
+  creative formats map to known Broadstreet templates.
 
 ### SpringServe
 
@@ -548,6 +760,9 @@ Capabilities:
   `enable_key_value_targeting`.
 - SpringServe supply read scope can be pending; selector search should return a
   clear sync/scope state when no cache is available.
+- Candidate readiness is partial: supply partners/tags are cached, value lists
+  can become signals, and composed signal materialization should be advertised
+  only when the adapter can execute it.
 
 ### Mock
 
@@ -581,6 +796,18 @@ publisher domains and ad-server inventory. Product forms should either:
 - select an existing bundle, then configure commercial terms, or
 - launch bundle creation inline and return to product pricing.
 
+For embedded tenants specifically:
+
+- Adapter credential forms remain platform-managed and should be read-only or
+  hidden in the publisher UI.
+- Setup UI should start from adapter capability and candidate APIs, not from
+  raw adapter config forms.
+- Publisher-facing setup should not require the publisher to type native ad
+  server IDs when a synced selector cache is available.
+- Shared-agent deployments must not infer publisher domains from agent URLs.
+- Native adapter details can be shown as explanation/evidence, but the saved
+  object should still be the generic bundle/signal/product shape.
+
 ## Validation Rules
 
 - Bundle `publisher_properties` must be non-empty.
@@ -613,10 +840,12 @@ publisher domains and ad-server inventory. Product forms should either:
 5. Implement normalized selector search over each adapter's local cache.
 6. Add generic inventory sync, publisher-property, and creative-format
    discovery endpoints.
-7. Update product API to accept `inventory_bundle_id` while retaining
+7. Add signal candidate, signal mapping, and setup preview endpoints backed by
+   `TenantSignal`.
+8. Update product API to accept `inventory_bundle_id` while retaining
    `inventory_profile_id` as an alias.
-8. Update Admin UI forms to create bundles first and products second.
-9. Update `get_products` projection tests for bundle-derived formats,
+9. Update Admin UI forms to create bundles first and products second.
+10. Update `get_products` projection tests for bundle-derived formats,
    publisher properties, and capabilities.
 
 ## Open Decisions
