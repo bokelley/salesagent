@@ -412,13 +412,14 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
-    from core.platforms._delegate import SUPPORTED_MAJOR_VERSIONS
+    from core.platforms._delegate import SUPPORTED_ADCP_VERSIONS, SUPPORTED_MAJOR_VERSIONS
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
 
     capabilities = DecisioningCapabilities(
         specialisms=["sales-non-guaranteed", "signal-owned"],
         adcp=Adcp(
             major_versions=sorted(SUPPORTED_MAJOR_VERSIONS),
+            supported_versions=list(SUPPORTED_ADCP_VERSIONS),
             idempotency=IdempotencySupported(supported=True, replay_ttl_seconds=IDEMPOTENCY_REPLAY_TTL_SECONDS),
         ),
         # Both billing modes are supported at the platform level.

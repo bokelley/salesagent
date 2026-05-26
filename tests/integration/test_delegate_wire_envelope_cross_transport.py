@@ -235,6 +235,7 @@ def _create_media_buy_payload(
     product_id = authenticated_principal["product_id"]
 
     return {
+        "adcp_version": "3.1-beta.3",
         "account": {"account_id": account_id},
         "idempotency_key": idempotency_key,
         "brand": {"domain": "testbrand.example"},

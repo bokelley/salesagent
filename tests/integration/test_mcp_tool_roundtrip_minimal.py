@@ -25,7 +25,11 @@ _WIRE_ACCOUNT = {"brand": _WIRE_BRAND, "operator": "testbrand.com"}
 
 def _wire_envelope(prefix: str) -> dict:
     """Return ``account`` + ``idempotency_key`` for inclusion in mutation requests."""
-    return {"account": _WIRE_ACCOUNT, "idempotency_key": f"{prefix}-{uuid.uuid4()}"}
+    return {
+        "account": _WIRE_ACCOUNT,
+        "idempotency_key": f"{prefix}-{uuid.uuid4()}",
+        "adcp_version": "3.1-beta.3",
+    }
 
 
 @pytest.fixture
