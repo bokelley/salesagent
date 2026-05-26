@@ -344,7 +344,8 @@ class TestCreativeAssignmentPrincipalIdAutoApprove:
 
         assert result.status == "completed"
         assert result.response is not None
-        assert result.response.status == MediaBuyStatus.pending_start
+        assert result.response.status == "completed"
+        assert result.response.media_buy_status == MediaBuyStatus.pending_start
         media_buy_id = getattr(result.response, "media_buy_id", None)
         assert media_buy_id is not None, "Response should contain media_buy_id"
 
