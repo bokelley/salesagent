@@ -5,6 +5,30 @@ from __future__ import annotations
 from typing import Any
 
 DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+REFERENCE_CREATIVE_AGENT_URL_ALIASES = frozenset(
+    {
+        DEFAULT_CREATIVE_AGENT_URL,
+        "https://adcontextprotocol.org/agents/formats",
+    }
+)
+
+
+def normalize_reference_agent_url(agent_url: Any) -> str:
+    """Return the canonical reference-agent URL when ``agent_url`` is a known alias."""
+    normalized = str(agent_url).rstrip("/")
+    if normalized.endswith("/mcp"):
+        normalized = normalized.removesuffix("/mcp").rstrip("/")
+    if normalized in REFERENCE_CREATIVE_AGENT_URL_ALIASES:
+        return DEFAULT_CREATIVE_AGENT_URL
+    return normalized
+
+
+def is_reference_creative_agent_url(agent_url: Any) -> bool:
+    """Return whether ``agent_url`` identifies the AdCP reference format catalog."""
+    if not agent_url:
+        return False
+    return normalize_reference_agent_url(agent_url) == DEFAULT_CREATIVE_AGENT_URL
+
 
 CANONICAL_DISPLAY_FORMAT_IDS = ("display_image", "display_html", "display_js")
 CANONICAL_CAROUSEL_FORMAT_IDS = (
@@ -51,5 +75,8 @@ __all__ = [
     "CANONICAL_VIDEO_FORMAT_IDS",
     "DEFAULT_CREATIVE_AGENT_URL",
     "DISPLAY_FORMAT_LABELS",
+    "REFERENCE_CREATIVE_AGENT_URL_ALIASES",
     "canonical_format_ref",
+    "is_reference_creative_agent_url",
+    "normalize_reference_agent_url",
 ]

@@ -9,8 +9,11 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
+from src.core.creative_agent_registry import CreativeAgentRegistry
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import CreativeAsset
 from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._validation import _validate_creative_input
 from tests.harness import make_mock_uow
 
 
@@ -121,6 +124,35 @@ class TestSyncCreativesFormatValidation:
             assert len(response.creatives) == 1
             assert response.creatives[0].action == CreativeAction.created
             assert response.creatives[0].creative_id == "creative_123"
+
+    def test_product_advertised_reference_format_alias_validates_locally(self, monkeypatch):
+        """Formats advertised as adcontextprotocol.org/agents/formats use the local catalog."""
+        registry = CreativeAgentRegistry()
+        network_mock = MagicMock(side_effect=AssertionError("standard format alias should not hit network"))
+        monkeypatch.setattr(registry, "get_formats_for_agent", network_mock)
+
+        creative = CreativeAsset(
+            creative_id="creative_123",
+            name="Product Format Creative",
+            format_id={"agent_url": "https://adcontextprotocol.org/agents/formats", "id": "display_300x250"},
+            assets={
+                "main": {
+                    "asset_type": "image",
+                    "url": "https://example.com/ad.png",
+                    "width": 300,
+                    "height": 250,
+                    "format": "png",
+                }
+            },
+        )
+
+        validated = _validate_creative_input(creative, registry, "principal_123")
+
+        assert validated.format is not None
+        assert validated.format.id == "display_image"
+        assert validated.format.width == 300
+        assert validated.format.height == 250
+        network_mock.assert_not_called()
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""

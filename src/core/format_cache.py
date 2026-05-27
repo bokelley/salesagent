@@ -20,7 +20,12 @@ from typing import Any
 from adcp.types import FormatId as LibraryFormatId
 
 from src.core._deprecations import LEGACY_FORMAT_ID_SUNSET, warn_deprecated
-from src.core.canonical_formats import CANONICAL_FORMAT_IDS, DEFAULT_CREATIVE_AGENT_URL
+from src.core.canonical_formats import (
+    CANONICAL_FORMAT_IDS,
+    DEFAULT_CREATIVE_AGENT_URL,
+    is_reference_creative_agent_url,
+    normalize_reference_agent_url,
+)
 from src.core.schemas import FormatId
 
 # Default agent URL for AdCP reference implementation
@@ -32,10 +37,7 @@ CACHE_FILE = CACHE_DIR / "reference_formats.json"
 
 
 def _is_default_agent_url(agent_url: Any) -> bool:
-    normalized = str(agent_url).rstrip("/")
-    if normalized.endswith("/mcp"):
-        normalized = normalized.removesuffix("/mcp")
-    return normalized == DEFAULT_AGENT_URL.rstrip("/")
+    return is_reference_creative_agent_url(agent_url)
 
 
 def _canonical_reference_format_kwargs(format_id: str, agent_url: Any = DEFAULT_AGENT_URL) -> dict[str, Any]:
@@ -83,9 +85,7 @@ def _canonical_reference_format_kwargs(format_id: str, agent_url: Any = DEFAULT_
 def canonical_format_identity(format_ref: Any) -> tuple[str, str, int | None, int | None, int | None]:
     """Return a comparable canonical identity for a FormatId-like value."""
     fmt = upgrade_legacy_format_id(format_ref)
-    agent_url = str(fmt.agent_url).rstrip("/")
-    if agent_url.endswith("/mcp"):
-        agent_url = agent_url.removesuffix("/mcp")
+    agent_url = normalize_reference_agent_url(fmt.agent_url)
     return (
         agent_url,
         fmt.id,

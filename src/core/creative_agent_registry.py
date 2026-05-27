@@ -767,6 +767,12 @@ class CreativeAgentRegistry:
         if cached and not cached.is_expired() and not force_refresh and not has_filters:
             return CachedFetchResult(formats=cached.formats)
 
+        if not has_filters:
+            from src.core.standard_formats import get_standard_formats, is_standard_agent
+
+            if is_standard_agent(agent.agent_url):
+                return CachedFetchResult(formats=get_standard_formats())
+
         try:
             formats = await self._fetch_formats_from_agent(
                 client,

@@ -542,6 +542,21 @@ class TestStaleCacheFallback:
         assert registry._format_cache[key].formats == fresh_formats
 
     @pytest.mark.asyncio
+    async def test_standard_agent_uses_local_catalog_without_network(self, monkeypatch):
+        """The built-in reference agent is served locally, not fetched over HTTP."""
+        registry = CreativeAgentRegistry()
+        standard_agent = registry.DEFAULT_AGENT
+
+        fetch_mock = AsyncMock(side_effect=AssertionError("standard catalog should not hit network"))
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", fetch_mock)
+
+        result = await self._call_helper(registry, standard_agent)
+
+        assert any(fmt.format_id.id == "display_300x250" for fmt in result.formats)
+        assert result.stale is False
+        fetch_mock.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_list_all_formats_with_errors_emits_stale_response_warning(self, monkeypatch):
         """list_all_formats_with_errors surfaces stale fallback as STALE_RESPONSE warning,
         not AGENT_UNREACHABLE — and still includes the cached formats in the response.
@@ -550,10 +565,10 @@ class TestStaleCacheFallback:
         # Patch out client construction — _fetch_formats_from_agent is mocked anyway.
         registry._build_adcp_client = lambda _agents: Mock()  # type: ignore[assignment]
 
-        # Only the default agent in scope (no tenant agents)
-        default_agent = registry.DEFAULT_AGENT
+        agent = self._agent()
+        registry._get_tenant_agents = lambda tenant_id=None: [agent]  # type: ignore[assignment]
         cached_formats = [Mock(name="cached_fmt", spec=[])]
-        self._seed_cache(registry, default_agent, age_seconds=7200, formats=cached_formats)
+        self._seed_cache(registry, agent, age_seconds=7200, formats=cached_formats)
 
         boom = RuntimeError("upstream 503")
         monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))
@@ -568,13 +583,15 @@ class TestStaleCacheFallback:
         assert err.details is not None
         assert err.details["served_from_cache"] is True
         assert err.details["cache_age_seconds"] >= 7200
-        assert err.details["agent_url"] == str(default_agent.agent_url)
+        assert err.details["agent_url"] == str(agent.agent_url)
 
     @pytest.mark.asyncio
     async def test_list_all_formats_with_errors_falls_back_to_agent_unreachable(self, monkeypatch):
         """No usable cache + fetch failure → AGENT_UNREACHABLE (existing behavior preserved)."""
         registry = CreativeAgentRegistry()
         registry._build_adcp_client = lambda _agents: Mock()  # type: ignore[assignment]
+        agent = self._agent()
+        registry._get_tenant_agents = lambda tenant_id=None: [agent]  # type: ignore[assignment]
 
         boom = RuntimeError("upstream 503")
         monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))

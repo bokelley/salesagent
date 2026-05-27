@@ -116,6 +116,10 @@ class TestIsStandardAgent:
     def test_trailing_slash_tolerated(self):
         assert is_standard_agent(STANDARD_AGENT_URL + "/") is True
 
+    def test_public_format_agent_alias_tolerated(self):
+        assert is_standard_agent("https://adcontextprotocol.org/agents/formats") is True
+        assert is_standard_agent("https://adcontextprotocol.org/agents/formats/mcp/") is True
+
     def test_other_url_rejected(self):
         assert is_standard_agent("https://example.com") is False
         assert is_standard_agent("https://creative.scope3.com") is False
@@ -169,6 +173,18 @@ class TestRegistryShortCircuit:
             fmt = asyncio.run(registry.get_format(STANDARD_AGENT_URL, "display_image"))
             assert fmt is not None
             assert fmt.format_id.id == "display_image"
+            mock_network.assert_not_called()
+
+    def test_get_format_short_circuits_for_public_format_agent_alias(self):
+        """Product-advertised public format-agent URLs resolve via the local catalog."""
+        from src.core.creative_agent_registry import CreativeAgentRegistry
+
+        registry = CreativeAgentRegistry()
+
+        with patch.object(registry, "get_formats_for_agent", new=AsyncMock(return_value=[])) as mock_network:
+            fmt = asyncio.run(registry.get_format("https://adcontextprotocol.org/agents/formats", "display_300x250"))
+            assert fmt is not None
+            assert fmt.format_id.id == "display_300x250"
             mock_network.assert_not_called()
 
     def test_get_format_falls_through_for_custom_agent(self):

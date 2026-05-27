@@ -104,6 +104,16 @@ def test_canonical_format_identity_accepts_mcp_suffix_and_format_id_alias():
     assert legacy_alias == canonical
 
 
+def test_canonical_format_identity_accepts_public_format_agent_alias():
+    public_agent_alias = "https://adcontextprotocol.org/agents/formats"
+    legacy_alias = canonical_format_identity({"agent_url": public_agent_alias, "id": "display_300x250"})
+    canonical = canonical_format_identity(
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_image", "width": 300, "height": 250}
+    )
+
+    assert legacy_alias == canonical
+
+
 def test_canonical_format_matches_legacy_fixed_size_to_canonical_parameters():
     assert canonical_format_matches(
         {"agent_url": DEFAULT_AGENT_URL, "id": "display_image", "width": 300, "height": 250},

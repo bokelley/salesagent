@@ -25,7 +25,11 @@ from typing import Any
 from adcp.canonical_formats.fixtures import load_v1_reference_catalog
 from adcp.types import FormatId as LibraryFormatId
 
-from src.core.canonical_formats import CANONICAL_FORMAT_IDS, DEFAULT_CREATIVE_AGENT_URL
+from src.core.canonical_formats import (
+    CANONICAL_FORMAT_IDS,
+    DEFAULT_CREATIVE_AGENT_URL,
+    is_reference_creative_agent_url,
+)
 
 # Use the salesagent-extended Format (adds internal platform_config / category /
 # requirements fields). The GAM adapter reads format_obj.platform_config for
@@ -288,6 +292,11 @@ def get_standard_format(format_id: str) -> Format | None:
     return STANDARD_FORMATS.get(format_id)
 
 
+def get_standard_formats() -> list[Format]:
+    """Return all local reference-catalog formats."""
+    return list(STANDARD_FORMATS.values())
+
+
 def is_standard_agent(agent_url: str) -> bool:
     """``True`` if ``agent_url`` matches the reference creative agent.
 
@@ -295,10 +304,7 @@ def is_standard_agent(agent_url: str) -> bool:
     canonicalization the registry uses on cache keys is overkill for this
     boolean check).
     """
-    if not agent_url:
-        return False
-    # Pydantic AnyUrl is not a str - coerce so .rstrip works regardless.
-    return str(agent_url).rstrip("/") == STANDARD_AGENT_URL.rstrip("/")
+    return is_reference_creative_agent_url(agent_url)
 
 
 __all__: list[str] = [
@@ -306,5 +312,6 @@ __all__: list[str] = [
     "STANDARD_FORMAT_IDS",
     "STANDARD_FORMATS",
     "get_standard_format",
+    "get_standard_formats",
     "is_standard_agent",
 ]
