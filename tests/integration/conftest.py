@@ -662,7 +662,7 @@ main()
     # means the route is mounted and the test can proceed).
     import http.client as _http_client
 
-    max_wait = 30
+    max_wait = int(os.environ.get("MCP_SERVER_STARTUP_TIMEOUT", "90" if os.environ.get("CI") else "30"))
     start_time = time.time()
     server_ready = False
 
