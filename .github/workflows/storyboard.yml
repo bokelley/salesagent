@@ -19,6 +19,10 @@ on:
           - "false"
           - "true"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CONDUCTOR_PORT: "8000"
   SEED_DEMO_AUTO_APPROVE: "1"
