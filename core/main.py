@@ -428,8 +428,14 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
-    from core.platforms._delegate import SUPPORTED_ADCP_VERSIONS, SUPPORTED_MAJOR_VERSIONS
+    from core.platforms._delegate import (
+        SUPPORTED_ADCP_VERSIONS,
+        SUPPORTED_MAJOR_VERSIONS,
+        install_adcp_wire_version_compat,
+    )
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
+
+    install_adcp_wire_version_compat()
 
     capabilities = DecisioningCapabilities(
         specialisms=["sales-non-guaranteed", "signal-owned"],

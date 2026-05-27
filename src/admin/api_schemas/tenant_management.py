@@ -26,6 +26,7 @@ from pydantic import (
 from src.admin.api_schemas.composition import TenantSignalCreate
 from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
+from src.services.catalog_event_types import TENANT_MANAGEMENT_CATALOG_EVENT_TYPES
 
 _EXTRA_MODE = get_pydantic_extra_mode()
 
@@ -1902,8 +1903,7 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "creative.created",
     "creative.status_changed",
     "principal.created",
-    "product.created",
-    "product.updated",
+    *TENANT_MANAGEMENT_CATALOG_EVENT_TYPES,
     # ``sync_run`` (not ``sync``) — the noun is the persistent SyncJob row,
     # the verb-past pattern is ``<entity>.<verb-past>`` consistent with the
     # rest of the catalog. The payload's ``data.sync_run_id`` matches.
@@ -1922,6 +1922,10 @@ WebhookEventType = Literal[
     "principal.created",
     "product.created",
     "product.updated",
+    "product.removed",
+    "signal.created",
+    "signal.updated",
+    "signal.removed",
     "sync_run.completed",
     "sync_run.failed",
     "tenant.config_changed",

@@ -854,6 +854,10 @@ components:
             - principal.created
             - product.created
             - product.updated
+            - product.removed
+            - signal.created
+            - signal.updated
+            - signal.removed
             - sync_run.completed
             - sync_run.failed
             - tenant.config_changed

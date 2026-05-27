@@ -23,6 +23,7 @@ from src.core.database.repositories.push_notification import (
 )
 from src.core.database.repositories.uow import PushNotificationUoW
 from src.core.exceptions import AdCPValidationError
+from src.services.catalog_event_types import CATALOG_CHANGE_EVENT_TYPES
 from src.services.protocol_webhook_service import _normalize_localhost_for_docker
 from src.services.webhook_signing import (
     SIGNING_MODE_BOTH,
@@ -35,15 +36,7 @@ ACCOUNT_NOTIFICATION_EVENT_TYPES = frozenset(
     {
         "creative.status_changed",
         "creative.purged",
-        "product.created",
-        "product.updated",
-        "product.priced",
-        "product.removed",
-        "signal.created",
-        "signal.updated",
-        "signal.priced",
-        "signal.removed",
-        "wholesale_feed.bulk_change",
+        *CATALOG_CHANGE_EVENT_TYPES,
     }
 )
 
