@@ -180,7 +180,7 @@ def get_engine():
 
 def reset_engine():
     """Reset engine for testing - closes existing connections and clears global state."""
-    global _engine, _session_factory, _scoped_session
+    global _engine, _session_factory, _scoped_session, _is_healthy, _last_health_check
 
     if _scoped_session is not None:
         _scoped_session.remove()
@@ -191,6 +191,8 @@ def reset_engine():
         _engine = None
 
     _session_factory = None
+    _is_healthy = True
+    _last_health_check = 0.0
 
 
 def reset_health_state():
