@@ -61,10 +61,52 @@ from src.core.transport_helpers import enrich_identity_with_account
 
 logger = logging.getLogger(__name__)
 
+_WIRE_COMPATIBLE_ADCP_VERSIONS: tuple[str, ...] = (
+    # Agentic's current @adcp/sdk emits this patch-level beta envelope. The
+    # request/response wire shape is compatible with the packaged beta.4 SDK,
+    # so accept and advertise it until the Python SDK pin catches up.
+    "3.1-beta.5",
+)
+
+
+def _supported_adcp_versions() -> tuple[str, ...]:
+    """Return release-precision versions accepted by this agent."""
+    return tuple(dict.fromkeys((*get_supported_adcp_versions(), *_WIRE_COMPATIBLE_ADCP_VERSIONS)))
+
+
 # Release-precision AdCP versions this agent serves on the native v3 surface.
-# Keep this sourced from the SDK so beta bumps automatically advertise the
-# packaged spec version instead of leaving stale local constants behind.
-SUPPORTED_ADCP_VERSIONS: tuple[str, ...] = get_supported_adcp_versions()
+# Keep SDK-owned versions sourced from the SDK and append explicit wire-compatible
+# aliases above so capabilities and runtime validation stay in sync.
+SUPPORTED_ADCP_VERSIONS: tuple[str, ...] = _supported_adcp_versions()
+_SDK_WIRE_COMPAT_INSTALLED = False
+
+
+def install_adcp_wire_version_compat() -> None:
+    """Keep SDK strict envelope validation aligned with local aliases."""
+    global _SDK_WIRE_COMPAT_INSTALLED
+    if _SDK_WIRE_COMPAT_INSTALLED:
+        return
+    _SDK_WIRE_COMPAT_INSTALLED = True
+
+    from adcp.validation import envelope
+
+    envelope.SUPPORTED_WIRE_VERSIONS = tuple(
+        dict.fromkeys((*envelope.SUPPORTED_WIRE_VERSIONS, *_WIRE_COMPATIBLE_ADCP_VERSIONS))
+    )
+    sdk_detect_wire_version = envelope.detect_wire_version
+
+    def detect_wire_version_compat(
+        payload: Any,
+        *,
+        supported: tuple[str, ...] = envelope.SUPPORTED_WIRE_VERSIONS,
+    ) -> str | None:
+        return sdk_detect_wire_version(
+            payload,
+            supported=tuple(dict.fromkeys((*supported, *_WIRE_COMPATIBLE_ADCP_VERSIONS))),
+        )
+
+    envelope.detect_wire_version = detect_wire_version_compat
+
 
 # Process-singleton guard so the misconfig WARNING (see _build_identity)
 # fires once per process rather than once per request — repeated logs
@@ -199,7 +241,7 @@ def _resolve_requested_version(req: Any) -> str:
             message=str(exc),
             recovery="correctable",
             field=field,
-            details={"supported_versions": list(exc.supported)},
+            details={field: exc.wire_value, "supported_versions": list(exc.supported)},
         ) from exc
 
 

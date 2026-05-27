@@ -30,9 +30,12 @@ from src.admin.services.sync_webhook_emission import wait_for_dispatch
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.repositories.webhook_subscription import hash_secret
 from tests.factories import (
+    AdapterConfigFactory,
     ContextFactory,
+    GAMInventoryFactory,
     ObjectWorkflowMappingFactory,
     PrincipalFactory,
+    ProductFactory,
     TenantFactory,
     WebhookSubscriptionFactory,
     WorkflowStepFactory,
@@ -530,6 +533,10 @@ class TestExpandedEventCatalog:
         "principal.created",
         "product.created",
         "product.updated",
+        "product.removed",
+        "signal.created",
+        "signal.updated",
+        "signal.removed",
         # Issue #463: inventory-sync visibility events. Catalog plumbing
         # only — the real ``SyncJob``-driven emission path is covered by
         # ``TestSyncTerminalEmission`` below.
@@ -595,6 +602,77 @@ class TestExpandedEventCatalog:
         assert envelope["event_type"] == event_type
         assert envelope["tenant_id"] == tenant.tenant_id
         assert envelope["data"] == {"sample_field": "sample_value"}
+
+    def test_signal_mapping_create_emits_signal_created_webhook(
+        self, client, auth_headers, bound_factories, monkeypatch
+    ):
+        """Managed signal writes publish Tenant Management catalog webhooks."""
+        bound_factories.info["management_api_caller"] = True
+        tenant = TenantFactory(
+            tenant_id="tenant_signal_webhook",
+            ad_server="google_ad_manager",
+            is_embedded=True,
+        )
+        AdapterConfigFactory(tenant=tenant, adapter_type="google_ad_manager", gam_network_code="123456")
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="audience_segment",
+            inventory_id="seg_auto_intenders",
+            name="Auto Intenders",
+            inventory_metadata={"type": "FIRST_PARTY"},
+        )
+        bound_factories.commit()
+        TestSyncTerminalEmission._subscribe(client, auth_headers, tenant.tenant_id, "signal.created")
+        receiver = TestSyncTerminalEmission._install_capture(monkeypatch)
+
+        response = client.post(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/signals",
+            headers=auth_headers,
+            json={
+                "signal_id": "audience_auto_intenders",
+                "name": "Auto Intenders",
+                "description": "First-party auto audience.",
+                "value_type": "binary",
+                "adapter_config": {
+                    "type": "passthrough",
+                    "kind": "audience_segment",
+                    "segment_id": "seg_auto_intenders",
+                },
+                "data_provider": "publisher_1p",
+                "targeting_dimension": "audience",
+            },
+        )
+
+        assert response.status_code == 201, response.get_data(as_text=True)
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "signal.created"
+        assert envelope["data"] == {"signal_id": "audience_auto_intenders", "name": "Auto Intenders"}
+
+    def test_wholesale_product_delete_emits_product_removed_webhook(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """Managed product deletes publish the event the schema accepts."""
+        ProductFactory(
+            tenant=tenant,
+            product_id="api_product_to_remove",
+            name="API Product To Remove",
+            allowed_principal_ids=[],
+        )
+        bound_factories.commit()
+        TestSyncTerminalEmission._subscribe(client, auth_headers, tenant.tenant_id, "product.removed")
+        receiver = TestSyncTerminalEmission._install_capture(monkeypatch)
+
+        response = client.delete(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products/api_product_to_remove",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.get_data(as_text=True)
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "product.removed"
+        assert envelope["data"] == {"product_id": "api_product_to_remove", "name": "API Product To Remove"}
 
 
 # ---------------------------------------------------------------------------

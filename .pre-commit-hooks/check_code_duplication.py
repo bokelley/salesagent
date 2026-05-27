@@ -32,6 +32,7 @@ import json
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BASELINE_FILE = ".duplication-baseline"
@@ -114,6 +115,25 @@ def scan_duplications(directory: str) -> list[str]:
     return fingerprints
 
 
+def scopes_from_paths(paths: list[str]) -> list[str]:
+    """Infer affected duplication scopes from pre-commit filenames."""
+    scopes: set[str] = set()
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.parts or path.suffix != ".py":
+            continue
+        if path.parts[0] in {"src", "tests"}:
+            scopes.add(path.parts[0])
+    return sorted(scopes)
+
+
+def scan_scopes(scopes: list[str]) -> dict[str, list[str]]:
+    """Run pylint similarity scans for each scope in parallel."""
+    with ThreadPoolExecutor(max_workers=len(scopes)) as executor:
+        futures = {scope: executor.submit(scan_duplications, f"{scope}/") for scope in scopes}
+        return {scope: futures[scope].result() for scope in scopes}
+
+
 def read_baseline(baseline_file: Path) -> dict[str, list[str]] | None:
     """Read baseline fingerprint sets from the baseline file (JSON format).
 
@@ -151,20 +171,24 @@ def write_baseline(baseline_file: Path, fingerprints: dict[str, list[str]]) -> N
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check that no NEW code duplication blocks were introduced")
     parser.add_argument("--update-baseline", action="store_true", help="Force update baseline to current fingerprints")
+    parser.add_argument("--scope", choices=("src", "tests"), action="append", help="Limit scan to one or more scopes")
+    parser.add_argument("paths", nargs="*", help="Changed files, usually passed by pre-commit")
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
     baseline_file = repo_root / BASELINE_FILE
+    scopes = args.scope or scopes_from_paths(args.paths) or ["src", "tests"]
 
-    print("Scanning for code duplication (pylint R0801)...")
-    current = {
-        "src": scan_duplications("src/"),
-        "tests": scan_duplications("tests/"),
-    }
+    print(f"Scanning for code duplication (pylint R0801): {', '.join(f'{scope}/' for scope in scopes)}")
+    current = scan_scopes(scopes)
 
     baseline = read_baseline(baseline_file)
 
     if baseline is None:
+        if set(scopes) != {"src", "tests"}:
+            scopes = ["src", "tests"]
+            print(f"No baseline found. Running full scan before creating {BASELINE_FILE}.")
+            current = scan_scopes(scopes)
         print(f"No baseline found. Creating {BASELINE_FILE}:")
         for scope, fps in current.items():
             print(f"  {scope}/   = {len(set(fps))} duplicate blocks")
@@ -172,15 +196,17 @@ def main() -> int:
         return 0
 
     if args.update_baseline:
-        for scope, fps in current.items():
+        updated = {**baseline, **current}
+        for scope in scopes:
             old_count = len(set(baseline.get(scope, [])))
-            print(f"Updating baseline: {scope}/ {old_count} -> {len(set(fps))}")
-        write_baseline(baseline_file, current)
+            print(f"Updating baseline: {scope}/ {old_count} -> {len(set(current[scope]))}")
+        write_baseline(baseline_file, updated)
         return 0
 
     failed = False
     changed = False
-    for scope in ("src", "tests"):
+    updated = {**baseline}
+    for scope in scopes:
         baseline_set = set(baseline.get(scope, []))
         current_set = set(current[scope])
 
@@ -193,6 +219,7 @@ def main() -> int:
         elif removed:
             print(f"  {scope}/:  {len(current_set)} duplicate blocks (-{len(removed)} fixed)")
             changed = True
+            updated[scope] = current[scope]
         else:
             print(f"  {scope}/:  {len(current_set)} duplicate blocks (unchanged)")
 
@@ -210,7 +237,7 @@ def main() -> int:
     # deletions that masked duplicates) so the ratchet keeps shrinking.
     if changed:
         print(f"Automatically updating {BASELINE_FILE}...")
-        write_baseline(baseline_file, current)
+        write_baseline(baseline_file, updated)
 
     return 0
 

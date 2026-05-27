@@ -72,6 +72,12 @@ from src.admin.api_schemas.composition import (
     TenantSignalUpdate,
 )
 from src.admin.auth_helpers import require_api_key_auth
+from src.admin.services.catalog_webhook_events import (
+    publish_product_catalog_change,
+    publish_product_record_catalog_change,
+    publish_product_record_update_catalog_change,
+    publish_signal_catalog_change,
+)
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdvertiserRoutingRule,
@@ -88,7 +94,6 @@ from src.core.database.repositories.advertiser_mapping import (
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
-from src.services.protocol_change_webhooks import notify_signal_catalog_changed
 
 logger = logging.getLogger(__name__)
 
@@ -447,6 +452,7 @@ def create_product(tenant_id: str):
         except IntegrityError as exc:
             session.rollback()
             return _api_error("conflict", str(exc), 409)
+        publish_product_record_catalog_change(tenant_id=tenant_id, action="created", product=product)
         return jsonify(_product_to_read(product)), 201
 
 
@@ -465,6 +471,7 @@ def update_product(tenant_id: str, product_id: str):
         product = repo.get_by_id_with_pricing(product_id)
         if product is None:
             return _api_error("product_not_found", f"Product {product_id!r} not found.", 404)
+        previous_allowed_principal_ids = list(product.allowed_principal_ids) if product.allowed_principal_ids else None
 
         fields_set = payload.model_fields_set
         for field in (
@@ -501,6 +508,11 @@ def update_product(tenant_id: str, product_id: str):
                 _pricing_options_from_payload(tenant_id, product.product_id, payload.pricing_options),
             )
         session.commit()
+        publish_product_record_update_catalog_change(
+            tenant_id=tenant_id,
+            product=product,
+            previous_allowed_principal_ids=previous_allowed_principal_ids,
+        )
         return jsonify(_product_to_read(product)), 200
 
 
@@ -514,8 +526,17 @@ def delete_product(tenant_id: str, product_id: str):
         product = repo.get_by_id(product_id)
         if product is None:
             return _api_error("product_not_found", f"Product {product_id!r} not found.", 404)
+        product_name = product.name
+        principal_ids = product.allowed_principal_ids or None
         repo.delete(product)
         session.commit()
+        publish_product_catalog_change(
+            tenant_id=tenant_id,
+            action="deleted",
+            product_id=product_id,
+            data={"name": product_name},
+            principal_ids=principal_ids,
+        )
         return "", 204
 
 
@@ -622,7 +643,7 @@ def create_signal(tenant_id: str):
         session.flush()
         _refresh_signal_etag(signal)
         session.commit()
-        notify_signal_catalog_changed(
+        publish_signal_catalog_change(
             tenant_id=tenant_id,
             action="created",
             signal_id=signal.signal_id,
@@ -665,7 +686,7 @@ def update_signal(tenant_id: str, signal_id: str):
             signal.targeting_dimension = payload.targeting_dimension
         _refresh_signal_etag(signal)
         session.commit()
-        notify_signal_catalog_changed(
+        publish_signal_catalog_change(
             tenant_id=tenant_id,
             action="updated",
             signal_id=signal.signal_id,
@@ -687,7 +708,7 @@ def delete_signal(tenant_id: str, signal_id: str):
         signal_name = signal.name
         repo.delete(signal)
         session.commit()
-        notify_signal_catalog_changed(
+        publish_signal_catalog_change(
             tenant_id=tenant_id,
             action="deleted",
             signal_id=signal_id,

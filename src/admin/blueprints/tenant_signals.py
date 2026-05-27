@@ -38,6 +38,7 @@ from typing import Any
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from src.admin.services.catalog_webhook_events import publish_signal_catalog_changes
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.signal_id import unique_signal_id
@@ -47,7 +48,6 @@ from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.signal_usage import SignalUsageRepository
 from src.core.database.repositories.springserve_inventory import SpringServeInventoryRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
-from src.services.protocol_change_webhooks import notify_signal_catalog_changes
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def _notify_signal_catalog_changes(
     signal_ids: list[str],
     data: dict[str, Any] | None = None,
 ) -> None:
-    notify_signal_catalog_changes(
+    publish_signal_catalog_changes(
         tenant_id=tenant_id,
         action=action,
         signal_ids=signal_ids,
