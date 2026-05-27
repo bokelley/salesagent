@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
+from src.admin.services.catalog_webhook_events import publish_product_catalog_change
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.embedded_capabilities import capability_owned_response, publisher_owns
@@ -21,7 +22,6 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import Format
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
-from src.services.protocol_change_webhooks import notify_product_catalog_changed
 
 logger = logging.getLogger(__name__)
 
@@ -1358,15 +1358,8 @@ def add_product(tenant_id):
 
                 db_session.commit()
 
-                from src.admin.services.webhook_publisher import emit_event
-
-                emit_event(
+                publish_product_catalog_change(
                     tenant_id,
-                    "product.created",
-                    {"product_id": product.product_id, "name": product.name},
-                )
-                notify_product_catalog_changed(
-                    tenant_id=tenant_id,
                     action="created",
                     product_id=product.product_id,
                     data={"name": product.name},
@@ -1958,18 +1951,12 @@ def edit_product(tenant_id, product_id):
                 db_session.refresh(product)
                 logger.info(f"[DEBUG] After commit - product.format_ids from DB: {product.format_ids}")
 
-                from src.admin.services.webhook_publisher import emit_event
-
-                emit_event(
+                publish_product_catalog_change(
                     tenant_id,
-                    "product.updated",
-                    {"product_id": product.product_id, "name": product.name},
-                )
-                notify_product_catalog_changed(
-                    tenant_id=tenant_id,
                     action="updated",
                     product_id=product.product_id,
                     data={"name": product.name},
+                    pricing_changed=True,
                     principal_ids=_catalog_acl_notification_scope(
                         previous_allowed_principal_ids,
                         product.allowed_principal_ids,
@@ -2265,8 +2252,8 @@ def delete_product(tenant_id, product_id):
             db_session.commit()
 
             logger.info(f"Product {product_id} ({product_name}) deleted by tenant {tenant_id}")
-            notify_product_catalog_changed(
-                tenant_id=tenant_id,
+            publish_product_catalog_change(
+                tenant_id,
                 action="deleted",
                 product_id=product_id,
                 data={"name": product_name},

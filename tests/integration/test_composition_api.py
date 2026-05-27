@@ -8,6 +8,7 @@ buyer runs AdCP discovery.
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import Mock, call
 
 import pytest
 from adcp import GetProductsRequest
@@ -27,13 +28,19 @@ def _headers(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 def _seed_tenant(tenant_id: str) -> None:
-    from tests.factories import TenantFactory
+    from tests.factories import AuthorizedPropertyFactory, TenantFactory
 
-    TenantFactory(
+    tenant = TenantFactory(
         tenant_id=tenant_id,
         subdomain=tenant_id.replace("_", "-"),
         ad_server="mock",
         brand_manifest_policy="public",
+    )
+    AuthorizedPropertyFactory(
+        tenant=tenant,
+        property_id="publisher_example_sports",
+        publisher_domain="publisher.example.com",
+        tags=["sports", "all_inventory"],
     )
 
 
@@ -168,6 +175,191 @@ def test_authoring_inventory_signal_and_product_unblocks_buyer_discovery(admin_c
     signals = asyncio.run(_get_signals_impl(GetSignalsRequest(), identity=_identity(tenant_id)))
     discovered_signal_ids = {signal.signal_agent_segment_id for signal in signals.signals}
     assert signal_id in discovered_signal_ids
+
+
+def test_composition_product_routes_emit_tenant_and_protocol_catalog_notifications(
+    admin_client,
+    factory_session,
+    monkeypatch,
+):
+    tenant_id = "composition_api_product_notifications"
+    profile_id = "notification_profile"
+    product_id = "notification_product"
+    _seed_tenant(tenant_id)
+    headers = _headers(monkeypatch)
+
+    profile_resp = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/inventory-profiles",
+        json=_inventory_profile_payload(profile_id),
+        headers=headers,
+    )
+    assert profile_resp.status_code == 201
+
+    emit_event = Mock()
+    notify_product = Mock()
+    monkeypatch.setattr("src.admin.services.catalog_webhook_events.emit_event", emit_event)
+    monkeypatch.setattr("src.admin.services.catalog_webhook_events.notify_product_catalog_changed", notify_product)
+
+    create_resp = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/products",
+        json=_product_payload(product_id, profile_id),
+        headers=headers,
+    )
+    assert create_resp.status_code == 201
+
+    update_payload = {
+        "name": "Renamed Notification Product",
+        "pricing_options": [
+            {
+                "pricing_model": "cpm",
+                "currency": "USD",
+                "is_fixed": False,
+                "price_guidance": {"floor": 4.0, "p50": 5.0, "p75": 6.0},
+            }
+        ],
+    }
+    update_resp = admin_client.put(
+        f"/api/v1/tenants/{tenant_id}/products/{product_id}",
+        json=update_payload,
+        headers=headers,
+    )
+    assert update_resp.status_code == 200
+
+    delete_resp = admin_client.delete(
+        f"/api/v1/tenants/{tenant_id}/products/{product_id}",
+        headers=headers,
+    )
+    assert delete_resp.status_code == 204
+
+    emitted_event_types = [args[1] for args, _kwargs in emit_event.call_args_list]
+    assert emitted_event_types == [
+        "product.created",
+        "wholesale_feed.bulk_change",
+        "product.updated",
+        "product.priced",
+        "wholesale_feed.bulk_change",
+        "product.removed",
+        "wholesale_feed.bulk_change",
+    ]
+    notify_product.assert_has_calls(
+        [
+            call(
+                tenant_id=tenant_id,
+                action="created",
+                product_id=product_id,
+                data={"name": "Wholesale Sports Display"},
+                principal_ids=None,
+            ),
+            call(
+                tenant_id=tenant_id,
+                action="updated",
+                product_id=product_id,
+                data={"name": "Renamed Notification Product"},
+                principal_ids=None,
+            ),
+            call(
+                tenant_id=tenant_id,
+                action="deleted",
+                product_id=product_id,
+                data={"name": "Renamed Notification Product"},
+                principal_ids=None,
+            ),
+        ]
+    )
+
+
+def test_inventory_profile_create_infers_publisher_property_selection_type(
+    admin_client,
+    factory_session,
+    monkeypatch,
+):
+    tenant_id = "composition_api_infer_property_selection"
+    profile_id = "infer_property_selection"
+    _seed_tenant(tenant_id)
+    payload = _inventory_profile_payload(profile_id)
+    payload["publisher_properties"] = [
+        {
+            "publisher_domain": "publisher.example.com",
+            "property_ids": ["publisher_example_sports"],
+        }
+    ]
+
+    response = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/inventory-profiles",
+        json=payload,
+        headers=_headers(monkeypatch),
+    )
+
+    assert response.status_code == 201
+    from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+
+    factory_session.expire_all()
+    profile = InventoryProfileRepository(factory_session, tenant_id).get_by_id(profile_id)
+    assert profile is not None
+    assert profile.publisher_properties == [
+        {
+            "publisher_domain": "publisher.example.com",
+            "selection_type": "by_id",
+            "property_ids": ["publisher_example_sports"],
+        }
+    ]
+
+
+def test_inventory_profile_create_rejects_unauthorized_publisher_property_selector(
+    admin_client,
+    factory_session,
+    monkeypatch,
+):
+    tenant_id = "composition_api_unauthorized_publisher_property"
+    profile_id = "unauthorized_property_selector"
+    _seed_tenant(tenant_id)
+    payload = _inventory_profile_payload(profile_id)
+    payload["publisher_properties"] = [
+        {
+            "publisher_domain": "publisher.example.com",
+            "selection_type": "by_id",
+            "property_ids": ["not_authorized"],
+        }
+    ]
+
+    response = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/inventory-profiles",
+        json=payload,
+        headers=_headers(monkeypatch),
+    )
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"] == "invalid_publisher_properties"
+    assert body["details"]["issues"][0]["code"] == "publisher_property_not_authorized"
+
+
+def test_inventory_profile_create_rejects_unsupported_publisher_property_fields(
+    admin_client,
+    factory_session,
+    monkeypatch,
+):
+    tenant_id = "composition_api_bad_publisher_property"
+    profile_id = "bad_property_shape"
+    _seed_tenant(tenant_id)
+    payload = _inventory_profile_payload(profile_id)
+    payload["publisher_properties"] = [
+        {
+            "publisher_domain": "publisher.example.com",
+            "selection_type": "all",
+            "name": "publisher.example.com",
+            "property_type": "website",
+        }
+    ]
+
+    response = admin_client.post(
+        f"/api/v1/tenants/{tenant_id}/inventory-profiles",
+        json=payload,
+        headers=_headers(monkeypatch),
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_request"
 
 
 def test_wholesale_discovery_retains_profile_backed_product_pricing(admin_client, factory_session, monkeypatch):

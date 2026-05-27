@@ -35,6 +35,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.admin.api_schemas.publisher_properties import PublisherPropertySelector
 from src.core.config import get_pydantic_extra_mode
 
 _EXTRA_MODE = get_pydantic_extra_mode()
@@ -93,7 +94,7 @@ class InventoryProfileCreate(BaseModel):
         ),
     )
     format_ids: list[dict] = Field(default_factory=list)
-    publisher_properties: list[dict] = Field(default_factory=list)
+    publisher_properties: list[PublisherPropertySelector] = Field(default_factory=list)
     targeting_template: dict | None = None
     constraints: ProfileConstraints | None = None
 
@@ -105,7 +106,7 @@ class InventoryProfileUpdate(BaseModel):
     description: str | None = None
     inventory_config: dict | None = None
     format_ids: list[dict] | None = None
-    publisher_properties: list[dict] | None = None
+    publisher_properties: list[PublisherPropertySelector] | None = None
     targeting_template: dict | None = None
     constraints: ProfileConstraints | None = None
 

@@ -24,8 +24,10 @@ from pydantic import (
 )
 
 from src.admin.api_schemas.composition import TenantSignalCreate
+from src.admin.api_schemas.publisher_properties import PublisherPropertySelector
 from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
+from src.core.webhook_event_types import CATALOG_CHANGE_EVENT_TYPES
 
 _EXTRA_MODE = get_pydantic_extra_mode()
 
@@ -768,27 +770,6 @@ class WholesalePricingOption(BaseModel):
     price_guidance: dict[str, Any] | None = None
     parameters: dict[str, Any] | None = None
     min_spend_per_package: Decimal | None = None
-
-
-class PublisherPropertySelector(BaseModel):
-    """AdCP publisher-property selector."""
-
-    model_config = _config()
-
-    publisher_domain: str = Field(..., min_length=1, max_length=255)
-    selection_type: Literal["all", "by_id", "by_tag"] = "all"
-    property_ids: list[str] | None = None
-    property_tags: list[str] | None = None
-
-    @model_validator(mode="after")
-    def _validate_selector_shape(self) -> PublisherPropertySelector:
-        if self.selection_type == "all":
-            return self
-        if self.selection_type == "by_id" and not self.property_ids:
-            raise ValueError("property_ids is required when selection_type='by_id'")
-        if self.selection_type == "by_tag" and not self.property_tags:
-            raise ValueError("property_tags is required when selection_type='by_tag'")
-        return self
 
 
 class WholesaleSlotRequirement(BaseModel):
@@ -1902,8 +1883,7 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "creative.created",
     "creative.status_changed",
     "principal.created",
-    "product.created",
-    "product.updated",
+    *CATALOG_CHANGE_EVENT_TYPES,
     # ``sync_run`` (not ``sync``) — the noun is the persistent SyncJob row,
     # the verb-past pattern is ``<entity>.<verb-past>`` consistent with the
     # rest of the catalog. The payload's ``data.sync_run_id`` matches.
@@ -1912,20 +1892,7 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "tenant.config_changed",
 )
 
-WebhookEventType = Literal[
-    "workflow.created",
-    "workflow.decided",
-    "media_buy.created",
-    "media_buy.status_changed",
-    "creative.created",
-    "creative.status_changed",
-    "principal.created",
-    "product.created",
-    "product.updated",
-    "sync_run.completed",
-    "sync_run.failed",
-    "tenant.config_changed",
-]
+WebhookEventType = Annotated[str, Field(json_schema_extra={"enum": list(WEBHOOK_EVENT_TYPES)})]
 
 
 class CreateWebhookSubscriptionRequest(BaseModel):

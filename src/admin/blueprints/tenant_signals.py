@@ -38,6 +38,7 @@ from typing import Any
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from src.admin.services.catalog_webhook_events import emit_signal_catalog_events
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.signal_id import unique_signal_id
@@ -78,6 +79,8 @@ def _notify_signal_catalog_changes(
     signal_ids: list[str],
     data: dict[str, Any] | None = None,
 ) -> None:
+    for signal_id in signal_ids:
+        emit_signal_catalog_events(tenant_id, action=action, signal_id=signal_id, data=data)
     notify_signal_catalog_changes(
         tenant_id=tenant_id,
         action=action,

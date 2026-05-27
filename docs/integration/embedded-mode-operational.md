@@ -298,6 +298,13 @@ The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/we
 | `principal.created` | A new advertiser/principal is created (both via provision endpoint and standalone admin UI flow) | `{"principal_id": str, "name": str}` |
 | `product.created` | A new product is created in the admin UI | `{"product_id": str, "name": str}` |
 | `product.updated` | An existing product is edited in the admin UI | `{"product_id": str, "name": str}` |
+| `product.priced` | An existing wholesale product's pricing is replaced | `{"product_id": str, "name": str}` |
+| `product.removed` | A wholesale product is deleted | `{"product_id": str, "name": str}` |
+| `signal.created` | A signal mapping is created | `{"signal_id": str, "name": str}` |
+| `signal.updated` | A signal mapping is updated | `{"signal_id": str, "name": str}` |
+| `signal.priced` | A signal's pricing changes, when signal pricing is explicitly modeled | `{"signal_id": str, ...}` |
+| `signal.removed` | A signal mapping is deleted | `{"signal_id": str, "name": str}` |
+| `wholesale_feed.bulk_change` | A catalog change should trigger a wholesale feed resync | `{"summary": str, "affected_count": int, "affected_entity_type": "product"\|"signal", "recommendation": "wholesale_resync", "change": {...}}` |
 | `sync_run.completed` | A `SyncJob` row transitioned `running -> completed` (#463). Fires once per actual DB commit, regardless of which worker / endpoint / cron path drove the transition. | `{"sync_run_id": str, "sync_type": "inventory"\|"custom_targeting"\|"advertisers", "adapter_type": str, "trigger": "provisioning"\|"scheduled"\|"manual"\|"unknown", "started_at": ISO8601, "completed_at": ISO8601, "item_count": int\|null, "summary": str\|null}` |
 | `sync_run.failed` | A `SyncJob` row transitioned `running -> failed` (#463). | `{"sync_run_id": str, "sync_type": str, "adapter_type": str, "trigger": str, "started_at": ISO8601, "completed_at": ISO8601, "error": {"message": str\|null, "class": str\|null, "category": "auth"\|"transient"\|"permanent"}}` |
 | `tenant.config_changed` | Tenant configuration was patched | `{"changed": [...]}` |
