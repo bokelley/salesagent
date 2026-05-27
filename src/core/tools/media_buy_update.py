@@ -29,6 +29,7 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPConflictError,
     AdCPInvalidStateError,
     AdCPMediaBuyNotFoundError,
     AdCPNotCancellableError,
@@ -45,6 +46,7 @@ from src.core.auth import (
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.format_cache import canonical_format_satisfies
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -60,6 +62,7 @@ from src.core.tools._gam_projection import (
     log_materialization_audit,
 )
 from src.core.tools.media_buy_create import _status_after_creative_attachment
+from src.core.tools.workflow_serialization import serialize_for_workflow_step
 
 
 def _is_terminal_media_buy_state(status: str | None) -> bool:
@@ -89,6 +92,70 @@ def _is_terminal_media_buy_state(status: str | None) -> bool:
     if status is None:
         return False
     return status in MEDIA_BUY_TRANSITIONS and not MEDIA_BUY_TRANSITIONS[status]
+
+
+def _safe_media_buy_revision(media_buy_obj: Any | None) -> int:
+    """Read a media-buy revision defensively from ORM rows and unit-test mocks."""
+    revision = getattr(media_buy_obj, "revision", 1)
+    return revision if isinstance(revision, int) and revision >= 1 else 1
+
+
+def _request_mutates_media_buy(req: UpdateMediaBuyRequest) -> bool:
+    """Return whether an update request carries any state-mutating fields."""
+    return (
+        req.paused is not None
+        or _is_explicit_cancel_request(req)
+        or req.start_time is not None
+        or req.end_time is not None
+        or getattr(req, "budget", None) is not None
+        or any(_package_update_mutates(pkg) for pkg in req.packages or [])
+        or bool(req.new_packages)
+    )
+
+
+def _package_update_mutates(pkg_update: Any) -> bool:
+    """Return whether a package update carries fields this tool actually writes."""
+    return (
+        getattr(pkg_update, "paused", None) is not None
+        or getattr(pkg_update, "budget", None) is not None
+        or getattr(pkg_update, "creative_ids", None) is not None
+        or bool(getattr(pkg_update, "creatives", None))
+        or bool(getattr(pkg_update, "creative_assignments", None))
+        or getattr(pkg_update, "targeting_overlay", None) is not None
+    )
+
+
+def _validate_expected_revision(req: UpdateMediaBuyRequest, media_buy_obj: Any | None) -> int:
+    """Validate buyer-supplied optimistic-concurrency revision when present."""
+    current_revision = _safe_media_buy_revision(media_buy_obj)
+    if req.revision is not None and req.revision != current_revision:
+        raise AdCPConflictError(
+            (
+                f"Revision mismatch for media_buy_id={req.media_buy_id!r}: "
+                f"expected {req.revision}, current {current_revision}."
+            ),
+            details={
+                "error_code": "REVISION_MISMATCH",
+                "media_buy_id": req.media_buy_id,
+                "expected_revision": req.revision,
+                "current_revision": current_revision,
+            },
+            recovery="correctable",
+        )
+    return current_revision
+
+
+def _increment_revision_for_response(
+    media_buys: MediaBuyRepository,
+    media_buy_id: str | None,
+    current_revision: int,
+) -> int:
+    """Increment persisted revision and return the revision to put on the wire."""
+    if not media_buy_id:
+        return current_revision
+    updated = media_buys.increment_revision(media_buy_id)
+    updated_revision = _safe_media_buy_revision(updated)
+    return updated_revision if updated_revision > current_revision else current_revision + 1
 
 
 def _apply_creative_attachment_status_transition(media_buy_obj: Any, media_buy_id: str, reason: str) -> None:
@@ -181,23 +248,6 @@ from src.core.tools.financial_validation import (
 # Order new + LineItem stale + DB new (three-way drift).
 _GUARANTEED_LINE_ITEM_TYPES: set[str] = {"STANDARD", "SPONSORSHIP"}
 _RESERVATION_FIELDS: set[str] = {"start_time", "end_time", "budget"}
-
-
-def serialize_for_workflow_step(model: Any) -> dict[str, Any]:
-    """Serialize a Pydantic model for storage on ``workflow_step.response_data``.
-
-    The ``workflow_step`` table holds the original request/response blob in
-    a JSONB column so the approval reviewer can replay or inspect the call.
-    JSONB needs a dict, not a model — but this is *persistence*, not a
-    transport boundary, so the no-``.model_dump()``-in-``_impl`` rule does
-    not apply.
-
-    Centralizes the dump kwargs (``mode='json'``) so all ~22 call sites
-    stay consistent, and lets the architecture guard switch from a
-    fragile ``(file, line_number)`` allowlist to a single function-name
-    exemption — see issue #240.
-    """
-    return model.model_dump(mode="json")
 
 
 def _check_guaranteed_immutable(
@@ -508,6 +558,14 @@ def _update_media_buy_impl(
                         return UpdateMediaBuyError.model_validate(cached)
                     return UpdateMediaBuySuccess.model_validate(cached)
 
+        mutation_requested = _request_mutates_media_buy(req)
+        current_media_buy = (
+            uow.media_buys.get_by_id_for_update(media_buy_id_to_use)
+            if mutation_requested
+            else uow.media_buys.get_by_id(media_buy_id_to_use)
+        )
+        current_revision = _validate_expected_revision(req, current_media_buy)
+
         # Pre-flight: every referenced package_id must exist on this media
         # buy. Run before the manual-approval gate, workflow-step writes,
         # and adapter dispatch so a bogus package_id surfaces
@@ -604,6 +662,7 @@ def _update_media_buy_impl(
             dry_run_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 affected_packages=simulated_affected,
+                revision=req.revision or current_revision,
                 context=req.context,
             )
 
@@ -656,7 +715,7 @@ def _update_media_buy_impl(
             # with ``INVALID_REQUEST[status]``.
             from src.core.tools.media_buy_list import _to_wire_status
 
-            current_buy = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
+            current_buy = current_media_buy if req.media_buy_id else None
             current_media_buy_status: str | None = _to_wire_status(
                 getattr(current_buy, "status", None) if current_buy is not None else None
             )
@@ -664,6 +723,7 @@ def _update_media_buy_impl(
                 media_buy_id=req.media_buy_id or "",
                 media_buy_status=current_media_buy_status,
                 affected_packages=[],  # Not yet applied — pending approval
+                revision=current_revision,
                 context=req.context,
                 # Surface the workflow step id so buyers can disambiguate
                 # "deferred for approval" from "applied with no package
@@ -692,7 +752,7 @@ def _update_media_buy_impl(
         # Validate currency limits if flight dates or budget changes
         # This prevents workarounds where buyers extend flight to bypass daily max
         if req.start_time or req.end_time or req.budget or (req.packages and any(pkg.budget for pkg in req.packages)):
-            media_buy = uow.media_buys.get_by_id(req.media_buy_id)
+            media_buy = current_media_buy
 
             if media_buy:
                 request_currency: str
@@ -800,7 +860,7 @@ def _update_media_buy_impl(
         # branches. Gate on ``model_fields_set`` so only an explicit
         # ``canceled=True`` from the buyer triggers cancellation.
         if cancel_requested:
-            current_mb = uow.media_buys.get_by_id(req.media_buy_id)
+            current_mb = current_media_buy
             if current_mb and str(current_mb.status) == "canceled":
                 # Pre-validation: re-cancel of a terminal buy raises the typed
                 # AdCPNotCancellableError BEFORE adapter dispatch. Idempotency-spec
@@ -821,6 +881,11 @@ def _update_media_buy_impl(
             # response context) is the spec-compliant minimum. Persisting
             # it would need a schema migration; tracked separately.
             uow.media_buys.update_fields(req.media_buy_id, status="canceled")
+            response_revision = _increment_revision_for_response(
+                uow.media_buys,
+                req.media_buy_id,
+                current_revision,
+            )
 
             # Include the resulting lifecycle status — buyers need
             # ``media_buy_status="canceled"``
@@ -832,6 +897,7 @@ def _update_media_buy_impl(
                 media_buy_id=req.media_buy_id or "",
                 media_buy_status="canceled",
                 affected_packages=[],
+                revision=response_revision,
                 context=req.context,
             )
             if deferred_cancel_step is None or not _has_media_buy_update_workflow_mapping(step, media_buy_id_to_use):
@@ -864,7 +930,7 @@ def _update_media_buy_impl(
             # already drifted: ``rejected`` is terminal per spec but was
             # not in the tuple, so pause/resume of a rejected buy would
             # fall through to the adapter and return a less-typed error.
-            current_mb = uow.media_buys.get_by_id(req.media_buy_id)
+            current_mb = current_media_buy
             current_status = str(current_mb.status) if current_mb else None
             if _is_terminal_media_buy_state(current_status):
                 action_name = "pause" if req.paused else "resume"
@@ -911,10 +977,16 @@ def _update_media_buy_impl(
                 # ``media_buy_state_machine / {pause,resume}_buy`` storyboards
                 # assert on ``field_present @ /media_buy_status`` (#353).
                 resulting_media_buy_status = "paused" if req.paused else "active"
+                response_revision = _increment_revision_for_response(
+                    uow.media_buys,
+                    req.media_buy_id,
+                    current_revision,
+                )
                 success_response = UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
                     media_buy_status=resulting_media_buy_status,
                     affected_packages=affected_pkgs,
+                    revision=response_revision,
                     context=req.context,
                 )
                 # Log successful update_media_buy (pause/resume)
@@ -991,7 +1063,7 @@ def _update_media_buy_impl(
                     if isinstance(pkg_update.budget, int | float):
                         budget_amount = float(pkg_update.budget)
                         # F-07: preserve existing DB currency rather than defaulting to USD
-                        _existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                        _existing_mb = current_media_buy
                         currency = str(_existing_mb.currency) if _existing_mb and _existing_mb.currency else "USD"
                     else:
                         # Budget object with .total and .currency attributes
@@ -1147,50 +1219,34 @@ def _update_media_buy_impl(
                         product = session.scalars(product_stmt).first()
 
                         if product and product.format_ids:
-                            # Build set of supported formats (agent_url, format_id) tuples
-                            supported_formats = set()
-                            for fmt in product.format_ids:
-                                if isinstance(fmt, dict):
-                                    agent_url = fmt.get("agent_url")
-                                    format_id = fmt.get("id") or fmt.get("format_id")
-                                    if agent_url and format_id:
-                                        supported_formats.add((agent_url, format_id))
-
                             # Check each creative's format
                             for creative in creatives_list:
-                                creative_agent_url = creative.agent_url
-                                creative_format_id = creative.format
-
-                                # Allow /mcp URL variant
-                                def normalize_url(url: str | None) -> str | None:
-                                    if not url:
-                                        return None
-                                    return url.rstrip("/").removesuffix("/mcp")
-
-                                normalized_creative_url = normalize_url(creative_agent_url)
-                                is_supported = False
-
-                                for supported_url, supported_format_id in supported_formats:
-                                    normalized_supported_url = normalize_url(supported_url)
-                                    if (
-                                        normalized_creative_url == normalized_supported_url
-                                        and creative_format_id == supported_format_id
-                                    ):
-                                        is_supported = True
-                                        break
-
-                                if not supported_formats:
-                                    # Product has no format restrictions - allow all
-                                    is_supported = True
+                                format_parameters = (
+                                    creative.format_parameters if isinstance(creative.format_parameters, dict) else {}
+                                )
+                                creative_format_ref = {
+                                    "agent_url": creative.agent_url,
+                                    "id": creative.format,
+                                    **format_parameters,
+                                }
+                                is_supported = any(
+                                    canonical_format_satisfies(creative_format_ref, supported_format)
+                                    for supported_format in product.format_ids
+                                )
 
                                 if not is_supported:
                                     creative_format_display = (
-                                        f"{creative_agent_url}/{creative_format_id}"
-                                        if creative_agent_url
-                                        else creative_format_id
+                                        f"{creative.agent_url}/{creative.format}"
+                                        if creative.agent_url
+                                        else creative.format
                                     )
                                     supported_formats_display = ", ".join(
-                                        [f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in supported_formats]
+                                        [
+                                            f"{fmt.get('agent_url')}/{fmt.get('id') or fmt.get('format_id')}"
+                                            if isinstance(fmt, dict)
+                                            else str(fmt)
+                                            for fmt in product.format_ids
+                                        ]
                                     )
                                     validation_errors.append(
                                         f"Creative {creative.creative_id} format '{creative_format_display}' "
@@ -1548,7 +1604,7 @@ def _update_media_buy_impl(
             if isinstance(req.budget, int | float):
                 total_budget = float(req.budget)
                 # F-07: preserve existing DB currency rather than defaulting to USD
-                _mb_for_currency = uow.media_buys.get_by_id(req.media_buy_id)
+                _mb_for_currency = current_media_buy
                 budget_currency = (
                     str(_mb_for_currency.currency) if _mb_for_currency and _mb_for_currency.currency else "USD"
                 )
@@ -1646,7 +1702,13 @@ def _update_media_buy_impl(
 
             if update_values:
                 # Get existing media buy to check date range consistency
-                existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                try:
+                    refreshed_mb = uow.media_buys.get_by_id(req.media_buy_id) if req.media_buy_id else None
+                except StopIteration:
+                    # Unit-test repository mocks sometimes only provision the
+                    # preflight row; production repositories do not raise this.
+                    refreshed_mb = None
+                existing_mb = refreshed_mb or current_media_buy
 
                 if not existing_mb:
                     error_msg = f"Media buy {req.media_buy_id} not found"
@@ -1724,6 +1786,11 @@ def _update_media_buy_impl(
         # Create ObjectWorkflowMapping to link media buy update to workflow step.
         # This enables webhook delivery when the update completes.
         _add_media_buy_update_workflow_mapping(session, step.step_id, media_buy_id_to_use)
+        response_revision = (
+            _increment_revision_for_response(uow.media_buys, req.media_buy_id, current_revision)
+            if mutation_requested
+            else current_revision
+        )
 
         # Build final response first
         logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")
@@ -1768,6 +1835,7 @@ def _update_media_buy_impl(
             media_buy_id=req.media_buy_id or "",
             media_buy_status=response_media_buy_status,
             affected_packages=affected_packages_list,
+            revision=response_revision,
             context=req.context,
         )
 

@@ -255,6 +255,15 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         default=None,
         description="Client-supplied idempotency key echoed for retry correlation.",
     )
+    revision: int = Field(
+        default=1,
+        ge=1,
+        description="Monotonic media-buy revision for optimistic concurrency.",
+    )
+    confirmed_at: datetime | None = Field(
+        default=None,
+        description="Timestamp when the seller committed to the media buy.",
+    )
     replayed: bool | None = Field(
         default=None,
         description="Envelope flag set true when the response is returned from an idempotency replay.",
@@ -436,6 +445,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # extra field is permitted. None values are dropped by exclude_none on
     # the wire boundary, so immediate-apply responses don't leak the field.
     workflow_step_id: str | None = None
+    revision: int = Field(
+        default=1,
+        ge=1,
+        description="Monotonic media-buy revision after this update.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -2427,6 +2441,15 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
+    revision: int = Field(
+        default=1,
+        ge=1,
+        description="Monotonic media-buy revision for optimistic concurrency.",
+    )
+    confirmed_at: datetime | None = Field(
+        default=None,
+        description="Timestamp when the seller committed to the media buy.",
+    )
     ext: dict | None = Field(
         default=None,
         description=(

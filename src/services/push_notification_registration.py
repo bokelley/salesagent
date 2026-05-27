@@ -23,7 +23,7 @@ from src.core.database.repositories.push_notification import (
 )
 from src.core.database.repositories.uow import PushNotificationUoW
 from src.core.exceptions import AdCPValidationError
-from src.core.webhook_event_types import ACCOUNT_NOTIFICATION_EVENT_TYPES
+from src.services.catalog_event_types import ACCOUNT_NOTIFICATION_EVENT_TYPES
 from src.services.protocol_webhook_service import _normalize_localhost_for_docker
 from src.services.webhook_signing import (
     SIGNING_MODE_BOTH,

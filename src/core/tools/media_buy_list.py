@@ -37,6 +37,9 @@ class _MediaBuyData:
     raw_request: dict | None
     created_at: datetime | None
     updated_at: datetime | None
+    revision: int = 1
+    approved_at: datetime | None = None
+    confirmed_at: datetime | None = None
     # Persisted MediaBuy.status from the DB. Honored by ``_compute_status``
     # for blocker / terminal states (pending_creatives, paused, rejected,
     # canceled) that no clock can resolve.
@@ -182,6 +185,7 @@ def _get_media_buys_impl(
             principal,
             dry_run=testing_ctx.dry_run if testing_ctx else False,
             testing_context=testing_ctx,
+            tenant=tenant,
         )
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
@@ -257,6 +261,8 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
+                revision=getattr(buy, "revision", 1) or 1,
+                confirmed_at=buy.confirmed_at,
                 ext=buy_ext,
             )
         )
@@ -383,6 +389,9 @@ def _fetch_target_media_buys(
             raw_request=buy.raw_request,
             created_at=buy.created_at,
             updated_at=buy.updated_at,
+            revision=getattr(buy, "revision", 1) or 1,
+            approved_at=buy.approved_at,
+            confirmed_at=buy.confirmed_at,
             status=buy.status,
         )
         for buy in buys

@@ -87,6 +87,49 @@ class TestValidateCreativeFormatAgainstProduct:
         assert is_valid is True
         assert error is None
 
+    def test_parameterized_canonical_format_matches_legacy_product_format(self):
+        """Canonical display_image creatives match legacy fixed-size product formats."""
+        creative_format_id = FormatId(
+            agent_url="https://creative.adcontextprotocol.org",
+            id="display_image",
+            width=300,
+            height=250,
+        )
+        product = Product.model_construct(
+            product_id="product_1",
+            name="Legacy Display Product",
+            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")],
+        )
+
+        is_valid, error = validate_creative_format_against_product(
+            creative_format_id=creative_format_id,
+            product=product,
+        )
+
+        assert is_valid is True
+        assert error is None
+
+    def test_under_specified_canonical_format_does_not_match_fixed_size_product_format(self):
+        """A generic display_image creative cannot satisfy a fixed-size product."""
+        creative_format_id = FormatId(
+            agent_url="https://creative.adcontextprotocol.org",
+            id="display_image",
+        )
+        product = Product.model_construct(
+            product_id="product_1",
+            name="Legacy Display Product",
+            format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")],
+        )
+
+        is_valid, error = validate_creative_format_against_product(
+            creative_format_id=creative_format_id,
+            product=product,
+        )
+
+        assert is_valid is False
+        assert error is not None
+        assert "display_image" in error
+
     def test_error_message_includes_supported_formats(self):
         """Test that error message includes supported formats."""
         creative_format_id = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250_image")

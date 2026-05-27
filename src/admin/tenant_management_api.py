@@ -144,7 +144,12 @@ from src.admin.services.adapter_connection_tester import (
     preview_adapter,
     probe_adapter_connection,
 )
-from src.admin.services.catalog_webhook_events import emit_signal_catalog_events, publish_product_catalog_change
+from src.admin.services.catalog_webhook_events import (
+    publish_product_catalog_change,
+    publish_product_record_catalog_change,
+    publish_product_record_update_catalog_change,
+    publish_signal_catalog_change,
+)
 from src.admin.services.publisher_property_authorization import validate_publisher_property_selectors
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
@@ -183,10 +188,7 @@ from src.core.security.url_validator import check_url_ssrf
 from src.services.aao_lookup_service import get_publisher_partner_status
 from src.services.agent_url_resolver import resolve_agent_url
 from src.services.property_discovery_service import get_property_discovery_service
-from src.services.protocol_change_webhooks import (
-    notify_account_status_changed,
-    notify_signal_catalog_changed,
-)
+from src.services.protocol_change_webhooks import notify_account_status_changed
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import (
     build_gam_inventory_discovery,
@@ -1491,8 +1493,7 @@ def _refresh_signal_etag(signal: TenantSignal) -> None:
 
 
 def _notify_signal_mapping_changed(tenant_id: str, action: str, signal_id: str, signal_name: str) -> None:
-    emit_signal_catalog_events(tenant_id, action=action, signal_id=signal_id, data={"name": signal_name})
-    notify_signal_catalog_changed(
+    publish_signal_catalog_change(
         tenant_id=tenant_id,
         action=action,
         signal_id=signal_id,
@@ -2932,13 +2933,7 @@ def create_wholesale_product(tenant_id: str):
         product_repo.create(product)
         session.commit()
 
-        publish_product_catalog_change(
-            tenant_id,
-            action="created",
-            product_id=product.product_id,
-            data={"name": product.name},
-            principal_ids=product.allowed_principal_ids or None,
-        )
+        publish_product_record_catalog_change(tenant_id=tenant_id, action="created", product=product)
         response = _wholesale_response_from_product(product, adapter_type)
         return jsonify(response.model_dump(mode="json")), 201
 
@@ -2998,17 +2993,16 @@ def put_wholesale_product(tenant_id: str, product_id: str):
             product.inventory_profile, product_id
         ):
             return _inventory_profile_conflict(product_id)
+        previous_allowed_principal_ids = list(product.allowed_principal_ids) if product.allowed_principal_ids else None
         _update_product_from_wholesale_request(product, req, adapter_type)
         product_repo.replace_pricing_options(product, _pricing_option_rows(tenant_id, product_id, req.pricing_options))
         session.commit()
 
-        publish_product_catalog_change(
-            tenant_id,
-            action="updated",
-            product_id=product.product_id,
-            data={"name": product.name},
+        publish_product_record_update_catalog_change(
+            tenant_id=tenant_id,
+            product=product,
+            previous_allowed_principal_ids=previous_allowed_principal_ids,
             pricing_changed=True,
-            principal_ids=product.allowed_principal_ids or None,
         )
         return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
 
@@ -3039,8 +3033,9 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
             if profile is not None:
                 InventoryProfileRepository(session, tenant_id).delete(profile)
         session.commit()
+
         publish_product_catalog_change(
-            tenant_id,
+            tenant_id=tenant_id,
             action="deleted",
             product_id=product_id,
             data={"name": product_name},

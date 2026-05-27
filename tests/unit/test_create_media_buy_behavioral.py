@@ -2233,6 +2233,20 @@ class TestPendingCreativesVariantClassification:
         )
         assert _request_has_creatives(with_assignments) is True
 
+    def test_confirmed_at_populates_for_seller_committed_statuses(self):
+        """Create responses expose confirmed_at once the seller has committed."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_create import _confirmed_at_for_create_status
+
+        confirmed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+        assert _confirmed_at_for_create_status(MediaBuyStatus.active.value, confirmed_at) == confirmed_at
+        assert _confirmed_at_for_create_status(MediaBuyStatus.completed.value, confirmed_at) == confirmed_at
+        assert _confirmed_at_for_create_status(MediaBuyStatus.pending_start.value, confirmed_at) == confirmed_at
+        assert _confirmed_at_for_create_status(MediaBuyStatus.pending_creatives.value, confirmed_at) == confirmed_at
+        assert _confirmed_at_for_create_status("submitted", confirmed_at) is None
+
     @pytest.mark.asyncio
     async def test_config_disabled_auto_create_emits_variant_one(self):
         """Tenant-config-disabled auto_create still mints a buy → variant-1.

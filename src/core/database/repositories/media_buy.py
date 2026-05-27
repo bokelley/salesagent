@@ -60,6 +60,17 @@ class MediaBuyRepository:
             )
         ).first()
 
+    def get_by_id_for_update(self, media_buy_id: str) -> MediaBuy | None:
+        """Get a media buy by ID and lock it for the current transaction."""
+        return self._session.scalars(
+            select(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .with_for_update()
+        ).first()
+
     def find_by_idempotency_key(self, idempotency_key: str, principal_id: str) -> MediaBuy | None:
         """Find an existing media buy by idempotency_key within (tenant, principal).
 
@@ -442,6 +453,9 @@ class MediaBuyRepository:
         package_id_map: dict[int, str] | None = None,
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
+        approved_at: datetime.datetime | None = None,
+        confirmed_at: datetime.datetime | None = None,
+        approved_by: str | None = None,
         account_id: str | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
@@ -499,6 +513,12 @@ class MediaBuyRepository:
             kwargs["kpi_goal"] = kpi_goal
         if created_at is not None:
             kwargs["created_at"] = created_at
+        if approved_at is not None:
+            kwargs["approved_at"] = approved_at
+        if confirmed_at is not None:
+            kwargs["confirmed_at"] = confirmed_at
+        if approved_by is not None:
+            kwargs["approved_by"] = approved_by
         if account_id is not None:
             kwargs["account_id"] = account_id
 
@@ -586,8 +606,19 @@ class MediaBuyRepository:
         media_buy.status = status
         if approved_at is not None:
             media_buy.approved_at = approved_at
+            if media_buy.confirmed_at is None:
+                media_buy.confirmed_at = approved_at
         if approved_by is not None:
             media_buy.approved_by = approved_by
+        self._session.flush()
+        return media_buy
+
+    def increment_revision(self, media_buy_id: str) -> MediaBuy | None:
+        """Increment a media buy's optimistic-concurrency revision."""
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            return None
+        media_buy.revision = (media_buy.revision or 1) + 1
         self._session.flush()
         return media_buy
 

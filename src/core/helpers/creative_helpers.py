@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from adcp import FormatId as LibraryFormatId
 from pydantic import BaseModel
 
+from src.core.format_cache import canonical_format_satisfies
+
 if TYPE_CHECKING:
     from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
@@ -493,6 +495,7 @@ def build_adapter_asset_from_stored_creative(
     content_type = _infer_creative_content_type(format_id, assets, creative_data)
 
     asset: dict[str, Any] = {
+        "id": creative.creative_id,
         "creative_id": creative.creative_id,
         "package_assignments": [package_id],
         "format": format_id,
@@ -556,7 +559,8 @@ def validate_creative_format_against_product(
 
     Note:
         Packages have exactly one product, so this is a binary check (matches or doesn't).
-        Format IDs should already be normalized before calling this function.
+        The comparison canonicalizes legacy fixed-size IDs and structured
+        parameterized IDs before matching.
 
     Example:
         >>> from src.core.schemas import FormatId, Product
@@ -588,25 +592,10 @@ def validate_creative_format_against_product(
             return ""
         return str(url_val).rstrip("/")
 
-    # Simple equality check: does creative's format_id match any product format_id?
+    # Canonical comparison keeps legacy fixed-size IDs compatible with AdCP
+    # parameterized IDs, e.g. display_300x250_image vs display_image+300x250.
     for product_format in product_format_ids:
-        # Handle both FormatId objects and dicts (database stores as dicts)
-        if isinstance(product_format, dict):
-            product_agent_url: str | None = product_format.get("agent_url")
-            product_fmt_id: str | None = product_format.get("id") or product_format.get("format_id")
-        elif isinstance(product_format, LibraryFormatId):
-            # Convert AnyUrl to string for consistent comparison
-            product_agent_url = str(product_format.agent_url) if product_format.agent_url else None
-            product_fmt_id = product_format.id
-        else:
-            # Skip invalid format entries
-            continue
-
-        if not product_agent_url or not product_fmt_id:
-            continue
-
-        # Format IDs match if both agent_url and id are equal (normalized to strip trailing slashes)
-        if normalize_url(creative_agent_url) == normalize_url(product_agent_url) and creative_id == product_fmt_id:
+        if canonical_format_satisfies(creative_format_id, product_format):
             return True, None
 
     # Build error message with supported formats

@@ -65,7 +65,7 @@ def _format_ref_display(format_ref: Any) -> str:
 
 def _matching_supported_format(requested_format: Any, supported_formats: list[Any]) -> Any | None:
     for supported_format in supported_formats:
-        if canonical_format_matches(requested_format, supported_format):
+        if canonical_format_satisfies(requested_format, supported_format):
             return supported_format
     return None
 
@@ -233,7 +233,7 @@ from src.core.database.models import MediaBuy
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.embedded_runtime import publisher_owns_campaign_approval, publisher_owns_creative_approval
-from src.core.format_cache import canonical_format_matches, upgrade_legacy_format_id
+from src.core.format_cache import canonical_format_satisfies, upgrade_legacy_format_id
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -266,6 +266,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tools.financial_validation import validate_max_daily_package_spend, validate_min_package_budget
+from src.core.tools.workflow_serialization import serialize_for_workflow_step
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
@@ -397,6 +398,23 @@ def _determine_media_buy_status(
     return MediaBuyStatus.active.value
 
 
+def _confirmed_at_for_create_status(status: str, timestamp: datetime) -> datetime | None:
+    """Return confirmation time for synchronous create successes.
+
+    ``confirmed_at`` records seller commitment to the media buy, not whether
+    the buy is already delivering. A future-start buy and a buy waiting for
+    creatives are still confirmed once the seller has created the buy.
+    """
+    if status in {
+        MediaBuyStatus.active.value,
+        MediaBuyStatus.completed.value,
+        MediaBuyStatus.pending_start.value,
+        MediaBuyStatus.pending_creatives.value,
+    }:
+        return timestamp
+    return None
+
+
 def _status_after_creative_attachment(
     *,
     current_status: str,
@@ -499,7 +517,7 @@ def _link_step_to_media_buy(*, tenant_id: str, step_id: str, media_buy_id: str, 
 
 
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
-    """Get format specification synchronously using asyncio.run().
+    """Get format specification synchronously from async registry code.
 
     This helper function wraps the async registry.get_format() call to make it
     usable in synchronous contexts. The registry uses in-memory cache (30min TTL)
@@ -512,17 +530,26 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     Returns:
         Format specification object or None if not found
     """
-    import asyncio
-
     from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.validation_helpers import run_async_in_sync_context
 
     registry = get_creative_agent_registry()
 
     try:
-        return asyncio.run(registry.get_format(agent_url, format_id))
+        return run_async_in_sync_context(registry.get_format(agent_url, format_id))
     except Exception as e:
         logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
         return None
+
+
+def _stored_creative_format_id(creative: Any) -> FormatId:
+    """Build a full FormatId from a stored creative row."""
+    format_ref: dict[str, Any] = {
+        "agent_url": creative.agent_url,
+        "id": creative.format,
+    }
+    format_ref.update(creative.format_parameters or {})
+    return FormatId(**format_ref)
 
 
 def _dict_implementation_config(value: Any) -> dict[str, Any]:
@@ -758,11 +785,16 @@ def _validate_creatives_before_adapter_call(
             )
 
     # --- Format compatibility check: creative format vs product accepted formats ---
-    # Build creative_id -> format mapping from fetched creatives
-    creative_format_map: dict[str, str] = {}
+    # Build creative_id -> namespaced format mapping from fetched creatives
+    creative_format_map: dict[str, dict[str, Any]] = {}
     for creative in creatives_list:
         if creative.format:
-            creative_format_map[creative.creative_id] = str(creative.format)
+            format_ref: dict[str, Any] = {
+                "agent_url": creative.agent_url,
+                "id": str(creative.format),
+            }
+            format_ref.update(creative.format_parameters or {})
+            creative_format_map[creative.creative_id] = format_ref
 
     # Collect all product_ids from packages that have creatives
     product_ids_needed: set[str] = set()
@@ -779,16 +811,10 @@ def _validate_creatives_before_adapter_call(
         )
         products_list = list(session.scalars(product_stmt).all())
 
-        # Build product_id -> set of accepted format id strings
-        product_format_map: dict[str, set[str]] = {}
+        # Build product_id -> accepted namespaced formats
+        product_format_map: dict[str, list[Any]] = {}
         for product in products_list:
-            accepted_formats: set[str] = set()
-            if product.format_ids:
-                for fmt in product.format_ids:
-                    fmt_id = fmt.get("id")
-                    if fmt_id:
-                        accepted_formats.add(str(fmt_id))
-            product_format_map[product.product_id] = accepted_formats
+            product_format_map[product.product_id] = list(product.format_ids or [])
 
         # Check each package's creatives against its product's accepted formats
         for package in packages:
@@ -801,11 +827,12 @@ def _validate_creatives_before_adapter_call(
                 continue  # Product not found or has no formats — skip format check
 
             for cid in pkg_creative_ids:
-                creative_fmt = creative_format_map.get(cid)
-                if creative_fmt and creative_fmt not in accepted:
+                creative_format = creative_format_map.get(cid)
+                if creative_format and not _matching_supported_format(creative_format, accepted):
+                    accepted_display = sorted(_format_ref_display(fmt) for fmt in accepted)
                     validation_errors.append(
-                        f"Creative {cid} has format '{creative_fmt}' which is not accepted by "
-                        f"product {package.product_id} (accepted formats: {sorted(accepted)})"
+                        f"Creative {cid} has format '{_format_ref_display(creative_format)}' which is not accepted by "
+                        f"product {package.product_id} (accepted formats: {accepted_display})"
                     )
 
     if validation_errors:
@@ -2074,6 +2101,27 @@ def _build_idempotency_hit_result(
                 recovery="terminal",
             )
 
+        try:
+            from src.core.database.repositories.workflow import WorkflowRepository
+
+            workflow_step = None
+            if uow.session is not None:
+                workflow_step = WorkflowRepository(uow.session, tenant_id).find_by_idempotency_key(
+                    idempotency_key,
+                    principal_id,
+                    tool_name="create_media_buy",
+                )
+        except Exception:
+            workflow_step = None
+        cached_response = getattr(workflow_step, "response_data", None)
+        if isinstance(cached_response, dict) and cached_response and not cached_response.get("errors"):
+            cached = {k: v for k, v in cached_response.items() if k != "request_data"}
+            cached["replayed"] = True
+            return CreateMediaBuyResult(
+                response=CreateMediaBuySuccess.model_validate(cached),
+                status=AdcpTaskStatus.completed.value,
+            )
+
         db_packages = uow.media_buys.get_packages(existing.media_buy_id)
         # Rebuild AdCP Package response from the persisted ``package_config``
         # so the replay payload is byte-stable with the original response
@@ -2089,6 +2137,8 @@ def _build_idempotency_hit_result(
                 packages=response_packages,
                 status="completed",
                 media_buy_status=_media_buy_status_for_create_replay(existing),
+                revision=1,
+                confirmed_at=getattr(existing, "confirmed_at", None),
                 replayed=True,
             ),
             status=AdcpTaskStatus.completed.value,
@@ -3166,12 +3216,7 @@ async def _create_media_buy_impl(
                                     for creative_id in pkg_cids:
                                         creative = creatives_map.get(creative_id)
                                         if creative:
-                                            # Simple binary check: does creative's format_id match product?
-                                            # Construct FormatId from database creative's agent_url and format columns
-                                            # (DBCreative stores these as separate string columns, not a FormatId object)
-                                            creative_format_id = FormatId(
-                                                agent_url=creative.agent_url, id=creative.format
-                                            )
+                                            creative_format_id = _stored_creative_format_id(creative)
                                             format_is_valid, format_error = validate_creative_format_against_product(
                                                 creative_format_id=creative_format_id,
                                                 product=product_for_format_validation,
@@ -3254,16 +3299,21 @@ async def _create_media_buy_impl(
             buy_status = (
                 MediaBuyStatus.pending_start if _request_has_creatives(req) else MediaBuyStatus.pending_creatives
             )
-            return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    packages=pending_packages,
-                    status="completed",
-                    media_buy_status=buy_status,
-                    workflow_step_id=step.step_id,
-                ),
-                status=AdcpTaskStatus.completed.value,
+            approval_response = CreateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                packages=pending_packages,
+                status="completed",
+                media_buy_status=buy_status,
+                revision=1,
+                confirmed_at=None,
+                workflow_step_id=step.step_id,
             )
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="requires_approval",
+                response_data=serialize_for_workflow_step(approval_response),
+            )
+            return CreateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.completed.value)
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy import to avoid circular dependency with main.py
@@ -3463,16 +3513,21 @@ async def _create_media_buy_impl(
             buy_status = (
                 MediaBuyStatus.pending_start if _request_has_creatives(req) else MediaBuyStatus.pending_creatives
             )
-            return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    packages=response_packages,
-                    status="completed",
-                    media_buy_status=buy_status,
-                    workflow_step_id=step.step_id,
-                ),
-                status=AdcpTaskStatus.completed.value,
+            approval_response = CreateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                packages=response_packages,
+                status="completed",
+                media_buy_status=buy_status,
+                revision=1,
+                confirmed_at=None,
+                workflow_step_id=step.step_id,
             )
+            ctx_manager.update_workflow_step(
+                step.step_id,
+                status="requires_approval",
+                response_data=serialize_for_workflow_step(approval_response),
+            )
+            return CreateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.completed.value)
 
         # Continue with synchronized media buy creation
 
@@ -3754,6 +3809,8 @@ async def _create_media_buy_impl(
                 media_buy_status=MediaBuyStatus.pending_start
                 if _request_has_creatives(req)
                 else MediaBuyStatus.pending_creatives,
+                revision=1,
+                confirmed_at=None,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3809,6 +3866,7 @@ async def _create_media_buy_impl(
             f"[STATUS] Media buy {response.media_buy_id}: manual_approval=False, "
             f"has_creatives={has_creatives} → status={media_buy_status}"
         )
+        confirmed_at = _confirmed_at_for_create_status(media_buy_status, now)
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
         # Repository handles raw_request serialization at the DB boundary.
@@ -3855,6 +3913,9 @@ async def _create_media_buy_impl(
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
                     package_id_map=auto_package_id_map or None,
+                    approved_at=confirmed_at,
+                    confirmed_at=confirmed_at,
+                    approved_by="system" if confirmed_at is not None else None,
                     account_id=identity.account_id if identity else None,
                 )
                 # UoW auto-commits on clean exit
@@ -4069,10 +4130,7 @@ async def _create_media_buy_impl(
                                 for creative_id in pkg_cids:
                                     creative = creatives_by_id.get(creative_id)
                                     if creative:
-                                        # Simple binary check: does creative's format_id match product?
-                                        # Construct FormatId from database creative's agent_url and format columns
-                                        # (DBCreative stores these as separate string columns, not a FormatId object)
-                                        creative_format_id = FormatId(agent_url=creative.agent_url, id=creative.format)
+                                        creative_format_id = _stored_creative_format_id(creative)
                                         format_is_valid, format_error = validate_creative_format_against_product(
                                             creative_format_id=creative_format_id,
                                             product=product_format_check,
@@ -4395,6 +4453,8 @@ async def _create_media_buy_impl(
             status="completed",
             media_buy_status=MediaBuyStatus(media_buy_status),
             creative_deadline=response.creative_deadline,
+            revision=1,
+            confirmed_at=confirmed_at,
         )
 
         # Log activity
@@ -4462,7 +4522,11 @@ async def _create_media_buy_impl(
             )
 
         # Mark workflow step as completed on success
-        ctx_manager.update_workflow_step(step.step_id, status="completed")
+        ctx_manager.update_workflow_step(
+            step.step_id,
+            status="completed",
+            response_data=serialize_for_workflow_step(modified_response),
+        )
 
         # Send Slack notification for successful media buy creation
         try:

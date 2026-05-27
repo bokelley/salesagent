@@ -141,6 +141,7 @@ class TestIdempotencyReplaySuccess:
         assert isinstance(result, UpdateMediaBuySuccess)
         assert result.status == "completed"
         assert getattr(result.media_buy_status, "value", result.media_buy_status) == "canceled"
+        assert result.revision == 2
         uow.media_buys.update_fields.assert_called_once_with("mb_1", status="canceled")
         assert uow.session.add.call_count == 1
         patches["ctx_manager"].create_workflow_step.assert_not_called()
@@ -152,6 +153,7 @@ class TestIdempotencyReplaySuccess:
                 "affected_packages": [],
                 "media_buy_status": "canceled",
                 "status": "completed",
+                "revision": 2,
             },
         )
 

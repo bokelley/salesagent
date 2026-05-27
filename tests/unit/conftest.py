@@ -135,6 +135,9 @@ def standard_mocks():
     # override per-test. Without this, the bare MagicMock returns a truthy
     # default and every request looks like an idempotency hit.
     mock_uow.media_buys.find_by_idempotency_key.return_value = None
+    mock_uow.media_buys.get_by_id_for_update.side_effect = lambda media_buy_id: mock_uow.media_buys.get_by_id(
+        media_buy_id
+    )
     mock_currency_limits_repo = MagicMock()
     mock_currency_limits_repo.get_for_currency.return_value = mock_cl
     mock_uow.currency_limits = mock_currency_limits_repo
