@@ -3,11 +3,12 @@
 import logging
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.adapters import get_adapter_schemas
+from src.adapters._logging import safe_upstream_body_excerpt
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -17,6 +18,53 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 adapters_bp = Blueprint("adapters", __name__)
+
+
+def _freewheel_auth_mode(config_data: dict) -> str | None:
+    """Return the intended FreeWheel auth mode and remove UI-only metadata."""
+    explicit_mode = config_data.pop("auth_mode", None)
+    if explicit_mode in {"password_grant", "api_token"}:
+        return explicit_mode
+    if config_data.get("api_token"):
+        return "api_token"
+    if config_data.get("username"):
+        return "password_grant"
+    return None
+
+
+def _secret_fields_for_connection_schema(connection_config: type[BaseModel] | None) -> list[str]:
+    if connection_config is None:
+        return []
+    return [
+        name
+        for name, field in connection_config.model_fields.items()
+        if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get("secret")
+    ]
+
+
+def _freewheel_secret_fields_to_clear(auth_mode: str | None) -> set[str]:
+    if auth_mode == "password_grant":
+        return {"api_token"}
+    if auth_mode == "api_token":
+        return {"password"}
+    return set()
+
+
+def _preserve_or_clear_secret_fields(
+    config_data: dict,
+    existing_config: dict,
+    *,
+    secret_fields: list[str],
+    clear_secret_fields: set[str],
+) -> None:
+    """Preserve omitted stored secrets, except secrets explicitly cleared by mode switches."""
+    for field_name in [f for f in secret_fields if not config_data.get(f)]:
+        if field_name in clear_secret_fields:
+            config_data.pop(field_name, None)
+            continue
+        existing_value = existing_config.get(field_name)
+        if existing_value:
+            config_data[field_name] = existing_value
 
 
 @adapters_bp.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
@@ -155,7 +203,8 @@ def save_adapter_config(tenant_id, **kwargs):
             return jsonify({"success": False, "error": "No JSON data provided"}), 400
 
         adapter_type = data.get("adapter_type")
-        config_data = data.get("config", {})
+        config_data = dict(data.get("config") or {})
+        freewheel_auth_mode = _freewheel_auth_mode(config_data) if adapter_type == "freewheel" else None
 
         if not adapter_type:
             return jsonify({"success": False, "error": "adapter_type is required"}), 400
@@ -170,11 +219,10 @@ def save_adapter_config(tenant_id, **kwargs):
 
         schemas = get_adapter_schemas(adapter_type)
         if schemas and schemas.connection_config:
-            secret_fields = [
-                name
-                for name, field in schemas.connection_config.model_fields.items()
-                if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get("secret")
-            ]
+            secret_fields = _secret_fields_for_connection_schema(schemas.connection_config)
+            clear_secret_fields = (
+                _freewheel_secret_fields_to_clear(freewheel_auth_mode) if adapter_type == "freewheel" else set()
+            )
             for field_name in secret_fields:
                 submitted = config_data.get(field_name)
                 if submitted and is_encrypted(submitted):
@@ -194,10 +242,12 @@ def save_adapter_config(tenant_id, **kwargs):
                         stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
                         existing = session.scalars(stmt).first()
                         if existing and existing.config_json:
-                            for field_name in missing:
-                                existing_value = existing.config_json.get(field_name)
-                                if existing_value:
-                                    config_data[field_name] = existing_value
+                            _preserve_or_clear_secret_fields(
+                                config_data,
+                                existing.config_json,
+                                secret_fields=secret_fields,
+                                clear_secret_fields=clear_secret_fields,
+                            )
 
         # Validate config against adapter schema (keeps Pydantic model flowing)
         validated_config = None
@@ -237,7 +287,20 @@ def save_adapter_config(tenant_id, **kwargs):
             # already uses config_json via its connection schema.
 
             session.commit()
-            logger.info(f"Saved adapter config for tenant {tenant_id}: {adapter_type}")
+            if adapter_type == "freewheel":
+                logger.info(
+                    "Saved FreeWheel adapter config: tenant_id=%s environment=%s auth_mode=%s "
+                    "has_username=%s has_password=%s has_api_token=%s cleared_secrets=%s",
+                    tenant_id,
+                    config_data.get("environment", "production"),
+                    freewheel_auth_mode or "unchanged",
+                    bool(config_data.get("username")),
+                    bool(config_data.get("password")),
+                    bool(config_data.get("api_token")),
+                    sorted(_freewheel_secret_fields_to_clear(freewheel_auth_mode)),
+                )
+            else:
+                logger.info(f"Saved adapter config for tenant {tenant_id}: {adapter_type}")
 
         return jsonify({"success": True, "adapter_type": adapter_type})
 
@@ -423,6 +486,7 @@ def test_freewheel_connection(tenant_id, **kwargs):
                     except ValidationError:
                         pass
 
+        auth_mode = "api_token" if api_token else ("password_grant" if username and password else "stored")
         if not (username and password) and not api_token:
             return (
                 jsonify(
@@ -442,23 +506,44 @@ def test_freewheel_connection(tenant_id, **kwargs):
         try:
             info = client.token_info()
         except FreeWheelError as exc:
-            # Log the full upstream body server-side; return only a generic
-            # message to the client to avoid echoing reflected request data
-            # or hint messages from the auth provider.
-            logger.warning("FreeWheel token probe failed: %s body=%s", exc, exc.body)
+            # Keep the UI response generic, but log enough phase/status
+            # context for operators to diagnose upstream auth failures.
+            logger.warning(
+                "FreeWheel connection test failed: tenant_id=%s environment=%s auth_mode=%s "
+                "phase=token_info status=%s error=%s body_excerpt=%s",
+                tenant_id,
+                environment,
+                auth_mode,
+                exc.status_code,
+                exc,
+                safe_upstream_body_excerpt(exc.body),
+            )
             return jsonify({"success": False, "error": "FreeWheel rejected the credentials"}), 200
 
+        logger.info(
+            "FreeWheel connection test succeeded: tenant_id=%s environment=%s auth_mode=%s phase=token_info",
+            tenant_id,
+            environment,
+            "password_grant" if (username and password) else "api_token",
+        )
         return jsonify(
             {
                 "success": True,
                 "environment": environment,
-                "expires_in": info.get("expires_in"),
+                "expires_in": info.get("expires_in") or info.get("expires_in_seconds"),
                 "auth_mode": "password_grant" if (username and password) else "pre_minted_token",
             }
         )
 
     except Exception as e:
-        logger.error(f"FreeWheel connection test failed: {e}", exc_info=True)
+        logger.error(
+            "FreeWheel connection test crashed: tenant_id=%s environment=%s auth_mode=%s error=%s",
+            tenant_id,
+            locals().get("environment", "unknown"),
+            locals().get("auth_mode", "unknown"),
+            e,
+            exc_info=True,
+        )
         return jsonify({"success": False, "error": "Connection test failed (see server logs)"}), 500
 
 

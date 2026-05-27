@@ -107,6 +107,49 @@ class TestAdapterConfigValidation:
         with pytest.raises(ValidationError):
             MockProductConfig(daily_impressions=-1)
 
+    def test_freewheel_password_grant_mode_clears_stored_api_token(self):
+        """Switching to username/password must not keep an old static bearer."""
+        from src.admin.blueprints.adapters import (
+            _freewheel_auth_mode,
+            _freewheel_secret_fields_to_clear,
+            _preserve_or_clear_secret_fields,
+        )
+
+        incoming = {"auth_mode": "password_grant", "username": "publisher@example.com"}
+        auth_mode = _freewheel_auth_mode(incoming)
+        _preserve_or_clear_secret_fields(
+            incoming,
+            {"password": "encrypted-password", "api_token": "encrypted-token"},
+            secret_fields=["password", "api_token"],
+            clear_secret_fields=_freewheel_secret_fields_to_clear(auth_mode),
+        )
+
+        assert auth_mode == "password_grant"
+        assert incoming["password"] == "encrypted-password"
+        assert "api_token" not in incoming
+        assert "auth_mode" not in incoming
+
+    def test_freewheel_token_mode_clears_stored_password(self):
+        """Switching to a pre-minted token must not keep password auth alive."""
+        from src.admin.blueprints.adapters import (
+            _freewheel_auth_mode,
+            _freewheel_secret_fields_to_clear,
+            _preserve_or_clear_secret_fields,
+        )
+
+        incoming = {"auth_mode": "api_token", "api_token": "new-token", "username": "publisher@example.com"}
+        auth_mode = _freewheel_auth_mode(incoming)
+        _preserve_or_clear_secret_fields(
+            incoming,
+            {"password": "encrypted-password", "api_token": "encrypted-token"},
+            secret_fields=["password", "api_token"],
+            clear_secret_fields=_freewheel_secret_fields_to_clear(auth_mode),
+        )
+
+        assert auth_mode == "api_token"
+        assert incoming["api_token"] == "new-token"
+        assert "password" not in incoming
+
 
 class TestCapabilitiesEndpointLogic:
     """Tests for capabilities endpoint business logic."""
