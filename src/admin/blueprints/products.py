@@ -1940,6 +1940,7 @@ def edit_product(tenant_id, product_id):
                     tenant_id=tenant_id,
                     product=product,
                     previous_allowed_principal_ids=previous_allowed_principal_ids,
+                    pricing_changed=True,
                 )
 
                 flash(f"Product '{product.name}' updated successfully", "success")

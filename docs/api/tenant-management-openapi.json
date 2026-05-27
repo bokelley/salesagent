@@ -1238,10 +1238,13 @@
                 "principal.created",
                 "product.created",
                 "product.updated",
+                "product.priced",
                 "product.removed",
                 "signal.created",
                 "signal.updated",
+                "signal.priced",
                 "signal.removed",
+                "wholesale_feed.bulk_change",
                 "sync_run.completed",
                 "sync_run.failed",
                 "tenant.config_changed"
@@ -3479,14 +3482,21 @@
             "type": "string"
           },
           "selection_type": {
-            "default": "all",
-            "enum": [
-              "all",
-              "by_id",
-              "by_tag"
+            "anyOf": [
+              {
+                "enum": [
+                  "all",
+                  "by_id",
+                  "by_tag"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Selection Type",
-            "type": "string"
+            "default": null,
+            "title": "Selection Type"
           }
         },
         "required": [
@@ -8040,14 +8050,21 @@
             "type": "string"
           },
           "selection_type": {
-            "default": "all",
-            "enum": [
-              "all",
-              "by_id",
-              "by_tag"
+            "anyOf": [
+              {
+                "enum": [
+                  "all",
+                  "by_id",
+                  "by_tag"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Selection Type",
-            "type": "string"
+            "default": null,
+            "title": "Selection Type"
           }
         },
         "required": [
@@ -8655,14 +8672,21 @@
             "type": "string"
           },
           "selection_type": {
-            "default": "all",
-            "enum": [
-              "all",
-              "by_id",
-              "by_tag"
+            "anyOf": [
+              {
+                "enum": [
+                  "all",
+                  "by_id",
+                  "by_tag"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Selection Type",
-            "type": "string"
+            "default": null,
+            "title": "Selection Type"
           }
         },
         "required": [

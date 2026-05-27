@@ -533,10 +533,13 @@ class TestExpandedEventCatalog:
         "principal.created",
         "product.created",
         "product.updated",
+        "product.priced",
         "product.removed",
         "signal.created",
         "signal.updated",
+        "signal.priced",
         "signal.removed",
+        "wholesale_feed.bulk_change",
         # Issue #463: inventory-sync visibility events. Catalog plumbing
         # only — the real ``SyncJob``-driven emission path is covered by
         # ``TestSyncTerminalEmission`` below.

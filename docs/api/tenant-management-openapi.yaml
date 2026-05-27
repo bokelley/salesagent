@@ -854,10 +854,13 @@ components:
             - principal.created
             - product.created
             - product.updated
+            - product.priced
             - product.removed
             - signal.created
             - signal.updated
+            - signal.priced
             - signal.removed
+            - wholesale_feed.bulk_change
             - sync_run.completed
             - sync_run.failed
             - tenant.config_changed
@@ -2381,13 +2384,15 @@ components:
           title: Publisher Domain
           type: string
         selection_type:
-          default: all
-          enum:
-          - all
-          - by_id
-          - by_tag
+          anyOf:
+          - enum:
+            - all
+            - by_id
+            - by_tag
+            type: string
+          - type: 'null'
+          default: null
           title: Selection Type
-          type: string
       required:
       - publisher_domain
       title: PublisherPropertySelector
@@ -5573,13 +5578,15 @@ components:
           title: Publisher Domain
           type: string
         selection_type:
-          default: all
-          enum:
-          - all
-          - by_id
-          - by_tag
+          anyOf:
+          - enum:
+            - all
+            - by_id
+            - by_tag
+            type: string
+          - type: 'null'
+          default: null
           title: Selection Type
-          type: string
       required:
       - publisher_domain
       title: PublisherPropertySelector
@@ -5972,13 +5979,15 @@ components:
           title: Publisher Domain
           type: string
         selection_type:
-          default: all
-          enum:
-          - all
-          - by_id
-          - by_tag
+          anyOf:
+          - enum:
+            - all
+            - by_id
+            - by_tag
+            type: string
+          - type: 'null'
+          default: null
           title: Selection Type
-          type: string
       required:
       - publisher_domain
       title: PublisherPropertySelector
