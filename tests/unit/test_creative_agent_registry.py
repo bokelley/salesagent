@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import AnyUrl
 
-from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry, _default_agent_url
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import Format, FormatId, url
 
@@ -71,6 +71,18 @@ class TestCacheKeyAcceptsAnyUrl:
 
 class TestCreativeAgentRegistry:
     """Test suite for Creative Agent Registry adcp integration."""
+
+    def test_default_agent_url_uses_reference_when_env_blank(self, monkeypatch):
+        """Blank CREATIVE_AGENT_URL from matrix jobs must not unregister the standard agent."""
+        monkeypatch.setenv("CREATIVE_AGENT_URL", "")
+
+        assert _default_agent_url() == "https://creative.adcontextprotocol.org"
+
+    def test_default_agent_url_uses_env_override(self, monkeypatch):
+        """Non-blank CREATIVE_AGENT_URL still points CI/live tests at a local agent."""
+        monkeypatch.setenv("CREATIVE_AGENT_URL", "http://localhost:9999/api/creative-agent")
+
+        assert _default_agent_url() == "http://localhost:9999/api/creative-agent"
 
     def test_build_adcp_client_with_custom_auth_header(self):
         """Test _build_adcp_client correctly maps custom auth headers."""

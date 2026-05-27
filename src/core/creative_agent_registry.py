@@ -80,6 +80,7 @@ from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from yarl import URL
 
+from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import Format, FormatId, url
 
@@ -158,6 +159,11 @@ def _get_mock_formats() -> list[Format]:
     return get_standard_formats()
 
 
+def _default_agent_url() -> str:
+    """Resolve the default creative agent URL, treating blank env values as unset."""
+    return os.environ.get("CREATIVE_AGENT_URL") or DEFAULT_CREATIVE_AGENT_URL
+
+
 @dataclass
 class CreativeAgent:
     """Represents a creative agent that provides format definitions and creative services."""
@@ -208,7 +214,7 @@ class CreativeAgentRegistry:
     # The MCP server endpoint (/mcp) is appended by the MCP client when connecting
     # Reads CREATIVE_AGENT_URL env var so CI can point at a containerized agent.
     DEFAULT_AGENT = CreativeAgent(
-        agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
+        agent_url=_default_agent_url(),
         name="AdCP Standard Creative Agent",
         enabled=True,
         priority=1,
