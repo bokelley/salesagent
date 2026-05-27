@@ -70,6 +70,7 @@ class UpdateMediaBuyImplFixture:
         uow = MagicMock()
         uow.session = mock_session
         uow.media_buys = MagicMock()
+        uow.media_buys.get_by_id_for_update.side_effect = lambda media_buy_id: uow.media_buys.get_by_id(media_buy_id)
         if self._existing_media_buy is not None:
             uow.media_buys.get_by_id.return_value = self._existing_media_buy
         uow.currency_limits = MagicMock()

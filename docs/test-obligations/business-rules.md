@@ -642,12 +642,12 @@ Then the existing assignment is updated (weight reset to 100)
 ### BR-RULE-039: Assignment Format Compatibility
 **Obligation ID** BR-RULE-039-01
 **Layer** schema
-**Invariant:** Format compatibility checks normalized agent_url and exact format_id against product's format_ids. Empty format_ids means all allowed.
+**Invariant:** Format compatibility checks normalized agent_url and canonical format identity against product's format_ids. Legacy fixed-size IDs such as `display_300x250` match their structured form (`display_image` with 300x250 parameters). Empty format_ids means all allowed.
 **Scenario:**
 ```gherkin
-Given product format_ids accepts agent "http://agent.com/mcp" id "banner_300x250"
-When a creative with agent_url "http://agent.com/mcp/" and id "banner_300x250" is assigned
-Then URL normalization strips trailing "/" and the format matches
+Given product format_ids accepts agent "http://agent.com/mcp" id "display_300x250"
+When a creative with agent_url "http://agent.com/mcp/" and id "display_image" plus width 300 and height 250 is assigned
+Then URL normalization strips trailing "/" and canonical format comparison matches
 
 Given a product with empty format_ids
 When any creative format is assigned

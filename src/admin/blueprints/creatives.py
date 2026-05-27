@@ -655,7 +655,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     if mb:
                         new_status = _compute_media_buy_status_from_flight_dates(mb)
                         mb.status = new_status
-                        mb.approved_at = datetime.now(UTC)
+                        approved_at = datetime.now(UTC)
+                        mb.approved_at = approved_at
+                        if mb.confirmed_at is None:
+                            mb.confirmed_at = approved_at
                         mb.approved_by = "system"
                     # auto-commits
 

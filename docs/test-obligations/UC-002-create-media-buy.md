@@ -511,13 +511,13 @@ Source: UC-002-alt-manual.md
 **Then** the system sends a Slack notification to the Seller for approval review
 **Priority:** P2
 
-#### Scenario: Response Envelope Status is submitted
+#### Scenario: Deferred Response Carries Created Buy Metadata
 **Obligation ID** UC-002-ALT-MANUAL-APPROVAL-REQUIRED-06
 **Layer** behavioral
 **Given** manual approval is required
 **When** the system returns the response
-**Then** the protocol envelope status is `submitted` (NOT `completed`)
-**And** the response includes `media_buy_id` and `workflow_step_id`
+**Then** the response includes the minted `media_buy_id`, current `revision`, and `workflow_step_id`
+**And** `confirmed_at` is null until the Seller commits to the buy
 **Priority:** P0
 
 #### Scenario: No Adapter Execution Before Approval

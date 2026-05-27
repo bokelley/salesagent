@@ -118,6 +118,30 @@ def canonical_format_matches(requested: Any, supported: Any) -> bool:
     return True
 
 
+def canonical_format_satisfies(requested: Any, supported: Any) -> bool:
+    """Return whether a concrete requested format satisfies a supported format.
+
+    ``supported`` may be broad (``display_image``), in which case a more specific
+    requested format may match. If ``supported`` declares width/height/duration,
+    the requested format must declare the same value. This keeps product-gating
+    from accepting under-specified creatives for fixed-size products.
+    """
+    req_agent, req_id, req_width, req_height, req_duration = canonical_format_identity(requested)
+    sup_agent, sup_id, sup_width, sup_height, sup_duration = canonical_format_identity(supported)
+    if (req_agent, req_id) != (sup_agent, sup_id):
+        return False
+
+    for requested_value, supported_value in (
+        (req_width, sup_width),
+        (req_height, sup_height),
+        (req_duration, sup_duration),
+    ):
+        if supported_value is not None and requested_value != supported_value:
+            return False
+
+    return True
+
+
 def load_format_cache() -> dict[str, str]:
     """Load cached formats from reference implementation.
 

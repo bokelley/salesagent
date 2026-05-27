@@ -73,7 +73,9 @@ Files to create under `src/adapters/<name>/`:
     can do (used by the UI and the discovery API)
   - `__init__` — resolves principal + advertiser + auth
   - `create_media_buy` (abstract)
-  - `add_creative_assets` (abstract)
+  - `add_creative_assets` (abstract). URL-backed stored-creative payloads passed to adapters include `id` and
+    `creative_id` aliases for the creative identifier, `format_id`, `name`, `asset_type`, and `url`. Adapters
+    should reject missing platform-required fields explicitly instead of accepting partial assets.
   - `associate_creatives` (abstract)
   - `check_media_buy_status` (abstract)
   - `get_media_buy_delivery` (abstract; can return empty until reporting

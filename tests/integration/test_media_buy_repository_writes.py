@@ -8,6 +8,8 @@ Tests write operations against real PostgreSQL to verify:
 beads: salesagent-dyb6
 """
 
+import threading
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -217,6 +219,89 @@ class TestUpdateStatus:
             assert result.status == "active"
             assert result.approved_at is None
             assert result.approved_by is None
+
+    def test_increment_revision_roundtrip(self, tenant_a, principal_a):
+        """Media-buy revisions default to 1 and increment persistently."""
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_revision_1")
+            created = uow.media_buys.create(mb)
+            assert created.revision == 1
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.increment_revision("mb_revision_1")
+            assert result is not None
+            assert result.revision == 2
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            fetched = repo.get_by_id("mb_revision_1")
+            assert fetched is not None
+            assert fetched.revision == 2
+
+    def test_get_by_id_for_update_serializes_revision_check(self, tenant_a, principal_a):
+        """Concurrent revision checks serialize on the locked media-buy row."""
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_revision_lock")
+            uow.media_buys.create(mb)
+
+        first_locked = threading.Event()
+        release_first = threading.Event()
+        results: list[tuple[str, int]] = []
+        errors: list[BaseException] = []
+
+        def first_updater():
+            try:
+                with get_db_session() as session:
+                    repo = MediaBuyRepository(session, tenant_a)
+                    row = repo.get_by_id_for_update("mb_revision_lock")
+                    assert row is not None
+                    first_locked.set()
+                    assert release_first.wait(timeout=5)
+                    row.revision = row.revision + 1
+                    session.flush()
+                    session.commit()
+                    results.append(("success", row.revision))
+            except BaseException as exc:
+                errors.append(exc)
+
+        def second_updater():
+            try:
+                assert first_locked.wait(timeout=5)
+                with get_db_session() as session:
+                    repo = MediaBuyRepository(session, tenant_a)
+                    row = repo.get_by_id_for_update("mb_revision_lock")
+                    assert row is not None
+                    if row.revision != 1:
+                        results.append(("conflict", row.revision))
+                    else:
+                        row.revision = row.revision + 1
+                        session.flush()
+                        session.commit()
+                        results.append(("success", row.revision))
+            except BaseException as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=first_updater)
+        second = threading.Thread(target=second_updater)
+
+        first.start()
+        assert first_locked.wait(timeout=5)
+        second.start()
+        time.sleep(0.2)
+        release_first.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert not errors
+        assert sorted(results) == [("conflict", 2), ("success", 2)]
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            fetched = repo.get_by_id("mb_revision_lock")
+            assert fetched is not None
+            assert fetched.revision == 2
 
 
 # ---------------------------------------------------------------------------

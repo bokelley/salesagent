@@ -23,6 +23,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.exceptions import AdCPConflictError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Budget,
@@ -70,11 +71,14 @@ def _make_mock_db_session():
     return mock_session, mock_cm
 
 
-def _make_mock_media_buy(media_buy_id="mb_test", currency="USD"):
+def _make_mock_media_buy(media_buy_id="mb_test", currency="USD", revision=1, status="active"):
     """Create a mock MediaBuy database object."""
     mb = MagicMock()
     mb.media_buy_id = media_buy_id
     mb.currency = currency
+    mb.revision = revision
+    mb.status = status
+    mb.approved_at = datetime(2025, 1, 1, tzinfo=UTC)
     mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
     mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
     return mb
@@ -151,6 +155,86 @@ def test_workflow_step_receives_request_model_with_protocol_metadata(standard_mo
         request_data=req,
         request_metadata={"protocol": "mcp"},
     )
+
+
+def test_stale_revision_rejected_before_mutation(standard_mocks):
+    """A buyer-supplied stale revision raises CONFLICT before adapter dispatch."""
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.side_effect = None
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = _make_mock_media_buy(
+        "mb_revision",
+        revision=3,
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_revision",
+        paused=True,
+        revision=2,
+    )
+
+    with pytest.raises(AdCPConflictError) as exc_info:
+        _update_media_buy_impl(req=req, identity=identity)
+
+    assert exc_info.value.error_code == "CONFLICT"
+    assert exc_info.value.details["error_code"] == "REVISION_MISMATCH"
+    standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
+    standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_not_called()
+
+
+def test_successful_update_increments_revision(standard_mocks):
+    """Successful mutating updates return the next media-buy revision."""
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.side_effect = None
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy(
+        "mb_revision",
+        revision=1,
+    )
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_revision",
+        affected_packages=[],
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_revision",
+        paused=True,
+        revision=1,
+    )
+
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.revision == 2
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.assert_called_once_with("mb_revision")
+    standard_mocks["uow_instance"].media_buys.increment_revision.assert_called_once_with("mb_revision")
+
+
+def test_package_reference_only_update_does_not_increment_revision(standard_mocks):
+    """A package-only reference validates existence but does not advance revision."""
+    current = _make_mock_media_buy("mb_revision", revision=4)
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = current
+    standard_mocks["uow_instance"].media_buys.get_package.return_value = MagicMock(package_id="pkg_1")
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_revision",
+        affected_packages=[],
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_revision",
+        packages=[{"package_id": "pkg_1"}],
+        revision=4,
+    )
+
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert result.revision == 4
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.assert_not_called()
+    standard_mocks["uow_instance"].media_buys.increment_revision.assert_not_called()
+    standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1487,6 +1571,52 @@ class TestUC003UpdateCreativeIds:
         with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
             _update_media_buy_impl(req=req, identity=identity)
         assert exc_info.value.details["error_code"] == "INVALID_CREATIVES"
+
+    def test_creative_format_compatibility_accepts_canonical_legacy_equivalent(self, standard_mocks):
+        """Creative format compatibility canonicalizes legacy fixed-size product IDs."""
+        mock_session = _setup_db_session(standard_mocks)
+
+        mock_mb = MagicMock()
+        mock_mb.media_buy_id = "mb_creative"
+        mock_mb.status = "active"
+        mock_mb.approved_at = None
+        standard_mocks["uow_instance"].media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+
+        c1 = MagicMock()
+        c1.creative_id = "C1"
+        c1.status = "active"
+        c1.agent_url = "https://creative.adcontextprotocol.org"
+        c1.format = "display_image"
+        c1.format_parameters = {"width": 300, "height": 250}
+
+        mock_product = MagicMock()
+        mock_product.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+        mock_product.name = "Legacy Display Product"
+
+        mock_pkg = MagicMock()
+        mock_pkg.package_config = {"product_id": "prod_1"}
+        standard_mocks["uow_instance"].media_buys.get_package.return_value = mock_pkg
+
+        scalars_calls = iter(
+            [
+                MagicMock(all=Mock(return_value=[c1])),
+                MagicMock(first=Mock(return_value=mock_product)),
+                MagicMock(all=Mock(return_value=[])),  # existing assignments
+            ]
+        )
+        mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+
+        identity = _make_identity()
+        req = UpdateMediaBuyRequest(
+            **required_request_kwargs(),
+            media_buy_id="mb_creative",
+            packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
+        )
+
+        result = _update_media_buy_impl(req=req, identity=identity)
+
+        assert isinstance(result, UpdateMediaBuySuccess)
+        standard_mocks["adapter_instance"].update_media_buy.assert_not_called()
 
     def test_creative_update_no_adapter_call(self, standard_mocks):
         """Creative ID updates persist directly to DB without adapter call.

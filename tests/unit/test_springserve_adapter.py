@@ -438,6 +438,8 @@ class TestLiveCreatives:
 
         asset = build_adapter_asset_from_stored_creative(creative, package_id="pkg_audio", format_spec=None)
 
+        assert asset["id"] == "talpa_audio_1"
+        assert asset["creative_id"] == "talpa_audio_1"
         assert asset["format_id"] == {
             "agent_url": "https://creative.adcontextprotocol.org",
             "id": "audio_30s",

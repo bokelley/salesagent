@@ -7,6 +7,8 @@ and URL extraction.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.core.tools.media_buy_create import _get_format_spec_sync
 
 
@@ -48,3 +50,17 @@ class TestGetFormatSpecSync:
         with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry):
             format_spec = _get_format_spec_sync("https://creative.adcontextprotocol.org", "display_300x250_image")
             assert format_spec is None
+
+    @pytest.mark.asyncio
+    async def test_format_retrieval_inside_running_event_loop(self):
+        """Format lookup works when called from async MCP handlers."""
+        mock_format_spec = MagicMock()
+        mock_format_spec.format_id.id = "display_image"
+
+        mock_registry = MagicMock()
+        mock_registry.get_format = AsyncMock(return_value=mock_format_spec)
+
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry):
+            format_spec = _get_format_spec_sync("https://creative.adcontextprotocol.org/", "display_image")
+
+        assert format_spec is mock_format_spec
