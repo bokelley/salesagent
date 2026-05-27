@@ -550,8 +550,10 @@ class TestStaleCacheFallback:
         # Patch out client construction — _fetch_formats_from_agent is mocked anyway.
         registry._build_adcp_client = lambda _agents: Mock()  # type: ignore[assignment]
 
-        # Only the default agent in scope (no tenant agents)
-        default_agent = registry.DEFAULT_AGENT
+        # Use a custom agent so this test exercises stale-cache fallback
+        # rather than the reference-agent local catalog shortcut.
+        default_agent = self._agent()
+        registry._get_tenant_agents = lambda _tenant_id: [default_agent]  # type: ignore[method-assign]
         cached_formats = [Mock(name="cached_fmt", spec=[])]
         self._seed_cache(registry, default_agent, age_seconds=7200, formats=cached_formats)
 
@@ -575,6 +577,7 @@ class TestStaleCacheFallback:
         """No usable cache + fetch failure → AGENT_UNREACHABLE (existing behavior preserved)."""
         registry = CreativeAgentRegistry()
         registry._build_adcp_client = lambda _agents: Mock()  # type: ignore[assignment]
+        registry._get_tenant_agents = lambda _tenant_id: [self._agent()]  # type: ignore[method-assign]
 
         boom = RuntimeError("upstream 503")
         monkeypatch.setattr(registry, "_fetch_formats_from_agent", AsyncMock(side_effect=boom))

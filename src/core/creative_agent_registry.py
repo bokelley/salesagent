@@ -140,9 +140,9 @@ def _get_mock_formats() -> list[Format]:
     These formats match what the real creative agent returns, but without
     making external HTTP calls. Used in CI to avoid timeouts.
     """
-    from src.core.standard_formats import STANDARD_FORMATS
+    from src.core.standard_formats import get_standard_formats
 
-    return list(STANDARD_FORMATS.values())
+    return get_standard_formats()
 
 
 @dataclass
@@ -762,6 +762,11 @@ class CreativeAgentRegistry:
         Filtered requests skip stale fallback — the cache holds the full unfiltered result,
         and serving it for a filtered query could return the wrong subset.
         """
+        from src.core.standard_formats import get_standard_formats, is_standard_agent
+
+        if is_standard_agent(agent.agent_url) and not force_refresh and not has_filters:
+            return CachedFetchResult(formats=get_standard_formats())
+
         cache_key = self._cache_key(agent.agent_url)
         cached = self._format_cache.get(cache_key)
         if cached and not cached.is_expired() and not force_refresh and not has_filters:

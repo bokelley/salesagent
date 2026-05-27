@@ -42,6 +42,25 @@ def canonical_format_ref(format_id: str, **params: Any) -> dict[str, Any]:
     return ref
 
 
+def normalize_creative_agent_url(agent_url: Any) -> str:
+    """Normalize an agent URL for creative-format identity comparisons."""
+    if not agent_url:
+        return ""
+
+    normalized = str(agent_url).rstrip("/")
+    if normalized.endswith("/mcp"):
+        normalized = normalized.removesuffix("/mcp").rstrip("/")
+
+    if normalized == DEFAULT_CREATIVE_AGENT_URL:
+        return DEFAULT_CREATIVE_AGENT_URL
+    return normalized
+
+
+def is_reference_creative_agent_url(agent_url: Any) -> bool:
+    """Return true for known URLs that identify the AdCP reference format catalog."""
+    return normalize_creative_agent_url(agent_url) == DEFAULT_CREATIVE_AGENT_URL
+
+
 __all__ = [
     "CANONICAL_AUDIO_FORMAT_IDS",
     "CANONICAL_CAROUSEL_FORMAT_IDS",
@@ -52,4 +71,6 @@ __all__ = [
     "DEFAULT_CREATIVE_AGENT_URL",
     "DISPLAY_FORMAT_LABELS",
     "canonical_format_ref",
+    "is_reference_creative_agent_url",
+    "normalize_creative_agent_url",
 ]
