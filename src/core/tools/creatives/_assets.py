@@ -21,7 +21,7 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
     Returns:
         The extracted URL string, or None if no URL found.
     """
-    url = getattr(creative, "url", None)
+    url = getattr(creative, "url", None) or getattr(creative, "media_url", None)
     if url or not creative.assets:
         return url
 

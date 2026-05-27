@@ -50,6 +50,24 @@ class TestCacheKeyAcceptsAnyUrl:
         assert result is not None
         assert result.format_id.id == "display_300x250_image"
 
+    @pytest.mark.asyncio
+    async def test_reference_preview_with_direct_url_does_not_open_client(self, monkeypatch):
+        """Reference static formats with direct assets should not require remote preview."""
+        registry = CreativeAgentRegistry()
+
+        def fail_create_client(*args, **kwargs):
+            raise AssertionError("reference preview should not open an MCP client")
+
+        monkeypatch.setattr("src.core.creative_agent_registry.create_mcp_client", fail_create_client)
+
+        result = await registry.preview_creative(
+            "https://creative.adcontextprotocol.org",
+            "display_300x250",
+            {"creative_id": "cr_1", "name": "Static", "format_id": "display_300x250", "url": "https://ad.test/a.png"},
+        )
+
+        assert result == {}
+
 
 class TestCreativeAgentRegistry:
     """Test suite for Creative Agent Registry adcp integration."""

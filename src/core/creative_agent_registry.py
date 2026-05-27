@@ -61,6 +61,19 @@ def _resolve_fetch_timeout() -> float:
     return value
 
 
+def _manifest_has_direct_url(creative_manifest: dict[str, Any]) -> bool:
+    """Return true when a manifest already points at creative content."""
+    for key in ("url", "media_url", "content_uri"):
+        if creative_manifest.get(key):
+            return True
+
+    assets = creative_manifest.get("assets")
+    if not isinstance(assets, dict):
+        return False
+
+    return any(isinstance(asset, dict) and bool(asset.get("url")) for asset in assets.values())
+
+
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
@@ -896,6 +909,11 @@ class CreativeAgentRegistry:
                 }]
             }
         """
+        from src.core.standard_formats import is_standard_agent
+
+        if is_standard_agent(agent_url) and _manifest_has_direct_url(creative_manifest):
+            return {}
+
         # preview_creative is an AdCP creative-protocol tool; we use a thin custom MCP
         # client here because the request shape is creative-agent-specific.
         async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
