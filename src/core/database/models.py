@@ -2095,7 +2095,7 @@ class SyncJob(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     adapter_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    sync_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    sync_type: Mapped[str] = mapped_column(String(40), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -50,6 +50,8 @@ def start_inventory_sync_background(
     *,
     pending_sync_id: str | None = None,
     targeting_sync_id: str | None = None,
+    triggered_by: str = "admin_ui",
+    triggered_by_id: str | None = "system",
 ) -> str:
     """
     Start an inventory sync in the background.
@@ -69,6 +71,9 @@ def start_inventory_sync_background(
             row id. Inventory sync does targeting work internally; the
             companion row is transitioned alongside the inventory row so
             the publisher's per-type progress UI reflects reality.
+        triggered_by: Provenance stamped on newly-created rows. Ignored
+            when ``pending_sync_id`` points at an existing row.
+        triggered_by_id: Optional actor/source stamped on newly-created rows.
 
     Returns:
         sync_id: The sync job ID for tracking progress
@@ -164,8 +169,8 @@ def start_inventory_sync_background(
                 sync_type="inventory",
                 status="running",
                 started_at=datetime.now(UTC),
-                triggered_by="admin_ui",
-                triggered_by_id="system",
+                triggered_by=triggered_by,
+                triggered_by_id=triggered_by_id,
                 progress={
                     "phase": "Starting",
                     "sync_types": sync_types,

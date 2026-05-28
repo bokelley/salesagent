@@ -22,10 +22,9 @@ from pydantic import ValidationError
 
 from src.admin.utils import require_auth
 from src.core.database.database_session import get_db_session
-from src.core.database.repositories.sync_job import SyncJobAdminRepository
+from src.core.database.repositories.sync_job import SyncJobAdminRepository, SyncJobRepository
 from src.services.adapter_sync_orchestration import (
-    KIND_INVENTORY,
-    KIND_REPORTING,
+    SUPPORTED_SYNC_KINDS,
     AdapterDoesNotSupportSyncKind,
     enqueue_adapter_sync,
 )
@@ -35,9 +34,10 @@ logger = logging.getLogger(__name__)
 
 scheduling_bp = Blueprint("scheduling", __name__)
 
-_VALID_KINDS = {KIND_INVENTORY, KIND_REPORTING}
+_VALID_KINDS = set(SUPPORTED_SYNC_KINDS)
 
 
+@scheduling_bp.route("/scheduling", methods=["GET"])
 @scheduling_bp.route("/admin/scheduling", methods=["GET"])
 @require_auth(admin_only=True)
 def scheduling_index():
@@ -72,6 +72,7 @@ def scheduling_index():
     )
 
 
+@scheduling_bp.route("/api/scheduling/jobs", methods=["GET"])
 @scheduling_bp.route("/admin/api/scheduling/jobs", methods=["GET"])
 @require_auth(admin_only=True)
 def list_jobs():
@@ -85,6 +86,7 @@ def list_jobs():
     return jsonify({"rows": [r.to_dict() for r in rows]})
 
 
+@scheduling_bp.route("/api/scheduling/recent", methods=["GET"])
 @scheduling_bp.route("/admin/api/scheduling/recent", methods=["GET"])
 @require_auth(admin_only=True)
 def list_recent():
@@ -117,6 +119,7 @@ def list_recent():
     )
 
 
+@scheduling_bp.route("/api/scheduling/run", methods=["POST"])
 @scheduling_bp.route("/admin/api/scheduling/run", methods=["POST"])
 @require_auth(admin_only=True)
 def run_now():
@@ -155,6 +158,18 @@ def run_now():
         return jsonify({"error": str(exc)}), 400
     except ValidationError as exc:
         return jsonify({"error": f"Stored adapter config is invalid: {exc}"}), 400
+    except ValueError as exc:
+        if "Sync already running" in str(exc):
+            return (
+                jsonify(
+                    {
+                        "error": "sync_already_running",
+                        "message": str(exc),
+                    }
+                ),
+                409,
+            )
+        raise
     except Exception:
         logger.exception(
             "Scheduling Run Now enqueue failed for tenant=%s adapter=%s kind=%s",
@@ -170,7 +185,15 @@ def run_now():
             400,
         )
 
-    return jsonify({"sync_id": sync_id, "status": "queued", "triggered_by_id": triggered_by_id}), 202
+    return jsonify(
+        {"sync_id": sync_id, "status": _sync_status(tenant_id, sync_id), "triggered_by_id": triggered_by_id}
+    ), 202
+
+
+def _sync_status(tenant_id: str, sync_id: str) -> str:
+    with get_db_session() as session:
+        job = SyncJobRepository(session, tenant_id).find_by_sync_id(sync_id)
+        return job.status if job is not None else "queued"
 
 
 def _resolve_admin_identity() -> str | None:

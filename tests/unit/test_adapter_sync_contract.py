@@ -66,6 +66,9 @@ class TestAdapterCapabilitiesFlags:
         caps = AdapterCapabilities()
         assert caps.supports_inventory_sync is False
         assert caps.supports_reporting_sync is False
+        assert caps.supports_price_guidance_sync is False
+        assert caps.supports_availability_guidance_sync is False
+        assert caps.supports_signal_coverage_sync is False
 
     def test_flags_independent(self):
         """Inventory sync and reporting sync are independent capabilities —
@@ -74,6 +77,7 @@ class TestAdapterCapabilitiesFlags:
         caps = AdapterCapabilities(supports_inventory_sync=True)
         assert caps.supports_inventory_sync is True
         assert caps.supports_reporting_sync is False
+        assert caps.supports_price_guidance_sync is False
 
 
 class TestDefaultContractImplementation:
@@ -132,6 +136,22 @@ class TestDefaultContractImplementation:
         message = str(exc.value)
         assert "supports_reporting_sync" in message
         assert "run_reporting_sync" in message
+
+    @pytest.mark.parametrize(
+        ("method_name", "flag"),
+        [
+            ("run_price_guidance_sync", "supports_price_guidance_sync"),
+            ("run_availability_guidance_sync", "supports_availability_guidance_sync"),
+            ("run_signal_coverage_sync", "supports_signal_coverage_sync"),
+        ],
+    )
+    def test_guidance_sync_defaults_raise_with_actionable_message(self, method_name, flag):
+        adapter = self._bare_adapter()
+        with pytest.raises(NotImplementedError) as exc:
+            getattr(adapter, method_name)()
+        message = str(exc.value)
+        assert flag in message
+        assert method_name in message
 
     def test_latest_sync_accessors_return_none_by_default(self):
         """Adapters without caches return None; the scheduling UI shows

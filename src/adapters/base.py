@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
@@ -143,6 +143,13 @@ class AdapterCapabilities:
     # adapter.
     supports_reporting_sync: bool = False
 
+    # Guidance syncs — optional scheduled jobs that refresh derived
+    # buyer-facing advice from inventory/reporting inputs. Adapters opt
+    # in independently because these can have very different upstream cost.
+    supports_price_guidance_sync: bool = False
+    supports_availability_guidance_sync: bool = False
+    supports_signal_coverage_sync: bool = False
+
     # Freshness windows for the cross-tenant /admin/scheduling page
     # (#382 Stage 4). ``warning`` = "should refresh soon", ``critical`` =
     # "data is too old, alert operator". Defaults reflect the typical
@@ -155,6 +162,8 @@ class AdapterCapabilities:
     inventory_freshness_critical: timedelta = timedelta(hours=72)
     reporting_freshness_warning: timedelta = timedelta(hours=2)
     reporting_freshness_critical: timedelta = timedelta(hours=6)
+    guidance_freshness_warning: timedelta = timedelta(hours=24)
+    guidance_freshness_critical: timedelta = timedelta(hours=72)
 
     # Per-adapter "reporting bundled with inventory" hint. GAM doesn't
     # have a separate reporting sync — line-item stats are written by
@@ -962,6 +971,24 @@ class AdServerAdapter(ABC):
             f"{self.__class__.__name__} declared supports_reporting_sync but did not "
             "implement run_reporting_sync(). Override it, or flip the capability flag off."
         )
+
+    def _raise_sync_not_implemented(self, sync_kind: str) -> NoReturn:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} declared supports_{sync_kind}_sync but did not "
+            f"implement run_{sync_kind}_sync(). Override it, or flip the capability flag off."
+        )
+
+    def run_price_guidance_sync(self) -> AdapterSyncResult:
+        """Refresh cached price guidance for products/packages."""
+        self._raise_sync_not_implemented("price_guidance")
+
+    def run_availability_guidance_sync(self) -> AdapterSyncResult:
+        """Refresh cached availability guidance for products/packages."""
+        self._raise_sync_not_implemented("availability_guidance")
+
+    def run_signal_coverage_sync(self) -> AdapterSyncResult:
+        """Refresh cached signal coverage data for products/packages."""
+        self._raise_sync_not_implemented("signal_coverage")
 
     def latest_inventory_sync_at(self) -> datetime | None:
         """When this adapter's inventory was last refreshed, or ``None`` if

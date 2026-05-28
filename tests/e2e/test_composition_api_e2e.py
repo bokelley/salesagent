@@ -6,6 +6,7 @@ admin REST authoring -> persisted catalog/signal rows -> buyer MCP product disco
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -197,7 +198,7 @@ async def test_admin_authored_inventory_signal_and_product_reach_buyer_discovery
     profile_id = f"e2e_homepage_sports_{suffix}"
     signal_id = f"e2e_sports_fans_{suffix}"
     product_id = f"e2e_wholesale_sports_display_{suffix}"
-    api_key = f"composition-e2e-{uuid.uuid4().hex}"
+    api_key = os.environ.get("TENANT_MANAGEMENT_API_KEY") or f"composition-e2e-{uuid.uuid4().hex}"
 
     tenant_id = _resolve_ci_tenant_id(live_server)
 

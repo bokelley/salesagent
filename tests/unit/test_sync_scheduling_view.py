@@ -100,7 +100,8 @@ class TestBuildRowFreshness:
         assert row.never_run is False
 
     def test_completed_past_warning_but_before_critical_is_warning(self):
-        # Just past the 24h warning, still inside 72h critical for FW inventory.
+        # Just past the default adapter warning, still inside the default
+        # adapter critical window.
         now = datetime.now(UTC)
         row = _build_row(
             tenant_id="t1",
@@ -112,6 +113,19 @@ class TestBuildRowFreshness:
                 completed_at=now - (DEFAULT_INVENTORY_WARNING + timedelta(minutes=1)),
             ),
             now=now,
+        )
+        assert row.freshness == FRESHNESS_WARNING
+
+    def test_inventory_freshness_respects_tenant_cadence(self):
+        now = datetime.now(UTC)
+        row = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="google_ad_manager",
+            sync_kind=KIND_INVENTORY,
+            job=self._job(status="completed", completed_at=now - timedelta(minutes=150)),
+            now=now,
+            sync_cadence_minutes=120,
         )
         assert row.freshness == FRESHNESS_WARNING
 

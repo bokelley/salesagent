@@ -221,6 +221,7 @@ class TestBuildPayload:
             "sync_run_id": "sync_001",
             "sync_type": "inventory",
             "adapter_type": "google_ad_manager",
+            "status": "completed",
             "trigger": "scheduled",
             "started_at": "2026-05-17T18:23:11+00:00",
             "completed_at": "2026-05-17T18:24:33+00:00",
@@ -259,7 +260,7 @@ class TestBuildPayload:
         payload = _build_payload(snap, "sync_run.failed")
         # The data block must always carry the run identity + timing so the
         # receiver can correlate to its own UI state without an extra read.
-        for key in ("sync_run_id", "sync_type", "adapter_type", "trigger", "started_at", "completed_at"):
+        for key in ("sync_run_id", "sync_type", "adapter_type", "status", "trigger", "started_at", "completed_at"):
             assert key in payload, f"missing required key {key} in failure payload"
 
     def test_completed_with_no_item_count_emits_none(self):

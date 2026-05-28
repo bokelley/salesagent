@@ -479,6 +479,7 @@ def _build_payload(snap: dict[str, Any], event_type: str) -> dict[str, Any]:
         "sync_run_id": snap["sync_run_id"],
         "sync_type": snap["sync_type"],
         "adapter_type": snap["adapter_type"],
+        "status": snap["_status"],
         "trigger": _normalize_trigger(snap.get("triggered_by"), snap.get("triggered_by_id")),
         "started_at": _iso(snap.get("started_at")),
         "completed_at": _iso(snap.get("completed_at")),

@@ -22,7 +22,14 @@ from src.adapters.base import AdapterCapabilities
 from src.core.database.models import SyncJob
 from src.core.database.repositories.adapter_config import AdapterConfigAdminRepository
 from src.core.database.repositories.sync_job import SyncJobAdminRepository
-from src.services.adapter_sync_orchestration import KIND_INVENTORY, KIND_REPORTING
+from src.services.adapter_sync_orchestration import (
+    KIND_AVAILABILITY_GUIDANCE,
+    KIND_INVENTORY,
+    KIND_PRICE_GUIDANCE,
+    KIND_SIGNAL_COVERAGE,
+    SUPPORTED_SYNC_KINDS,
+    adapter_supports_sync_kind,
+)
 
 # Fallback thresholds when an adapter doesn't override on its capabilities
 # block. Used for unknown adapter types and as backstops; production
@@ -31,6 +38,8 @@ DEFAULT_INVENTORY_WARNING = timedelta(hours=24)
 DEFAULT_INVENTORY_CRITICAL = timedelta(hours=72)
 DEFAULT_REPORTING_WARNING = timedelta(hours=2)
 DEFAULT_REPORTING_CRITICAL = timedelta(hours=6)
+DEFAULT_GUIDANCE_WARNING = timedelta(hours=24)
+DEFAULT_GUIDANCE_CRITICAL = timedelta(hours=72)
 
 # Back-compat aliases — the Stage 5 reporting scheduler uses these to
 # decide "is this row fresh enough to skip?". Keeping them at the
@@ -38,8 +47,10 @@ DEFAULT_REPORTING_CRITICAL = timedelta(hours=6)
 # which adapter is which, it just needs a single threshold.
 REPORTING_STALE_AFTER = DEFAULT_REPORTING_WARNING
 INVENTORY_STALE_AFTER = DEFAULT_INVENTORY_WARNING
+GUIDANCE_STALE_AFTER = DEFAULT_GUIDANCE_WARNING
 
-_SYNC_KINDS = (KIND_INVENTORY, KIND_REPORTING)
+GUIDANCE_SYNC_KINDS = (KIND_PRICE_GUIDANCE, KIND_AVAILABILITY_GUIDANCE, KIND_SIGNAL_COVERAGE)
+_SYNC_KINDS = tuple(sorted(SUPPORTED_SYNC_KINDS))
 
 # Freshness levels, in increasing severity. The HTML template renders
 # each as a distinct badge color (green / amber / red).
@@ -119,25 +130,38 @@ def _capability_flag(adapter_type: str, sync_kind: str) -> bool:
     caps = _capabilities_for(adapter_type)
     if caps is None:
         return False
-    attr = "supports_inventory_sync" if sync_kind == KIND_INVENTORY else "supports_reporting_sync"
-    return bool(getattr(caps, attr, False))
+    return adapter_supports_sync_kind(caps, sync_kind)
 
 
-def _freshness_thresholds(adapter_type: str, sync_kind: str) -> tuple[timedelta, timedelta]:
+def _freshness_thresholds(
+    adapter_type: str,
+    sync_kind: str,
+    *,
+    sync_cadence_minutes: int | None = None,
+) -> tuple[timedelta, timedelta]:
     """Return ``(warning_after, critical_after)`` for this triple.
 
     Reads from the adapter's :class:`AdapterCapabilities` so each adapter
     can declare its own cadence (FW reporting flips warning at 2h; GAM
     inventory at 24h). Falls back to module defaults for unknown adapters.
     """
+    if sync_kind == KIND_INVENTORY and sync_cadence_minutes is not None:
+        warning = timedelta(minutes=sync_cadence_minutes)
+        return warning, warning * 3
+
     caps = _capabilities_for(adapter_type)
     if caps is None:
         if sync_kind == KIND_INVENTORY:
-            return DEFAULT_INVENTORY_WARNING, DEFAULT_INVENTORY_CRITICAL
+            warning = timedelta(hours=6)
+            return warning, warning * 3
+        if sync_kind in GUIDANCE_SYNC_KINDS:
+            return DEFAULT_GUIDANCE_WARNING, DEFAULT_GUIDANCE_CRITICAL
         return DEFAULT_REPORTING_WARNING, DEFAULT_REPORTING_CRITICAL
 
     if sync_kind == KIND_INVENTORY:
         return caps.inventory_freshness_warning, caps.inventory_freshness_critical
+    if sync_kind in GUIDANCE_SYNC_KINDS:
+        return caps.guidance_freshness_warning, caps.guidance_freshness_critical
     return caps.reporting_freshness_warning, caps.reporting_freshness_critical
 
 
@@ -200,9 +224,14 @@ def _build_row(
     sync_kind: str,
     job: SyncJob | None,
     now: datetime,
+    sync_cadence_minutes: int | None = None,
 ) -> SchedulingRow:
     supported = _capability_flag(adapter_type, sync_kind)
-    warning_after, critical_after = _freshness_thresholds(adapter_type, sync_kind)
+    warning_after, critical_after = _freshness_thresholds(
+        adapter_type,
+        sync_kind,
+        sync_cadence_minutes=sync_cadence_minutes,
+    )
     freshness = _classify_freshness(job=job, now=now, warning_after=warning_after, critical_after=critical_after)
     notes = _notes_for(adapter_type, sync_kind)
 
@@ -282,6 +311,7 @@ def build_scheduling_matrix(session: Session) -> list[SchedulingRow]:
                     sync_kind=kind,
                     job=latest.get((pair.tenant_id, pair.adapter_type, kind)),
                     now=now,
+                    sync_cadence_minutes=pair.sync_cadence_minutes,
                 )
             )
 

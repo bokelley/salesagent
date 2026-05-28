@@ -18,6 +18,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
 from src.services.adapter_sync_orchestration import (
     KIND_INVENTORY,
+    KIND_PRICE_GUIDANCE,
     KIND_REPORTING,
     SyncExecutionResult,
     execute_sync,
@@ -69,6 +70,37 @@ class TestSuccessfulRunPersistsSyncJob:
             assert row.completed_at is not None
             assert row.progress["counts"] == {"site": 29, "site_section": 51}
             assert row.error_message is None
+
+    def test_price_guidance_success_writes_completed_sync_job(self, factory_session):
+        TenantFactory(tenant_id="t_price_guidance_success")
+
+        adapter = _mock_adapter(
+            supports_price_guidance=True,
+            price_guidance_result=AdapterSyncResult(
+                sync_kind=KIND_PRICE_GUIDANCE,
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                succeeded=True,
+                counts={"products": 3},
+            ),
+        )
+
+        result = execute_sync(
+            adapter=adapter,
+            tenant_id="t_price_guidance_success",
+            sync_kind=KIND_PRICE_GUIDANCE,
+            triggered_by="scheduler_price_guidance",
+        )
+
+        assert result.succeeded is True
+        assert result.counts == {"products": 3}
+
+        with get_db_session() as session:
+            row = session.scalar(select(SyncJob).filter_by(sync_id=result.sync_id))
+            assert row is not None
+            assert row.sync_type == KIND_PRICE_GUIDANCE
+            assert row.triggered_by == "scheduler_price_guidance"
+            assert row.status == "completed"
 
 
 class TestFailedRunMarksJobFailed:

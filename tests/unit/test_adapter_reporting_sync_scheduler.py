@@ -18,15 +18,35 @@ from src.services.adapter_reporting_sync_scheduler import (
     AdapterReportingSyncScheduler,
     _list_eligible_tenants,
 )
-from src.services.adapter_sync_orchestration import KIND_REPORTING, SyncExecutionResult
+from src.services.adapter_sync_orchestration import (
+    KIND_INVENTORY,
+    KIND_PRICE_GUIDANCE,
+    KIND_REPORTING,
+    SyncExecutionResult,
+)
+from src.services.adapter_sync_scheduler import (
+    DEFAULT_INVENTORY_SYNC_CADENCE_MINUTES,
+    AdapterInventoryGuidanceSyncScheduler,
+    _list_eligible_syncs,
+)
 from src.services.sync_scheduling_view import REPORTING_STALE_AFTER
 
 
-def _pair(tenant_id, adapter_type):
+def _pair(tenant_id, adapter_type, sync_cadence_minutes=None):
     p = MagicMock()
     p.tenant_id = tenant_id
     p.adapter_type = adapter_type
+    p.sync_cadence_minutes = sync_cadence_minutes
+    p.sync_ready = True
     return p
+
+
+def _eligible(tenant_id: str, adapter_type: str = "freewheel", sync_kind: str = KIND_REPORTING):
+    item = MagicMock()
+    item.tenant_id = tenant_id
+    item.adapter_type = adapter_type
+    item.sync_kind = sync_kind
+    return item
 
 
 def _patch_eligibility_layer(monkeypatch, *, pairs, latest_map):
@@ -38,15 +58,15 @@ def _patch_eligibility_layer(monkeypatch, *, pairs, latest_map):
     import contextlib
 
     monkeypatch.setattr(
-        "src.services.adapter_reporting_sync_scheduler.AdapterConfigAdminRepository.list_all",
+        "src.services.adapter_sync_scheduler.AdapterConfigAdminRepository.list_all",
         lambda self: pairs,
     )
     monkeypatch.setattr(
-        "src.services.adapter_reporting_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
+        "src.services.adapter_sync_scheduler.SyncJobAdminRepository.latest_for_triples",
         lambda self, triples: latest_map,
     )
     monkeypatch.setattr(
-        "src.services.adapter_reporting_sync_scheduler.get_db_session",
+        "src.services.adapter_sync_scheduler.get_db_session",
         lambda: contextlib.nullcontext(MagicMock()),
     )
 
@@ -82,6 +102,41 @@ class TestListEligibleTenantsFiltering:
             latest_map={("t_fresh", "freewheel", KIND_REPORTING): recent_job},
         )
         assert _list_eligible_tenants(now) == []
+
+
+class TestInventoryGuidanceEligibility:
+    def test_inventory_uses_default_six_hour_cadence(self, monkeypatch):
+        now = datetime.now(UTC)
+        recent_job = MagicMock()
+        recent_job.status = "completed"
+        recent_job.completed_at = now - timedelta(hours=5)
+
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_recent_inventory", "google_ad_manager")],
+            latest_map={("t_recent_inventory", "google_ad_manager", KIND_INVENTORY): recent_job},
+        )
+
+        eligible = _list_eligible_syncs(now, (KIND_INVENTORY,))
+        assert eligible == []
+        assert DEFAULT_INVENTORY_SYNC_CADENCE_MINUTES == 360
+
+    def test_inventory_respects_tenant_cadence_override(self, monkeypatch):
+        now = datetime.now(UTC)
+        stale_job = MagicMock()
+        stale_job.status = "completed"
+        stale_job.completed_at = now - timedelta(minutes=150)
+
+        _patch_eligibility_layer(
+            monkeypatch,
+            pairs=[_pair("t_stale_inventory", "google_ad_manager", sync_cadence_minutes=120)],
+            latest_map={("t_stale_inventory", "google_ad_manager", KIND_INVENTORY): stale_job},
+        )
+
+        eligible = _list_eligible_syncs(now, (KIND_INVENTORY,))
+        assert [(i.tenant_id, i.adapter_type, i.sync_kind) for i in eligible] == [
+            ("t_stale_inventory", "google_ad_manager", KIND_INVENTORY)
+        ]
 
     def test_eligible_when_last_run_older_than_threshold(self, monkeypatch):
         now = datetime.now(UTC)
@@ -150,8 +205,8 @@ class TestRunOnceDispatch:
     @pytest.mark.asyncio
     async def test_dispatches_one_per_eligible_pair(self, monkeypatch):
         monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler._list_eligible_tenants",
-            lambda now: [("t1", "freewheel"), ("t2", "freewheel")],
+            "src.services.adapter_sync_scheduler._list_eligible_syncs",
+            lambda now, sync_kinds: [_eligible("t1"), _eligible("t2")],
         )
 
         calls: list[tuple[str, str]] = []
@@ -163,7 +218,7 @@ class TestRunOnceDispatch:
             return SyncExecutionResult(sync_id=f"sync_{tenant_id}", sync_kind=KIND_REPORTING, succeeded=True)
 
         monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.execute_adapter_sync",
+            "src.services.adapter_sync_scheduler.execute_adapter_sync",
             fake_exec,
         )
 
@@ -176,8 +231,8 @@ class TestRunOnceDispatch:
     @pytest.mark.asyncio
     async def test_one_crashing_tenant_does_not_break_cycle(self, monkeypatch):
         monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler._list_eligible_tenants",
-            lambda now: [("t_boom", "freewheel"), ("t_ok", "freewheel")],
+            "src.services.adapter_sync_scheduler._list_eligible_syncs",
+            lambda now, sync_kinds: [_eligible("t_boom"), _eligible("t_ok")],
         )
 
         def fake_exec(*, tenant_id, adapter_type, sync_kind, triggered_by):
@@ -186,7 +241,7 @@ class TestRunOnceDispatch:
             return SyncExecutionResult(sync_id="sync_ok", sync_kind=KIND_REPORTING, succeeded=True)
 
         monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.execute_adapter_sync",
+            "src.services.adapter_sync_scheduler.execute_adapter_sync",
             fake_exec,
         )
 
@@ -200,16 +255,54 @@ class TestRunOnceDispatch:
     async def test_orchestrator_returning_none_is_silent_skip(self, monkeypatch):
         # Tenant disabled their adapter between matrix-read and dispatch.
         monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler._list_eligible_tenants",
-            lambda now: [("t_gone", "freewheel")],
+            "src.services.adapter_sync_scheduler._list_eligible_syncs",
+            lambda now, sync_kinds: [_eligible("t_gone")],
         )
         monkeypatch.setattr(
-            "src.services.adapter_reporting_sync_scheduler.execute_adapter_sync",
+            "src.services.adapter_sync_scheduler.execute_adapter_sync",
             lambda **_: None,
         )
 
         scheduler = AdapterReportingSyncScheduler()
         assert await scheduler.run_once() == []
+
+    @pytest.mark.asyncio
+    async def test_inventory_guidance_scheduler_enqueues_non_reporting_work(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.services.adapter_sync_scheduler._list_eligible_syncs",
+            lambda now, sync_kinds: [
+                _eligible("t_inventory", "google_ad_manager", KIND_INVENTORY),
+                _eligible("t_guidance", "freewheel", KIND_PRICE_GUIDANCE),
+            ],
+        )
+
+        calls: list[tuple[str, str, str, dict[str, str] | None]] = []
+
+        def fake_enqueue(*, tenant_id, adapter_type, sync_kind, triggered_by, run_kwargs):
+            calls.append((tenant_id, sync_kind, triggered_by, run_kwargs))
+            return f"sync_{tenant_id}"
+
+        monkeypatch.setattr(
+            "src.services.adapter_sync_scheduler.enqueue_adapter_sync",
+            fake_enqueue,
+        )
+
+        scheduler = AdapterInventoryGuidanceSyncScheduler()
+        dispatched = await scheduler.run_once()
+
+        assert dispatched == ["sync_t_inventory", "sync_t_guidance"]
+        assert calls == [
+            ("t_inventory", KIND_INVENTORY, "scheduler_inventory", {"sync_mode": "full"}),
+            ("t_guidance", KIND_PRICE_GUIDANCE, "scheduler_price_guidance", None),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_skips_adapter_rows_that_are_not_ready(self, monkeypatch):
+        pair = _pair("t_unready", "google_ad_manager")
+        pair.sync_ready = False
+        _patch_eligibility_layer(monkeypatch, pairs=[pair], latest_map={})
+
+        assert _list_eligible_syncs(datetime.now(UTC), (KIND_INVENTORY,)) == []
 
 
 class TestSchedulerLifecycle:

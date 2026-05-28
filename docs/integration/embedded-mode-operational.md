@@ -256,18 +256,22 @@ The salesagent has automation for this: `POST /create-service-account` (existing
 
 ## D.4 — Sync cadence
 
-**From `crontab` (run via supercronic in the container):**
+Routine inventory refresh is now server-owned: the ASGI lifecycle starts the
+adapter inventory/guidance scheduler, which dispatches eligible tenants through
+the same `SyncJob`/background-worker paths used by manual refreshes.
+
+**Legacy `crontab` fallback (run via supercronic in older container topologies):**
 
 ```
-0 */6 * * * python /app/scripts/sync_all_tenants.py
-0 7 * * *   python /app/scripts/sync_all_tenants.py
+0 */6 * * * python /app/scripts/ops/sync_all_tenants.py
+0 7 * * *   python /app/scripts/ops/sync_all_tenants.py
 ```
 
 | Trigger | Frequency | Notes |
 |---|---|---|
 | Scheduled (every 6h) | 4×/day | Catches recent inventory/targeting changes |
 | Scheduled (daily 7 UTC ≈ 2am EST) | 1×/day | Belt-and-suspenders, matches a quiet window for most US publishers |
-| On-demand | Anytime | `POST /api/sync/trigger/<tenant_id>` (existing `sync_api`); also via Admin UI button |
+| On-demand | Anytime | `POST /api/v1/tenant-management/tenants/{tenant_id}/refresh`; also via Admin UI button |
 
 **Implication for host-product status caching:** the homepage status card can be ~6h stale at most under normal scheduling. The host's UI should:
 - Show "Last synced: <time>" prominently on the tenant overview.
@@ -298,8 +302,8 @@ The host product subscribes via `POST /api/v1/tenant-management/tenants/{tid}/we
 | `principal.created` | A new advertiser/principal is created (both via provision endpoint and standalone admin UI flow) | `{"principal_id": str, "name": str}` |
 | `product.created` | A new product is created in the admin UI | `{"product_id": str, "name": str}` |
 | `product.updated` | An existing product is edited in the admin UI | `{"product_id": str, "name": str}` |
-| `sync_run.completed` | A `SyncJob` row transitioned `running -> completed` (#463). Fires once per actual DB commit, regardless of which worker / endpoint / cron path drove the transition. | `{"sync_run_id": str, "sync_type": "inventory"\|"custom_targeting"\|"advertisers", "adapter_type": str, "trigger": "provisioning"\|"scheduled"\|"manual"\|"unknown", "started_at": ISO8601, "completed_at": ISO8601, "item_count": int\|null, "summary": str\|null}` |
-| `sync_run.failed` | A `SyncJob` row transitioned `running -> failed` (#463). | `{"sync_run_id": str, "sync_type": str, "adapter_type": str, "trigger": str, "started_at": ISO8601, "completed_at": ISO8601, "error": {"message": str\|null, "class": str\|null, "category": "auth"\|"transient"\|"permanent"}}` |
+| `sync_run.completed` | A `SyncJob` row transitioned `running -> completed` (#463). Fires once per actual DB commit, regardless of which worker / endpoint / cron path drove the transition. | `{"sync_run_id": str, "sync_type": "inventory"\|"custom_targeting"\|"advertisers"\|"reporting"\|"price_guidance"\|"availability_guidance"\|"signal_coverage", "adapter_type": str, "status": "completed", "trigger": "provisioning"\|"scheduled"\|"manual"\|"unknown", "started_at": ISO8601, "completed_at": ISO8601, "item_count": int\|null, "summary": str\|null}` |
+| `sync_run.failed` | A `SyncJob` row transitioned `running -> failed` (#463). | `{"sync_run_id": str, "sync_type": str, "adapter_type": str, "status": "failed", "trigger": str, "started_at": ISO8601, "completed_at": ISO8601, "error": {"message": str\|null, "class": str\|null, "category": "auth"\|"transient"\|"permanent"}}` |
 | `tenant.config_changed` | Tenant configuration was patched | `{"changed": [...]}` |
 
 **Delivery semantics**: fire-and-forget from a Flask request handler. Best-effort — webhook delivery failures are logged but do not roll back the operation that fired the event. The host product is responsible for idempotency on receive (use `event_id` for dedup, since retries reuse the same id).
