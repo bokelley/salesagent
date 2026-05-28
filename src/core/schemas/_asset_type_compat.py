@@ -52,36 +52,48 @@ _KNOWN_ASSET_TYPES = frozenset(
 
 
 def infer_asset_types(assets: dict[str, Any]) -> dict[str, Any]:
-    """Backfill ``asset_type`` discriminator on raw asset values.
+    """Backfill and coerce ``asset_type`` discriminators on raw asset values.
 
-    Mirrored in ``src.core.tools.creatives._sync._infer_asset_types``; kept
-    as a public helper here so production sync code and the
-    ``CreativeAsset.__init__`` patch share one inference rule.
+    Mirrors the SDK's pre-4.4 ``sync_creatives`` spec-compat hook; kept as a
+    public helper here so production sync code, local schema validators, and
+    the ``CreativeAsset.__init__`` patch share one inference rule.
     """
-    inferred: dict[str, Any] = {}
+    coerced_assets: dict[str, Any] = {}
     for key, value in assets.items():
-        if not isinstance(value, dict) or "asset_type" in value:
-            inferred[key] = value
+        if not isinstance(value, dict):
+            coerced_assets[key] = value
             continue
-        if key in _KNOWN_ASSET_TYPES:
-            inferred[key] = {"asset_type": key, **value}
-            continue
-        has_content = "content" in value
-        has_url = "url" in value
-        has_dims = "width" in value and "height" in value
-        if has_content and not has_url:
-            inferred[key] = {"asset_type": "text", **value}
-        elif has_url and has_dims:
-            # Image assets require url + width + height in adcp 4.4. When
-            # the caller supplies all three we can confidently infer image.
-            inferred[key] = {"asset_type": "image", **value}
-        elif has_url:
-            # ``url`` asset is the safe default when only a URL is supplied —
-            # only ``url`` is required, no width/height needed.
-            inferred[key] = {"asset_type": "url", **value}
+        coerced_assets[key] = _coerce_asset(key, value)
+    return coerced_assets
+
+
+def _coerce_asset(asset_key: str, asset: dict[str, Any]) -> dict[str, Any]:
+    coerced = dict(asset)
+    if "asset_type" not in coerced:
+        if asset_key in _KNOWN_ASSET_TYPES:
+            coerced["asset_type"] = asset_key
         else:
-            inferred[key] = value
-    return inferred
+            has_content = "content" in coerced
+            has_url = "url" in coerced
+            has_dims = "width" in coerced and "height" in coerced
+            if has_content and not has_url:
+                coerced["asset_type"] = "text"
+            elif has_url and has_dims:
+                # Image assets require url + width + height in adcp 4.4. When
+                # the caller supplies all three we can confidently infer image.
+                coerced["asset_type"] = "image"
+            elif has_url:
+                # ``url`` asset is the safe default when only a URL is supplied
+                # — only ``url`` is required, no width/height needed.
+                coerced["asset_type"] = "url"
+    if coerced.get("asset_type") == "image" and not ("width" in coerced and "height" in coerced):
+        # SDK spec-compat demotes image-like URL assets without dimensions to
+        # URL assets because the image schema requires dimensions.
+        if "url" in coerced:
+            coerced.pop("width", None)
+            coerced.pop("height", None)
+            coerced["asset_type"] = "url"
+    return coerced
 
 
 def normalize_assets_for_wire(assets: dict[str, Any]) -> dict[str, Any]:

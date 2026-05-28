@@ -187,16 +187,9 @@ def _upgrade_format_id_in_values(values: Any) -> Any:
 
     assets = values.get("assets")
     if isinstance(assets, dict):
-        for asset in assets.values():
-            if isinstance(asset, dict) and "asset_type" not in asset:
-                if asset.get("url_type"):
-                    asset["asset_type"] = "url"
-                elif asset.get("duration_ms") is not None:
-                    asset["asset_type"] = "video"
-                elif asset.get("content") is not None:
-                    asset["asset_type"] = "text"
-                elif asset.get("url"):
-                    asset["asset_type"] = "image"
+        from src.core.schemas._asset_type_compat import infer_asset_types
+
+        values["assets"] = infer_asset_types(assets)
     return values
 
 

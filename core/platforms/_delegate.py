@@ -63,8 +63,8 @@ logger = logging.getLogger(__name__)
 
 _WIRE_COMPATIBLE_ADCP_VERSIONS: tuple[str, ...] = (
     # Agentic's current @adcp/sdk emits this patch-level beta envelope. The
-    # request/response wire shape is compatible with the packaged beta.4 SDK,
-    # so accept and advertise it until the Python SDK pin catches up.
+    # request/response wire shape remains compatible with the packaged beta.7
+    # schema, so accept and advertise it until all buyers have upgraded.
     "3.1-beta.5",
 )
 

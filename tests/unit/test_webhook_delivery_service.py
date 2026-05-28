@@ -133,13 +133,13 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
         # Version should match what's reported by the adcp library
         import json as _json
 
-        from adcp import get_adcp_version
+        from adcp import get_adcp_spec_version
 
         # Slice 3 of signing-non-embedded: webhook_delivery_service now
         # pre-serializes the body once and sends via ``content=`` so the
         # signature base bytes are byte-identical to the wire body.
         payload = _json.loads(call_args.kwargs["content"])
-        assert payload["adcp_version"] == get_adcp_version()
+        assert payload["adcp_version"] == get_adcp_spec_version()
         assert payload["notification_type"] == "scheduled"
         assert payload["is_adjusted"] is False  # NEW in PR #86
         assert payload["sequence_number"] == 1

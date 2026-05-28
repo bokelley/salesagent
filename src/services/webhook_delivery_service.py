@@ -23,7 +23,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
-from adcp import get_adcp_version
+from adcp import get_adcp_spec_version
 
 from src.core.metrics import webhook_signing_misconfigured_total
 from src.core.webhook_validator import WebhookURLValidator
@@ -280,7 +280,7 @@ class WebhookDeliveryService:
                 "by_package": by_package or [],
             }
             delivery_payload: dict[str, Any] = {
-                "adcp_version": get_adcp_version(),
+                "adcp_version": get_adcp_spec_version(),
                 "notification_type": notification_type,
                 "is_adjusted": is_adjusted,  # New field for late data
                 "sequence_number": sequence_number,

@@ -103,6 +103,7 @@ class TestRequestedVersionResolution:
 
     def test_explicit_3_1_beta_is_preserved(self) -> None:
         version = explicit_adcp_version()
+        assert version.startswith("3.1-")
         assert _resolve_requested_version({"adcp_version": version}) == version
 
     def test_current_js_sdk_beta_is_accepted_as_wire_compatible(self) -> None:
