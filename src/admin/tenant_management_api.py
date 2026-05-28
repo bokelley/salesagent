@@ -25,6 +25,10 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import attributes
 
+from src.admin.api_schemas.publisher_properties import (
+    coerce_stored_publisher_property_selectors,
+    dump_publisher_property_selectors,
+)
 from src.admin.api_schemas.tenant_management import (
     BROADSTREET_CAMPAIGN_NAME_MACROS,
     GAM_LINE_ITEM_NAME_MACROS,
@@ -146,6 +150,7 @@ from src.admin.services.catalog_webhook_events import (
     publish_product_record_update_catalog_change,
     publish_signal_catalog_change,
 )
+from src.admin.services.publisher_property_authorization import validate_publisher_property_selectors
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
@@ -1126,7 +1131,7 @@ def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -
 
 
 def _publisher_property_dicts(publisher_properties: list[PublisherPropertySelector]) -> list[dict[str, Any]]:
-    return [prop.model_dump(exclude_none=True, mode="json") for prop in publisher_properties]
+    return dump_publisher_property_selectors(publisher_properties)
 
 
 def _pricing_option_rows(
@@ -1260,7 +1265,7 @@ def _wholesale_response_from_product(product: Product, adapter_type: str | None 
         pricing_options=[_pricing_option_schema(option) for option in product.pricing_options or []],
         forecast=product.forecast,
         inventory=WholesaleInventory(
-            publisher_properties=[PublisherPropertySelector(**prop) for prop in publisher_properties],
+            publisher_properties=coerce_stored_publisher_property_selectors(publisher_properties),
             creative_formats=[_creative_format_schema(format_id, product) for format_id in format_ids],
             execution=_execution_from_product(product, resolved_adapter),
         ),
@@ -1333,53 +1338,15 @@ def _publisher_property_validation_issues(
     tenant_id: str,
     req: WholesaleProductRequest,
 ) -> list[WholesaleValidationIssue]:
-    authorized = TenantConfigRepository(session, tenant_id).list_authorized_properties()
-    properties_by_domain: dict[str, list[Any]] = {}
-    for prop in authorized:
-        properties_by_domain.setdefault(prop.publisher_domain.lower(), []).append(prop)
-
-    issues: list[WholesaleValidationIssue] = []
-    for idx, selector in enumerate(req.inventory.publisher_properties):
-        field_prefix = f"inventory.publisher_properties.{idx}"
-        domain = selector.publisher_domain.lower()
-        domain_properties = properties_by_domain.get(domain, [])
-        if not domain_properties:
-            issues.append(
-                WholesaleValidationIssue(
-                    code="publisher_domain_not_authorized",
-                    field=f"{field_prefix}.publisher_domain",
-                    message=(
-                        f"Publisher domain {selector.publisher_domain!r} has no authorized properties for this tenant."
-                    ),
-                )
-            )
-            continue
-
-        if selector.selection_type == "by_id":
-            authorized_ids = {prop.property_id for prop in domain_properties}
-            missing_ids = sorted(set(selector.property_ids or []) - authorized_ids)
-            if missing_ids:
-                issues.append(
-                    WholesaleValidationIssue(
-                        code="publisher_property_not_authorized",
-                        field=f"{field_prefix}.property_ids",
-                        message=f"Publisher property id(s) are not authorized for {selector.publisher_domain}: "
-                        f"{', '.join(missing_ids)}.",
-                    )
-                )
-        elif selector.selection_type == "by_tag":
-            authorized_tags = {tag for prop in domain_properties for tag in (prop.tags or [])}
-            missing_tags = sorted(set(selector.property_tags or []) - authorized_tags)
-            if missing_tags:
-                issues.append(
-                    WholesaleValidationIssue(
-                        code="publisher_property_tag_not_authorized",
-                        field=f"{field_prefix}.property_tags",
-                        message=f"Publisher property tag(s) are not authorized for {selector.publisher_domain}: "
-                        f"{', '.join(missing_tags)}.",
-                    )
-                )
-    return issues
+    return [
+        WholesaleValidationIssue(**issue)
+        for issue in validate_publisher_property_selectors(
+            session=session,
+            tenant_id=tenant_id,
+            selectors=req.inventory.publisher_properties,
+            field_prefix="inventory.publisher_properties",
+        )
+    ]
 
 
 def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None:
@@ -3035,6 +3002,7 @@ def put_wholesale_product(tenant_id: str, product_id: str):
             tenant_id=tenant_id,
             product=product,
             previous_allowed_principal_ids=previous_allowed_principal_ids,
+            pricing_changed=True,
         )
         return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
 

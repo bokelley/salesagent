@@ -27,10 +27,26 @@ CATALOG_CHANGE_EVENT_TYPES: tuple[str, ...] = (
 TENANT_MANAGEMENT_CATALOG_EVENT_TYPES: tuple[str, ...] = (
     "product.created",
     "product.updated",
+    "product.priced",
     "product.removed",
     "signal.created",
     "signal.updated",
+    "signal.priced",
     "signal.removed",
+    *WHOLESALE_FEED_EVENT_TYPES,
+)
+
+ACCOUNT_NOTIFICATION_EVENT_TYPES = frozenset(
+    (
+        "creative.status_changed",
+        "creative.purged",
+        "product.created",
+        "product.updated",
+        "product.removed",
+        "signal.created",
+        "signal.updated",
+        "signal.removed",
+    )
 )
 
 

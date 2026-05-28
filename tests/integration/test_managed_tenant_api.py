@@ -42,6 +42,7 @@ from tests.factories import (
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
+    SyncJobFactory,
     TenantFactory,
 )
 from tests.helpers.managed_tenant_api import bind_factories_to_session, install_management_api_key
@@ -1141,7 +1142,7 @@ class TestTenantStatus:
         assert resp.get_json()["error"] == "tenant_not_found"
 
     def test_freshly_provisioned_tenant_returns_zero_state(self, client, auth_headers, managed_tenant):
-        """A new tenant has no syncs / workflows / buys / creatives — should return zero counts, not error."""
+        """A new tenant has no workflows / buys / creatives — should return zero counts, not error."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_json()
@@ -1150,10 +1151,16 @@ class TestTenantStatus:
         assert body["adapter"]["type"] == "google_ad_manager"
         assert body["adapter"]["connected"] is True
 
-        # Empty defaults
-        assert body["syncs"]["inventory"]["status"] == "never_run"
-        assert body["syncs"]["custom_targeting"]["status"] == "never_run"
-        assert body["syncs"]["advertisers"]["status"] == "never_run"
+        # Provisioning creates the initial pending inventory row; public
+        # status normalizes pending/queued to running.
+        assert body["syncs"]["inventory"]["status"] == "running"
+        assert body["syncs"]["inventory"]["severity"] == "warning"
+        assert body["syncs"]["inventory"]["last_success_at"] is None
+        assert body["syncs"]["inventory"]["issue"]["code"] == "sync_running"
+        assert body["syncs"]["custom_targeting"]["status"] == "running"
+        assert body["syncs"]["custom_targeting"]["severity"] == "warning"
+        assert body["syncs"]["advertisers"]["status"] == "running"
+        assert body["syncs"]["advertisers"]["severity"] == "warning"
         assert body["workflows"]["open_count"] == 0
         assert body["workflows"]["by_kind"] == {}
         assert body["media_buys"]["active_count"] == 0
@@ -1164,6 +1171,27 @@ class TestTenantStatus:
         assert body["creatives"]["pending_review_count"] == 0
         assert body["webhooks"] is None
         assert "fetched_at" in body
+
+    def test_pending_sync_renders_as_running_health(self, client, auth_headers, managed_tenant, bound_factories):
+        """Storefront callers should never see raw pending/queued DB states."""
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_status_pending",
+            status="pending",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=datetime.now(UTC),
+            completed_at=None,
+        )
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200
+        sync = resp.get_json()["syncs"]["inventory"]
+        assert sync["status"] == "running"
+        assert sync["severity"] == "warning"
+        assert sync["last_success_at"] is None
+        assert sync["issue"]["action"] == "wait"
 
     def test_status_reflects_active_media_buy(self, client, auth_headers, managed_tenant, bound_factories):
         """An active media buy bumps ``media_buys.active_count``."""

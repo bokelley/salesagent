@@ -24,6 +24,7 @@ from src.core.standard_formats import (
     STANDARD_FORMAT_IDS,
     STANDARD_FORMATS,
     get_standard_format,
+    get_standard_formats,
     is_standard_agent,
 )
 
@@ -81,6 +82,16 @@ class TestStandardFormatCatalog:
                 if asset.get("item_type") == "individual":
                     assert asset.get("asset_type") != "pixel_tracker", fmt_id
 
+    def test_full_catalog_serializes_to_list_creative_formats_response(self):
+        """The bundled catalog must be valid as a list_creative_formats payload."""
+        from adcp.types import ListCreativeFormatsResponse
+
+        payload = {"formats": [fmt.model_dump(mode="json", exclude_none=True) for fmt in get_standard_formats()]}
+
+        response = ListCreativeFormatsResponse.model_validate(payload)
+
+        assert len(response.formats) == len(STANDARD_FORMATS)
+
     def test_get_known_format_returns_object(self):
         fmt = get_standard_format("display_image")
         assert fmt is not None
@@ -115,6 +126,10 @@ class TestIsStandardAgent:
 
     def test_trailing_slash_tolerated(self):
         assert is_standard_agent(STANDARD_AGENT_URL + "/") is True
+
+    def test_public_format_agent_alias_rejected(self):
+        assert is_standard_agent("https://adcontextprotocol.org/agents/formats") is False
+        assert is_standard_agent("https://adcontextprotocol.org/agents/formats/mcp/") is False
 
     def test_other_url_rejected(self):
         assert is_standard_agent("https://example.com") is False
@@ -169,6 +184,19 @@ class TestRegistryShortCircuit:
             fmt = asyncio.run(registry.get_format(STANDARD_AGENT_URL, "display_image"))
             assert fmt is not None
             assert fmt.format_id.id == "display_image"
+            mock_network.assert_not_called()
+
+    def test_list_all_formats_uses_local_catalog_for_standard_agent(self):
+        """Default format discovery should not call the public reference agent."""
+        from src.core.creative_agent_registry import CreativeAgentRegistry
+
+        registry = CreativeAgentRegistry()
+
+        with patch.object(registry, "_fetch_formats_from_agent", new=AsyncMock(return_value=[])) as mock_network:
+            formats = asyncio.run(registry.list_all_formats(tenant_id=None))
+            returned_ids = {fmt.format_id.id for fmt in formats}
+            assert "display_300x250" in returned_ids
+            assert "display_generative" in returned_ids
             mock_network.assert_not_called()
 
     def test_get_format_falls_through_for_custom_agent(self):

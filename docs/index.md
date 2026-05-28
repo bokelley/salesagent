@@ -10,6 +10,7 @@ The Prebid Sales Agent is the Prebid.org reference implementation of an AdCP-com
 
 - **[Single-Tenant](deployment/single-tenant.md)** - Standard deployment (recommended)
 - **[Multi-Tenant](deployment/multi-tenant.md)** - Multiple publishers on one deployment
+- **[How to Embed Sales Agent](integration/how-to-embed-sales-agent.md)** - Practical end-to-end guide for host products embedding Sales Agent
 - **[Embedded Wholesale Products API](integration/embedded-wholesale-products-api.md)** - API-only setup flow for embedded storefronts creating wholesale products
 - **[Embedded Signal Mapping API](integration/embedded-signals-api.md)** - API-only setup flow for embedded storefronts managing buyer-facing signal mappings
 
@@ -59,6 +60,7 @@ docs/
 │       ├── gcp.md              # Google Cloud Run
 │       └── fly.md              # Fly.io
 ├── integration/
+│   ├── how-to-embed-sales-agent.md
 │   ├── embedded-mode-operational.md
 │   ├── embedded-mode-identity-contract.md
 │   └── embedded-wholesale-products-api.md

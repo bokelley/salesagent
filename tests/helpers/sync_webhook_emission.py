@@ -24,6 +24,10 @@ def make_snapshot(**overrides: Any) -> dict[str, Any]:
     """
     base = {
         "_status": "completed",
+        "_old_status": None,
+        "_old_completed_at": None,
+        "_old_error_message": None,
+        "_health_change_payload": None,
         "tenant_id": "tnt_x",
         "sync_run_id": "sync_test",
         "sync_type": "inventory",

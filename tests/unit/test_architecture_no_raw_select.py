@@ -329,7 +329,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # for the /status snapshot. Fold into a StatusRepository or per-block repos.
     ("src/admin/services/tenant_status_service.py", "get_tenant_status"),
     ("src/admin/services/tenant_status_service.py", "_adapter_block"),
-    ("src/admin/services/tenant_status_service.py", "_syncs_block"),
     ("src/admin/services/tenant_status_service.py", "_workflows_block"),
     ("src/admin/services/tenant_status_service.py", "_setup_tasks_block"),
     # FIXME(embedded-mode-sprint-2): managed/embedded mode auth bypass loads tenant

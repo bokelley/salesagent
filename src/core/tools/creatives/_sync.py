@@ -20,7 +20,12 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _update_existing_creative
-from ._validation import _get_field, _validate_creative_input, check_provenance_required
+from ._validation import (
+    _get_field,
+    _validate_creative_input,
+    check_provenance_required,
+    get_registered_creative_agent_urls,
+)
 from ._workflow import (
     _audit_log_sync,
     _create_sync_workflow_steps,
@@ -173,6 +178,7 @@ def _sync_creatives_impl(
 
     registry = get_creative_agent_registry()
     all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+    registered_agent_urls = get_registered_creative_agent_urls(registry, tenant["tenant_id"])
 
     with CreativeUoW(tenant["tenant_id"]) as uow:
         assert uow.creatives is not None
@@ -204,7 +210,12 @@ def _sync_creatives_impl(
 
                 # Validate the creative against schema and business rules
                 try:
-                    validated_creative = _validate_creative_input(creative, registry, principal_id)
+                    validated_creative = _validate_creative_input(
+                        creative,
+                        registry,
+                        principal_id,
+                        registered_agent_urls=registered_agent_urls,
+                    )
                     format_value = validated_creative.format
 
                 except (ValidationError, ValueError) as validation_error:

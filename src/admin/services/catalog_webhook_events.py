@@ -39,10 +39,15 @@ def publish_product_catalog_change(
     product_id: str,
     data: dict[str, Any] | None = None,
     principal_ids: list[str] | None = None,
+    pricing_changed: bool = False,
 ) -> None:
     """Publish Tenant Management and protocol webhooks for one product change."""
     event_data = data or {}
-    emit_event(tenant_id, f"product.{catalog_event_action(action)}", {"product_id": product_id, **event_data})
+    payload = {"product_id": product_id, **event_data}
+    emit_event(tenant_id, f"product.{catalog_event_action(action)}", payload)
+    if pricing_changed:
+        emit_event(tenant_id, "product.priced", payload)
+    _emit_bulk_change(tenant_id, affected_entity_type="product", action=action, data=payload)
     notify_product_catalog_changed(
         tenant_id=tenant_id,
         action=action,
@@ -68,6 +73,7 @@ def publish_product_record_update_catalog_change(
     tenant_id: str,
     product: Any,
     previous_allowed_principal_ids: list[str] | None,
+    pricing_changed: bool = False,
 ) -> None:
     """Publish product update webhooks scoped to before/after ACL union."""
     publish_product_catalog_change(
@@ -79,6 +85,7 @@ def publish_product_record_update_catalog_change(
             previous_allowed_principal_ids,
             product.allowed_principal_ids,
         ),
+        pricing_changed=pricing_changed,
     )
 
 
@@ -91,7 +98,9 @@ def publish_signal_catalog_change(
 ) -> None:
     """Publish Tenant Management and protocol webhooks for one signal change."""
     event_data = data or {}
-    emit_event(tenant_id, f"signal.{catalog_event_action(action)}", {"signal_id": signal_id, **event_data})
+    payload = {"signal_id": signal_id, **event_data}
+    emit_event(tenant_id, f"signal.{catalog_event_action(action)}", payload)
+    _emit_bulk_change(tenant_id, affected_entity_type="signal", action=action, data=payload)
     notify_signal_catalog_changed(
         tenant_id=tenant_id,
         action=action,
@@ -114,9 +123,37 @@ def publish_signal_catalog_changes(
     event_type = f"signal.{catalog_event_action(action)}"
     for signal_id in signal_ids:
         emit_event(tenant_id, event_type, {"signal_id": signal_id, **event_data})
+    _emit_bulk_change(
+        tenant_id,
+        affected_entity_type="signal",
+        action=action,
+        data={"signal_ids": signal_ids, **event_data},
+        affected_count=len(signal_ids),
+    )
     notify_signal_catalog_changes(
         tenant_id=tenant_id,
         action=action,
         signal_ids=signal_ids,
         data=event_data,
+    )
+
+
+def _emit_bulk_change(
+    tenant_id: str,
+    *,
+    affected_entity_type: str,
+    action: str,
+    data: dict[str, Any],
+    affected_count: int = 1,
+) -> None:
+    emit_event(
+        tenant_id,
+        "wholesale_feed.bulk_change",
+        {
+            "summary": f"{affected_entity_type} catalog {action}",
+            "affected_count": affected_count,
+            "affected_entity_type": affected_entity_type,
+            "recommendation": "wholesale_resync",
+            "change": data,
+        },
     )

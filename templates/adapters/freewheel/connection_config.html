@@ -182,7 +182,12 @@ function _freewheelPayload() {
         manual_approval_required: document.getElementById('freewheel_manual_approval_required').checked
     };
     if (passwordEl.value) config.password = passwordEl.value;
-    if (tokenEl.value) config.api_token = tokenEl.value;
+    if (tokenEl.value) {
+        config.api_token = tokenEl.value;
+        config.auth_mode = 'api_token';
+    } else if (usernameEl.value) {
+        config.auth_mode = 'password_grant';
+    }
     return config;
 }
 

@@ -23,7 +23,20 @@ def test_publish_product_catalog_change_emits_tenant_and_protocol_webhooks(monke
         principal_ids=["principal_1"],
     )
 
-    assert emitted == [("tenant_1", "product.removed", {"product_id": "prod_1", "name": "Homepage"})]
+    assert emitted == [
+        ("tenant_1", "product.removed", {"product_id": "prod_1", "name": "Homepage"}),
+        (
+            "tenant_1",
+            "wholesale_feed.bulk_change",
+            {
+                "summary": "product catalog deleted",
+                "affected_count": 1,
+                "affected_entity_type": "product",
+                "recommendation": "wholesale_resync",
+                "change": {"product_id": "prod_1", "name": "Homepage"},
+            },
+        ),
+    ]
     assert protocol == [
         {
             "tenant_id": "tenant_1",
@@ -52,7 +65,20 @@ def test_publish_signal_catalog_change_emits_tenant_and_protocol_webhooks(monkey
         data={"name": "Audience"},
     )
 
-    assert emitted == [("tenant_1", "signal.removed", {"signal_id": "sig_1", "name": "Audience"})]
+    assert emitted == [
+        ("tenant_1", "signal.removed", {"signal_id": "sig_1", "name": "Audience"}),
+        (
+            "tenant_1",
+            "wholesale_feed.bulk_change",
+            {
+                "summary": "signal catalog deleted",
+                "affected_count": 1,
+                "affected_entity_type": "signal",
+                "recommendation": "wholesale_resync",
+                "change": {"signal_id": "sig_1", "name": "Audience"},
+            },
+        ),
+    ]
     assert protocol == [
         {"tenant_id": "tenant_1", "action": "deleted", "signal_id": "sig_1", "data": {"name": "Audience"}}
     ]
@@ -106,6 +132,7 @@ def test_publish_product_record_update_catalog_change_uses_acl_union(monkeypatch
             "product_id": "prod_1",
             "data": {"name": "Homepage"},
             "principal_ids": ["new_principal", "old_principal"],
+            "pricing_changed": False,
         }
     ]
 
@@ -129,5 +156,16 @@ def test_publish_signal_catalog_changes_emits_each_tenant_event_once(monkeypatch
     assert emitted == [
         ("tenant_1", "signal.created", {"signal_id": "sig_1"}),
         ("tenant_1", "signal.created", {"signal_id": "sig_2"}),
+        (
+            "tenant_1",
+            "wholesale_feed.bulk_change",
+            {
+                "summary": "signal catalog created",
+                "affected_count": 2,
+                "affected_entity_type": "signal",
+                "recommendation": "wholesale_resync",
+                "change": {"signal_ids": ["sig_1", "sig_2"]},
+            },
+        ),
     ]
     assert protocol == [{"tenant_id": "tenant_1", "action": "created", "signal_ids": ["sig_1", "sig_2"], "data": {}}]

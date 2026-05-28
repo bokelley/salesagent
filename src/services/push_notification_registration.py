@@ -23,21 +23,13 @@ from src.core.database.repositories.push_notification import (
 )
 from src.core.database.repositories.uow import PushNotificationUoW
 from src.core.exceptions import AdCPValidationError
-from src.services.catalog_event_types import CATALOG_CHANGE_EVENT_TYPES
+from src.services.catalog_event_types import ACCOUNT_NOTIFICATION_EVENT_TYPES
 from src.services.protocol_webhook_service import _normalize_localhost_for_docker
 from src.services.webhook_signing import (
     SIGNING_MODE_BOTH,
     SIGNING_MODE_RFC9421,
     SigningConfigurationError,
     load_active_signing_credential,
-)
-
-ACCOUNT_NOTIFICATION_EVENT_TYPES = frozenset(
-    {
-        "creative.status_changed",
-        "creative.purged",
-        *CATALOG_CHANGE_EVENT_TYPES,
-    }
 )
 
 
