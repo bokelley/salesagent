@@ -10,7 +10,7 @@ BUDGET FORMAT: AdCP v2.2.0 Migration (2025-10-27)
 All tests in this file use float budget format per AdCP v2.2.0 spec:
 - Package.budget: float (e.g., 1000.0) - NOT Budget object
 - Currency is determined by PricingOption, not Package
-- Excessive budgets trigger adapter errors (raises ToolError)
+- Excessive budgets trigger adapter validation errors (raises AdCPInvalidRequestError)
 
 # --- Test Source-of-Truth Audit ---
 # Audited: 2026-03-08
@@ -486,10 +486,10 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        # Pre-adapter validation raises AdCPValidationError for excessive impressions/budget
-        from src.core.exceptions import AdCPValidationError
+        # Adapter validation rejects excessive impressions/budget as buyer-fixable INVALID_REQUEST.
+        from src.core.exceptions import AdCPInvalidRequestError
 
-        with pytest.raises(AdCPValidationError, match="PERCENTAGE_UNITS_BOUGHT_TOO_HIGH|VALUE_TOO_LARGE"):
+        with pytest.raises(AdCPInvalidRequestError, match="PERCENTAGE_UNITS_BOUGHT_TOO_HIGH|VALUE_TOO_LARGE"):
             await _create_media_buy_impl(req=req, identity=identity)
 
     async def test_different_currency_different_minimum(self, setup_test_data):
