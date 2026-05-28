@@ -49,10 +49,20 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
+
+from src.admin.services.sync_health import (
+    SyncRunSnapshot,
+    build_sync_health_changed_payload,
+    classify_sync_error,
+    derive_sync_health,
+    public_sync_error_message,
+    sync_run_snapshot_from_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +79,6 @@ _LISTENER_REGISTERED = False
 _DISPATCH_QUEUE: queue.Queue[dict[str, Any]] = queue.Queue()
 _DISPATCHER_THREAD: threading.Thread | None = None
 _DISPATCHER_LOCK = threading.Lock()
-
-# Max length of the public-facing ``error.message`` field. The raw
-# ``SyncJob.error_message`` can carry stack frames + adapter internals;
-# webhook subscribers (storefront UIs, third-party ingestion endpoints)
-# don't need that. The operator-visible full string stays on the row for
-# admin debugging.
-_MAX_PUBLIC_ERROR_LEN = 200
 
 
 def _capture(session: Session, *_args: Any) -> None:
@@ -119,14 +122,33 @@ def _capture(session: Session, *_args: Any) -> None:
             # leaves ``added`` empty — skip to avoid duplicate emission.
             if not status_history.added:
                 continue
-            pending.append(_snapshot(obj))
+            old_status = status_history.deleted[0] if status_history.deleted else None
+            old_completed_at = _old_attr_value(obj, "completed_at")
+            old_error_message = _old_attr_value(obj, "error_message")
+            pending.append(
+                _snapshot(
+                    obj,
+                    old_status=old_status,
+                    old_completed_at=old_completed_at,
+                    old_error_message=old_error_message,
+                    health_change_payload=_safe_health_change_payload_for_transition(
+                        session,
+                        obj,
+                        old_status=old_status,
+                        old_completed_at=old_completed_at,
+                        old_error_message=old_error_message,
+                    ),
+                )
+            )
 
         for obj in session.new:
             if not isinstance(obj, SyncJob):
                 continue
             if obj.status not in _TERMINAL_STATUSES:
                 continue
-            pending.append(_snapshot(obj))
+            pending.append(
+                _snapshot(obj, health_change_payload=_safe_health_change_payload_for_transition(session, obj))
+            )
     except Exception:  # pragma: no cover - defensive, must not raise
         logger.warning("sync webhook emission _capture failed", exc_info=True)
 
@@ -232,6 +254,8 @@ def _dispatch_one(snap: dict[str, Any]) -> None:
         event_type,
         _build_payload(snap, event_type),
     )
+    if health_change_payload := snap.get("_health_change_payload"):
+        emit_event(snap["tenant_id"], "sync_health.changed", health_change_payload)
 
 
 def wait_for_dispatch(timeout: float = 5.0) -> None:
@@ -283,7 +307,144 @@ def register_sync_webhook_emission() -> None:
     _LISTENER_REGISTERED = True
 
 
-def _snapshot(job: Any) -> dict[str, Any]:
+def _old_attr_value(job: Any, attr_name: str) -> Any:
+    """Return an attribute's pre-flush value when it changed."""
+
+    history = inspect(job).attrs[attr_name].history
+    if history.deleted:
+        return history.deleted[0]
+    return getattr(job, attr_name)
+
+
+def _safe_health_change_payload_for_transition(
+    session: Session,
+    job: Any,
+    *,
+    old_status: str | None = None,
+    old_completed_at: Any = None,
+    old_error_message: str | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return _health_change_payload_for_transition(
+            session,
+            job,
+            old_status=old_status,
+            old_completed_at=old_completed_at,
+            old_error_message=old_error_message,
+        )
+    except Exception:  # pragma: no cover - defensive, must not suppress raw run event
+        logger.warning(
+            "sync health change capture failed for tenant_id=%s sync_run_id=%s",
+            getattr(job, "tenant_id", None),
+            getattr(job, "sync_id", None),
+            exc_info=True,
+        )
+        return None
+
+
+def _health_change_payload_for_transition(
+    session: Session,
+    job: Any,
+    *,
+    old_status: str | None = None,
+    old_completed_at: Any = None,
+    old_error_message: str | None = None,
+) -> dict[str, Any] | None:
+    """Build an immutable ``sync_health.changed`` payload during flush.
+
+    The dispatcher runs after commit and may lag behind later writes. To avoid
+    recomputing health against a newer database state, capture the previous and
+    current health inputs while SQLAlchemy still has the attribute history for
+    the transitioning row.
+    """
+    from src.core.database.models import Tenant
+    from src.core.database.repositories.sync_job import SyncJobRepository
+
+    with session.no_autoflush:
+        rows = SyncJobRepository(session, job.tenant_id).health_inputs_for_stream(
+            adapter_type=job.adapter_type,
+            sync_type=job.sync_type,
+        )
+        tenant = session.get(Tenant, job.tenant_id)
+
+    base_runs = [sync_run_snapshot_from_job(row) for row in rows]
+    current_snapshot = sync_run_snapshot_from_job(job)
+    current_runs = _replace_or_append_run(base_runs, current_snapshot)
+    previous_runs = _runs_before_transition(
+        base_runs,
+        current_snapshot=current_snapshot,
+        old_status=old_status,
+        old_completed_at=old_completed_at,
+        old_error_message=old_error_message,
+    )
+    tenant_created_at = tenant.created_at if tenant else None
+    now = datetime.now(UTC)
+    current = derive_sync_health(
+        current_runs,
+        adapter_type=job.adapter_type,
+        sync_type=job.sync_type,
+        tenant_created_at=tenant_created_at,
+        now=now,
+    )
+    previous = derive_sync_health(
+        previous_runs,
+        adapter_type=job.adapter_type,
+        sync_type=job.sync_type,
+        tenant_created_at=tenant_created_at,
+        now=now,
+    )
+    if current.severity == previous.severity:
+        return None
+    return build_sync_health_changed_payload(
+        current=current,
+        previous=previous,
+        sync_type=job.sync_type,
+        adapter_type=job.adapter_type,
+    )
+
+
+def _runs_before_transition(
+    runs: list[SyncRunSnapshot],
+    *,
+    current_snapshot: SyncRunSnapshot,
+    old_status: str | None,
+    old_completed_at: Any,
+    old_error_message: str | None,
+) -> list[SyncRunSnapshot]:
+    if old_status is None:
+        return [run for run in runs if run.sync_run_id != current_snapshot.sync_run_id]
+
+    previous_snapshot = SyncRunSnapshot(
+        sync_run_id=current_snapshot.sync_run_id,
+        sync_type=current_snapshot.sync_type,
+        adapter_type=current_snapshot.adapter_type,
+        status=old_status,
+        started_at=current_snapshot.started_at,
+        completed_at=old_completed_at,
+        error_message=old_error_message,
+        progress=current_snapshot.progress,
+    )
+    return _replace_or_append_run(runs, previous_snapshot)
+
+
+def _replace_or_append_run(
+    runs: list[SyncRunSnapshot],
+    replacement: SyncRunSnapshot,
+) -> list[SyncRunSnapshot]:
+    out = [replacement if run.sync_run_id == replacement.sync_run_id else run for run in runs]
+    if all(run.sync_run_id != replacement.sync_run_id for run in runs):
+        out.append(replacement)
+    return out
+
+
+def _snapshot(
+    job: Any,
+    *,
+    old_status: str | None = None,
+    old_completed_at: Any = None,
+    old_error_message: str | None = None,
+    health_change_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Capture every field needed for the payload while the row is attached.
 
     Done in ``before_flush`` so a subsequent attribute expiration (after
@@ -294,6 +455,10 @@ def _snapshot(job: Any) -> dict[str, Any]:
     progress = job.progress or {}
     return {
         "_status": job.status,
+        "_old_status": old_status,
+        "_old_completed_at": old_completed_at,
+        "_old_error_message": old_error_message,
+        "_health_change_payload": health_change_payload,
         "tenant_id": job.tenant_id,
         "sync_run_id": job.sync_id,
         "sync_type": job.sync_type,
@@ -377,45 +542,6 @@ def _normalize_trigger(triggered_by: str | None, triggered_by_id: str | None) ->
     return "unknown"
 
 
-# Substring fingerprints used to bucket a raw ``error_message`` into the
-# public ``error.category`` taxonomy. Case-insensitive substring match,
-# first-bucket-wins. The classifier is intentionally crude — its job is
-# to give storefront UI enough signal to pick a CTA (Retry vs Reconnect
-# vs Contact admin) without substring-matching our exception strings
-# themselves. When structured exception capture lands at the failure
-# sites, this fallback shrinks to the small-residue case.
-_ERROR_CATEGORY_FINGERPRINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        "auth",
-        (
-            "refresh token",
-            "invalid_grant",
-            "unauthoriz",
-            "permission denied",
-            "insufficient permissions",
-            "403",
-            "401",
-        ),
-    ),
-    (
-        "transient",
-        (
-            "timeout",
-            "timed out",
-            "connection reset",
-            "connection refused",
-            "rate limit",
-            "throttle",
-            "5xx",
-            "503",
-            "502",
-            "500",
-            "temporarily unavailable",
-        ),
-    ),
-)
-
-
 def _classify_error(message: str | None) -> str:
     """Bucket a raw ``error_message`` into a coarse public category.
 
@@ -424,12 +550,9 @@ def _classify_error(message: str | None) -> str:
     — operator investigation). Receivers shouldn't make load-bearing
     decisions off this beyond CTA selection.
     """
-    if not message:
-        return "permanent"
-    lowered = message.lower()
-    for category, fingerprints in _ERROR_CATEGORY_FINGERPRINTS:
-        if any(fp in lowered for fp in fingerprints):
-            return category
+    category = classify_sync_error(message)
+    if category in {"auth", "transient"}:
+        return category
     return "permanent"
 
 
@@ -451,14 +574,11 @@ def _public_error_message(raw: str | None) -> str | None:
     be a Slack channel, a generic ingestion endpoint, or anywhere else
     a tenant configures — none of those need stack frames.
 
-    Strategy: first line of the rendered string, capped at
-    :data:`_MAX_PUBLIC_ERROR_LEN`. The full text stays on the DB row for
-    admin debugging.
+    Strategy: first line of the rendered string, capped by the shared
+    sync-health public error helper. The full text stays on the DB row
+    for admin debugging.
     """
-    if not raw:
-        return None
-    first_line = raw.splitlines()[0].strip()
-    return first_line[:_MAX_PUBLIC_ERROR_LEN]
+    return public_sync_error_message(raw)
 
 
 def _build_payload(snap: dict[str, Any], event_type: str) -> dict[str, Any]:

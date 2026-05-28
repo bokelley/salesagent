@@ -141,6 +141,15 @@ def _freshness_thresholds(adapter_type: str, sync_kind: str) -> tuple[timedelta,
     return caps.reporting_freshness_warning, caps.reporting_freshness_critical
 
 
+def freshness_thresholds_for(adapter_type: str, sync_kind: str) -> tuple[timedelta, timedelta]:
+    """Public wrapper for the scheduling freshness thresholds.
+
+    Storefront sync-health derives severity from the same adapter-declared
+    windows the admin scheduling page renders.
+    """
+    return _freshness_thresholds(adapter_type, sync_kind)
+
+
 def _classify_freshness(
     *,
     job: SyncJob | None,

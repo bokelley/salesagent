@@ -1203,6 +1203,21 @@ class StatusAdapterBlock(BaseModel):
 
 
 SyncStatus = Literal["success", "failed", "running", "never_run"]
+SyncSeverity = Literal["ok", "warning", "critical"]
+SyncIssueCategory = Literal["auth", "transient", "permanent", "stale", "unknown"]
+SyncIssueAction = Literal["reconnect_adapter", "retry_sync", "wait", "contact_support"]
+
+
+class StatusSyncIssue(BaseModel):
+    """Storefront-safe issue summary for a sync stream."""
+
+    model_config = _config()
+
+    code: str
+    category: SyncIssueCategory
+    message: str
+    retryable: bool
+    action: SyncIssueAction
 
 
 class StatusSyncRunBlock(BaseModel):
@@ -1212,6 +1227,9 @@ class StatusSyncRunBlock(BaseModel):
 
     last_run_at: datetime | None = None
     status: SyncStatus = "never_run"
+    severity: SyncSeverity = "warning"
+    last_success_at: datetime | None = None
+    issue: StatusSyncIssue | None = None
     item_count: int | None = None
     error: str | None = None
 
@@ -1889,6 +1907,11 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     # rest of the catalog. The payload's ``data.sync_run_id`` matches.
     "sync_run.completed",
     "sync_run.failed",
+    # Derived storefront alerting event. Emitted on committed sync-run
+    # transitions when public health severity changes for a tenant sync
+    # stream; raw run events remain immutable for correlation and admin
+    # drill-downs.
+    "sync_health.changed",
     "tenant.config_changed",
 )
 

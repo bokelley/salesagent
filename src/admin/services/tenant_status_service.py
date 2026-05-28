@@ -26,11 +26,18 @@ from src.admin.api_schemas.tenant_management import (
     StatusMediaBuysBlock,
     StatusPackagesBlock,
     StatusProductsBlock,
+    StatusSyncIssue,
     StatusSyncRunBlock,
     StatusSyncsBlock,
     StatusWebhooksBlock,
     StatusWorkflowsBlock,
     TenantStatusResponse,
+)
+from src.admin.services.sync_health import (
+    SyncHealth,
+    derive_sync_health,
+    public_sync_error_message,
+    sync_run_snapshot_from_job,
 )
 from src.admin.utils.embedded_capabilities import publisher_owns
 from src.core.database.database_session import get_db_session
@@ -45,6 +52,7 @@ from src.core.database.models import (
     Tenant,
     WorkflowStep,
 )
+from src.core.database.repositories.sync_job import SyncJobRepository
 
 # ---------------------------------------------------------------------------
 # In-memory cache (5-second TTL — see sprint 1.5 design § Caching)
@@ -88,16 +96,18 @@ def get_tenant_status(tenant_id: str) -> TenantStatusResponse | None:
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
             return None
-        snapshot = _build_status(session, tenant_id)
+        snapshot = _build_status(session, tenant)
 
     _CACHE[tenant_id] = (now, snapshot)
     return snapshot
 
 
-def _build_status(session: Session, tenant_id: str) -> TenantStatusResponse:
+def _build_status(session: Session, tenant: Tenant) -> TenantStatusResponse:
+    tenant_id = tenant.tenant_id
+    adapter = _adapter_block(session, tenant_id)
     return TenantStatusResponse(
-        adapter=_adapter_block(session, tenant_id),
-        syncs=_syncs_block(session, tenant_id),
+        adapter=adapter,
+        syncs=_syncs_block(session, tenant, adapter.type),
         workflows=_workflows_block(session, tenant_id),
         media_buys=_media_buys_block(session, tenant_id),
         packages=_packages_block(session, tenant_id),
@@ -130,39 +140,74 @@ def _adapter_block(session: Session, tenant_id: str) -> StatusAdapterBlock:
     )
 
 
-def _syncs_block(session: Session, tenant_id: str) -> StatusSyncsBlock:
+def _syncs_block(session: Session, tenant: Tenant, adapter_type: str) -> StatusSyncsBlock:
     """Sync runs grouped by ``sync_type``."""
-    runs = session.scalars(select(SyncJob).filter_by(tenant_id=tenant_id).order_by(SyncJob.started_at.desc())).all()
-
-    by_type: dict[str, SyncJob] = {}
-    for run in runs:
-        # Keep most recent per sync_type only (runs are ordered desc).
-        by_type.setdefault(run.sync_type, run)
+    repo = SyncJobRepository(session, tenant.tenant_id)
 
     return StatusSyncsBlock(
-        inventory=_sync_run_block(by_type.get("inventory")),
-        custom_targeting=_sync_run_block(by_type.get("custom_targeting")),
-        advertisers=_sync_run_block(by_type.get("advertisers")),
+        inventory=_sync_run_block(
+            repo.health_inputs_for_stream(adapter_type=adapter_type, sync_type="inventory"),
+            tenant=tenant,
+            adapter_type=adapter_type,
+            sync_type="inventory",
+        ),
+        custom_targeting=_sync_run_block(
+            repo.health_inputs_for_stream(adapter_type=adapter_type, sync_type="custom_targeting"),
+            tenant=tenant,
+            adapter_type=adapter_type,
+            sync_type="custom_targeting",
+        ),
+        advertisers=_sync_run_block(
+            repo.health_inputs_for_stream(adapter_type=adapter_type, sync_type="advertisers"),
+            tenant=tenant,
+            adapter_type=adapter_type,
+            sync_type="advertisers",
+        ),
     )
 
 
-def _sync_run_block(run: SyncJob | None) -> StatusSyncRunBlock:
-    if run is None:
-        return StatusSyncRunBlock()
-    status_map = {
-        "completed": "success",
-        "success": "success",
-        "failed": "failed",
-        "error": "failed",
-        "running": "running",
-        "in_progress": "running",
-    }
+def _sync_run_block(
+    runs: list[SyncJob],
+    *,
+    tenant: Tenant,
+    adapter_type: str,
+    sync_type: str,
+) -> StatusSyncRunBlock:
+    snapshots = [sync_run_snapshot_from_job(run) for run in runs]
+    health = derive_sync_health(
+        snapshots,
+        adapter_type=adapter_type,
+        sync_type=sync_type,
+        tenant_created_at=tenant.created_at,
+    )
+    run = _sync_detail_run(runs, health)
     return StatusSyncRunBlock(
-        last_run_at=run.completed_at or run.started_at,
-        status=status_map.get(run.status, "never_run"),
-        item_count=(run.progress or {}).get("item_count") if run.progress else None,
-        error=run.error_message,
+        last_run_at=health.last_run_at,
+        status=health.status,
+        severity=health.severity,
+        last_success_at=health.last_success_at,
+        issue=_status_issue(health),
+        item_count=_sync_item_count(run),
+        error=public_sync_error_message(run.error_message) if run is not None else None,
     )
+
+
+def _sync_detail_run(runs: list[SyncJob], health: SyncHealth) -> SyncJob | None:
+    if health.related_sync_run_id is None:
+        return None
+    return next((run for run in runs if run.sync_id == health.related_sync_run_id), None)
+
+
+def _sync_item_count(run: SyncJob | None) -> int | None:
+    if run is None or not run.progress:
+        return None
+    return run.progress.get("item_count")
+
+
+def _status_issue(health: SyncHealth) -> StatusSyncIssue | None:
+    if health.issue is None:
+        return None
+    return StatusSyncIssue(**health.issue.to_dict())
 
 
 def _workflows_block(session: Session, tenant_id: str) -> StatusWorkflowsBlock:

@@ -863,6 +863,7 @@ components:
             - wholesale_feed.bulk_change
             - sync_run.completed
             - sync_run.failed
+            - sync_health.changed
             - tenant.config_changed
             type: string
           title: Event Types
@@ -4835,6 +4836,44 @@ components:
           type: integer
       title: StatusProductsBlock
       type: object
+    TenantStatusResponse.f44f287.StatusSyncIssue:
+      additionalProperties: false
+      description: Storefront-safe issue summary for a sync stream.
+      properties:
+        action:
+          enum:
+          - reconnect_adapter
+          - retry_sync
+          - wait
+          - contact_support
+          title: Action
+          type: string
+        category:
+          enum:
+          - auth
+          - transient
+          - permanent
+          - stale
+          - unknown
+          title: Category
+          type: string
+        code:
+          title: Code
+          type: string
+        message:
+          title: Message
+          type: string
+        retryable:
+          title: Retryable
+          type: boolean
+      required:
+      - code
+      - category
+      - message
+      - retryable
+      - action
+      title: StatusSyncIssue
+      type: object
     TenantStatusResponse.f44f287.StatusSyncRunBlock:
       additionalProperties: false
       description: One sync-run summary inside :class:`StatusSyncsBlock`.
@@ -4845,6 +4884,11 @@ components:
           - type: 'null'
           default: null
           title: Error
+        issue:
+          anyOf:
+          - $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncIssue'
+          - type: 'null'
+          default: null
         item_count:
           anyOf:
           - type: integer
@@ -4858,6 +4902,21 @@ components:
           - type: 'null'
           default: null
           title: Last Run At
+        last_success_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Success At
+        severity:
+          default: warning
+          enum:
+          - ok
+          - warning
+          - critical
+          title: Severity
+          type: string
         status:
           default: never_run
           enum:

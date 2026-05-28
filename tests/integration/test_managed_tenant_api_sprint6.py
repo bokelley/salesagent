@@ -36,6 +36,7 @@ from tests.factories import (
     ObjectWorkflowMappingFactory,
     PrincipalFactory,
     ProductFactory,
+    SyncJobFactory,
     TenantFactory,
     WebhookSubscriptionFactory,
     WorkflowStepFactory,
@@ -847,6 +848,110 @@ class TestSyncTerminalEmission:
         assert envelope["event_schema_version"] == "1"
         # Plaintext secret was returned at create time and used for signing.
         assert plaintext_secret  # smoke
+
+    def test_health_change_fires_only_when_severity_changes(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """A failed run with a fresh successful baseline degrades
+        ``ok -> warning`` and emits the derived storefront event."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+
+        now = datetime.now(UTC)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_prior_success",
+            status="completed",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(hours=1, minutes=5),
+            completed_at=now - timedelta(hours=1),
+            triggered_by="scheduler",
+        )
+        wait_for_dispatch()
+
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_health.changed")
+        receiver = self._install_capture(monkeypatch)
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_failed",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(minutes=2),
+            triggered_by="scheduler",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "failed"
+            row.completed_at = now - timedelta(minutes=1)
+            row.error_message = "Timeout while fetching inventory"
+            session.commit()
+
+        wait_for_dispatch()
+
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "sync_health.changed"
+        data = envelope["data"]
+        assert data["sync_type"] == "inventory"
+        assert data["adapter_type"] == "google_ad_manager"
+        assert data["health"] == "warning"
+        assert data["previous_health"] == "ok"
+        assert data["reason"] == "transient"
+        assert data["action"] == "retry_sync"
+        assert data["related_sync_run_id"] == sync_id
+
+    def test_health_change_does_not_fire_when_severity_is_unchanged(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """Raw run events remain available, but the derived health event
+        stays quiet for ``ok -> ok`` transitions."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+
+        now = datetime.now(UTC)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_still_ok_prior",
+            status="completed",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(hours=1, minutes=5),
+            completed_at=now - timedelta(hours=1),
+            triggered_by="scheduler",
+        )
+        wait_for_dispatch()
+
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_health.changed")
+        receiver = self._install_capture(monkeypatch)
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_still_ok_current",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(minutes=2),
+            triggered_by="scheduler",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "completed"
+            row.completed_at = now - timedelta(minutes=1)
+            row.summary = "Synced inventory"
+            session.commit()
+
+        wait_for_dispatch()
+
+        assert receiver.calls == []
 
     def test_provision_trigger_normalizes_to_provisioning(
         self, client, auth_headers, tenant, bound_factories, monkeypatch
