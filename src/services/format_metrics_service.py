@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import FormatPerformanceMetrics, Tenant
+from src.core.statistics import percentile
 
 logger = logging.getLogger(__name__)
 
@@ -241,21 +242,9 @@ class FormatMetricsAggregationService:
             "total_impressions": sum(m["impressions"] for m in metrics_by_format.values()),
         }
 
-    def _calculate_percentile(self, sorted_values: list[float], percentile: int) -> float | None:
+    def _calculate_percentile(self, sorted_values: list[float], percentile_value: int) -> float | None:
         """Calculate percentile from sorted list of values."""
-        if not sorted_values:
-            return None
-
-        if len(sorted_values) == 1:
-            return sorted_values[0]
-
-        # Use linear interpolation
-        index = (percentile / 100) * (len(sorted_values) - 1)
-        lower_index = int(index)
-        upper_index = min(lower_index + 1, len(sorted_values) - 1)
-        weight = index - lower_index
-
-        return sorted_values[lower_index] * (1 - weight) + sorted_values[upper_index] * weight
+        return percentile(sorted_values, percentile_value)
 
 
 def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:

@@ -32,6 +32,44 @@ from src.core.schemas import Product
 logger = logging.getLogger(__name__)
 
 
+def _split_price_guidance(price_guidance: Any) -> tuple[float | None, dict[str, Any] | None]:
+    """Return top-level floor_price plus public guidance without legacy floor."""
+    if not price_guidance:
+        return None, None
+    if isinstance(price_guidance, dict):
+        guidance_data = dict(price_guidance)
+    elif hasattr(price_guidance, "model_dump"):
+        guidance_data = price_guidance.model_dump(mode="json", exclude_none=True)
+    else:
+        guidance_data = {
+            field: getattr(price_guidance, field)
+            for field in ("floor", "p25", "p50", "p75", "p90")
+            if hasattr(price_guidance, field)
+        }
+
+    floor = guidance_data.pop("floor", None)
+    floor_price = float(floor) if floor is not None else None
+    return floor_price, guidance_data or None
+
+
+def _auction_pricing_fields(
+    *,
+    pricing_model: str,
+    pricing_option_id: str,
+    common_fields: dict[str, Any],
+    price_guidance: Any,
+) -> dict[str, Any]:
+    floor_price, public_guidance = _split_price_guidance(price_guidance)
+    if floor_price is None and not public_guidance:
+        raise ValueError(f"Auction {pricing_model.upper()} pricing option {pricing_option_id} requires price_guidance")
+    fields = dict(common_fields)
+    if floor_price is not None:
+        fields["floor_price"] = floor_price
+    if public_guidance:
+        fields["price_guidance"] = public_guidance
+    return fields
+
+
 def _normalize_product_placements(placements: Any) -> Any:
     """Project legacy stored placement dicts onto the current SDK shape."""
     if not isinstance(placements, list):
@@ -112,14 +150,6 @@ def convert_pricing_option_to_adcp(
     price_guidance = get_attr(pricing_option, "price_guidance")
     parameters = get_attr(pricing_option, "parameters")
 
-    # Extract floor from price_guidance if present (V3: moves to top-level floor_price)
-    floor_price = None
-    if price_guidance:
-        if isinstance(price_guidance, dict):
-            floor_price = price_guidance.get("floor")
-        elif hasattr(price_guidance, "floor"):
-            floor_price = price_guidance.floor
-
     # Discriminate by pricing_model to return typed instances
     if pricing_model == "cpm":
         if is_fixed:
@@ -130,20 +160,14 @@ def convert_pricing_option_to_adcp(
                 fixed_price=float(rate),
             )
         else:
-            if not price_guidance:
-                raise ValueError(f"Auction CPM pricing option {pricing_option_id} requires price_guidance")
-            # V3: floor moves to top-level, price_guidance only has percentiles
-            result = CpmPricingOption(
-                **common_fields,
-                price_guidance=price_guidance,
-            )
-            if floor_price is not None:
-                result = CpmPricingOption(
-                    **common_fields,
-                    floor_price=float(floor_price),
+            return CpmPricingOption(
+                **_auction_pricing_fields(
+                    pricing_model=pricing_model,
+                    pricing_option_id=pricing_option_id,
+                    common_fields=common_fields,
                     price_guidance=price_guidance,
                 )
-            return result
+            )
 
     elif pricing_model == "vcpm":
         if is_fixed:
@@ -154,19 +178,14 @@ def convert_pricing_option_to_adcp(
                 fixed_price=float(rate),
             )
         else:
-            if not price_guidance:
-                raise ValueError(f"Auction VCPM pricing option {pricing_option_id} requires price_guidance")
-            vcpm_result = VcpmPricingOption(
-                **common_fields,
-                price_guidance=price_guidance,
-            )
-            if floor_price is not None:
-                vcpm_result = VcpmPricingOption(
-                    **common_fields,
-                    floor_price=float(floor_price),
+            return VcpmPricingOption(
+                **_auction_pricing_fields(
+                    pricing_model=pricing_model,
+                    pricing_option_id=pricing_option_id,
+                    common_fields=common_fields,
                     price_guidance=price_guidance,
                 )
-            return vcpm_result
+            )
 
     elif pricing_model == "cpc":
         if is_fixed:
@@ -177,19 +196,14 @@ def convert_pricing_option_to_adcp(
                 fixed_price=float(rate),
             )
         else:
-            if not price_guidance:
-                raise ValueError(f"Auction CPC pricing option {pricing_option_id} requires price_guidance")
-            cpc_result = CpcPricingOption(
-                **common_fields,
-                price_guidance=price_guidance,
-            )
-            if floor_price is not None:
-                cpc_result = CpcPricingOption(
-                    **common_fields,
-                    floor_price=float(floor_price),
+            return CpcPricingOption(
+                **_auction_pricing_fields(
+                    pricing_model=pricing_model,
+                    pricing_option_id=pricing_option_id,
+                    common_fields=common_fields,
                     price_guidance=price_guidance,
                 )
-            return cpc_result
+            )
 
     elif pricing_model == "cpcv":
         # CPCV (Cost Per Completed View) - typically fixed rate

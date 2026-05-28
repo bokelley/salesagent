@@ -519,10 +519,11 @@ class TestWireShapeValidatesAgainstLibrary:
         """Spec contract: variant-1 with ``status='pending_creatives'`` is valid.
 
         Independent of our implementation, the discriminated union must accept
-        ``{media_buy_id, packages, status: 'pending_creatives'}`` as the
-        sync-success shape for "buy minted, awaiting creatives sync." This is
-        the storyboard contract that PR #183 inadvertently broke by routing
-        the case through variant-3 (``submitted``).
+        ``{media_buy_id, packages, status: 'pending_creatives', confirmed_at,
+        revision}`` as the sync-success shape for "buy minted, awaiting
+        creatives sync." This is the storyboard contract that PR #183
+        inadvertently broke by routing the case through variant-3
+        (``submitted``).
         """
         from adcp.types import CreateMediaBuyResponse as LibResponse
         from pydantic import TypeAdapter
@@ -531,6 +532,8 @@ class TestWireShapeValidatesAgainstLibrary:
             "media_buy_id": "mb_test",
             "packages": [{"package_id": "pkg_test", "paused": False}],
             "status": "pending_creatives",
+            "confirmed_at": "2026-05-28T12:00:00Z",
+            "revision": 1,
         }
         # Raises ValidationError on spec drift; success means the discriminated
         # union resolves cleanly to the sync-success variant.
@@ -770,3 +773,25 @@ class TestConvertProductHandlesNullableColumns:
                 f"reporting_capabilities default must include '{required_key}' "
                 f"per adcp ReportingCapabilities spec; got keys {sorted(rc.keys())}"
             )
+
+    def test_auction_price_guidance_moves_floor_to_floor_price_only(self) -> None:
+        from src.core.product_conversion import convert_product_model_to_schema
+
+        auction_option = SimpleNamespace(
+            pricing_model="cpm",
+            currency="USD",
+            is_fixed=False,
+            rate=None,
+            price_guidance={"floor": 0.5, "p25": 1.0, "p50": 1.5, "p75": 2.0},
+            parameters=None,
+            min_spend_per_package=None,
+        )
+        model = _make_product_model_mock(pricing_options=[auction_option])
+
+        schema = convert_product_model_to_schema(model, adapter_type="mock")
+        wire = schema.model_dump(mode="json", exclude_none=True)
+        pricing_option = wire["pricing_options"][0]
+
+        assert pricing_option["floor_price"] == 0.5
+        assert pricing_option["price_guidance"] == {"p25": 1.0, "p50": 1.5, "p75": 2.0}
+        assert "floor" not in pricing_option["price_guidance"]

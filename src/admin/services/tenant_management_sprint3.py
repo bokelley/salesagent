@@ -466,9 +466,17 @@ def sync_to_run_info(row: SyncJob) -> SyncRunInfo:
         delta = row.completed_at - row.started_at
         duration = int(delta.total_seconds())
 
-    progress = row.progress or {}
-    items_processed = int(progress.get("item_count") or progress.get("items_processed") or 0)
-    items_failed = int(progress.get("items_failed") or 0)
+    progress = row.progress if isinstance(row.progress, dict) else {}
+    raw_counts = progress.get("counts")
+    counts = raw_counts if isinstance(raw_counts, dict) else {}
+    items_processed = int(
+        progress.get("item_count")
+        or progress.get("items_processed")
+        or counts.get("products_updated")
+        or counts.get("signals_updated")
+        or 0
+    )
+    items_failed = int(progress.get("items_failed") or counts.get("keys_failed") or 0)
 
     # Map DB statuses to wire-side enum values. The DB uses ``running``,
     # ``pending``, ``completed``, ``failed``, ``cancelled``; the wire uses

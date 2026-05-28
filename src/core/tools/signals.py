@@ -31,8 +31,10 @@ _SIGNAL_SPEC_STOPWORDS = {
 _BROAD_SIGNAL_SPEC_TOKENS = {"audience", "audiences", "segment", "segments"}
 
 from adcp.types import PaginationResponse
+from adcp.types.generated_poc.core.signal_coverage_forecast import SignalCoverageForecast
 from adcp.types.generated_poc.core.vendor_pricing_option import VendorPricingOption
 from adcp.types.generated_poc.signals.get_signals_response import Range
+from pydantic import ValidationError
 
 from src.core.auth import get_principal_object
 from src.core.database.models import TenantSignal
@@ -61,6 +63,43 @@ def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricing
     ]
 
 
+def _coverage_forecast_from_adapter_config(adapter_config: dict[str, Any]) -> SignalCoverageForecast | None:
+    raw_forecast = adapter_config.get("coverage_forecast")
+    if raw_forecast is None:
+        return None
+    try:
+        return SignalCoverageForecast.model_validate(raw_forecast)
+    except ValidationError as exc:
+        raise AdCPValidationError(
+            "Invalid signal coverage_forecast stored for tenant signal",
+            details={"errors": exc.errors()},
+        ) from exc
+
+
+def _legacy_coverage_percentage(
+    adapter_config: dict[str, Any],
+    coverage_forecast: SignalCoverageForecast | None,
+) -> float:
+    configured = adapter_config.get("coverage_percentage")
+    if isinstance(configured, int | float):
+        return max(0.0, min(100.0, float(configured)))
+
+    if coverage_forecast is None:
+        return 100.0
+
+    present_share = 0.0
+    for point in coverage_forecast.points:
+        dimensions = point.dimensions.root if point.dimensions is not None else []
+        has_present_signal_dimension = any(
+            getattr(dimension, "kind", None) == "signal"
+            and getattr(getattr(dimension, "presence", None), "value", None) == "present"
+            for dimension in dimensions
+        )
+        if has_present_signal_dimension:
+            present_share += point.metrics.coverage_rate.mid or 0.0
+    return round(max(0.0, min(1.0, present_share)) * 100, 2)
+
+
 def _tenant_signal_to_adcp(
     ts: TenantSignal,
     *,
@@ -84,6 +123,7 @@ def _tenant_signal_to_adcp(
     # hasn't set ``public_agent_url`` so projection doesn't fail validation.
     resolved_agent_url = agent_url or "https://salesagent.adcontextprotocol.org/signals"
     wire_id = adcp_safe_signal_id(ts.signal_id)
+    coverage_forecast = _coverage_forecast_from_adapter_config(ts.adapter_config)
 
     signal_kwargs: dict = {
         "signal_id": {
@@ -99,10 +139,7 @@ def _tenant_signal_to_adcp(
         # warrant a column on TenantSignal — keep the default simple.
         "signal_type": "owned",
         "data_provider": ts.data_provider or "publisher",
-        # No coverage measurement yet — declare 100% (signal applies to
-        # any inventory the operator says it applies to) until we wire
-        # up coverage stats.
-        "coverage_percentage": 100.0,
+        "coverage_percentage": _legacy_coverage_percentage(ts.adapter_config, coverage_forecast),
         "deployments": [
             SignalDeployment(
                 platform=ad_server or "mock",
@@ -126,6 +163,8 @@ def _tenant_signal_to_adcp(
         # tightest wire schema, but a storefront that supports them can
         # filter on them — and they're round-tripped via extra='allow'.
         signal_kwargs["tags"] = list(ts.tags)
+    if coverage_forecast is not None:
+        signal_kwargs["coverage_forecast"] = coverage_forecast
     return Signal.model_validate(signal_kwargs)
 
 
@@ -444,7 +483,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             # Filter by min_coverage_percentage
             if (
                 req.filters.min_coverage_percentage is not None
-                and signal.coverage_percentage < req.filters.min_coverage_percentage
+                and (signal.coverage_percentage or 0.0) < req.filters.min_coverage_percentage
             ):
                 continue
 

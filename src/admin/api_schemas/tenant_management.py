@@ -1243,6 +1243,9 @@ class StatusSyncsBlock(BaseModel):
     inventory: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
     custom_targeting: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
     advertisers: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
+    reporting: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
+    signal_coverage: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
+    pricing_availability: StatusSyncRunBlock = Field(default_factory=StatusSyncRunBlock)
 
 
 class StatusWorkflowsBlock(BaseModel):
@@ -1904,6 +1907,8 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "principal.created",
     "product.created",
     "product.updated",
+    "signal.created",
+    "signal.updated",
     # ``sync_run`` (not ``sync``) — the noun is the persistent SyncJob row,
     # the verb-past pattern is ``<entity>.<verb-past>`` consistent with the
     # rest of the catalog. The payload's ``data.sync_run_id`` matches.
@@ -1922,6 +1927,8 @@ WebhookEventType = Literal[
     "principal.created",
     "product.created",
     "product.updated",
+    "signal.created",
+    "signal.updated",
     "sync_run.completed",
     "sync_run.failed",
     "tenant.config_changed",

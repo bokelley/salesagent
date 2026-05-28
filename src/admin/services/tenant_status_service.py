@@ -143,12 +143,19 @@ def _syncs_block(session: Session, tenant_id: str) -> StatusSyncsBlock:
         inventory=_sync_run_block(by_type.get("inventory")),
         custom_targeting=_sync_run_block(by_type.get("custom_targeting")),
         advertisers=_sync_run_block(by_type.get("advertisers")),
+        reporting=_sync_run_block(by_type.get("reporting")),
+        signal_coverage=_sync_run_block(by_type.get("signal_coverage")),
+        pricing_availability=_sync_run_block(by_type.get("pricing_availability")),
     )
 
 
 def _sync_run_block(run: SyncJob | None) -> StatusSyncRunBlock:
     if run is None:
         return StatusSyncRunBlock()
+    progress = run.progress if isinstance(run.progress, dict) else {}
+    raw_counts = progress.get("counts")
+    counts = raw_counts if isinstance(raw_counts, dict) else {}
+    item_count = progress.get("item_count") or counts.get("products_updated") or counts.get("signals_updated")
     status_map = {
         "completed": "success",
         "success": "success",
@@ -160,7 +167,7 @@ def _sync_run_block(run: SyncJob | None) -> StatusSyncRunBlock:
     return StatusSyncRunBlock(
         last_run_at=run.completed_at or run.started_at,
         status=status_map.get(run.status, "never_run"),
-        item_count=(run.progress or {}).get("item_count") if run.progress else None,
+        item_count=item_count,
         error=run.error_message,
     )
 

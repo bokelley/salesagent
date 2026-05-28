@@ -291,7 +291,13 @@ def _snapshot(job: Any) -> dict[str, Any]:
     or missing data. Bare ``dict`` instead of a dataclass — this only
     travels across two callbacks in the same session.
     """
-    progress = job.progress or {}
+    progress = job.progress if isinstance(job.progress, dict) else {}
+    raw_counts = progress.get("counts")
+    counts = raw_counts if isinstance(raw_counts, dict) else {}
+    item_count = None
+    if isinstance(progress, dict):
+        item_count = progress.get("item_count") or counts.get("products_updated") or counts.get("signals_updated")
+
     return {
         "_status": job.status,
         "tenant_id": job.tenant_id,
@@ -304,7 +310,7 @@ def _snapshot(job: Any) -> dict[str, Any]:
         "error_message": job.error_message,
         "triggered_by": job.triggered_by,
         "triggered_by_id": job.triggered_by_id,
-        "item_count": progress.get("item_count") if isinstance(progress, dict) else None,
+        "item_count": item_count,
     }
 
 

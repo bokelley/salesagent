@@ -6192,7 +6192,8 @@ def list_sync_history(tenant_id: str):
     """List historical sync runs for a tenant.
 
     Query params: ``sync_type`` (``inventory`` / ``custom_targeting`` /
-    ``advertisers``), ``status``, ``limit`` (default 20, max 500),
+    ``advertisers`` / ``reporting`` / ``signal_coverage`` /
+    ``pricing_availability``), ``status``, ``limit`` (default 20, max 500),
     ``cursor``. Default sort: ``started_at desc``.
 
     Current sync state is in ``GET /tenants/{tid}/status`` — this endpoint

@@ -11,11 +11,12 @@ from adcp.server.mcp_tools import DISCOVERY_TOOLS
 from core.main import AUTH_OPTIONAL_TOOLS
 from core.platforms.gam import GamPlatform
 from core.platforms.mock import MockSellerPlatform
+from src.core.database.models import TenantSignal
 from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetSignalsRequest
 from src.core.tenant_context import TenantContext
-from src.core.tools.signals import _get_signals_impl, current_signal_feed_version
+from src.core.tools.signals import _get_signals_impl, _tenant_signal_to_adcp, current_signal_feed_version
 
 
 def _advertised_tools(platform) -> frozenset[str]:
@@ -61,6 +62,90 @@ def test_platforms_declare_catalog_signals_capability(platform) -> None:
         "brief",
         "wholesale",
     }
+
+
+def test_tenant_signal_projects_coverage_forecast_from_adapter_config() -> None:
+    tenant_signal = TenantSignal(
+        tenant_id="tenant_1",
+        signal_id="weather",
+        name="Weather",
+        description="Weather key-value signal",
+        value_type="categorical",
+        categories=["hot", "cold"],
+        tags=[],
+        adapter_config={
+            "coverage_forecast": {
+                "forecast_range_unit": "availability",
+                "method": "estimate",
+                "scope": {
+                    "kind": "inventory",
+                    "label": "PRICE_PRIORITY inventory",
+                    "line_item_types": ["PRICE_PRIORITY"],
+                },
+                "bucket_semantics": "exclusive",
+                "bucket_completeness": "partial",
+                "points": [
+                    {
+                        "label": "hot",
+                        "dimensions": [
+                            {
+                                "kind": "signal",
+                                "signal_id": "weather",
+                                "signal_value": "hot",
+                                "presence": "present",
+                            }
+                        ],
+                        "metrics": {
+                            "impressions": {"mid": 180},
+                            "coverage_rate": {"mid": 0.18},
+                        },
+                    },
+                    {
+                        "label": "cold",
+                        "dimensions": [
+                            {
+                                "kind": "signal",
+                                "signal_id": "weather",
+                                "signal_value": "cold",
+                                "presence": "present",
+                            }
+                        ],
+                        "metrics": {
+                            "impressions": {"mid": 380},
+                            "coverage_rate": {"mid": 0.38},
+                        },
+                    },
+                    {
+                        "label": "not present",
+                        "dimensions": [
+                            {
+                                "kind": "signal",
+                                "signal_id": "weather",
+                                "signal_value": None,
+                                "presence": "absent",
+                            }
+                        ],
+                        "metrics": {
+                            "impressions": {"mid": 440},
+                            "coverage_rate": {"mid": 0.44},
+                        },
+                    },
+                ],
+            }
+        },
+    )
+
+    signal = _tenant_signal_to_adcp(
+        tenant_signal,
+        ad_server="google_ad_manager",
+        agent_url="https://publisher.example.com/adcp",
+    )
+
+    assert signal.coverage_percentage == 56.0
+    assert signal.coverage_forecast is not None
+    assert signal.coverage_forecast.scope.kind.value == "inventory"
+    dumped = signal.model_dump(mode="json", exclude_none=True)
+    assert dumped["coverage_forecast"]["points"][0]["metrics"]["coverage_rate"]["mid"] == 0.18
 
 
 @pytest.mark.asyncio

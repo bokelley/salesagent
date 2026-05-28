@@ -14,6 +14,7 @@ Stage 4 of #382 adds :class:`SyncJobAdminRepository` for the cross-tenant
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
@@ -129,6 +130,76 @@ class SyncJobRepository:
             .limit(1)
         )
         return self._session.scalar(stmt)
+
+    def create_running(
+        self,
+        *,
+        sync_id: str,
+        adapter_type: str,
+        sync_type: str,
+        triggered_by: str,
+        triggered_by_id: str | None = None,
+        started_at: datetime | None = None,
+        progress: dict[str, Any] | None = None,
+    ) -> SyncJob:
+        """Create a running SyncJob row for tenant-owned worker services.
+
+        The adapter orchestrator and GAM inventory worker predate this
+        repository and still write rows directly. New worker services should
+        use the repository so SyncJob lifecycle writes stay tenant-scoped and
+        testable.
+        """
+        job = SyncJob(
+            sync_id=sync_id,
+            tenant_id=self._tenant_id,
+            adapter_type=adapter_type,
+            sync_type=sync_type,
+            status="running",
+            started_at=started_at or datetime.now(UTC),
+            triggered_by=triggered_by,
+            triggered_by_id=triggered_by_id,
+            progress=progress,
+        )
+        self._session.add(job)
+        return job
+
+    def mark_completed(
+        self,
+        sync_id: str,
+        *,
+        summary: str | None = None,
+        progress: dict[str, Any] | None = None,
+        completed_at: datetime | None = None,
+    ) -> SyncJob | None:
+        """Mark this tenant's SyncJob row completed."""
+        job = self.find_by_sync_id(sync_id)
+        if job is None:
+            return None
+        job.status = "completed"
+        job.completed_at = completed_at or datetime.now(UTC)
+        job.summary = summary
+        if progress is not None:
+            job.progress = progress
+        return job
+
+    def mark_failed(
+        self,
+        sync_id: str,
+        *,
+        error_message: str,
+        progress: dict[str, Any] | None = None,
+        completed_at: datetime | None = None,
+    ) -> SyncJob | None:
+        """Mark this tenant's SyncJob row failed."""
+        job = self.find_by_sync_id(sync_id)
+        if job is None:
+            return None
+        job.status = "failed"
+        job.completed_at = completed_at or datetime.now(UTC)
+        job.error_message = error_message
+        if progress is not None:
+            job.progress = progress
+        return job
 
 
 class SyncJobAdminRepository:

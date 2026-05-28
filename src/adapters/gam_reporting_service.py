@@ -10,17 +10,79 @@ Provides comprehensive reporting data from GAM including:
 import csv
 import gzip
 import io
+import json
 import logging
+import math
 import time
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 import pytz
 import requests
 
+from src.core.signal_ids import adcp_safe_signal_id
+from src.core.statistics import percentile
+
 logger = logging.getLogger(__name__)
+
+
+def _parse_report_float(value: Any) -> float:
+    """Parse GAM CSV numeric values, accepting blanks and comma separators."""
+    if value is None:
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    text = str(value).replace(",", "").strip()
+    if not text:
+        return 0.0
+    return float(text)
+
+
+def _parse_report_int(value: Any) -> int:
+    return int(_parse_report_float(value))
+
+
+def _cpm_from_micros(revenue_micros: float, impressions: int) -> float:
+    if impressions <= 0:
+        return 0.0
+    return revenue_micros / 1_000_000 / impressions * 1000
+
+
+def _weighted_percentile(cpm_weights: list[tuple[float, int]], percentile: int) -> float | None:
+    weighted = sorted((cpm, weight) for cpm, weight in cpm_weights if weight > 0)
+    total_weight = sum(weight for _, weight in weighted)
+    if total_weight <= 0:
+        return None
+
+    threshold = total_weight * (percentile / 100)
+    cumulative = 0
+    for cpm, weight in weighted:
+        cumulative += weight
+        if cumulative >= threshold:
+            return cpm
+    return weighted[-1][0]
+
+
+def _rounded_guidance(guidance: dict[str, float | None]) -> dict[str, float | None]:
+    return {key: (round(value, 2) if value is not None else None) for key, value in guidance.items()}
+
+
+def _total_result_set_size(page: Any) -> int:
+    if page is None:
+        return 0
+    if isinstance(page, dict):
+        return int(page.get("totalResultSetSize") or 0)
+    return int(getattr(page, "totalResultSetSize", 0) or 0)
+
+
+def _object_field(obj: Any, field: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(field)
+    return getattr(obj, field, None)
 
 
 class ReportingConfig:
@@ -427,13 +489,19 @@ class GAMReportingService:
             "Dimension.DATE": "DATE",
             "Dimension.HOUR": "HOUR",
             "Dimension.COUNTRY_NAME": "COUNTRY_NAME",
+            "Dimension.COUNTRY_CODE": "COUNTRY_CODE",
             "Dimension.AD_UNIT_ID": "AD_UNIT_ID",
             "Dimension.AD_UNIT_NAME": "AD_UNIT_NAME",
+            "Dimension.PLACEMENT_ID": "PLACEMENT_ID",
+            "Dimension.PLACEMENT_NAME": "PLACEMENT_NAME",
+            "Dimension.LINE_ITEM_TYPE": "LINE_ITEM_TYPE",
             # Metrics - only including the ones we're actually requesting
             "Column.AD_SERVER_IMPRESSIONS": "AD_SERVER_IMPRESSIONS",
             "Column.AD_SERVER_CLICKS": "AD_SERVER_CLICKS",
             "Column.AD_SERVER_CPM_AND_CPC_REVENUE": "AD_SERVER_CPM_AND_CPC_REVENUE",
             "Column.AD_SERVER_VIDEO_COMPLETIONS": "AD_SERVER_VIDEO_COMPLETIONS",
+            "Column.AD_SERVER_ACTIVE_VIEW_VIEWABLE_IMPRESSIONS": "AD_SERVER_ACTIVE_VIEW_VIEWABLE_IMPRESSIONS",
+            "Column.AD_SERVER_ACTIVE_VIEW_MEASURABLE_IMPRESSIONS": "AD_SERVER_ACTIVE_VIEW_MEASURABLE_IMPRESSIONS",
         }
 
         # Dictionary to store aggregated data
@@ -550,6 +618,1257 @@ class GAMReportingService:
         logger.info(f"Aggregated {len(raw_data)} raw rows into {len(processed)} aggregated rows")
 
         return processed
+
+    def get_placement_country_price_guidance(
+        self,
+        date_range: Literal["lifetime", "this_month", "today"],
+        *,
+        placement_ids: list[str] | None = None,
+        countries: list[str] | None = None,
+        line_item_types: list[str] | None = None,
+        min_group_impressions: int = 10_000,
+        min_line_item_impressions: int = 1_000,
+        min_package_budget: float | None = None,
+        bookability_safety_factor: float = 1.0,
+        include_zero_revenue: bool = False,
+        include_eligible_line_items: bool = False,
+        currency: str = "USD",
+        publisher_domain: str | None = None,
+        viewability_standard: str = "mrc",
+        requested_timezone: str = "America/New_York",
+    ) -> dict[str, Any]:
+        """Calculate placement-country price guidance from line-item delivery.
+
+        GAM does not provide CPM quartiles directly. This report asks GAM for
+        placement x country x line-item rows, then computes p25/p50/p75/p90
+        locally from each line item's realized CPM. The primary guidance is
+        impression-weighted so tiny high-CPM line items do not dominate.
+        """
+        dimensions, start_date, end_date, granularity = self._get_report_config(
+            date_range=date_range,
+            requested_tz=requested_timezone,
+            include_date=False,
+        )
+        dimensions = [
+            "PLACEMENT_ID",
+            "PLACEMENT_NAME",
+            "COUNTRY_CODE",
+            "COUNTRY_NAME",
+            "LINE_ITEM_ID",
+            "LINE_ITEM_NAME",
+            "LINE_ITEM_TYPE",
+        ]
+
+        effective_line_item_types = ["PRICE_PRIORITY"] if line_item_types is None else line_item_types
+
+        report_query = self._build_price_guidance_report_query(
+            dimensions=dimensions,
+            start_date=start_date,
+            end_date=end_date,
+            placement_ids=placement_ids,
+            countries=countries,
+            line_item_types=effective_line_item_types,
+        )
+        raw_rows = self._run_report(report_query)
+        line_item_rows = self._price_guidance_line_item_rows(
+            raw_rows,
+            line_item_types=effective_line_item_types,
+            min_line_item_impressions=min_line_item_impressions,
+            include_zero_revenue=include_zero_revenue,
+        )
+
+        groups = self._aggregate_price_guidance_groups(
+            line_item_rows,
+            min_group_impressions=min_group_impressions,
+            min_package_budget=min_package_budget,
+            bookability_safety_factor=bookability_safety_factor,
+            currency=currency,
+            publisher_domain=publisher_domain,
+            viewability_standard=viewability_standard,
+        )
+
+        result = {
+            "date_range": date_range,
+            "window_start": start_date.date().isoformat(),
+            "window_end": end_date.date().isoformat(),
+            "timezone": requested_timezone,
+            "data_valid_until": self._calculate_data_validity(date_range, requested_timezone).isoformat(),
+            "dimensions": dimensions,
+            "columns": [
+                "AD_SERVER_IMPRESSIONS",
+                "AD_SERVER_CLICKS",
+                "AD_SERVER_CPM_AND_CPC_REVENUE",
+                "AD_SERVER_VIDEO_COMPLETIONS",
+                "AD_SERVER_ACTIVE_VIEW_VIEWABLE_IMPRESSIONS",
+                "AD_SERVER_ACTIVE_VIEW_MEASURABLE_IMPRESSIONS",
+            ],
+            "thresholds": {
+                "min_group_impressions": min_group_impressions,
+                "min_line_item_impressions": min_line_item_impressions,
+                "min_package_budget": min_package_budget,
+                "bookability_safety_factor": bookability_safety_factor,
+                "include_zero_revenue": include_zero_revenue,
+            },
+            "filters": {
+                "placement_ids": placement_ids or [],
+                "countries": countries or [],
+                "line_item_types": effective_line_item_types,
+            },
+            "raw_rows": len(raw_rows),
+            "possibly_truncated": len(raw_rows) >= ReportingConfig.MAX_ROWS_PER_REPORT,
+            "eligible_line_item_rows": len(line_item_rows),
+            "groups": groups,
+            "group_count": len(groups),
+            "bookable_group_count": sum(1 for group in groups if group["bookable"]),
+            "forecast": self._forecast_from_groups(groups, currency=currency),
+            "granularity": granularity,
+        }
+        if include_eligible_line_items:
+            result["line_item_rows"] = line_item_rows
+        return result
+
+    def get_line_item_capacity_guidance(
+        self,
+        date_range: Literal["this_month", "today"] = "this_month",
+        *,
+        max_network_line_items: int,
+        monthly_line_item_space_fraction: float = 0.01,
+        estimated_line_items_per_package: int = 1,
+        requested_timezone: str = "America/New_York",
+    ) -> dict[str, Any]:
+        """Estimate minimum package size from GAM revenue and line-item capacity.
+
+        GAM documents line-item limit errors, but does not expose the network's
+        hard line-item cap as a reporting metric. Callers provide the assumed
+        cap, and this method computes the minimum package budget that would keep
+        Sales Agent-originated monthly line-item creation within the configured
+        fraction of that cap.
+        """
+        if max_network_line_items <= 0:
+            raise ValueError("max_network_line_items must be positive")
+        if not 0 < monthly_line_item_space_fraction <= 1:
+            raise ValueError("monthly_line_item_space_fraction must be greater than 0 and at most 1")
+        if estimated_line_items_per_package <= 0:
+            raise ValueError("estimated_line_items_per_package must be positive")
+
+        _dimensions, start_date, end_date, granularity = self._get_report_config(
+            date_range=date_range,
+            requested_tz=requested_timezone,
+            include_date=False,
+        )
+        report_query = self._build_network_revenue_report_query(start_date=start_date, end_date=end_date)
+        raw_rows = self._run_report(report_query)
+        monthly_revenue_to_date = self._sum_report_revenue(raw_rows)
+        projected_monthly_revenue = self._project_monthly_revenue(
+            monthly_revenue_to_date,
+            start_date=start_date,
+            end_date=end_date,
+            requested_timezone=requested_timezone,
+        )
+
+        monthly_line_item_budget = max(1, math.floor(max_network_line_items * monthly_line_item_space_fraction))
+        total_line_items = self._line_item_count()
+        line_items_created_in_window = self._line_item_count(start_date=start_date, end_date=end_date)
+        remaining_total_line_item_capacity = max(0, max_network_line_items - total_line_items)
+        effective_monthly_line_item_budget = min(monthly_line_item_budget, remaining_total_line_item_capacity)
+        minimum_package_budget = (
+            projected_monthly_revenue / effective_monthly_line_item_budget * estimated_line_items_per_package
+            if effective_monthly_line_item_budget > 0
+            else None
+        )
+
+        return {
+            "date_range": date_range,
+            "window_start": start_date.date().isoformat(),
+            "window_end": end_date.date().isoformat(),
+            "timezone": requested_timezone,
+            "granularity": granularity,
+            "network_revenue": {
+                "to_date": round(monthly_revenue_to_date, 2),
+                "projected_monthly": round(projected_monthly_revenue, 2),
+            },
+            "line_item_capacity": {
+                "max_network_line_items": max_network_line_items,
+                "monthly_space_fraction": monthly_line_item_space_fraction,
+                "monthly_line_item_budget": monthly_line_item_budget,
+                "effective_monthly_line_item_budget": effective_monthly_line_item_budget,
+                "estimated_line_items_per_package": estimated_line_items_per_package,
+                "total_line_items": total_line_items,
+                "total_line_item_utilization_pct": round(total_line_items / max_network_line_items * 100, 2),
+                "remaining_total_line_item_capacity": remaining_total_line_item_capacity,
+                "created_in_window": line_items_created_in_window,
+                "created_in_window_pct_of_monthly_budget": round(
+                    line_items_created_in_window / monthly_line_item_budget * 100, 2
+                ),
+                "remaining_monthly_line_item_budget": max(
+                    0, effective_monthly_line_item_budget - line_items_created_in_window
+                ),
+            },
+            "minimum_package_budget": round(minimum_package_budget, 2) if minimum_package_budget is not None else None,
+            "notes": [
+                "GAM exposes errors when line-item limits are reached, but this calculation requires the network cap as an input.",
+                "The minimum package budget is based on projected monthly network revenue divided by the allowed monthly line-item budget.",
+            ],
+        }
+
+    def get_custom_targeting_value_coverage(
+        self,
+        date_range: Literal["lifetime", "this_month", "today"],
+        *,
+        key_name: str | None = None,
+        key_id: str | int | None = None,
+        value_names: list[str] | None = None,
+        line_item_types: list[str] | None = None,
+        min_value_impressions: int = 1,
+        requested_timezone: str = "America/New_York",
+    ) -> dict[str, Any]:
+        """Measure delivered inventory share for one GAM custom targeting key.
+
+        This is historical coverage: it answers "what share of matching GAM
+        delivery carried each key-value?" It is not a forecast that applies new
+        targeting to unsold future capacity.
+        """
+        if not key_name and key_id is None:
+            raise ValueError("Either key_name or key_id is required")
+
+        start_date, end_date, granularity = self._signal_coverage_window(date_range, requested_timezone)
+        effective_line_item_types = ["PRICE_PRIORITY"] if line_item_types is None else line_item_types
+        key = self._custom_targeting_key(key_name=key_name, key_id=key_id)
+        values = self._custom_targeting_values(key_id=int(key["id"]), value_names=value_names)
+        value_ids = [str(value["id"]) for value in values]
+
+        total_impressions, total_revenue = self._signal_coverage_total_inventory(
+            start_date=start_date,
+            end_date=end_date,
+            line_item_types=effective_line_item_types,
+        )
+        aggregated_values = self._signal_coverage_values_for_ids(
+            value_ids=value_ids,
+            values_by_id={str(value["id"]): value for value in values},
+            start_date=start_date,
+            end_date=end_date,
+            line_item_types=effective_line_item_types,
+        )
+        filtered_values = [value for value in aggregated_values if value["impressions"] >= min_value_impressions]
+        present_impressions = sum(value["impressions"] for value in filtered_values)
+        not_present_impressions = max(0, total_impressions - present_impressions)
+        denominator = total_impressions or 1
+        for value in filtered_values:
+            value["share_of_inventory"] = round(value["impressions"] / denominator, 6)
+
+        multi_value_overlap = present_impressions > total_impressions
+        not_present_bucket = {
+            "label": "not present",
+            "impressions": not_present_impressions,
+            "share_of_inventory": round(not_present_impressions / denominator, 6),
+        }
+        return {
+            "date_range": date_range,
+            "window_start": start_date.date().isoformat(),
+            "window_end": end_date.date().isoformat(),
+            "timezone": requested_timezone,
+            "data_valid_until": self._calculate_data_validity(date_range, requested_timezone).isoformat(),
+            "granularity": granularity,
+            "key": key,
+            "filters": {
+                "line_item_types": effective_line_item_types,
+                "value_names": value_names or [],
+                "min_value_impressions": min_value_impressions,
+            },
+            "total_inventory": {
+                "impressions": total_impressions,
+                "revenue": round(total_revenue, 2),
+                "average_cpm": round(total_revenue / total_impressions * 1000, 2) if total_impressions > 0 else None,
+            },
+            "values": filtered_values,
+            "not_present": not_present_bucket,
+            "coverage": {
+                "present_impressions": present_impressions,
+                "present_share_of_inventory": round(min(present_impressions, total_impressions) / denominator, 6),
+                "value_count": len(filtered_values),
+                "registered_value_count": len(values),
+                "multi_value_overlap": multi_value_overlap,
+            },
+            "coverage_forecast": self._signal_coverage_forecast(
+                key=key,
+                values=filtered_values,
+                not_present=not_present_bucket,
+                total_impressions=total_impressions,
+                total_revenue=total_revenue,
+                line_item_types=effective_line_item_types,
+                window_start=start_date.date().isoformat(),
+                window_end=end_date.date().isoformat(),
+                multi_value_overlap=multi_value_overlap,
+            ),
+            "notes": [
+                "Coverage is based on delivered historical impressions for the selected line item types.",
+                "The not_present bucket is total matching delivery minus reported impressions for the selected values.",
+                "If a request can carry multiple values for this key, value shares may sum above 100%; multi_value_overlap flags that case.",
+                "Freeform key-values only appear when registered with GAM CustomTargetingService.",
+            ],
+        }
+
+    def get_custom_targeting_value_coverage_for_value_ids(
+        self,
+        date_range: Literal["lifetime", "this_month", "today"],
+        *,
+        value_ids: list[str],
+        values_by_id: dict[str, dict[str, Any]] | None = None,
+        line_item_types: list[str] | None = None,
+        min_value_impressions: int = 1,
+        requested_timezone: str = "America/New_York",
+    ) -> dict[str, Any]:
+        """Measure delivered inventory share for many mapped custom targeting values.
+
+        Unlike ``get_custom_targeting_value_coverage()``, this does not resolve
+        one key at a time through CustomTargetingService. Callers that already
+        have mapped GAM value IDs can use this to run one baseline report and
+        then chunk value-ID filters across the whole mapped catalog.
+        """
+        start_date, end_date, granularity = self._signal_coverage_window(date_range, requested_timezone)
+        effective_line_item_types = ["PRICE_PRIORITY"] if line_item_types is None else line_item_types
+        normalized_value_ids = sorted({str(int(value_id)) for value_id in value_ids if str(value_id).strip()})
+        value_metadata = {value_id: {"id": value_id, "name": ""} for value_id in normalized_value_ids}
+        for value_id, metadata in (values_by_id or {}).items():
+            normalized_id = str(int(value_id))
+            if normalized_id in value_metadata:
+                value_metadata[normalized_id] = {"id": normalized_id, **metadata}
+
+        total_impressions, total_revenue = self._signal_coverage_total_inventory(
+            start_date=start_date,
+            end_date=end_date,
+            line_item_types=effective_line_item_types,
+        )
+        aggregated_values = self._signal_coverage_values_for_ids(
+            value_ids=normalized_value_ids,
+            values_by_id=value_metadata,
+            start_date=start_date,
+            end_date=end_date,
+            line_item_types=effective_line_item_types,
+        )
+        filtered_values = [value for value in aggregated_values if value["impressions"] >= min_value_impressions]
+        denominator = total_impressions or 1
+        for value in filtered_values:
+            value["share_of_inventory"] = round(value["impressions"] / denominator, 6)
+
+        return {
+            "date_range": date_range,
+            "window_start": start_date.date().isoformat(),
+            "window_end": end_date.date().isoformat(),
+            "timezone": requested_timezone,
+            "data_valid_until": self._calculate_data_validity(date_range, requested_timezone).isoformat(),
+            "granularity": granularity,
+            "filters": {
+                "line_item_types": effective_line_item_types,
+                "value_ids": normalized_value_ids,
+                "min_value_impressions": min_value_impressions,
+            },
+            "total_inventory": {
+                "impressions": total_impressions,
+                "revenue": round(total_revenue, 2),
+                "average_cpm": round(total_revenue / total_impressions * 1000, 2) if total_impressions > 0 else None,
+            },
+            "values": filtered_values,
+            "coverage": {
+                "present_impressions": sum(value["impressions"] for value in filtered_values),
+                "value_count": len(filtered_values),
+                "requested_value_count": len(normalized_value_ids),
+                "report_value_chunk_count": len(self._chunks(normalized_value_ids, 200)),
+            },
+            "notes": [
+                "Coverage is based on delivered historical impressions for the selected line item types.",
+                "This bulk result is keyed by GAM custom targeting value ID and may include values from multiple keys.",
+            ],
+        }
+
+    def _signal_coverage_window(
+        self,
+        date_range: Literal["lifetime", "this_month", "today"],
+        requested_timezone: str,
+    ) -> tuple[datetime, datetime, str]:
+        _dimensions, start_date, end_date, granularity = self._get_report_config(
+            date_range=date_range,
+            requested_tz=requested_timezone,
+            include_date=False,
+        )
+        return start_date, end_date, granularity
+
+    def _signal_coverage_total_inventory(
+        self,
+        *,
+        start_date: datetime,
+        end_date: datetime,
+        line_item_types: list[str] | None,
+    ) -> tuple[int, float]:
+        baseline_query = self._build_signal_coverage_baseline_query(
+            start_date=start_date,
+            end_date=end_date,
+            line_item_types=line_item_types,
+        )
+        baseline_rows = self._run_report(baseline_query)
+        total_impressions = sum(
+            _parse_report_int(self._normalize_report_row(row).get("AD_SERVER_IMPRESSIONS")) for row in baseline_rows
+        )
+        total_revenue = (
+            sum(
+                _parse_report_float(self._normalize_report_row(row).get("AD_SERVER_CPM_AND_CPC_REVENUE"))
+                for row in baseline_rows
+            )
+            / 1_000_000
+        )
+        return total_impressions, total_revenue
+
+    def _signal_coverage_values_for_ids(
+        self,
+        *,
+        value_ids: list[str],
+        values_by_id: dict[str, dict[str, Any]],
+        start_date: datetime,
+        end_date: datetime,
+        line_item_types: list[str] | None,
+    ) -> list[dict[str, Any]]:
+        value_rows = []
+        for value_id_chunk in self._chunks(value_ids, 200):
+            report_query = self._build_signal_coverage_value_query(
+                start_date=start_date,
+                end_date=end_date,
+                value_ids=value_id_chunk,
+                line_item_types=line_item_types,
+            )
+            value_rows.extend(self._run_report(report_query))
+        return self._aggregate_signal_value_rows(value_rows, values_by_id)
+
+    @staticmethod
+    def _signal_coverage_forecast(
+        *,
+        key: dict[str, Any],
+        values: list[dict[str, Any]],
+        not_present: dict[str, Any],
+        total_impressions: int,
+        total_revenue: float,
+        line_item_types: list[str] | None,
+        window_start: str,
+        window_end: str,
+        multi_value_overlap: bool,
+    ) -> dict[str, Any]:
+        signal_id = adcp_safe_signal_id(str(key.get("name") or key.get("id") or "signal"))
+        signal_name = str(key.get("display_name") or key.get("name") or signal_id)
+        scope_label = f"{', '.join(line_item_types)} inventory" if line_item_types else "all line item type inventory"
+        return {
+            "forecast_range_unit": "availability",
+            "method": "estimate",
+            "scope": {
+                "kind": "inventory",
+                "label": scope_label,
+                "line_item_types": line_item_types or None,
+                "date_range": {"start": window_start, "end": window_end},
+                "ad_server": "google_ad_manager",
+                "custom_targeting_key_id": str(key.get("id") or ""),
+                "custom_targeting_key_name": key.get("name"),
+            },
+            "bucket_semantics": "overlapping" if multi_value_overlap else "exclusive",
+            "bucket_completeness": "partial",
+            "points": [
+                *[
+                    GAMReportingService._signal_coverage_value_point(
+                        signal_id=signal_id,
+                        signal_name=signal_name,
+                        value=value,
+                        total_impressions=total_impressions,
+                    )
+                    for value in values
+                ],
+                GAMReportingService._signal_coverage_absent_point(
+                    signal_id=signal_id,
+                    signal_name=signal_name,
+                    not_present=not_present,
+                    total_impressions=total_impressions,
+                ),
+            ],
+            "ext": {
+                "total_inventory": {
+                    "impressions": total_impressions,
+                    "revenue": round(total_revenue, 2),
+                }
+            },
+        }
+
+    @staticmethod
+    def _signal_coverage_value_point(
+        *,
+        signal_id: str,
+        signal_name: str,
+        value: dict[str, Any],
+        total_impressions: int,
+    ) -> dict[str, Any]:
+        signal_value_name = value.get("display_name") or value["value"]
+        return {
+            "label": signal_value_name,
+            "dimensions": [
+                {
+                    "kind": "signal",
+                    "signal_id": signal_id,
+                    "signal_name": signal_name,
+                    "signal_value": value["value"],
+                    "signal_value_name": signal_value_name,
+                    "presence": "present",
+                }
+            ],
+            "metrics": {
+                "impressions": {"mid": value["impressions"]},
+                "spend": {"mid": value["revenue"]},
+                "coverage_rate": {"mid": GAMReportingService._coverage_share(value["impressions"], total_impressions)},
+            },
+        }
+
+    @staticmethod
+    def _signal_coverage_absent_point(
+        *,
+        signal_id: str,
+        signal_name: str,
+        not_present: dict[str, Any],
+        total_impressions: int,
+    ) -> dict[str, Any]:
+        return {
+            "label": not_present["label"],
+            "dimensions": [
+                {
+                    "kind": "signal",
+                    "signal_id": signal_id,
+                    "signal_name": signal_name,
+                    "signal_value": None,
+                    "presence": "absent",
+                }
+            ],
+            "metrics": {
+                "impressions": {"mid": not_present["impressions"]},
+                "coverage_rate": {
+                    "mid": GAMReportingService._coverage_share(not_present["impressions"], total_impressions)
+                },
+            },
+        }
+
+    @staticmethod
+    def _coverage_share(impressions: int, total_impressions: int) -> float:
+        if total_impressions <= 0:
+            return 0.0
+        return round(impressions / total_impressions, 6)
+
+    def _build_price_guidance_report_query(
+        self,
+        *,
+        dimensions: list[str],
+        start_date: datetime,
+        end_date: datetime,
+        placement_ids: list[str] | None,
+        countries: list[str] | None,
+        line_item_types: list[str] | None,
+    ) -> dict[str, Any]:
+        where_clauses: list[str] = []
+        placement_filter = self._numeric_in_filter("PLACEMENT_ID", placement_ids)
+        if placement_filter:
+            where_clauses.append(placement_filter)
+        country_filter = self._country_filter(countries)
+        if country_filter:
+            where_clauses.append(country_filter)
+        line_item_type_filter = self._string_in_filter("LINE_ITEM_TYPE", line_item_types)
+        if line_item_type_filter:
+            where_clauses.append(line_item_type_filter)
+
+        report_query = {
+            "dimensions": dimensions,
+            "columns": [
+                "AD_SERVER_IMPRESSIONS",
+                "AD_SERVER_CLICKS",
+                "AD_SERVER_CPM_AND_CPC_REVENUE",
+                "AD_SERVER_VIDEO_COMPLETIONS",
+                "AD_SERVER_ACTIVE_VIEW_VIEWABLE_IMPRESSIONS",
+                "AD_SERVER_ACTIVE_VIEW_MEASURABLE_IMPRESSIONS",
+            ],
+            "dateRangeType": "CUSTOM_DATE",
+            "startDate": {"year": start_date.year, "month": start_date.month, "day": start_date.day},
+            "endDate": {"year": end_date.year, "month": end_date.month, "day": end_date.day},
+            "timeZoneType": "PUBLISHER",
+        }
+        if where_clauses:
+            report_query["statement"] = {"query": "WHERE " + " AND ".join(where_clauses)}
+        return {"reportQuery": report_query}
+
+    def _build_signal_coverage_baseline_query(
+        self,
+        *,
+        start_date: datetime,
+        end_date: datetime,
+        line_item_types: list[str] | None,
+    ) -> dict[str, Any]:
+        where_clauses = []
+        line_item_type_filter = self._string_in_filter("LINE_ITEM_TYPE", line_item_types)
+        if line_item_type_filter:
+            where_clauses.append(line_item_type_filter)
+        report_query = {
+            "dimensions": ["LINE_ITEM_TYPE"],
+            "columns": [
+                "AD_SERVER_IMPRESSIONS",
+                "AD_SERVER_CPM_AND_CPC_REVENUE",
+            ],
+            "dateRangeType": "CUSTOM_DATE",
+            "startDate": {"year": start_date.year, "month": start_date.month, "day": start_date.day},
+            "endDate": {"year": end_date.year, "month": end_date.month, "day": end_date.day},
+            "timeZoneType": "PUBLISHER",
+        }
+        if where_clauses:
+            report_query["statement"] = {"query": "WHERE " + " AND ".join(where_clauses)}
+        return {"reportQuery": report_query}
+
+    def _build_signal_coverage_value_query(
+        self,
+        *,
+        start_date: datetime,
+        end_date: datetime,
+        value_ids: list[str],
+        line_item_types: list[str] | None,
+    ) -> dict[str, Any]:
+        where_clauses = []
+        line_item_type_filter = self._string_in_filter("LINE_ITEM_TYPE", line_item_types)
+        if line_item_type_filter:
+            where_clauses.append(line_item_type_filter)
+        value_filter = self._numeric_in_filter("CUSTOM_TARGETING_VALUE_ID", value_ids)
+        if value_filter:
+            where_clauses.append(value_filter)
+        report_query = {
+            "dimensions": [
+                "CUSTOM_TARGETING_VALUE_ID",
+                "CUSTOM_CRITERIA",
+                "LINE_ITEM_TYPE",
+            ],
+            "columns": [
+                "AD_SERVER_IMPRESSIONS",
+                "AD_SERVER_CPM_AND_CPC_REVENUE",
+            ],
+            "dateRangeType": "CUSTOM_DATE",
+            "startDate": {"year": start_date.year, "month": start_date.month, "day": start_date.day},
+            "endDate": {"year": end_date.year, "month": end_date.month, "day": end_date.day},
+            "timeZoneType": "PUBLISHER",
+        }
+        if where_clauses:
+            report_query["statement"] = {"query": "WHERE " + " AND ".join(where_clauses)}
+        return {"reportQuery": report_query}
+
+    @staticmethod
+    def _build_network_revenue_report_query(*, start_date: datetime, end_date: datetime) -> dict[str, Any]:
+        return {
+            "reportQuery": {
+                "dimensions": ["DATE"],
+                "columns": [
+                    "AD_SERVER_IMPRESSIONS",
+                    "AD_SERVER_CPM_AND_CPC_REVENUE",
+                ],
+                "dateRangeType": "CUSTOM_DATE",
+                "startDate": {"year": start_date.year, "month": start_date.month, "day": start_date.day},
+                "endDate": {"year": end_date.year, "month": end_date.month, "day": end_date.day},
+                "timeZoneType": "PUBLISHER",
+            }
+        }
+
+    def _line_item_count(self, *, start_date: datetime | None = None, end_date: datetime | None = None) -> int:
+        from googleads import ad_manager
+
+        line_item_service = self.client.GetService("LineItemService")
+        statement_builder = ad_manager.StatementBuilder().Limit(1)
+        if start_date is not None and end_date is not None:
+            statement_builder = (
+                statement_builder.Where("creationDateTime >= :start AND creationDateTime <= :end")
+                .WithBindVariable("start", start_date)
+                .WithBindVariable("end", end_date)
+            )
+        page = line_item_service.getLineItemsByStatement(statement_builder.ToStatement())
+        return _total_result_set_size(page)
+
+    @staticmethod
+    def _sum_report_revenue(raw_rows: list[dict[str, Any]]) -> float:
+        total_revenue_micros = 0.0
+        for raw in raw_rows:
+            normalized = GAMReportingService._normalize_report_row(raw)
+            total_revenue_micros += _parse_report_float(normalized.get("AD_SERVER_CPM_AND_CPC_REVENUE"))
+        return total_revenue_micros / 1_000_000
+
+    @staticmethod
+    def _project_monthly_revenue(
+        revenue_to_date: float,
+        *,
+        start_date: datetime,
+        end_date: datetime,
+        requested_timezone: str,
+    ) -> float:
+        if revenue_to_date <= 0:
+            return 0.0
+
+        timezone = pytz.timezone(requested_timezone)
+        local_end = end_date.astimezone(timezone) if end_date.tzinfo else timezone.localize(end_date)
+        if start_date.month != local_end.month or start_date.year != local_end.year:
+            return revenue_to_date
+
+        days_in_month = monthrange(local_end.year, local_end.month)[1]
+        elapsed_days = max(1, local_end.day)
+        return revenue_to_date / elapsed_days * days_in_month
+
+    @staticmethod
+    def _numeric_in_filter(field: str, values: list[str] | None) -> str | None:
+        if not values:
+            return None
+        numeric_values = sorted({str(int(value)) for value in values})
+        if not numeric_values:
+            return None
+        return f"{field} IN ({', '.join(numeric_values)})"
+
+    @staticmethod
+    def _string_in_filter(field: str, values: list[str] | None) -> str | None:
+        if not values:
+            return None
+        escaped = sorted({str(value).replace("'", "''") for value in values if str(value).strip()})
+        if not escaped:
+            return None
+        quoted = ", ".join(f"'{value}'" for value in escaped)
+        return f"{field} IN ({quoted})"
+
+    @staticmethod
+    def _country_filter(countries: list[str] | None) -> str | None:
+        if not countries:
+            return None
+        country_criteria_ids: list[str] = []
+        country_names: list[str] = []
+        country_map = GAMReportingService._country_criteria_id_map()
+        for value in countries:
+            country = str(value).strip()
+            if not country:
+                continue
+            if len(country) == 2 and country.isalpha():
+                criteria_id = country_map.get(country.upper())
+                if criteria_id:
+                    country_criteria_ids.append(criteria_id)
+                else:
+                    country_names.append(country)
+            else:
+                country_names.append(country)
+
+        code_filter = GAMReportingService._numeric_in_filter("COUNTRY_CRITERIA_ID", country_criteria_ids)
+        name_filter = GAMReportingService._string_in_filter("COUNTRY_NAME", country_names)
+        if code_filter and name_filter:
+            return f"({code_filter} OR {name_filter})"
+        return code_filter or name_filter
+
+    @staticmethod
+    def _country_criteria_id_map() -> dict[str, str]:
+        mapping_file = Path(__file__).resolve().parent / "gam_geo_mappings.json"
+        try:
+            with mapping_file.open() as f:
+                data = json.load(f)
+        except OSError:
+            return {}
+        countries = data.get("countries", {})
+        return {str(code).upper(): str(criteria_id) for code, criteria_id in countries.items()}
+
+    def _custom_targeting_key(self, *, key_name: str | None, key_id: str | int | None) -> dict[str, Any]:
+        from googleads import ad_manager
+
+        service = self.client.GetService("CustomTargetingService")
+        builder = ad_manager.StatementBuilder().Limit(2)
+        if key_id is not None:
+            builder = builder.Where("id = :keyId").WithBindVariable("keyId", int(key_id))
+        elif key_name is not None:
+            escaped_name = key_name.replace("'", "\\'")
+            builder = builder.Where(f"name = '{escaped_name}'")
+
+        page = service.getCustomTargetingKeysByStatement(builder.ToStatement())
+        results = list(getattr(page, "results", []) or [])
+        if not results:
+            key_ref = key_id if key_id is not None else key_name
+            raise ValueError(f"GAM custom targeting key not found: {key_ref}")
+        if len(results) > 1:
+            raise ValueError(f"GAM custom targeting key lookup was ambiguous: {key_name}")
+        key = results[0]
+        return {
+            "id": str(_object_field(key, "id")),
+            "name": str(_object_field(key, "name") or ""),
+            "display_name": _object_field(key, "displayName"),
+            "type": _object_field(key, "type"),
+            "reportable_type": _object_field(key, "reportableType"),
+            "status": _object_field(key, "status"),
+        }
+
+    def _custom_targeting_values(self, *, key_id: int, value_names: list[str] | None) -> list[dict[str, Any]]:
+        from googleads import ad_manager
+
+        service = self.client.GetService("CustomTargetingService")
+        values: list[dict[str, Any]] = []
+        offset = 0
+        limit = 500
+        while True:
+            builder = (
+                ad_manager.StatementBuilder()
+                .Where("customTargetingKeyId = :keyId")
+                .WithBindVariable("keyId", key_id)
+                .Limit(limit)
+                .Offset(offset)
+            )
+            page = service.getCustomTargetingValuesByStatement(builder.ToStatement())
+            results = list(getattr(page, "results", []) or [])
+            for value in results:
+                values.append(
+                    {
+                        "id": str(_object_field(value, "id")),
+                        "name": str(_object_field(value, "name") or ""),
+                        "display_name": _object_field(value, "displayName"),
+                        "match_type": _object_field(value, "matchType"),
+                        "status": _object_field(value, "status"),
+                    }
+                )
+            total_results = _total_result_set_size(page)
+            if offset + limit >= total_results or not results:
+                break
+            offset += limit
+
+        if value_names:
+            requested = {name.lower() for name in value_names}
+            values = [value for value in values if value["name"].lower() in requested]
+            found = {value["name"].lower() for value in values}
+            missing = sorted(requested - found)
+            if missing:
+                raise ValueError(f"GAM custom targeting values not found for key {key_id}: {', '.join(missing)}")
+
+        return values
+
+    @staticmethod
+    def _aggregate_signal_value_rows(
+        raw_rows: list[dict[str, Any]], values_by_id: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        aggregated: dict[str, dict[str, Any]] = {}
+        for raw in raw_rows:
+            normalized = GAMReportingService._normalize_report_row(raw)
+            value_id = str(normalized.get("CUSTOM_TARGETING_VALUE_ID") or "")
+            if not value_id:
+                continue
+            value = values_by_id.get(value_id, {"id": value_id, "name": ""})
+            bucket = aggregated.setdefault(
+                value_id,
+                {
+                    "value_id": value_id,
+                    "value": value.get("name") or "",
+                    "display_name": value.get("display_name"),
+                    "custom_criteria": normalized.get("CUSTOM_CRITERIA") or "",
+                    "impressions": 0,
+                    "revenue": 0.0,
+                },
+            )
+            bucket["impressions"] += _parse_report_int(normalized.get("AD_SERVER_IMPRESSIONS"))
+            bucket["revenue"] += _parse_report_float(normalized.get("AD_SERVER_CPM_AND_CPC_REVENUE")) / 1_000_000
+
+        results = []
+        for bucket in aggregated.values():
+            impressions = bucket["impressions"]
+            revenue = bucket["revenue"]
+            bucket["revenue"] = round(revenue, 2)
+            bucket["average_cpm"] = round(revenue / impressions * 1000, 2) if impressions > 0 else None
+            results.append(bucket)
+        results.sort(key=lambda row: row["impressions"], reverse=True)
+        return results
+
+    @staticmethod
+    def _chunks(values: list[str], size: int) -> list[list[str]]:
+        return [values[index : index + size] for index in range(0, len(values), size)]
+
+    def _price_guidance_line_item_rows(
+        self,
+        raw_rows: list[dict[str, Any]],
+        *,
+        line_item_types: list[str] | None,
+        min_line_item_impressions: int,
+        include_zero_revenue: bool,
+    ) -> list[dict[str, Any]]:
+        allowed_line_item_types = {value.upper() for value in line_item_types or []}
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            normalized = self._normalize_report_row(raw)
+            line_item_type = str(normalized.get("LINE_ITEM_TYPE") or "").strip()
+            if allowed_line_item_types and line_item_type.upper() not in allowed_line_item_types:
+                continue
+
+            impressions = _parse_report_int(normalized.get("AD_SERVER_IMPRESSIONS"))
+            if impressions < min_line_item_impressions:
+                continue
+
+            revenue_micros = _parse_report_float(normalized.get("AD_SERVER_CPM_AND_CPC_REVENUE"))
+            if revenue_micros <= 0 and not include_zero_revenue:
+                continue
+            clicks = _parse_report_int(normalized.get("AD_SERVER_CLICKS"))
+            completed_views = _parse_report_int(normalized.get("AD_SERVER_VIDEO_COMPLETIONS"))
+            viewable_impressions = _parse_report_int(normalized.get("AD_SERVER_ACTIVE_VIEW_VIEWABLE_IMPRESSIONS"))
+            measurable_impressions = _parse_report_int(normalized.get("AD_SERVER_ACTIVE_VIEW_MEASURABLE_IMPRESSIONS"))
+
+            placement_id = str(normalized.get("PLACEMENT_ID") or "").strip()
+            country = str(normalized.get("COUNTRY_NAME") or "").strip()
+            line_item_id = str(normalized.get("LINE_ITEM_ID") or "").strip()
+            if not placement_id or not country or not line_item_id:
+                continue
+
+            rows.append(
+                {
+                    "placement_id": placement_id,
+                    "placement_name": str(normalized.get("PLACEMENT_NAME") or ""),
+                    "country_code": str(normalized.get("COUNTRY_CODE") or "").strip().upper(),
+                    "country": country,
+                    "line_item_id": line_item_id,
+                    "line_item_name": str(normalized.get("LINE_ITEM_NAME") or ""),
+                    "line_item_type": line_item_type,
+                    "impressions": impressions,
+                    "viewable_impressions": viewable_impressions,
+                    "measurable_impressions": measurable_impressions,
+                    "clicks": clicks,
+                    "completed_views": completed_views,
+                    "revenue": round(revenue_micros / 1_000_000, 2),
+                    "cpm": round(_cpm_from_micros(revenue_micros, impressions), 4),
+                    "vcpm": round(_cpm_from_micros(revenue_micros, viewable_impressions), 4)
+                    if viewable_impressions > 0
+                    else None,
+                    "cpc": round(revenue_micros / 1_000_000 / clicks, 4) if clicks > 0 else None,
+                    "cpcv": round(revenue_micros / 1_000_000 / completed_views, 4) if completed_views > 0 else None,
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _normalize_report_row(row: dict[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in row.items():
+            if "." in key:
+                normalized[key.split(".")[-1]] = value
+            else:
+                normalized[key] = value
+        return normalized
+
+    @staticmethod
+    def _aggregate_price_guidance_groups(
+        line_item_rows: list[dict[str, Any]],
+        *,
+        min_group_impressions: int,
+        min_package_budget: float | None,
+        bookability_safety_factor: float,
+        currency: str,
+        publisher_domain: str | None,
+        viewability_standard: str,
+    ) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in line_item_rows:
+            key = (row["placement_id"], row["country_code"], row["country"])
+            group = grouped.setdefault(
+                key,
+                {
+                    "placement_id": row["placement_id"],
+                    "placement_name": row["placement_name"],
+                    "country_code": row["country_code"],
+                    "country": row["country"],
+                    "line_items": [],
+                },
+            )
+            group["line_items"].append(row)
+
+        results: list[dict[str, Any]] = []
+        for group in grouped.values():
+            line_items = group["line_items"]
+            total_impressions = sum(row["impressions"] for row in line_items)
+            if total_impressions < min_group_impressions:
+                continue
+
+            total_revenue = sum(row["revenue"] for row in line_items)
+            total_clicks = sum(row["clicks"] for row in line_items)
+            total_completed_views = sum(row["completed_views"] for row in line_items)
+            total_viewable_impressions = sum(row["viewable_impressions"] for row in line_items)
+            total_measurable_impressions = sum(row["measurable_impressions"] for row in line_items)
+            weighted_inputs = [(row["cpm"], row["impressions"]) for row in line_items]
+            unweighted_inputs = sorted(row["cpm"] for row in line_items)
+            price_guidance = _rounded_guidance(
+                {
+                    "p25": _weighted_percentile(weighted_inputs, 25),
+                    "p50": _weighted_percentile(weighted_inputs, 50),
+                    "p75": _weighted_percentile(weighted_inputs, 75),
+                    "p90": _weighted_percentile(weighted_inputs, 90),
+                }
+            )
+            unweighted_line_item_guidance = _rounded_guidance(
+                {
+                    "p25": percentile(unweighted_inputs, 25),
+                    "p50": percentile(unweighted_inputs, 50),
+                    "p75": percentile(unweighted_inputs, 75),
+                    "p90": percentile(unweighted_inputs, 90),
+                }
+            )
+            pricing_guidance_by_model = {
+                "cpm": price_guidance,
+                "vcpm": GAMReportingService._billable_metric_guidance(
+                    line_items,
+                    price_key="vcpm",
+                    weight_key="viewable_impressions",
+                    min_billable_units=min_group_impressions,
+                ),
+                "cpc": GAMReportingService._billable_metric_guidance(
+                    line_items,
+                    price_key="cpc",
+                    weight_key="clicks",
+                    min_billable_units=100,
+                ),
+                "cpcv": GAMReportingService._billable_metric_guidance(
+                    line_items,
+                    price_key="cpcv",
+                    weight_key="completed_views",
+                    min_billable_units=100,
+                ),
+            }
+            delivery_guidance = GAMReportingService._delivery_guidance(
+                label=f"{group['placement_name']} / {group['country']}",
+                impressions=total_impressions,
+                viewable_impressions=total_viewable_impressions,
+                measurable_impressions=total_measurable_impressions,
+                clicks=total_clicks,
+                completed_views=total_completed_views,
+            )
+            bookability = GAMReportingService._bookability(
+                available_units=total_impressions,
+                price_guidance=price_guidance,
+                min_package_budget=min_package_budget,
+                safety_factor=bookability_safety_factor,
+            )
+            forecast_point = GAMReportingService._forecast_point(
+                placement_id=group["placement_id"],
+                placement_name=group["placement_name"],
+                country_code=group["country_code"],
+                country=group["country"],
+                impressions=total_impressions,
+                viewable_impressions=total_viewable_impressions,
+                measurable_impressions=total_measurable_impressions,
+                clicks=total_clicks,
+                completed_views=total_completed_views,
+                spend=total_revenue,
+                publisher_domain=publisher_domain,
+                viewability_standard=viewability_standard,
+            )
+            results.append(
+                {
+                    "placement_id": group["placement_id"],
+                    "placement_name": group["placement_name"],
+                    "country_code": group["country_code"],
+                    "country": group["country"],
+                    "bookable": bookability["bookable"],
+                    "bookability": bookability,
+                    "total_impressions": total_impressions,
+                    "total_viewable_impressions": total_viewable_impressions,
+                    "total_measurable_impressions": total_measurable_impressions,
+                    "total_clicks": total_clicks,
+                    "total_completed_views": total_completed_views,
+                    "total_revenue": round(total_revenue, 2),
+                    "average_cpm": round((total_revenue / total_impressions * 1000), 2),
+                    "average_vcpm": round((total_revenue / total_viewable_impressions * 1000), 2)
+                    if total_viewable_impressions > 0
+                    else None,
+                    "average_cpc": round((total_revenue / total_clicks), 2) if total_clicks > 0 else None,
+                    "average_cpcv": round((total_revenue / total_completed_views), 2)
+                    if total_completed_views > 0
+                    else None,
+                    "ctr": round(total_clicks / total_impressions, 6) if total_impressions > 0 else None,
+                    "viewability_rate": round(total_viewable_impressions / total_measurable_impressions, 6)
+                    if total_measurable_impressions > 0
+                    else None,
+                    "completion_rate": round(total_completed_views / total_impressions, 6)
+                    if total_impressions > 0
+                    else None,
+                    "line_item_count": len(line_items),
+                    "price_guidance": price_guidance,
+                    "pricing_guidance_by_model": pricing_guidance_by_model,
+                    "forecast_point": forecast_point,
+                    "delivery_guidance": delivery_guidance,
+                    "unweighted_line_item_guidance": unweighted_line_item_guidance,
+                    "line_items": sorted(line_items, key=lambda row: row["impressions"], reverse=True)[:10],
+                }
+            )
+
+        results.sort(key=lambda row: row["total_impressions"], reverse=True)
+        return results
+
+    @staticmethod
+    def _forecast_from_groups(groups: list[dict[str, Any]], *, currency: str) -> dict[str, Any]:
+        return {
+            "method": "estimate",
+            "currency": currency,
+            "forecast_range_unit": "availability",
+            "points": [group["forecast_point"] for group in groups if group["bookable"]],
+        }
+
+    @staticmethod
+    def _bookability(
+        *,
+        available_units: int,
+        price_guidance: dict[str, float | None],
+        min_package_budget: float | None,
+        safety_factor: float,
+    ) -> dict[str, Any]:
+        p25 = price_guidance.get("p25")
+        if min_package_budget is None:
+            return {
+                "bookable": True,
+                "reason": "no_min_package_budget",
+                "minimum_package_budget": None,
+                "price_basis": "cpm_p25",
+                "required_units": None,
+                "available_units": available_units,
+                "safety_factor": safety_factor,
+            }
+        if p25 is None or p25 <= 0:
+            return {
+                "bookable": False,
+                "reason": "missing_conservative_price_guidance",
+                "minimum_package_budget": min_package_budget,
+                "price_basis": "cpm_p25",
+                "required_units": None,
+                "available_units": available_units,
+                "safety_factor": safety_factor,
+            }
+
+        required_units = math.ceil((min_package_budget / p25) * 1000 * safety_factor)
+        return {
+            "bookable": available_units >= required_units,
+            "reason": "capacity_meets_minimum_budget" if available_units >= required_units else "insufficient_capacity",
+            "minimum_package_budget": round(min_package_budget, 2),
+            "price_basis": "cpm_p25",
+            "price": p25,
+            "required_units": required_units,
+            "available_units": available_units,
+            "safety_factor": safety_factor,
+        }
+
+    @staticmethod
+    def _forecast_point(
+        *,
+        placement_id: str,
+        placement_name: str,
+        country_code: str,
+        country: str,
+        impressions: int,
+        viewable_impressions: int,
+        measurable_impressions: int,
+        clicks: int,
+        completed_views: int,
+        spend: float,
+        publisher_domain: str | None,
+        viewability_standard: str,
+    ) -> dict[str, Any]:
+        placement_ref: dict[str, str] = {"placement_id": placement_id}
+        if publisher_domain:
+            placement_ref["publisher_domain"] = publisher_domain
+
+        dimensions: list[dict[str, Any]] = [
+            {
+                "kind": "placement",
+                "placement_ref": placement_ref,
+                "placement_name": placement_name,
+            }
+        ]
+        if country_code:
+            dimensions.append(
+                {
+                    "kind": "geo",
+                    "geo_level": "country",
+                    "geo_code": country_code,
+                    "geo_name": country,
+                }
+            )
+
+        metrics: dict[str, dict[str, float]] = {
+            "impressions": {"mid": float(impressions)},
+            "spend": {"mid": round(float(spend), 2)},
+        }
+        if clicks > 0:
+            metrics["clicks"] = {"mid": float(clicks)}
+        if completed_views > 0:
+            metrics["completed_views"] = {"mid": float(completed_views)}
+
+        point: dict[str, Any] = {
+            "label": f"{placement_name} / {country}",
+            "dimensions": dimensions,
+            "metrics": metrics,
+        }
+        if measurable_impressions > 0 or viewable_impressions > 0:
+            viewability: dict[str, Any] = {
+                "vendor": {"domain": "googleadmanager.com"},
+                "standard": viewability_standard,
+            }
+            if measurable_impressions > 0:
+                viewability["measurable_impressions"] = {"mid": float(measurable_impressions)}
+            if viewable_impressions > 0:
+                viewability["viewable_impressions"] = {"mid": float(viewable_impressions)}
+            if measurable_impressions > 0 and viewable_impressions > 0:
+                viewability["viewable_rate"] = {"mid": round(viewable_impressions / measurable_impressions, 6)}
+            point["viewability"] = viewability
+
+        return point
+
+    @staticmethod
+    def _billable_metric_guidance(
+        line_items: list[dict[str, Any]],
+        *,
+        price_key: str,
+        weight_key: str,
+        min_billable_units: int,
+    ) -> dict[str, float | None]:
+        weighted_inputs = [
+            (row[price_key], row[weight_key])
+            for row in line_items
+            if row.get(price_key) is not None and int(row.get(weight_key) or 0) > 0
+        ]
+        if sum(weight for _, weight in weighted_inputs) < min_billable_units:
+            return {"p25": None, "p50": None, "p75": None, "p90": None}
+        return _rounded_guidance(
+            {
+                "p25": _weighted_percentile(weighted_inputs, 25),
+                "p50": _weighted_percentile(weighted_inputs, 50),
+                "p75": _weighted_percentile(weighted_inputs, 75),
+                "p90": _weighted_percentile(weighted_inputs, 90),
+            }
+        )
+
+    @staticmethod
+    def _delivery_guidance(
+        *,
+        label: str,
+        impressions: int,
+        viewable_impressions: int,
+        measurable_impressions: int,
+        clicks: int,
+        completed_views: int,
+    ) -> dict[str, Any]:
+        metrics: dict[str, dict[str, float]] = {
+            "impressions": {"mid": float(impressions)},
+        }
+        if viewable_impressions > 0:
+            metrics["viewable_impressions"] = {"mid": float(viewable_impressions)}
+        if clicks > 0:
+            metrics["clicks"] = {"mid": float(clicks)}
+        if completed_views > 0:
+            metrics["completed_views"] = {"mid": float(completed_views)}
+        if impressions > 0 and clicks > 0:
+            metrics["ctr"] = {"mid": round(clicks / impressions, 6)}
+        if measurable_impressions > 0 and viewable_impressions > 0:
+            metrics["viewability_rate"] = {"mid": round(viewable_impressions / measurable_impressions, 6)}
+        if impressions > 0 and completed_views > 0:
+            metrics["completion_rate"] = {"mid": round(completed_views / impressions, 6)}
+
+        return {
+            "method": "historical",
+            "points": [
+                {
+                    "label": label,
+                    "metrics": metrics,
+                }
+            ],
+        }
 
     def _parse_timestamp(self, row: dict[str, Any], granularity: str) -> str:
         """Parse timestamp from row based on granularity"""

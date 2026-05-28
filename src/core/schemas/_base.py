@@ -1,6 +1,6 @@
 import uuid
 import warnings
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
@@ -247,6 +247,8 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # protocol envelope status. Default it here so adapter constructors stay
     # focused on domain fields.
     status: Literal["completed"] = "completed"
+    confirmed_at: datetime | None = Field(default_factory=lambda: datetime.now(UTC))
+    revision: int = 1
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -259,6 +261,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         default=None,
         description="Envelope flag set true when the response is returned from an idempotency replay.",
     )
+
+    def __init__(self, **data: Any) -> None:
+        # adcp 6.3 beta.5 made these required on create success. Keep older
+        # adapter constructors compatible while emitting the new wire fields.
+        data.setdefault("confirmed_at", datetime.now(UTC))
+        data.setdefault("revision", 1)
+        super().__init__(**data)
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -422,6 +431,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # protocol envelope status. Default it here so adapter constructors stay
     # focused on domain fields.
     status: Literal["completed"] = "completed"
+    revision: int = 1
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
@@ -2427,6 +2437,8 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
+    confirmed_at: datetime | None = Field(default=None, description="When this media buy was confirmed")
+    revision: int = Field(default=1, description="Current media-buy revision")
     ext: dict | None = Field(
         default=None,
         description=(
@@ -2435,6 +2447,12 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
             "so buyers can distinguish them from native AdCP buys."
         ),
     )
+
+    @model_validator(mode="after")
+    def populate_protocol_metadata(self) -> "GetMediaBuysMediaBuy":
+        if self.confirmed_at is None:
+            object.__setattr__(self, "confirmed_at", self.created_at or datetime.now(UTC))
+        return self
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)

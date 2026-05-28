@@ -1238,6 +1238,8 @@
                 "principal.created",
                 "product.created",
                 "product.updated",
+                "signal.created",
+                "signal.updated",
                 "sync_run.completed",
                 "sync_run.failed",
                 "tenant.config_changed"
@@ -7022,6 +7024,15 @@
           },
           "inventory": {
             "$ref": "#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock"
+          },
+          "pricing_availability": {
+            "$ref": "#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock"
+          },
+          "reporting": {
+            "$ref": "#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock"
+          },
+          "signal_coverage": {
+            "$ref": "#/components/schemas/TenantStatusResponse.f44f287.StatusSyncRunBlock"
           }
         },
         "title": "StatusSyncsBlock",
@@ -12533,7 +12544,7 @@
     },
     "/api/v1/tenant-management/tenants/{tenant_id}/sync-history": {
       "get": {
-        "description": "Query params: ``sync_type`` (``inventory`` / ``custom_targeting`` / ``advertisers``), ``status``, ``limit`` (default 20, max 500), ``cursor``. Default sort: ``started_at desc``.\n\nCurrent sync state is in ``GET /tenants/{tid}/status`` \u2014 this endpoint is the timeline drill-down.",
+        "description": "Query params: ``sync_type`` (``inventory`` / ``custom_targeting`` / ``advertisers`` / ``reporting`` / ``signal_coverage`` / ``pricing_availability``), ``status``, ``limit`` (default 20, max 500), ``cursor``. Default sort: ``started_at desc``.\n\nCurrent sync state is in ``GET /tenants/{tid}/status`` \u2014 this endpoint is the timeline drill-down.",
         "operationId": "get__api_v1_tenant-management_tenants_{tenant_id}_sync-history",
         "parameters": [
           {

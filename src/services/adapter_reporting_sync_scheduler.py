@@ -28,6 +28,7 @@ from src.core.database.repositories.adapter_config import AdapterConfigAdminRepo
 from src.core.database.repositories.sync_job import SyncJobAdminRepository
 from src.services._scheduler_lifecycle import cancel_scheduler_task
 from src.services.adapter_sync_orchestration import KIND_REPORTING, execute_adapter_sync
+from src.services.catalog_sync_helpers import dispatch_limited
 from src.services.sync_scheduling_view import REPORTING_STALE_AFTER, _capability_flag
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 # right cadence: any longer and the freshness threshold (2h) bites; any
 # shorter and we're spamming upstream APIs that bill per-call.
 SLEEP_INTERVAL_SECONDS = int(os.getenv("ADAPTER_REPORTING_SYNC_INTERVAL") or "3600")
+MAX_CONCURRENT_TENANTS = int(os.getenv("ADAPTER_REPORTING_MAX_CONCURRENT_TENANTS") or "3")
 
 
 class AdapterReportingSyncScheduler:
@@ -99,8 +101,8 @@ class AdapterReportingSyncScheduler:
         if not eligible:
             return []
 
-        dispatched: list[str] = []
-        for tenant_id, adapter_type in eligible:
+        async def dispatch(item: tuple[str, str]) -> str | None:
+            tenant_id, adapter_type = item
             try:
                 result = await asyncio.to_thread(
                     execute_adapter_sync,
@@ -121,15 +123,14 @@ class AdapterReportingSyncScheduler:
                     tenant_id,
                     adapter_type,
                 )
-                continue
+                return None
 
             if result is None:
                 # Tenant had no AdapterConfig matching adapter_type by the
                 # time we tried to run — usually a race against an admin
                 # disabling the adapter. Skip silently.
-                continue
+                return None
 
-            dispatched.append(result.sync_id)
             if not result.succeeded:
                 # Surface scope_pending vs generic failure at INFO/WARNING
                 # so operators reading the log can tell which tenants
@@ -143,6 +144,9 @@ class AdapterReportingSyncScheduler:
                     result.scope_pending,
                     list(result.errors.keys()),
                 )
+            return result.sync_id
+
+        dispatched = await dispatch_limited(eligible, max_concurrent=MAX_CONCURRENT_TENANTS, dispatch=dispatch)
 
         logger.info(
             "Reporting sync cycle complete: dispatched=%d eligible=%d",

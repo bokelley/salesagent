@@ -150,6 +150,7 @@ class TestIdempotencyReplaySuccess:
             response_data={
                 "media_buy_id": "mb_1",
                 "affected_packages": [],
+                "revision": 1,
                 "media_buy_status": "canceled",
                 "status": "completed",
             },
