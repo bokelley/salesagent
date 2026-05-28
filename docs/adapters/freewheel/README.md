@@ -135,10 +135,18 @@ AdCP targeting overlays translate into FreeWheel's placement targeting:
 | `geo_metros` (Nielsen DMA) | `geo.metros` |
 | `device_type_any_of` | `deviceTypes` |
 | Product `custom_targeting` + package `custom.freewheel` | `customCriteria` |
+| Signal mappings via `audience_include` | `viewershipProfileIds`, `audienceItemIds`, `customCriteria` |
 
 `geo_postal_areas` is rejected — FreeWheel doesn't expose postal-area
 targeting via the Publisher API. Use Nielsen DMA (`geo_metros`) or
 `geo_regions` instead.
+
+Saved targeting profiles are product defaults: every buy on that product
+inherits the configured `targetingProfileId`. Custom signals are buyer-selected
+overlays: a buyer references mapped `TenantSignal.signal_id` values in
+`targeting_overlay.audience_include`, and the adapter expands them into FW
+viewership profiles, audience items, or custom criteria. FreeWheel does not
+support signal exclusion; `audience_exclude` is rejected.
 
 ## Live coverage matrix
 
