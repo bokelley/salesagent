@@ -126,8 +126,10 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
                 operator=operator,
             )
     elif brand_domain in ("unknown.com",):
-        # Not found — don't create anything
-        pass
+        # Not found with no routing fallback — leave the tenant unactivated so
+        # the production resolver raises TENANT_NOT_ACTIVATED instead of
+        # auto-creating through the default advertiser seeded by the harness.
+        tenant.default_gam_advertiser_id = None
     elif brand_domain == "other-agent.com":
         # Access denied: account exists but belongs to a different agent
         from tests.factories.principal import PrincipalFactory

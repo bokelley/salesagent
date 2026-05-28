@@ -15,6 +15,7 @@ from src.admin.services.sync_webhook_emission import (
     _build_payload,
     _classify_error,
     _dedup_snapshots,
+    _dispatch_one,
     _iso,
     _normalize_trigger,
     _public_error_message,
@@ -221,6 +222,7 @@ class TestBuildPayload:
             "sync_run_id": "sync_001",
             "sync_type": "inventory",
             "adapter_type": "google_ad_manager",
+            "status": "completed",
             "trigger": "scheduled",
             "started_at": "2026-05-17T18:23:11+00:00",
             "completed_at": "2026-05-17T18:24:33+00:00",
@@ -259,7 +261,7 @@ class TestBuildPayload:
         payload = _build_payload(snap, "sync_run.failed")
         # The data block must always carry the run identity + timing so the
         # receiver can correlate to its own UI state without an extra read.
-        for key in ("sync_run_id", "sync_type", "adapter_type", "trigger", "started_at", "completed_at"):
+        for key in ("sync_run_id", "sync_type", "adapter_type", "status", "trigger", "started_at", "completed_at"):
             assert key in payload, f"missing required key {key} in failure payload"
 
     def test_completed_with_no_item_count_emits_none(self):
@@ -303,6 +305,37 @@ class TestBuildPayload:
         assert "traceback" not in payload["error"]
         # The traceback-classified TimeoutError surfaces as transient.
         assert payload["error"]["category"] == "transient"
+
+
+class TestDispatchOne:
+    def test_emits_captured_health_payload_without_recomputing(self, monkeypatch):
+        from tests.helpers.sync_webhook_emission import make_snapshot
+
+        calls = []
+
+        def fake_emit_event(tenant_id, event_type, payload):
+            calls.append((tenant_id, event_type, payload))
+
+        monkeypatch.setattr("src.admin.services.webhook_publisher.emit_event", fake_emit_event)
+        health_payload = {
+            "sync_type": "inventory",
+            "adapter_type": "google_ad_manager",
+            "health": "critical",
+            "previous_health": "warning",
+        }
+        snap = make_snapshot(
+            _status="failed",
+            tenant_id="tnt_health",
+            sync_run_id="sync_health_failed",
+            _health_change_payload=health_payload,
+        )
+
+        _dispatch_one(snap)
+
+        assert calls[0][0] == "tnt_health"
+        assert calls[0][1] == "sync_run.failed"
+        assert calls[0][2]["sync_run_id"] == "sync_health_failed"
+        assert calls[1] == ("tnt_health", "sync_health.changed", health_payload)
 
 
 class TestIsoRendering:

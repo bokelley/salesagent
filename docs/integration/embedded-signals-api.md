@@ -65,6 +65,95 @@ FreeWheel supports manual mappings for:
 - `freewheel_audience_item`
 - `freewheel_custom_kv`
 
+### FreeWheel Targeting Profiles And Custom Signals
+
+FreeWheel has two related but different targeting mechanisms:
+
+- Product-level saved targeting profiles are default execution targeting. Set
+  `implementation_config.freewheel.targeting_profile_id` on the wholesale
+  product when every buy for that product should carry the same saved
+  FreeWheel targeting profile. The adapter translates it to
+  `targetingProfileId`.
+- Buyer-selectable custom signals are optional targeting overlays. Author them
+  through the signal mapping endpoints and buyers reference their `signal_id`
+  in `targeting_overlay.audience_include`. The adapter expands those selected
+  signals into `viewershipProfileIds`, `audienceItemIds`, or `customCriteria`
+  and ANDs them with the product's saved targeting profile.
+
+Do not use a signal mapping to hide product-default targeting. If the targeting
+must always apply, keep it on the product. Use a signal only when the buyer or
+storefront should choose whether to add that audience/custom criterion to a
+buy.
+
+Viewership profile signal:
+
+```json
+{
+  "signal_id": "fw_adults_25_34",
+  "name": "Adults 25-34",
+  "description": "FreeWheel viewership profile selectable by buyers.",
+  "value_type": "binary",
+  "targeting_dimension": "audience",
+  "data_provider": "publisher_1p",
+  "adapter_config": {
+    "type": "passthrough",
+    "kind": "freewheel_viewership_profile",
+    "profile_id": "4711"
+  }
+}
+```
+
+Custom key/value signal:
+
+```json
+{
+  "signal_id": "fw_sports_context",
+  "name": "Sports Context",
+  "description": "FreeWheel custom criterion selectable by buyers.",
+  "value_type": "binary",
+  "targeting_dimension": "content",
+  "data_provider": "publisher_1p",
+  "adapter_config": {
+    "type": "passthrough",
+    "kind": "freewheel_custom_kv",
+    "key": "genre",
+    "value_id": "sports"
+  }
+}
+```
+
+Composed signal:
+
+```json
+{
+  "signal_id": "fw_sports_adults",
+  "name": "Sports Adults",
+  "description": "Combines one viewership profile and one custom criterion.",
+  "value_type": "binary",
+  "targeting_dimension": "audience",
+  "data_provider": "publisher_1p",
+  "adapter_config": {
+    "type": "composed",
+    "criteria": [
+      {
+        "kind": "freewheel_viewership_profile",
+        "profile_id": "4711"
+      },
+      {
+        "kind": "freewheel_custom_kv",
+        "key": "genre",
+        "value_id": "sports"
+      }
+    ]
+  }
+}
+```
+
+FreeWheel signal mappings are include-only in buyer targeting. The API accepts
+`mode` for shape consistency, but FreeWheel has no native exclusion semantic
+for viewership profiles, audience items, or custom criteria; references in
+`audience_exclude` are rejected during media-buy targeting validation.
+
 Broadstreet and Mock currently return no signal mapping kinds.
 
 ## Example

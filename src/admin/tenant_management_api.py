@@ -25,6 +25,10 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import attributes
 
+from src.admin.api_schemas.publisher_properties import (
+    coerce_stored_publisher_property_selectors,
+    dump_publisher_property_selectors,
+)
 from src.admin.api_schemas.tenant_management import (
     BROADSTREET_CAMPAIGN_NAME_MACROS,
     GAM_LINE_ITEM_NAME_MACROS,
@@ -34,6 +38,7 @@ from src.admin.api_schemas.tenant_management import (
     AccountSummary,
     AdapterCapabilitiesResponse,
     AdapterCapabilitiesSummary,
+    AdapterCapabilityCheck,
     AdapterCatalogEntry,
     AdapterConfigResponse,
     AdapterSettingsSchemaResponse,
@@ -54,6 +59,8 @@ from src.admin.api_schemas.tenant_management import (
     CreativeFormatSummary,
     DeleteSignalMappingResponse,
     DeleteWholesaleProductResponse,
+    EnsureGamAdvertiserRequest,
+    EnsureGamAdvertiserResponse,
     FormatIdRef,
     FreeWheelAdapterConfig,
     FreeWheelSettings,
@@ -137,9 +144,18 @@ from src.admin.api_schemas.tenant_management import (
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import (
     ProbeResult,
+    _classify_gam_message,
+    _vendor_fault,
     preview_adapter,
     probe_adapter_connection,
 )
+from src.admin.services.catalog_webhook_events import (
+    publish_product_catalog_change,
+    publish_product_record_catalog_change,
+    publish_product_record_update_catalog_change,
+    publish_signal_catalog_change,
+)
+from src.admin.services.publisher_property_authorization import validate_publisher_property_selectors
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
@@ -173,15 +189,12 @@ from src.core.database.repositories.springserve_inventory import SpringServeInve
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.core.domain_config import get_tenant_url
+from src.core.helpers.account_provisioning import gam_ensure_advertiser_companyservice
 from src.core.security.url_validator import check_url_ssrf
 from src.services.aao_lookup_service import get_publisher_partner_status
 from src.services.agent_url_resolver import resolve_agent_url
 from src.services.property_discovery_service import get_property_discovery_service
-from src.services.protocol_change_webhooks import (
-    notify_account_status_changed,
-    notify_product_catalog_changed,
-    notify_signal_catalog_changed,
-)
+from src.services.protocol_change_webhooks import notify_account_status_changed
 from src.services.recent_buyers_service import compute_recent_buyers
 from src.services.targeting_values import (
     build_gam_inventory_discovery,
@@ -611,6 +624,51 @@ def _build_adapter_config_response(adapter: AdapterConfig | None) -> AdapterConf
             refresh_token="<redacted>" if adapter.gam_refresh_token else None,
         )
     return AdapterConfigResponse(type=adapter.adapter_type, configured=True)
+
+
+def _adapter_probe_config(adapter: AdapterConfig) -> dict[str, Any]:
+    """Build the adapter probe/config dict expected by adapter services."""
+    if adapter.adapter_type == "google_ad_manager":
+        return AdapterConfigRepository.get_gam_config(adapter)
+    if adapter.adapter_type == "mock":
+        return {"dry_run": bool(adapter.mock_dry_run)}
+    model = _connection_config_model(adapter.adapter_type)
+    if model is not None:
+        validated = model(**dict(adapter.config_json or {}))
+        return {field: getattr(validated, field) for field in model.model_fields}
+    return dict(adapter.config_json or {})
+
+
+def _adapter_capability_checks(adapter_type: str, probe: ProbeResult) -> list[AdapterCapabilityCheck]:
+    """Return explicit capability check results for ``test-connection``.
+
+    Successful authentication is not proof that a write capability exists.
+    For GAM advertiser creation, the proof is a successful
+    ``POST /gam/advertisers:ensure`` call that actually creates an advertiser.
+    """
+    checks: list[AdapterCapabilityCheck] = [
+        AdapterCapabilityCheck(
+            capability="connect",
+            status="passed" if probe.success else "failed",
+            message=probe.error_message,
+            error_code=probe.error_code,
+            remediation=probe.remediation,
+            details=probe.details or None,
+        )
+    ]
+    if adapter_type == "google_ad_manager":
+        checks.append(
+            AdapterCapabilityCheck(
+                capability="create_gam_advertiser",
+                status="not_checked",
+                message=(
+                    "test-connection is non-mutating. Use POST "
+                    "/tenants/{tenant_id}/gam/advertisers:ensure with a missing advertiser "
+                    "to prove create permission."
+                ),
+            )
+        )
+    return checks
 
 
 def _surface_urls(tenant_id: str, tenant_subdomain: str, request_base_url: str | None = None) -> tuple[str, str, str]:
@@ -1124,7 +1182,7 @@ def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -
 
 
 def _publisher_property_dicts(publisher_properties: list[PublisherPropertySelector]) -> list[dict[str, Any]]:
-    return [prop.model_dump(exclude_none=True, mode="json") for prop in publisher_properties]
+    return dump_publisher_property_selectors(publisher_properties)
 
 
 def _pricing_option_rows(
@@ -1258,7 +1316,7 @@ def _wholesale_response_from_product(product: Product, adapter_type: str | None 
         pricing_options=[_pricing_option_schema(option) for option in product.pricing_options or []],
         forecast=product.forecast,
         inventory=WholesaleInventory(
-            publisher_properties=[PublisherPropertySelector(**prop) for prop in publisher_properties],
+            publisher_properties=coerce_stored_publisher_property_selectors(publisher_properties),
             creative_formats=[_creative_format_schema(format_id, product) for format_id in format_ids],
             execution=_execution_from_product(product, resolved_adapter),
         ),
@@ -1331,53 +1389,15 @@ def _publisher_property_validation_issues(
     tenant_id: str,
     req: WholesaleProductRequest,
 ) -> list[WholesaleValidationIssue]:
-    authorized = TenantConfigRepository(session, tenant_id).list_authorized_properties()
-    properties_by_domain: dict[str, list[Any]] = {}
-    for prop in authorized:
-        properties_by_domain.setdefault(prop.publisher_domain.lower(), []).append(prop)
-
-    issues: list[WholesaleValidationIssue] = []
-    for idx, selector in enumerate(req.inventory.publisher_properties):
-        field_prefix = f"inventory.publisher_properties.{idx}"
-        domain = selector.publisher_domain.lower()
-        domain_properties = properties_by_domain.get(domain, [])
-        if not domain_properties:
-            issues.append(
-                WholesaleValidationIssue(
-                    code="publisher_domain_not_authorized",
-                    field=f"{field_prefix}.publisher_domain",
-                    message=(
-                        f"Publisher domain {selector.publisher_domain!r} has no authorized properties for this tenant."
-                    ),
-                )
-            )
-            continue
-
-        if selector.selection_type == "by_id":
-            authorized_ids = {prop.property_id for prop in domain_properties}
-            missing_ids = sorted(set(selector.property_ids or []) - authorized_ids)
-            if missing_ids:
-                issues.append(
-                    WholesaleValidationIssue(
-                        code="publisher_property_not_authorized",
-                        field=f"{field_prefix}.property_ids",
-                        message=f"Publisher property id(s) are not authorized for {selector.publisher_domain}: "
-                        f"{', '.join(missing_ids)}.",
-                    )
-                )
-        elif selector.selection_type == "by_tag":
-            authorized_tags = {tag for prop in domain_properties for tag in (prop.tags or [])}
-            missing_tags = sorted(set(selector.property_tags or []) - authorized_tags)
-            if missing_tags:
-                issues.append(
-                    WholesaleValidationIssue(
-                        code="publisher_property_tag_not_authorized",
-                        field=f"{field_prefix}.property_tags",
-                        message=f"Publisher property tag(s) are not authorized for {selector.publisher_domain}: "
-                        f"{', '.join(missing_tags)}.",
-                    )
-                )
-    return issues
+    return [
+        WholesaleValidationIssue(**issue)
+        for issue in validate_publisher_property_selectors(
+            session=session,
+            tenant_id=tenant_id,
+            selectors=req.inventory.publisher_properties,
+            field_prefix="inventory.publisher_properties",
+        )
+    ]
 
 
 def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None:
@@ -1524,7 +1544,7 @@ def _refresh_signal_etag(signal: TenantSignal) -> None:
 
 
 def _notify_signal_mapping_changed(tenant_id: str, action: str, signal_id: str, signal_name: str) -> None:
-    notify_signal_catalog_changed(
+    publish_signal_catalog_change(
         tenant_id=tenant_id,
         action=action,
         signal_id=signal_id,
@@ -2964,16 +2984,7 @@ def create_wholesale_product(tenant_id: str):
         product_repo.create(product)
         session.commit()
 
-        from src.admin.services.webhook_publisher import emit_event
-
-        emit_event(tenant_id, "product.created", {"product_id": product.product_id, "name": product.name})
-        notify_product_catalog_changed(
-            tenant_id=tenant_id,
-            action="created",
-            product_id=product.product_id,
-            data={"name": product.name},
-            principal_ids=product.allowed_principal_ids or None,
-        )
+        publish_product_record_catalog_change(tenant_id=tenant_id, action="created", product=product)
         response = _wholesale_response_from_product(product, adapter_type)
         return jsonify(response.model_dump(mode="json")), 201
 
@@ -3033,19 +3044,16 @@ def put_wholesale_product(tenant_id: str, product_id: str):
             product.inventory_profile, product_id
         ):
             return _inventory_profile_conflict(product_id)
+        previous_allowed_principal_ids = list(product.allowed_principal_ids) if product.allowed_principal_ids else None
         _update_product_from_wholesale_request(product, req, adapter_type)
         product_repo.replace_pricing_options(product, _pricing_option_rows(tenant_id, product_id, req.pricing_options))
         session.commit()
 
-        from src.admin.services.webhook_publisher import emit_event
-
-        emit_event(tenant_id, "product.updated", {"product_id": product.product_id, "name": product.name})
-        notify_product_catalog_changed(
+        publish_product_record_update_catalog_change(
             tenant_id=tenant_id,
-            action="updated",
-            product_id=product.product_id,
-            data={"name": product.name},
-            principal_ids=product.allowed_principal_ids or None,
+            product=product,
+            previous_allowed_principal_ids=previous_allowed_principal_ids,
+            pricing_changed=True,
         )
         return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
 
@@ -3076,7 +3084,8 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
             if profile is not None:
                 InventoryProfileRepository(session, tenant_id).delete(profile)
         session.commit()
-        notify_product_catalog_changed(
+
+        publish_product_catalog_change(
             tenant_id=tenant_id,
             action="deleted",
             product_id=product_id,
@@ -4321,7 +4330,7 @@ def patch_tenant(tenant_id: str):
     with get_db_session() as session:
         session.info["management_api_caller"] = True
 
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
         if not tenant:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
@@ -4430,11 +4439,11 @@ def reactivate_tenant(tenant_id: str):
 def get_adapter_config(tenant_id: str):
     """Return the tenant's adapter config with secrets redacted."""
     with get_db_session() as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
         if not tenant:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-        adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+        adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
         return jsonify(_build_adapter_config_response(adapter).model_dump(mode="json"))
 
 
@@ -4492,11 +4501,11 @@ def put_adapter_config(tenant_id: str):
 def adapter_test_connection(tenant_id: str):
     """Probe the saved adapter config without modifying state."""
     with get_db_session() as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
         if not tenant:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-        adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+        adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
         if adapter is None:
             return jsonify(
                 TestConnectionResponse(
@@ -4504,17 +4513,7 @@ def adapter_test_connection(tenant_id: str):
                 ).model_dump(mode="json")
             )
 
-        config: dict = {}
-        if adapter.adapter_type == "google_ad_manager":
-            config = {
-                "network_code": adapter.gam_network_code,
-                "service_account_json": adapter.gam_service_account_json,
-                "refresh_token": adapter.gam_refresh_token,
-            }
-        elif adapter.adapter_type == "mock":
-            config = {"dry_run": bool(adapter.mock_dry_run)}
-
-        probe = probe_adapter_connection(adapter.adapter_type, config)
+        probe = probe_adapter_connection(adapter.adapter_type, _adapter_probe_config(adapter))
         invalidate_status_cache(tenant_id)
         return jsonify(
             TestConnectionResponse(
@@ -4523,6 +4522,7 @@ def adapter_test_connection(tenant_id: str):
                 error_code=probe.error_code,
                 remediation=probe.remediation,
                 details=probe.details or None,
+                capability_checks=_adapter_capability_checks(adapter.adapter_type, probe),
                 tested_at=datetime.now(UTC),
             ).model_dump(mode="json")
         )
@@ -5593,6 +5593,43 @@ def _encode_advertisers_cursor(offset: int) -> str:
     return base64.urlsafe_b64encode(json.dumps({"offset": int(offset)}).encode()).decode()
 
 
+def _gam_advertiser_schema(row: GamAdvertiser) -> GamAdvertiserSchema:
+    """Project a cached GAM advertiser row onto the wire schema."""
+    return GamAdvertiserSchema(
+        id=row.advertiser_id,
+        name=row.name,
+        currency_code=row.currency_code,
+        status=row.status,
+    )
+
+
+def _gam_create_error_response(exc: Exception):
+    """Map GAM advertiser creation failures to tenant-management API errors."""
+    message = str(exc)
+    code, remediation, gam_extra = _classify_gam_message(message)
+    safe_message = (
+        f"{gam_extra.get('service')}.{gam_extra.get('reason')}"
+        if gam_extra.get("service") and gam_extra.get("reason")
+        else type(exc).__name__
+    )
+    details = _vendor_fault(
+        "gam",
+        "create_advertiser",
+        "CompanyService.createCompanies",
+        message=safe_message,
+        extra=gam_extra or None,
+    )
+    if remediation:
+        details["remediation"] = remediation
+
+    return _api_error(
+        f"adapter_{code}",
+        "GAM advertiser ensure failed.",
+        403 if code == "permission_denied" else 400,
+        details=details,
+    )
+
+
 @tenant_management_api.route("/tenants/<tenant_id>/gam/advertisers", methods=["GET"])
 @require_tenant_management_api_key
 @spec.validate(resp=Response(HTTP_200=ListGamAdvertisersResponse, HTTP_404=ApiError))
@@ -5651,21 +5688,128 @@ def list_gam_advertisers(tenant_id: str):
             select(func.max(GamAdvertiser.synced_at)).where(GamAdvertiser.tenant_id == tenant_id)
         )
 
-    advertisers = [
-        GamAdvertiserSchema(
-            id=row.advertiser_id,
-            name=row.name,
-            currency_code=row.currency_code,
-            status=row.status,
-        )
-        for row in rows
-    ]
+    advertisers = [_gam_advertiser_schema(row) for row in rows]
     response = ListGamAdvertisersResponse(
         advertisers=advertisers,
         next_cursor=_encode_advertisers_cursor(offset + limit) if has_more else None,
         synced_at=synced_at,
     )
     return jsonify(response.model_dump(mode="json"))
+
+
+@tenant_management_api.route("/tenants/<tenant_id>/gam/advertisers:ensure", methods=["POST"])
+@require_tenant_management_api_key
+@spec.validate(
+    json=EnsureGamAdvertiserRequest,
+    resp=Response(
+        HTTP_200=EnsureGamAdvertiserResponse,
+        HTTP_201=EnsureGamAdvertiserResponse,
+        HTTP_400=ApiError,
+        HTTP_403=ApiError,
+        HTTP_404=ApiError,
+    ),
+)
+def ensure_gam_advertiser(tenant_id: str):
+    """Idempotently ensure a GAM advertiser exists.
+
+    This is the explicit write path Storefront can call when the buyer-routing
+    picker cannot find the desired ``Interchange-*`` advertiser. A 201 response
+    with ``created=true`` is also the permission proof that the configured GAM
+    credential can create advertiser companies. A 200 response with
+    ``created=false`` means an existing advertiser was found or attached; it
+    does not prove create permission.
+    """
+    req: EnsureGamAdvertiserRequest = _validated_json_payload()
+    name = req.name.strip()
+    if not name:
+        return _api_error("invalid_advertiser_name", "name must not be blank", 400)
+
+    with get_db_session() as session:
+        session.info["management_api_caller"] = True
+
+        tenant = TenantConfigRepository(session, tenant_id).get_tenant()
+        if not tenant:
+            return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
+
+        adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+        if adapter is None or adapter.adapter_type != "google_ad_manager":
+            return _api_error(
+                "adapter_not_configured",
+                "Tenant must have a Google Ad Manager adapter configured before ensuring GAM advertisers.",
+                400,
+            )
+        if not adapter.gam_network_code:
+            return _api_error("adapter_invalid_config", "GAM network_code is required", 400)
+
+        gam_repo = GAMSyncRepository(session, tenant_id)
+        cached = gam_repo.find_advertiser_by_name(name)
+        if cached is not None and cached.status == "active":
+            response = EnsureGamAdvertiserResponse(
+                advertiser=_gam_advertiser_schema(cached),
+                created=False,
+                dry_run=False,
+            )
+            return jsonify(response.model_dump(mode="json"))
+
+        try:
+            result = gam_ensure_advertiser_companyservice(
+                network_code=str(adapter.gam_network_code),
+                config=_adapter_probe_config(adapter),
+                name=name,
+                dry_run=req.dry_run,
+            )
+        except Exception as exc:
+            logger.warning(
+                "GAM advertiser ensure failed for tenant_id=%s name=%r error_type=%s",
+                tenant_id,
+                name,
+                type(exc).__name__,
+            )
+            return _gam_create_error_response(exc)
+
+        if result.dry_run:
+            response = EnsureGamAdvertiserResponse(
+                advertiser=GamAdvertiserSchema(
+                    id=result.advertiser_id,
+                    name=result.name,
+                    currency_code=None,
+                    status="active",
+                ),
+                created=False,
+                dry_run=True,
+            )
+            return jsonify(response.model_dump(mode="json"))
+
+        row = gam_repo.upsert_advertiser(
+            advertiser_id=result.advertiser_id,
+            name=name,
+            status="active",
+            synced_at=datetime.now(UTC),
+        )
+        try:
+            session.commit()
+        except EmbeddedTenantWriteError as exc:
+            session.rollback()
+            return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        except IntegrityError:
+            session.rollback()
+            existing = GAMSyncRepository(session, tenant_id).get_advertiser(result.advertiser_id)
+            if existing is None:
+                raise
+            response = EnsureGamAdvertiserResponse(
+                advertiser=_gam_advertiser_schema(existing),
+                created=result.created,
+                dry_run=result.dry_run,
+            )
+            return jsonify(response.model_dump(mode="json")), 201 if result.created else 200
+        session.refresh(row)
+
+    response = EnsureGamAdvertiserResponse(
+        advertiser=_gam_advertiser_schema(row),
+        created=result.created,
+        dry_run=result.dry_run,
+    )
+    return jsonify(response.model_dump(mode="json")), 201 if result.created else 200
 
 
 # ---------------------------------------------------------------------------

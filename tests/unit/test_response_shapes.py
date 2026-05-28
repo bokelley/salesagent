@@ -211,6 +211,24 @@ class TestCreateMediaBuyResponseShape:
 
         assert "workflow_step_id" not in data
 
+    def test_revision_and_confirmed_at_serialize_when_confirmed(self):
+        """Confirmed create responses include concurrency and audit fields."""
+        from datetime import UTC, datetime
+
+        from src.core.schemas import CreateMediaBuySuccess
+
+        confirmed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        resp = CreateMediaBuySuccess(
+            media_buy_id="buy_confirmed",
+            packages=[],
+            revision=3,
+            confirmed_at=confirmed_at,
+        )
+        data = resp.model_dump(mode="json")
+
+        assert data["revision"] == 3
+        assert data["confirmed_at"] == "2026-01-01T12:00:00Z"
+
 
 # ===========================================================================
 # 3. SyncCreativesResponse
@@ -637,10 +655,18 @@ class TestUpdateMediaBuyResponseShape:
         # to disambiguate "deferred for approval" from "applied with no
         # package effect". The two payloads were otherwise byte-identical.
         assert data["workflow_step_id"] == "wf_456"
-
         pkg = data["affected_packages"][0]
         assert "changes_applied" not in pkg, "Internal 'changes_applied' field should be excluded"
         assert "buyer_package_ref" not in pkg, "Internal 'buyer_package_ref' field should be excluded"
+
+    def test_revision_serializes_on_success_response(self):
+        """Update responses expose the post-update revision."""
+        from src.core.schemas import UpdateMediaBuySuccess
+
+        resp = UpdateMediaBuySuccess(media_buy_id="buy_103", revision=4)
+        data = resp.model_dump(mode="json")
+
+        assert data["revision"] == 4
 
 
 # ===========================================================================

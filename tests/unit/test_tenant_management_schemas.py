@@ -12,14 +12,18 @@ import pytest
 from pydantic import ValidationError
 
 from src.admin.api_schemas.tenant_management import (
+    AdapterCapabilityCheck,
     AdapterConfigResponse,
     AdapterStatusResponse,
     ApiError,
     BroadstreetAdapterConfig,
     BuyerAdvertiserMapping,
     CreateBuyerAdvertiserMappingRequest,
+    EnsureGamAdvertiserRequest,
+    EnsureGamAdvertiserResponse,
     FreeWheelAdapterConfig,
     GAMAdapterConfig,
+    GamAdvertiser,
     InitialPrincipalRequest,
     ListBuyerAdvertiserMappingsResponse,
     ListTenantsResponse,
@@ -386,6 +390,22 @@ def test_connection_test_response_failure_includes_error():
     assert resp.success is False and resp.error == "timeout"
 
 
+def test_connection_test_response_carries_capability_checks():
+    resp = ConnectionTestResponse(
+        success=True,
+        tested_at=datetime.now(),
+        capability_checks=[
+            AdapterCapabilityCheck(
+                capability="create_gam_advertiser",
+                status="not_checked",
+                message="requires write probe",
+            )
+        ],
+    )
+    assert resp.capability_checks[0].capability == "create_gam_advertiser"
+    assert resp.capability_checks[0].status == "not_checked"
+
+
 def test_api_error_minimum():
     err = ApiError(error="x", message="y")
     assert err.details is None
@@ -539,6 +559,26 @@ def test_update_mapping_request_all_optional():
 def test_update_mapping_request_rejects_blank_gam_advertiser_id():
     with pytest.raises(ValidationError):
         UpdateBuyerAdvertiserMappingRequest.model_validate({"gam_advertiser_id": ""})
+
+
+def test_ensure_gam_advertiser_request_minimum_fields():
+    req = EnsureGamAdvertiserRequest(name="Interchange-default")
+    assert req.name == "Interchange-default"
+    assert req.dry_run is False
+
+
+def test_ensure_gam_advertiser_request_rejects_blank_name():
+    with pytest.raises(ValidationError):
+        EnsureGamAdvertiserRequest(name="")
+
+
+def test_ensure_gam_advertiser_response_carries_created_flag():
+    resp = EnsureGamAdvertiserResponse(
+        advertiser=GamAdvertiser(id="12345", name="Interchange-default", status="active"),
+        created=True,
+    )
+    assert resp.advertiser.name == "Interchange-default"
+    assert resp.created is True
 
 
 # ---------------------------------------------------------------------------

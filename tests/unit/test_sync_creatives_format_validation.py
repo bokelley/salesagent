@@ -9,8 +9,11 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
+from src.core.creative_agent_registry import CreativeAgentRegistry
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import CreativeAsset
 from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._validation import _validate_creative_input
 from tests.harness import make_mock_uow
 
 
@@ -251,6 +254,70 @@ class TestSyncCreativesFormatValidation:
             create_kwargs = mock_creative_repo.create.call_args.kwargs
             assert create_kwargs["format"] == "display_image"
             assert create_kwargs["format_parameters"] == {"width": 300, "height": 250}
+
+    def test_format_validation_accepts_reference_agent_without_network(self):
+        """A product-advertised reference-agent format validates from the local catalog."""
+        creative = CreativeAsset(
+            creative_id="creative_reference_agent",
+            name="Product Format Creative",
+            format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+            assets={
+                "main": {
+                    "asset_type": "image",
+                    "url": "https://example.com/ad.png",
+                    "width": 300,
+                    "height": 250,
+                    "format": "png",
+                }
+            },
+            variants=[],
+        )
+        registry = CreativeAgentRegistry()
+
+        with patch.object(registry, "get_formats_for_agent") as mock_network:
+            validated = _validate_creative_input(
+                creative,
+                registry,
+                "principal_123",
+                registered_agent_urls={"https://creative.adcontextprotocol.org"},
+            )
+
+        assert validated.format_id.id == "display_image"
+        assert validated.format_id.width == 300
+        assert validated.format_id.height == 250
+        mock_network.assert_not_called()
+
+    def test_format_validation_rejects_unregistered_http_agent_without_network(self):
+        """An invalid HTTP agent URL fails before any remote format lookup."""
+        creative = CreativeAsset(
+            creative_id="creative_bad_agent",
+            name="Bad Agent Creative",
+            format_id={"agent_url": "https://adcontextprotocol.org/agents/formats", "id": "display_300x250"},
+            assets={
+                "main": {
+                    "asset_type": "image",
+                    "url": "https://example.com/ad.png",
+                    "width": 300,
+                    "height": 250,
+                    "format": "png",
+                }
+            },
+            variants=[],
+        )
+        registry = CreativeAgentRegistry()
+
+        with (
+            patch.object(registry, "get_formats_for_agent") as mock_network,
+            pytest.raises(ValueError, match="not registered"),
+        ):
+            _validate_creative_input(
+                creative,
+                registry,
+                "principal_123",
+                registered_agent_urls={"https://creative.adcontextprotocol.org"},
+            )
+
+        mock_network.assert_not_called()
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""

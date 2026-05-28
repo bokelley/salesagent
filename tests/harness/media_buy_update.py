@@ -83,6 +83,9 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         self._uow_instance = MagicMock()
         self._uow_instance.session = mock_session
         self._uow_instance.media_buys = MagicMock()
+        self._uow_instance.media_buys.get_by_id_for_update.side_effect = (
+            lambda media_buy_id: self._uow_instance.media_buys.get_by_id(media_buy_id)
+        )
         self._uow_instance.currency_limits = MagicMock()
         self._uow_instance.__enter__ = MagicMock(return_value=self._uow_instance)
         self._uow_instance.__exit__ = MagicMock(return_value=False)

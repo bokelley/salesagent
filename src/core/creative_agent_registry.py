@@ -61,12 +61,26 @@ def _resolve_fetch_timeout() -> float:
     return value
 
 
+def _manifest_has_direct_url(creative_manifest: dict[str, Any]) -> bool:
+    """Return true when a manifest already points at creative content."""
+    for key in ("url", "media_url", "content_uri"):
+        if creative_manifest.get(key):
+            return True
+
+    assets = creative_manifest.get("assets")
+    if not isinstance(assets, dict):
+        return False
+
+    return any(isinstance(asset, dict) and bool(asset.get("url")) for asset in assets.values())
+
+
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from yarl import URL
 
+from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import Format, FormatId, url
 
@@ -140,9 +154,14 @@ def _get_mock_formats() -> list[Format]:
     These formats match what the real creative agent returns, but without
     making external HTTP calls. Used in CI to avoid timeouts.
     """
-    from src.core.standard_formats import STANDARD_FORMATS
+    from src.core.standard_formats import get_standard_formats
 
-    return list(STANDARD_FORMATS.values())
+    return get_standard_formats()
+
+
+def _default_agent_url() -> str:
+    """Resolve the default creative agent URL, treating blank env values as unset."""
+    return os.environ.get("CREATIVE_AGENT_URL") or DEFAULT_CREATIVE_AGENT_URL
 
 
 @dataclass
@@ -195,7 +214,7 @@ class CreativeAgentRegistry:
     # The MCP server endpoint (/mcp) is appended by the MCP client when connecting
     # Reads CREATIVE_AGENT_URL env var so CI can point at a containerized agent.
     DEFAULT_AGENT = CreativeAgent(
-        agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
+        agent_url=_default_agent_url(),
         name="AdCP Standard Creative Agent",
         enabled=True,
         priority=1,
@@ -762,10 +781,21 @@ class CreativeAgentRegistry:
         Filtered requests skip stale fallback — the cache holds the full unfiltered result,
         and serving it for a filtered query could return the wrong subset.
         """
+        from src.core.standard_formats import get_standard_formats, is_standard_agent
+
+        if is_standard_agent(agent.agent_url) and not force_refresh and not has_filters:
+            return CachedFetchResult(formats=get_standard_formats())
+
         cache_key = self._cache_key(agent.agent_url)
         cached = self._format_cache.get(cache_key)
         if cached and not cached.is_expired() and not force_refresh and not has_filters:
             return CachedFetchResult(formats=cached.formats)
+
+        if not has_filters:
+            from src.core.standard_formats import get_standard_formats, is_standard_agent
+
+            if is_standard_agent(agent.agent_url):
+                return CachedFetchResult(formats=get_standard_formats())
 
         try:
             formats = await self._fetch_formats_from_agent(
@@ -891,6 +921,11 @@ class CreativeAgentRegistry:
                 }]
             }
         """
+        from src.core.standard_formats import is_standard_agent
+
+        if is_standard_agent(agent_url) and _manifest_has_direct_url(creative_manifest):
+            return {}
+
         # preview_creative is an AdCP creative-protocol tool; we use a thin custom MCP
         # client here because the request shape is creative-agent-specific.
         async with create_mcp_client(agent_url=agent_url, timeout=30) as client:

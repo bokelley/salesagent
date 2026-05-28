@@ -10,6 +10,8 @@ Core invariant: every query includes ``tenant_id`` in the WHERE clause.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -45,6 +47,43 @@ class GAMSyncRepository:
         return self._session.scalars(
             select(GamAdvertiser).filter_by(tenant_id=self._tenant_id, advertiser_id=advertiser_id)
         ).first()
+
+    def find_advertiser_by_name(self, name: str) -> GamAdvertiser | None:
+        """Return the first cached advertiser with an exact name match."""
+        return self._session.scalars(
+            select(GamAdvertiser)
+            .filter_by(tenant_id=self._tenant_id, name=name)
+            .order_by(GamAdvertiser.advertiser_id.asc())
+        ).first()
+
+    def upsert_advertiser(
+        self,
+        *,
+        advertiser_id: str,
+        name: str,
+        currency_code: str | None = None,
+        status: str = "active",
+        synced_at: datetime | None = None,
+    ) -> GamAdvertiser:
+        """Create or update a cached advertiser row."""
+        row = self.get_advertiser(advertiser_id)
+        if row is None:
+            row = GamAdvertiser(
+                tenant_id=self._tenant_id,
+                advertiser_id=advertiser_id,
+                name=name,
+                currency_code=currency_code,
+                status=status,
+                synced_at=synced_at,
+            )
+            self._session.add(row)
+            return row
+        row.name = name
+        row.currency_code = currency_code
+        row.status = status
+        if synced_at is not None:
+            row.synced_at = synced_at
+        return row
 
     def list_advertiser_ids_assigned_to(self, principal_id: str) -> list[str]:
         """Advertiser ids whose ``principal_id`` matches the given agent."""

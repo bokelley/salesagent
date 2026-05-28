@@ -110,6 +110,52 @@ class TestRunNowEnqueuesAsync:
             triggered_by_id="test@example.com",
         )
 
+    def test_successful_enqueue_reflects_running_job_status(self, authenticated_admin_session, factory_session):
+        t = TenantFactory(tenant_id="t_run_status", name="Run Status Co")
+        AdapterConfigFactory(tenant=t, adapter_type="google_ad_manager")
+
+        with (
+            patch(
+                "src.admin.blueprints.scheduling.enqueue_adapter_sync",
+                return_value="sync_running",
+            ),
+            patch(
+                "src.admin.blueprints.scheduling._sync_status",
+                return_value="running",
+            ),
+        ):
+            resp = authenticated_admin_session.post(
+                "/admin/api/scheduling/run",
+                json={
+                    "tenant_id": "t_run_status",
+                    "adapter_type": "google_ad_manager",
+                    "sync_kind": "inventory",
+                },
+            )
+
+        assert resp.status_code == 202
+        assert resp.get_json()["status"] == "running"
+
+    def test_already_running_inventory_sync_returns_409(self, authenticated_admin_session, factory_session):
+        t = TenantFactory(tenant_id="t_conflict", name="Conflict Co")
+        AdapterConfigFactory(tenant=t, adapter_type="google_ad_manager")
+
+        with patch(
+            "src.admin.blueprints.scheduling.enqueue_adapter_sync",
+            side_effect=ValueError("Sync already running for tenant t_conflict: sync_old"),
+        ):
+            resp = authenticated_admin_session.post(
+                "/admin/api/scheduling/run",
+                json={
+                    "tenant_id": "t_conflict",
+                    "adapter_type": "google_ad_manager",
+                    "sync_kind": "inventory",
+                },
+            )
+
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "sync_already_running"
+
     def test_capability_off_returns_400(self, authenticated_admin_session, factory_session):
         t = TenantFactory(tenant_id="t_cap", name="Cap Co")
         AdapterConfigFactory(tenant=t, adapter_type="freewheel")

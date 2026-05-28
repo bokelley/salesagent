@@ -247,8 +247,6 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # protocol envelope status. Default it here so adapter constructors stay
     # focused on domain fields.
     status: Literal["completed"] = "completed"
-    confirmed_at: datetime | None = Field(default_factory=lambda: datetime.now(UTC))
-    revision: int = 1
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -256,6 +254,15 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     idempotency_key: str | None = Field(
         default=None,
         description="Client-supplied idempotency key echoed for retry correlation.",
+    )
+    revision: int = Field(
+        default=1,
+        ge=1,
+        description="Monotonic media-buy revision for optimistic concurrency.",
+    )
+    confirmed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="Timestamp when the seller committed to the media buy.",
     )
     replayed: bool | None = Field(
         default=None,
@@ -431,7 +438,6 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # protocol envelope status. Default it here so adapter constructors stay
     # focused on domain fields.
     status: Literal["completed"] = "completed"
-    revision: int = 1
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
@@ -446,6 +452,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # extra field is permitted. None values are dropped by exclude_none on
     # the wire boundary, so immediate-apply responses don't leak the field.
     workflow_step_id: str | None = None
+    revision: int = Field(
+        default=1,
+        ge=1,
+        description="Monotonic media-buy revision after this update.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -2437,8 +2448,15 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
-    confirmed_at: datetime | None = Field(default=None, description="When this media buy was confirmed")
-    revision: int = Field(default=1, description="Current media-buy revision")
+    revision: int = Field(
+        default=1,
+        ge=1,
+        description="Monotonic media-buy revision for optimistic concurrency.",
+    )
+    confirmed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="Timestamp when the seller committed to the media buy.",
+    )
     ext: dict | None = Field(
         default=None,
         description=(

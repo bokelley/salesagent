@@ -45,9 +45,37 @@ logger = logging.getLogger(__name__)
 
 # Supported sync_kind values; the SyncJob.sync_type column is generic
 # but we pin the set to make orchestration explicit.
-SyncKind = str  # "inventory" | "reporting"
+SyncKind = str
 KIND_INVENTORY: SyncKind = "inventory"
 KIND_REPORTING: SyncKind = "reporting"
+KIND_PRICE_GUIDANCE: SyncKind = "price_guidance"
+KIND_AVAILABILITY_GUIDANCE: SyncKind = "availability_guidance"
+KIND_SIGNAL_COVERAGE: SyncKind = "signal_coverage"
+SUPPORTED_SYNC_KINDS: frozenset[SyncKind] = frozenset(
+    {
+        KIND_INVENTORY,
+        KIND_REPORTING,
+        KIND_PRICE_GUIDANCE,
+        KIND_AVAILABILITY_GUIDANCE,
+        KIND_SIGNAL_COVERAGE,
+    }
+)
+
+_SYNC_CAPABILITY_ATTRS: dict[SyncKind, str] = {
+    KIND_INVENTORY: "supports_inventory_sync",
+    KIND_REPORTING: "supports_reporting_sync",
+    KIND_PRICE_GUIDANCE: "supports_price_guidance_sync",
+    KIND_AVAILABILITY_GUIDANCE: "supports_availability_guidance_sync",
+    KIND_SIGNAL_COVERAGE: "supports_signal_coverage_sync",
+}
+
+_SYNC_METHODS: dict[SyncKind, str] = {
+    KIND_INVENTORY: "run_inventory_sync",
+    KIND_REPORTING: "run_reporting_sync",
+    KIND_PRICE_GUIDANCE: "run_price_guidance_sync",
+    KIND_AVAILABILITY_GUIDANCE: "run_availability_guidance_sync",
+    KIND_SIGNAL_COVERAGE: "run_signal_coverage_sync",
+}
 
 # Max length for ``SyncJob.error_message``. The column is TEXT so the DB
 # doesn't truncate, but the field renders cross-tenant on the super-admin
@@ -114,6 +142,17 @@ class AdapterDoesNotSupportSyncKind(RuntimeError):
             "Either enable the capability + override the method, or stop calling "
             f"execute_sync(sync_kind={sync_kind!r}) for this adapter."
         )
+
+
+def _validate_sync_kind(sync_kind: SyncKind) -> None:
+    if sync_kind not in SUPPORTED_SYNC_KINDS:
+        raise ValueError(f"sync_kind must be one of {sorted(SUPPORTED_SYNC_KINDS)}; got {sync_kind!r}")
+
+
+def adapter_supports_sync_kind(caps: Any, sync_kind: SyncKind) -> bool:
+    """Return whether an AdapterCapabilities-like object supports a kind."""
+    _validate_sync_kind(sync_kind)
+    return bool(getattr(caps, _SYNC_CAPABILITY_ATTRS[sync_kind], False))
 
 
 def execute_adapter_sync(
@@ -222,8 +261,7 @@ def enqueue_adapter_sync(
     from src.adapters import get_adapter_class
     from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-    if sync_kind not in (KIND_INVENTORY, KIND_REPORTING):
-        raise ValueError(f"sync_kind must be 'inventory' or 'reporting'; got {sync_kind!r}")
+    _validate_sync_kind(sync_kind)
 
     with get_db_session() as session:
         cfg = AdapterConfigRepository(session, tenant_id).find_by_tenant()
@@ -234,9 +272,22 @@ def enqueue_adapter_sync(
     caps = getattr(adapter_class, "capabilities", None)
     if caps is None:
         raise AdapterDoesNotSupportSyncKind(adapter_type=adapter_type, sync_kind=sync_kind)
-    flag = caps.supports_inventory_sync if sync_kind == KIND_INVENTORY else caps.supports_reporting_sync
-    if not flag:
+    if not adapter_supports_sync_kind(caps, sync_kind):
         raise AdapterDoesNotSupportSyncKind(adapter_type=adapter_type, sync_kind=sync_kind)
+
+    if sync_kind == KIND_INVENTORY and adapter_type == "google_ad_manager":
+        from src.services.background_sync_service import start_inventory_sync_background
+
+        kwargs = run_kwargs or {}
+        return start_inventory_sync_background(
+            tenant_id=tenant_id,
+            sync_mode=kwargs.get("sync_mode", "incremental"),
+            sync_types=kwargs.get("sync_types"),
+            custom_targeting_limit=kwargs.get("custom_targeting_limit"),
+            audience_segment_limit=kwargs.get("audience_segment_limit"),
+            triggered_by=triggered_by,
+            triggered_by_id=triggered_by_id,
+        )
 
     sync_id = f"sync_{uuid.uuid4().hex[:16]}"
     with get_db_session() as session:
@@ -338,15 +389,9 @@ def execute_sync(
             NotImplementedError from inside the orchestration.
     """
     adapter_type = getattr(adapter.__class__, "adapter_name", adapter.__class__.__name__)
-    if sync_kind not in (KIND_INVENTORY, KIND_REPORTING):
-        raise ValueError(f"sync_kind must be 'inventory' or 'reporting'; got {sync_kind!r}")
+    _validate_sync_kind(sync_kind)
 
-    capability_flag = (
-        adapter.capabilities.supports_inventory_sync
-        if sync_kind == KIND_INVENTORY
-        else adapter.capabilities.supports_reporting_sync
-    )
-    if not capability_flag:
+    if not adapter_supports_sync_kind(adapter.capabilities, sync_kind):
         raise AdapterDoesNotSupportSyncKind(adapter_type=adapter_type, sync_kind=sync_kind)
 
     if session is not None:
@@ -428,10 +473,7 @@ def _execute_sync_with_session(
 
     kwargs = run_kwargs or {}
     try:
-        if sync_kind == KIND_INVENTORY:
-            result = adapter.run_inventory_sync(**kwargs)
-        else:
-            result = adapter.run_reporting_sync(**kwargs)
+        result = getattr(adapter, _SYNC_METHODS[sync_kind])(**kwargs)
     except Exception as exc:
         logger.exception("Adapter %s %s sync raised unexpectedly for tenant=%s", adapter_type, sync_kind, tenant_id)
         job.status = "failed"

@@ -428,8 +428,14 @@ def _build_proposal_managers() -> dict[str, SalesAgentProposalManager]:
 def build_router() -> LazyPlatformRouter:
     from adcp.types.generated_poc.bundled.protocol.get_adcp_capabilities_response import Features
 
-    from core.platforms._delegate import SUPPORTED_ADCP_VERSIONS, SUPPORTED_MAJOR_VERSIONS
+    from core.platforms._delegate import (
+        SUPPORTED_ADCP_VERSIONS,
+        SUPPORTED_MAJOR_VERSIONS,
+        install_adcp_wire_version_compat,
+    )
     from src.core.tools.capabilities import IDEMPOTENCY_REPLAY_TTL_SECONDS
+
+    install_adcp_wire_version_compat()
 
     capabilities = DecisioningCapabilities(
         specialisms=["sales-non-guaranteed", "signal-owned"],
@@ -567,7 +573,10 @@ def _resolve_public_url(request: Any) -> str:
 
 async def _start_schedulers() -> None:
     """Boot background schedulers when the ASGI server comes up."""
-    from src.services.adapter_reporting_sync_scheduler import start_adapter_reporting_sync_scheduler
+    from src.services.adapter_sync_scheduler import (
+        start_adapter_inventory_guidance_sync_scheduler,
+        start_adapter_reporting_sync_scheduler,
+    )
     from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
     from src.services.gam_pricing_availability_scheduler import start_gam_pricing_availability_scheduler
     from src.services.gam_signal_coverage_scheduler import start_gam_signal_coverage_scheduler
@@ -576,13 +585,17 @@ async def _start_schedulers() -> None:
     await start_delivery_webhook_scheduler()
     await start_media_buy_status_scheduler()
     await start_adapter_reporting_sync_scheduler()
+    await start_adapter_inventory_guidance_sync_scheduler()
     await start_gam_pricing_availability_scheduler()
     await start_gam_signal_coverage_scheduler()
 
 
 async def _stop_schedulers() -> None:
     """Stop background schedulers on shutdown."""
-    from src.services.adapter_reporting_sync_scheduler import stop_adapter_reporting_sync_scheduler
+    from src.services.adapter_sync_scheduler import (
+        stop_adapter_inventory_guidance_sync_scheduler,
+        stop_adapter_reporting_sync_scheduler,
+    )
     from src.services.delivery_webhook_scheduler import stop_delivery_webhook_scheduler
     from src.services.gam_pricing_availability_scheduler import stop_gam_pricing_availability_scheduler
     from src.services.gam_signal_coverage_scheduler import stop_gam_signal_coverage_scheduler
@@ -590,6 +603,7 @@ async def _stop_schedulers() -> None:
 
     await stop_gam_signal_coverage_scheduler()
     await stop_gam_pricing_availability_scheduler()
+    await stop_adapter_inventory_guidance_sync_scheduler()
     await stop_adapter_reporting_sync_scheduler()
     await stop_media_buy_status_scheduler()
     await stop_delivery_webhook_scheduler()

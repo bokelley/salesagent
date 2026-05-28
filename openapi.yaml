@@ -854,10 +854,16 @@ components:
             - principal.created
             - product.created
             - product.updated
+            - product.priced
+            - product.removed
             - signal.created
             - signal.updated
+            - signal.priced
+            - signal.removed
+            - wholesale_feed.bulk_change
             - sync_run.completed
             - sync_run.failed
+            - sync_health.changed
             - tenant.config_changed
             type: string
           title: Event Types
@@ -914,6 +920,78 @@ components:
       - success
       - message
       title: DeleteWholesaleProductResponse
+      type: object
+    EnsureGamAdvertiserRequest.f44f287:
+      additionalProperties: false
+      description: '``POST /tenants/{tid}/gam/advertisers:ensure`` body.'
+      properties:
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+        name:
+          maxLength: 255
+          minLength: 1
+          title: Name
+          type: string
+      required:
+      - name
+      title: EnsureGamAdvertiserRequest
+      type: object
+    EnsureGamAdvertiserResponse.f44f287:
+      additionalProperties: false
+      description: 'Idempotent advertiser ensure response.
+
+
+        ``created`` is true only when the endpoint actually created a GAM company.
+
+        If the advertiser already existed in cache or GAM, ``created`` is false.'
+      properties:
+        advertiser:
+          $ref: '#/components/schemas/EnsureGamAdvertiserResponse.f44f287.GamAdvertiser'
+        created:
+          title: Created
+          type: boolean
+        dry_run:
+          default: false
+          title: Dry Run
+          type: boolean
+      required:
+      - advertiser
+      - created
+      title: EnsureGamAdvertiserResponse
+      type: object
+    EnsureGamAdvertiserResponse.f44f287.GamAdvertiser:
+      additionalProperties: false
+      description: 'One row from the synced ``gam_advertisers`` cache, on the wire.
+
+
+        Source of truth is GAM''s ``CompanyService.getCompaniesByStatement
+
+        WHERE type = ''ADVERTISER''``; this projection is what the Buyer
+
+        Routing UI''s picker renders.'
+      properties:
+        currency_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Currency Code
+        id:
+          title: Id
+          type: string
+        name:
+          title: Name
+          type: string
+        status:
+          title: Status
+          type: string
+      required:
+      - id
+      - name
+      - status
+      title: GamAdvertiser
       type: object
     FreeWheelSettings.f44f287:
       additionalProperties: false
@@ -2379,13 +2457,15 @@ components:
           title: Publisher Domain
           type: string
         selection_type:
-          default: all
-          enum:
-          - all
-          - by_id
-          - by_tag
+          anyOf:
+          - enum:
+            - all
+            - by_id
+            - by_tag
+            type: string
+          - type: 'null'
+          default: null
           title: Selection Type
-          type: string
       required:
       - publisher_domain
       title: PublisherPropertySelector
@@ -4828,6 +4908,44 @@ components:
           type: integer
       title: StatusProductsBlock
       type: object
+    TenantStatusResponse.f44f287.StatusSyncIssue:
+      additionalProperties: false
+      description: Storefront-safe issue summary for a sync stream.
+      properties:
+        action:
+          enum:
+          - reconnect_adapter
+          - retry_sync
+          - wait
+          - contact_support
+          title: Action
+          type: string
+        category:
+          enum:
+          - auth
+          - transient
+          - permanent
+          - stale
+          - unknown
+          title: Category
+          type: string
+        code:
+          title: Code
+          type: string
+        message:
+          title: Message
+          type: string
+        retryable:
+          title: Retryable
+          type: boolean
+      required:
+      - code
+      - category
+      - message
+      - retryable
+      - action
+      title: StatusSyncIssue
+      type: object
     TenantStatusResponse.f44f287.StatusSyncRunBlock:
       additionalProperties: false
       description: One sync-run summary inside :class:`StatusSyncsBlock`.
@@ -4838,6 +4956,11 @@ components:
           - type: 'null'
           default: null
           title: Error
+        issue:
+          anyOf:
+          - $ref: '#/components/schemas/TenantStatusResponse.f44f287.StatusSyncIssue'
+          - type: 'null'
+          default: null
         item_count:
           anyOf:
           - type: integer
@@ -4851,6 +4974,21 @@ components:
           - type: 'null'
           default: null
           title: Last Run At
+        last_success_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          default: null
+          title: Last Success At
+        severity:
+          default: warning
+          enum:
+          - ok
+          - warning
+          - critical
+          title: Severity
+          type: string
         status:
           default: never_run
           enum:
@@ -4930,6 +5068,11 @@ components:
         \ useful for ``permission_denied`` (vendor enables a role vs customer\nrebinds\
         \ the account) where the error code alone isn't actionable."
       properties:
+        capability_checks:
+          items:
+            $ref: '#/components/schemas/TestConnectionResponse.f44f287.AdapterCapabilityCheck'
+          title: Capability Checks
+          type: array
         details:
           anyOf:
           - additionalProperties: true
@@ -4977,6 +5120,71 @@ components:
       - success
       - tested_at
       title: TestConnectionResponse
+      type: object
+    TestConnectionResponse.f44f287.AdapterCapabilityCheck:
+      additionalProperties: false
+      description: 'One capability check result returned by adapter probes.
+
+
+        ``test-connection`` stays non-mutating, so write capabilities that require
+
+        a live mutation should be reported as ``not_checked`` rather than inferred
+
+        from successful authentication.'
+      properties:
+        capability:
+          maxLength: 128
+          minLength: 1
+          title: Capability
+          type: string
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Details
+        error_code:
+          anyOf:
+          - enum:
+            - network_not_found
+            - permission_denied
+            - invalid_credentials
+            - invalid_config
+            - upstream_unavailable
+            - connection_failed
+            type: string
+          - type: 'null'
+          default: null
+          title: Error Code
+        message:
+          anyOf:
+          - maxLength: 500
+            type: string
+          - type: 'null'
+          default: null
+          title: Message
+        remediation:
+          anyOf:
+          - enum:
+            - vendor_enables_role
+            - customer_rebinds_account
+            - customer_rotates_token
+            type: string
+          - type: 'null'
+          default: null
+          title: Remediation
+        status:
+          enum:
+          - passed
+          - failed
+          - not_checked
+          title: Status
+          type: string
+      required:
+      - capability
+      - status
+      title: AdapterCapabilityCheck
       type: object
     UpdateBuyerAdvertiserMappingRequest.f44f287:
       additionalProperties: false
@@ -5577,13 +5785,15 @@ components:
           title: Publisher Domain
           type: string
         selection_type:
-          default: all
-          enum:
-          - all
-          - by_id
-          - by_tag
+          anyOf:
+          - enum:
+            - all
+            - by_id
+            - by_tag
+            type: string
+          - type: 'null'
+          default: null
           title: Selection Type
-          type: string
       required:
       - publisher_domain
       title: PublisherPropertySelector
@@ -5976,13 +6186,15 @@ components:
           title: Publisher Domain
           type: string
         selection_type:
-          default: all
-          enum:
-          - all
-          - by_id
-          - by_tag
+          anyOf:
+          - enum:
+            - all
+            - by_id
+            - by_tag
+            type: string
+          - type: 'null'
+          default: null
           title: Selection Type
-          type: string
       required:
       - publisher_domain
       title: PublisherPropertySelector
@@ -7820,6 +8032,67 @@ paths:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
       summary: Searchable, paginated read over the synced ``gam_advertisers`` cache.
+      tags: []
+  /api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:ensure:
+    post:
+      description: This is the explicit write path Storefront can call when the buyer-routing
+        picker cannot find the desired ``Interchange-*`` advertiser. A 201 response
+        with ``created=true`` is also the permission proof that the configured GAM
+        credential can create advertiser companies. A 200 response with ``created=false``
+        means an existing advertiser was found or attached; it does not prove create
+        permission.
+      operationId: post__api_v1_tenant-management_tenants_{tenant_id}_gam_advertisers:ensure
+      parameters:
+      - description: ''
+        in: path
+        name: tenant_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnsureGamAdvertiserRequest.f44f287'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureGamAdvertiserResponse.f44f287'
+          description: OK
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureGamAdvertiserResponse.f44f287'
+          description: Created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Bad Request
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError.f44f287'
+          description: Not Found
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError.6a07bef'
+          description: Unprocessable Content
+      summary: Idempotently ensure a GAM advertiser exists.
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/inventory/adapter-capabilities:
     get:

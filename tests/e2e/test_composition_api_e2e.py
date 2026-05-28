@@ -6,15 +6,17 @@ admin REST authoring -> persisted catalog/signal rows -> buyer MCP product disco
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 
 import psycopg2
 import pytest
 import requests
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from psycopg2.extras import Json
 
 from tests.e2e.adcp_request_builder import parse_tool_result
 
@@ -67,6 +69,14 @@ def _temporary_management_api_key(live_server: dict[str, object], api_key: str) 
                     )
 
 
+def _active_management_api_key(live_server: dict[str, object]) -> tuple[str, AbstractContextManager[None]]:
+    env_key = os.environ.get("TENANT_MANAGEMENT_API_KEY")
+    if env_key:
+        return env_key, nullcontext()
+    api_key = f"composition-e2e-{uuid.uuid4().hex}"
+    return api_key, _temporary_management_api_key(live_server, api_key)
+
+
 def _cleanup_composition_rows(
     live_server: dict[str, object], tenant_id: str, product_id: str, signal_id: str, profile_id: str
 ) -> None:
@@ -84,6 +94,47 @@ def _cleanup_composition_rows(
             cursor.execute(
                 "DELETE FROM inventory_profiles WHERE tenant_id = %s AND profile_id = %s",
                 (tenant_id, profile_id),
+            )
+            cursor.execute(
+                "DELETE FROM authorized_properties WHERE tenant_id = %s AND property_id = %s",
+                (tenant_id, _authorized_property_id(profile_id)),
+            )
+
+
+def _authorized_property_id(profile_id: str) -> str:
+    return f"{profile_id}_property"
+
+
+def _ensure_authorized_publisher_property(live_server: dict[str, object], tenant_id: str, profile_id: str) -> None:
+    params = _db_params(live_server)
+    with psycopg2.connect(**params) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO authorized_properties (
+                    property_id,
+                    tenant_id,
+                    property_type,
+                    name,
+                    identifiers,
+                    tags,
+                    publisher_domain,
+                    verification_status
+                )
+                VALUES (%s, %s, 'website', %s, %s, %s, 'publisher.example.com', 'verified')
+                ON CONFLICT (property_id, tenant_id) DO UPDATE
+                SET identifiers = EXCLUDED.identifiers,
+                    tags = EXCLUDED.tags,
+                    publisher_domain = EXCLUDED.publisher_domain,
+                    verification_status = EXCLUDED.verification_status
+                """,
+                (
+                    _authorized_property_id(profile_id),
+                    tenant_id,
+                    "E2E Publisher Property",
+                    Json([{"type": "domain", "value": "publisher.example.com"}]),
+                    Json(["sports"]),
+                ),
             )
 
 
@@ -197,12 +248,13 @@ async def test_admin_authored_inventory_signal_and_product_reach_buyer_discovery
     profile_id = f"e2e_homepage_sports_{suffix}"
     signal_id = f"e2e_sports_fans_{suffix}"
     product_id = f"e2e_wholesale_sports_display_{suffix}"
-    api_key = f"composition-e2e-{uuid.uuid4().hex}"
 
     tenant_id = _resolve_ci_tenant_id(live_server)
+    api_key, api_key_context = _active_management_api_key(live_server)
 
     try:
-        with _temporary_management_api_key(live_server, api_key):
+        _ensure_authorized_publisher_property(live_server, tenant_id, profile_id)
+        with api_key_context:
             profile = _post_json(
                 live_server,
                 tenant_id,

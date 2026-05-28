@@ -21,11 +21,13 @@ from adcp.decisioning import AdcpError
 from pydantic import BaseModel, field_validator
 
 from core.platforms._delegate import (
+    SUPPORTED_ADCP_VERSIONS,
     _check_major_version,
     _maybe_raise_legacy_errors,
     _resolve_requested_version,
     _to_wire,
     _translate_validation_error,
+    install_adcp_wire_version_compat,
 )
 from src.core.schemas import CreateMediaBuySuccess, MediaBuyStatus, UpdateMediaBuySuccess
 from src.core.schemas._base import CreateMediaBuyResult
@@ -103,11 +105,25 @@ class TestRequestedVersionResolution:
         version = explicit_adcp_version()
         assert _resolve_requested_version({"adcp_version": version}) == version
 
+    def test_current_js_sdk_beta_is_accepted_as_wire_compatible(self) -> None:
+        assert _resolve_requested_version({"adcp_version": "3.1-beta.5"}) == "3.1-beta.5"
+
     def test_unsupported_version_raises_wire_error(self) -> None:
         with pytest.raises(AdcpError) as exc:
             _resolve_requested_version({"adcp_version": "4.0"})
         assert exc.value.code == "VERSION_UNSUPPORTED"
         assert exc.value.field == "adcp_version"
+        assert exc.value.details == {
+            "adcp_version": "4.0",
+            "supported_versions": list(SUPPORTED_ADCP_VERSIONS),
+        }
+
+    def test_sdk_strict_detector_accepts_current_js_beta(self) -> None:
+        install_adcp_wire_version_compat()
+
+        from adcp.validation.envelope import detect_wire_version
+
+        assert detect_wire_version({"adcp_version": "3.1-beta.5"}) == "3.1-beta.5"
 
 
 class TestRequestedVersionWireAdaptation:
@@ -154,6 +170,48 @@ class TestRequestedVersionWireAdaptation:
 
         assert wire["status"] == "canceled"
         assert "media_buy_status" not in wire
+
+    def test_list_creative_formats_3_0_omits_supported_macros(self) -> None:
+        response = {
+            "formats": [
+                {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "display_image",
+                        "width": 300,
+                        "height": 250,
+                    },
+                    "name": "Display 300x250",
+                    "type": "display",
+                    "supported_macros": ["MEDIA_BUY_ID", "CACHEBUSTER"],
+                }
+            ]
+        }
+
+        wire = _to_wire(response, requested_adcp_version="3.0", tool_name="list_creative_formats")
+
+        assert "supported_macros" not in wire["formats"][0]
+
+    def test_list_creative_formats_3_1_preserves_supported_macros(self) -> None:
+        response = {
+            "formats": [
+                {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "display_image",
+                        "width": 300,
+                        "height": 250,
+                    },
+                    "name": "Display 300x250",
+                    "type": "display",
+                    "supported_macros": ["MEDIA_BUY_ID", "CACHEBUSTER"],
+                }
+            ]
+        }
+
+        wire = _to_wire(response, requested_adcp_version=explicit_adcp_version(), tool_name="list_creative_formats")
+
+        assert wire["formats"][0]["supported_macros"] == ["MEDIA_BUY_ID", "CACHEBUSTER"]
 
 
 class TestMaybeRaiseLegacyErrors:

@@ -12,7 +12,7 @@
     </header>
 
     <p class="sa-text-muted" style="margin-bottom: var(--sa-space-4);">
-        Cross-tenant view of inventory + reporting sync freshness. Each row pairs a tenant's configured adapter
+        Cross-tenant view of inventory, reporting, and guidance sync freshness. Each row pairs a tenant's configured adapter
         with the sync kinds the adapter declares it can run. Freshness windows come from each adapter's
         <code>AdapterCapabilities</code> declaration:
         <span class="sa-text-success"><strong>OK</strong></span> = within the warning window;
@@ -133,10 +133,10 @@
     {% endif %}
 </div>
 
-<script>
-(function () {
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const apiBase = scriptRoot + '/admin/api/scheduling';
+    <script>
+    (function () {
+        const scriptRoot = '{{ request.script_root }}' || '';
+        const apiBase = scriptRoot ? scriptRoot + '/api/scheduling' : '/admin/api/scheduling';
 
     function flash(msg, kind) {
         // sa-toast is registered globally via base.html.
@@ -205,6 +205,32 @@
         return '<span class="sa-text-danger">⚠ critical</span>';
     }
 
+    function statusBadge(row) {
+        if (row.never_run) return '<span class="sa-text-faint">Never run</span>';
+        if (row.last_status === 'completed') return '<span class="status status-active">✓ completed</span>';
+        if (row.last_status === 'failed') {
+            let html = '<span class="status status-inactive">✗ failed</span>';
+            if (row.last_error_message) {
+                const message = String(row.last_error_message);
+                const shortMessage = message.length > 80 ? message.slice(0, 80) + '…' : message;
+                html += '<br><small class="sa-text-danger" title="' + escapeHtml(message) + '">' + escapeHtml(shortMessage) + '</small>';
+            }
+            return html;
+        }
+        if (row.last_status === 'running') return '<span class="status">⏳ running</span>';
+        if (row.last_status === 'queued') return '<span class="status">⏳ queued</span>';
+        return escapeHtml(row.last_status || '—');
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
     async function refresh() {
         const resp = await fetch(apiBase + '/jobs', {credentials: 'same-origin'});
         if (!resp.ok) return;
@@ -217,6 +243,7 @@
             const key = tr.dataset.tenant + '|' + tr.dataset.adapter + '|' + tr.dataset.kind;
             const row = rowsById.get(key);
             if (!row) continue;
+            tr.querySelector('.sa-cell-status').innerHTML = statusBadge(row);
             tr.querySelector('.sa-cell-completed').textContent = row.last_completed_at || '—';
             tr.querySelector('.sa-cell-freshness').innerHTML = freshnessBadge(row.freshness);
         }

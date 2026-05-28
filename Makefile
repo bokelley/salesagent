@@ -1,4 +1,4 @@
-.PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
+.PHONY: setup quality quality-fast quality-full pre-pr lint-fix lint typecheck duplication test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov test-entity openapi
 .PHONY: test-int test-bdd test-e2e storyboard-smoke storyboard-non-guaranteed
 
@@ -18,7 +18,10 @@ quality:
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
 	uv run python .pre-commit-hooks/check_code_duplication.py
-	uv run pytest tests/unit/ -x
+	uv run pytest tests/unit/ -x -q --tb=short
+
+quality-fast:
+	uv run python scripts/dev/quality_changed.py $(ARGS)
 
 quality-full:
 	$(MAKE) quality
@@ -38,8 +41,11 @@ lint:
 typecheck:
 	uv run mypy src/ --config-file=mypy.ini
 
+duplication:
+	uv run python .pre-commit-hooks/check_code_duplication.py
+
 test-fast:
-	uv run pytest tests/unit/ -x
+	uv run pytest tests/unit/ -x -q --tb=short
 
 test-full:
 	./run_all_tests.sh ci

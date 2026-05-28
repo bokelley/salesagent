@@ -6,6 +6,7 @@ from src.core.format_cache import (
     DEFAULT_AGENT_URL,
     canonical_format_identity,
     canonical_format_matches,
+    canonical_format_satisfies,
     get_agent_url_for_format,
     upgrade_legacy_format_id,
 )
@@ -126,6 +127,21 @@ def test_canonical_format_matches_respects_duration_when_both_sides_are_specific
     assert canonical_format_matches(
         {"agent_url": DEFAULT_AGENT_URL, "id": "video_vast"},
         {"agent_url": DEFAULT_AGENT_URL, "id": "video_vast", "duration_ms": 30000},
+    )
+
+
+def test_canonical_format_satisfies_requires_supported_parameters():
+    assert canonical_format_satisfies(
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_image", "width": 300, "height": 250},
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+    )
+    assert not canonical_format_satisfies(
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_image"},
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+    )
+    assert canonical_format_satisfies(
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_image", "width": 728, "height": 90},
+        {"agent_url": DEFAULT_AGENT_URL, "id": "display_image"},
     )
 
 

@@ -96,7 +96,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             principal_id="test_principal",
             name="Creative 1",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={"platform_creative_id": "gam_123"},
         )
@@ -106,7 +107,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             principal_id="test_principal",
             name="Creative 2",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={"platform_creative_id": "gam_456"},
         )
@@ -268,7 +270,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
             principal_id="test_principal",
             name="Creative 1",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={},
         )
@@ -278,7 +281,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
             principal_id="test_principal",
             name="Creative 2",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={},
         )
@@ -288,7 +292,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
             principal_id="test_principal",
             name="Creative 3",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={},
         )
@@ -573,7 +578,8 @@ def test_creative_assignments_with_weights(integration_db):
             principal_id="test_principal",
             name="Creative 1",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={},
         )
@@ -583,7 +589,8 @@ def test_creative_assignments_with_weights(integration_db):
             principal_id="test_principal",
             name="Creative 2",
             agent_url="https://creative.adcontextprotocol.org",
-            format="display",
+            format="display_image",
+            format_parameters={"width": 300, "height": 250},
             status="ready",
             data={},
         )
@@ -727,7 +734,8 @@ def test_creative_assignments_replaces_all(integration_db):
                     principal_id="test_principal",
                     name=f"Creative {cid}",
                     agent_url="https://creative.adcontextprotocol.org",
-                    format="display",
+                    format="display_image",
+                    format_parameters={"width": 300, "height": 250},
                     status="ready",
                     data={},
                 )

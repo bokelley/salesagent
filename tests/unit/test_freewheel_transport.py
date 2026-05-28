@@ -7,6 +7,7 @@ network calls happen.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,7 +105,7 @@ class TestPasswordGrant:
         assert session.post.call_count == 2
         assert session.request.call_count == 2
 
-    def test_mint_failure_raises_auth_error(self):
+    def test_mint_failure_raises_auth_error(self, caplog):
         session = MagicMock()
         bad_resp = MagicMock()
         bad_resp.status_code = 401
@@ -114,8 +115,10 @@ class TestPasswordGrant:
         session.post.return_value = bad_resp
 
         transport = FreeWheelTransport(username="u", password="wrong", session=session)
-        with pytest.raises(FreeWheelAuthError, match="/auth/token rejected"):
-            transport.get_json("/x")
+        with caplog.at_level(logging.WARNING, logger="src.adapters.freewheel._transport"):
+            with pytest.raises(FreeWheelAuthError, match="/auth/token rejected"):
+                transport.get_json("/x")
+        assert "phase=auth_token status=401" in caplog.text
 
     def test_api_token_does_not_trigger_mint(self):
         """When api_token is provided, no /auth/token call should ever happen,
@@ -197,6 +200,19 @@ class TestStatusMapping:
             transport.get_json("/services/v4/sites")
         assert excinfo.value.status_code == status
         assert excinfo.value.body == "upstream error"
+
+    def test_status_failure_is_logged(self, caplog):
+        session = MagicMock()
+        session.request.return_value = _stub_response(403, text="missing role", content=b"missing role")
+        transport = FreeWheelTransport(api_token="t", session=session)
+
+        with caplog.at_level(logging.WARNING, logger="src.adapters.freewheel._transport"):
+            with pytest.raises(FreeWheelForbiddenError):
+                transport.get_json("/services/v4/sites")
+
+        assert "FreeWheel API request failed" in caplog.text
+        assert "path=/services/v4/sites status=403" in caplog.text
+        assert "missing role" in caplog.text
 
     def test_2xx_does_not_raise(self):
         session = MagicMock()

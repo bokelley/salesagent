@@ -460,6 +460,55 @@ def test_profile_backed_generic_selectors_round_trip_without_legacy_gam_keys(
     assert execution["format_bindings"][0]["adapter_config"] == {"creative_template": "standard_display"}
 
 
+def test_wholesale_products_tolerate_extra_stored_publisher_property_fields(
+    management_api_client,
+    gam_tenant,
+    bound_factories,
+):
+    client, auth_headers = management_api_client
+    publisher_properties = [
+        {
+            "publisher_domain": "wonderstruck.com",
+            "property_id": "wonderstruck_site",
+            "tags": ["sports"],
+            "name": "wonderstruck.com",
+            "property_type": "website",
+        }
+    ]
+    format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+    profile = InventoryProfileFactory(
+        tenant=gam_tenant,
+        profile_id="extra_fields_profile",
+        inventory_config={"adapter": "google_ad_manager", "selectors": []},
+        format_ids=format_ids,
+        publisher_properties=publisher_properties,
+    )
+    product = ProductFactory(
+        tenant=gam_tenant,
+        product_id="extra_fields_product",
+        name="Extra Fields Product",
+        implementation_config={"adapter": "google_ad_manager", "status": "active"},
+        inventory_profile=profile,
+        properties=publisher_properties,
+        property_tags=None,
+    )
+    PricingOptionFactory(product=product)
+    bound_factories.commit()
+
+    listing = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+    )
+
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    properties = listing.get_json()["wholesale_products"][0]["inventory"]["publisher_properties"]
+    assert properties[0]["publisher_domain"] == "wonderstruck.com"
+    assert properties[0]["selection_type"] == "by_id"
+    assert properties[0]["property_ids"] == ["wonderstruck_site"]
+    assert "name" not in properties[0]
+    assert "property_type" not in properties[0]
+
+
 def test_wholesale_validation_checks_authorized_publisher_properties(management_api_client, gam_tenant):
     client, auth_headers = management_api_client
     payload = _wholesale_payload()

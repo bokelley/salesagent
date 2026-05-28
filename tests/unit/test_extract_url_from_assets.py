@@ -42,6 +42,17 @@ class TestTopLevelUrl:
         )
         assert _extract_url_from_assets(creative) == "https://top.com/ad.png"
 
+    def test_media_url_is_direct_url(self):
+        creative = _make_creative(media_url="https://example.com/media.png")
+        assert _extract_url_from_assets(creative) == "https://example.com/media.png"
+
+    def test_top_level_url_beats_media_url(self):
+        creative = _make_creative(
+            url="https://top.com/ad.png",
+            media_url="https://media.com/ad.png",
+        )
+        assert _extract_url_from_assets(creative) == "https://top.com/ad.png"
+
 
 class TestPriorityKeys:
     """Named asset keys are tried in priority order."""

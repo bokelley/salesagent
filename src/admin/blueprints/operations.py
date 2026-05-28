@@ -441,7 +441,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
                         media_buy.status = "draft"
 
-                    media_buy.approved_at = datetime.now(UTC)
+                    approved_at = datetime.now(UTC)
+                    media_buy.approved_at = approved_at
+                    if media_buy.confirmed_at is None:
+                        media_buy.confirmed_at = approved_at
                     media_buy.approved_by = user_email
                     db_session.commit()
 

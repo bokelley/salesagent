@@ -25,6 +25,7 @@ def _validate_creative_input(
     creative: CreativeAsset,
     registry: Any,
     principal_id: str,
+    registered_agent_urls: set[str] | None = None,
 ) -> Creative:
     """Validate a CreativeAsset and return a validated Creative model.
 
@@ -36,6 +37,7 @@ def _validate_creative_input(
         creative: CreativeAsset model from the sync payload.
         registry: CreativeAgentRegistry instance for format validation.
         principal_id: Authenticated principal ID for ownership.
+        registered_agent_urls: Normalized HTTP creative-agent URLs allowed for this tenant.
 
     Returns:
         Validated Creative schema object.
@@ -111,6 +113,15 @@ def _validate_creative_input(
     is_adapter_format = not agent_url.startswith(("http://", "https://"))
 
     if not is_adapter_format:
+        from src.core.validation import normalize_agent_url
+
+        normalized_agent_url = normalize_agent_url(agent_url)
+        if registered_agent_urls is not None and normalized_agent_url not in registered_agent_urls:
+            raise ValueError(
+                f"Creative agent '{agent_url}' is not registered for this tenant. "
+                f"Use list_creative_formats to discover supported formats."
+            )
+
         # Check if format exists (uses in-memory cache with 1-hour TTL)
         # Use run_async_in_sync_context to handle both sync and async contexts
         format_spec = None
@@ -146,6 +157,24 @@ def _validate_creative_input(
         logger.debug(f"Skipping external validation for adapter-provided format '{format_id}' (agent_url: {agent_url})")
 
     return validated_creative
+
+
+def get_registered_creative_agent_urls(registry: Any, tenant_id: str | None) -> set[str] | None:
+    """Return normalized tenant-registered creative-agent URLs when available."""
+    if not tenant_id:
+        return None
+
+    get_tenant_agents = getattr(registry, "_get_tenant_agents", None)
+    if not callable(get_tenant_agents):
+        return None
+
+    agents = get_tenant_agents(tenant_id)
+    if not isinstance(agents, list | tuple):
+        return None
+
+    from src.core.validation import normalize_agent_url
+
+    return {normalize_agent_url(agent.agent_url) for agent in agents if getattr(agent, "enabled", True)}
 
 
 def check_provenance_required(

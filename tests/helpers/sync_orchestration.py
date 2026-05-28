@@ -16,8 +16,14 @@ def make_mock_adapter(
     *,
     supports_inventory: bool = False,
     supports_reporting: bool = False,
+    supports_price_guidance: bool = False,
+    supports_availability_guidance: bool = False,
+    supports_signal_coverage: bool = False,
     inventory_result=None,
     reporting_result=None,
+    price_guidance_result=None,
+    availability_guidance_result=None,
+    signal_coverage_result=None,
     adapter_name: str = "_mock_test",
 ):
     """Stripped-down ``AdServerAdapter`` exposing only what
@@ -36,7 +42,13 @@ def make_mock_adapter(
     adapter.capabilities = AdapterCapabilities(
         supports_inventory_sync=supports_inventory,
         supports_reporting_sync=supports_reporting,
+        supports_price_guidance_sync=supports_price_guidance,
+        supports_availability_guidance_sync=supports_availability_guidance,
+        supports_signal_coverage_sync=supports_signal_coverage,
     )
     adapter.run_inventory_sync = MagicMock(return_value=inventory_result)
     adapter.run_reporting_sync = MagicMock(return_value=reporting_result)
+    adapter.run_price_guidance_sync = MagicMock(return_value=price_guidance_result)
+    adapter.run_availability_guidance_sync = MagicMock(return_value=availability_guidance_result)
+    adapter.run_signal_coverage_sync = MagicMock(return_value=signal_coverage_result)
     return adapter

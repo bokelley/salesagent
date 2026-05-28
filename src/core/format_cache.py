@@ -20,7 +20,12 @@ from typing import Any
 from adcp.types import FormatId as LibraryFormatId
 
 from src.core._deprecations import LEGACY_FORMAT_ID_SUNSET, warn_deprecated
-from src.core.canonical_formats import CANONICAL_FORMAT_IDS, DEFAULT_CREATIVE_AGENT_URL
+from src.core.canonical_formats import (
+    CANONICAL_FORMAT_IDS,
+    DEFAULT_CREATIVE_AGENT_URL,
+    is_reference_creative_agent_url,
+    normalize_creative_agent_url,
+)
 from src.core.schemas import FormatId
 
 # Default agent URL for AdCP reference implementation
@@ -32,10 +37,7 @@ CACHE_FILE = CACHE_DIR / "reference_formats.json"
 
 
 def _is_default_agent_url(agent_url: Any) -> bool:
-    normalized = str(agent_url).rstrip("/")
-    if normalized.endswith("/mcp"):
-        normalized = normalized.removesuffix("/mcp")
-    return normalized == DEFAULT_AGENT_URL.rstrip("/")
+    return is_reference_creative_agent_url(agent_url)
 
 
 def _canonical_reference_format_kwargs(format_id: str, agent_url: Any = DEFAULT_AGENT_URL) -> dict[str, Any]:
@@ -83,9 +85,7 @@ def _canonical_reference_format_kwargs(format_id: str, agent_url: Any = DEFAULT_
 def canonical_format_identity(format_ref: Any) -> tuple[str, str, int | None, int | None, int | None]:
     """Return a comparable canonical identity for a FormatId-like value."""
     fmt = upgrade_legacy_format_id(format_ref)
-    agent_url = str(fmt.agent_url).rstrip("/")
-    if agent_url.endswith("/mcp"):
-        agent_url = agent_url.removesuffix("/mcp")
+    agent_url = normalize_creative_agent_url(fmt.agent_url)
     return (
         agent_url,
         fmt.id,
@@ -113,6 +113,30 @@ def canonical_format_matches(requested: Any, supported: Any) -> bool:
         (req_duration, sup_duration),
     ):
         if requested_value is not None and supported_value is not None and requested_value != supported_value:
+            return False
+
+    return True
+
+
+def canonical_format_satisfies(requested: Any, supported: Any) -> bool:
+    """Return whether a concrete requested format satisfies a supported format.
+
+    ``supported`` may be broad (``display_image``), in which case a more specific
+    requested format may match. If ``supported`` declares width/height/duration,
+    the requested format must declare the same value. This keeps product-gating
+    from accepting under-specified creatives for fixed-size products.
+    """
+    req_agent, req_id, req_width, req_height, req_duration = canonical_format_identity(requested)
+    sup_agent, sup_id, sup_width, sup_height, sup_duration = canonical_format_identity(supported)
+    if (req_agent, req_id) != (sup_agent, sup_id):
+        return False
+
+    for requested_value, supported_value in (
+        (req_width, sup_width),
+        (req_height, sup_height),
+        (req_duration, sup_duration),
+    ):
+        if supported_value is not None and requested_value != supported_value:
             return False
 
     return True

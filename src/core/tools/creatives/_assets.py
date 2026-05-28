@@ -21,7 +21,7 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
     Returns:
         The extracted URL string, or None if no URL found.
     """
-    url = getattr(creative, "url", None)
+    url = getattr(creative, "url", None) or getattr(creative, "media_url", None)
     if url or not creative.assets:
         return url
 
@@ -74,7 +74,9 @@ def _build_creative_data(
         "duration": getattr(creative, "duration", None),
     }
     if creative.assets:
-        data["assets"] = creative.assets
+        from src.core.schemas._asset_type_compat import normalize_assets_for_wire
+
+        data["assets"] = normalize_assets_for_wire(creative.assets)
     snippet = getattr(creative, "snippet", None)
     if snippet:
         data["snippet"] = snippet

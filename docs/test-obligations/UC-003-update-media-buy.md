@@ -525,7 +525,8 @@ Source: UC-003-alt-manual.md
 **Layer** behavioral
 **Given** a tenant where `human_review_required` is true and the operation type matches `manual_approval_operations`
 **When** the buyer sends a valid update request
-**Then** the system creates a workflow step with status `requires_approval`, returns protocol envelope with status `submitted`, `implementation_date: null`, and `workflow_step_id`
+**Then** the system creates a workflow step with status `requires_approval`
+**And** the response includes the current `media_buy_id`, current `revision`, and `workflow_step_id`
 **Business Rule** BR-RULE-017 (INV-2/INV-3: manual approval triggers pending state)
 **Priority** P1
 

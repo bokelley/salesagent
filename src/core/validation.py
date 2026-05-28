@@ -292,7 +292,9 @@ def normalize_agent_url(url: str) -> str:
             normalized = normalized.rstrip("/")
             break  # Only strip one suffix
 
-    return normalized
+    from src.core.canonical_formats import normalize_creative_agent_url
+
+    return normalize_creative_agent_url(normalized)
 
 
 def sanitize_form_data(data: dict[str, Any]) -> dict[str, Any]:

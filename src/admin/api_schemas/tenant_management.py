@@ -24,8 +24,10 @@ from pydantic import (
 )
 
 from src.admin.api_schemas.composition import TenantSignalCreate
+from src.admin.api_schemas.publisher_properties import PublisherPropertySelector
 from src.admin.services.adapter_connection_tester import AdapterErrorCode, RemediationHint
 from src.core.config import get_pydantic_extra_mode
+from src.services.catalog_event_types import TENANT_MANAGEMENT_CATALOG_EVENT_TYPES
 
 _EXTRA_MODE = get_pydantic_extra_mode()
 
@@ -679,6 +681,24 @@ class AdapterConfigResponse(BaseModel):
     refresh_token: str | None = None
 
 
+class AdapterCapabilityCheck(BaseModel):
+    """One capability check result returned by adapter probes.
+
+    ``test-connection`` stays non-mutating, so write capabilities that require
+    a live mutation should be reported as ``not_checked`` rather than inferred
+    from successful authentication.
+    """
+
+    model_config = _config()
+
+    capability: str = Field(..., min_length=1, max_length=128)
+    status: Literal["passed", "failed", "not_checked"]
+    message: str | None = Field(default=None, max_length=500)
+    error_code: AdapterErrorCode | None = None
+    remediation: RemediationHint | None = None
+    details: dict[str, Any] | None = None
+
+
 class TestConnectionResponse(BaseModel):
     """Result of an adapter connection probe.
 
@@ -700,6 +720,7 @@ class TestConnectionResponse(BaseModel):
     error_code: AdapterErrorCode | None = None
     remediation: RemediationHint | None = None
     details: dict[str, Any] | None = None
+    capability_checks: list[AdapterCapabilityCheck] = Field(default_factory=list)
     tested_at: datetime
 
 
@@ -768,27 +789,6 @@ class WholesalePricingOption(BaseModel):
     price_guidance: dict[str, Any] | None = None
     parameters: dict[str, Any] | None = None
     min_spend_per_package: Decimal | None = None
-
-
-class PublisherPropertySelector(BaseModel):
-    """AdCP publisher-property selector."""
-
-    model_config = _config()
-
-    publisher_domain: str = Field(..., min_length=1, max_length=255)
-    selection_type: Literal["all", "by_id", "by_tag"] = "all"
-    property_ids: list[str] | None = None
-    property_tags: list[str] | None = None
-
-    @model_validator(mode="after")
-    def _validate_selector_shape(self) -> PublisherPropertySelector:
-        if self.selection_type == "all":
-            return self
-        if self.selection_type == "by_id" and not self.property_ids:
-            raise ValueError("property_ids is required when selection_type='by_id'")
-        if self.selection_type == "by_tag" and not self.property_tags:
-            raise ValueError("property_tags is required when selection_type='by_tag'")
-        return self
 
 
 class WholesaleSlotRequirement(BaseModel):
@@ -1222,6 +1222,21 @@ class StatusAdapterBlock(BaseModel):
 
 
 SyncStatus = Literal["success", "failed", "running", "never_run"]
+SyncSeverity = Literal["ok", "warning", "critical"]
+SyncIssueCategory = Literal["auth", "transient", "permanent", "stale", "unknown"]
+SyncIssueAction = Literal["reconnect_adapter", "retry_sync", "wait", "contact_support"]
+
+
+class StatusSyncIssue(BaseModel):
+    """Storefront-safe issue summary for a sync stream."""
+
+    model_config = _config()
+
+    code: str
+    category: SyncIssueCategory
+    message: str
+    retryable: bool
+    action: SyncIssueAction
 
 
 class StatusSyncRunBlock(BaseModel):
@@ -1231,6 +1246,9 @@ class StatusSyncRunBlock(BaseModel):
 
     last_run_at: datetime | None = None
     status: SyncStatus = "never_run"
+    severity: SyncSeverity = "warning"
+    last_success_at: datetime | None = None
+    issue: StatusSyncIssue | None = None
     item_count: int | None = None
     error: str | None = None
 
@@ -1652,6 +1670,29 @@ class ListGamAdvertisersResponse(BaseModel):
     synced_at: datetime | None = None
 
 
+class EnsureGamAdvertiserRequest(BaseModel):
+    """``POST /tenants/{tid}/gam/advertisers:ensure`` body."""
+
+    model_config = _config()
+
+    name: str = Field(..., min_length=1, max_length=255)
+    dry_run: bool = False
+
+
+class EnsureGamAdvertiserResponse(BaseModel):
+    """Idempotent advertiser ensure response.
+
+    ``created`` is true only when the endpoint actually created a GAM company.
+    If the advertiser already existed in cache or GAM, ``created`` is false.
+    """
+
+    model_config = _config()
+
+    advertiser: GamAdvertiser
+    created: bool
+    dry_run: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Sprint 3 — workflow approve/reject + read drill-downs
 # ---------------------------------------------------------------------------
@@ -1905,34 +1946,21 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "creative.created",
     "creative.status_changed",
     "principal.created",
-    "product.created",
-    "product.updated",
-    "signal.created",
-    "signal.updated",
+    *TENANT_MANAGEMENT_CATALOG_EVENT_TYPES,
     # ``sync_run`` (not ``sync``) — the noun is the persistent SyncJob row,
     # the verb-past pattern is ``<entity>.<verb-past>`` consistent with the
     # rest of the catalog. The payload's ``data.sync_run_id`` matches.
     "sync_run.completed",
     "sync_run.failed",
+    # Derived storefront alerting event. Emitted on committed sync-run
+    # transitions when public health severity changes for a tenant sync
+    # stream; raw run events remain immutable for correlation and admin
+    # drill-downs.
+    "sync_health.changed",
     "tenant.config_changed",
 )
 
-WebhookEventType = Literal[
-    "workflow.created",
-    "workflow.decided",
-    "media_buy.created",
-    "media_buy.status_changed",
-    "creative.created",
-    "creative.status_changed",
-    "principal.created",
-    "product.created",
-    "product.updated",
-    "signal.created",
-    "signal.updated",
-    "sync_run.completed",
-    "sync_run.failed",
-    "tenant.config_changed",
-]
+WebhookEventType = Annotated[str, Field(json_schema_extra={"enum": list(WEBHOOK_EVENT_TYPES)})]
 
 
 class CreateWebhookSubscriptionRequest(BaseModel):

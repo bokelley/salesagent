@@ -1370,6 +1370,54 @@ class TestCreateMediaBuyIdempotency:
         assert mock_repo.find_by_idempotency_key.call_count == 2
         mock_repo.find_by_idempotency_key.assert_called_with(idem_key, "test_principal")
 
+    def test_idempotency_replay_prefers_cached_workflow_response_metadata(self):
+        """Create replay should not derive revision/confirmed_at from mutable row state."""
+        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+
+        idem_key = "550e8400-e29b-41d4-a716-446655440001"
+        existing_buy = MagicMock()
+        existing_buy.media_buy_id = "mb_original_123"
+        existing_buy.status = "active"
+        existing_buy.revision = 7
+        existing_buy.confirmed_at = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
+
+        mock_repo = MagicMock()
+        mock_repo.find_by_idempotency_key.return_value = existing_buy
+        mock_repo.get_packages.return_value = []
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+        mock_uow.media_buys = mock_repo
+        mock_uow.session = MagicMock()
+
+        workflow_step = MagicMock()
+        workflow_step.response_data = {
+            "media_buy_id": "mb_original_123",
+            "packages": [],
+            "status": "completed",
+            "media_buy_status": "active",
+            "revision": 1,
+            "confirmed_at": "2026-01-01T12:00:00Z",
+        }
+        workflow_repo = MagicMock()
+        workflow_repo.find_by_idempotency_key.return_value = workflow_step
+
+        with (
+            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
+            patch("src.core.database.repositories.workflow.WorkflowRepository", return_value=workflow_repo),
+        ):
+            result = _build_idempotency_hit_result(
+                tenant_id="test_tenant",
+                idempotency_key=idem_key,
+                principal_id="test_principal",
+                context=None,
+            )
+
+        assert result.response.revision == 1
+        assert result.response.confirmed_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        assert result.response.replayed is True
+
     # NOTE: test_idempotency_absent_proceeds_normally was removed when adcp 5.0
     # made idempotency_key a required field on CreateMediaBuyRequest. There is
     # no longer a buyer-omits-key code path to exercise; Pydantic rejects the

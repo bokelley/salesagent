@@ -74,6 +74,9 @@ def make_media_buy(
     currency="USD",
     raw_request=None,
     status="",
+    revision=1,
+    approved_at=None,
+    confirmed_at=None,
 ):
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
@@ -89,6 +92,9 @@ def make_media_buy(
     buy.raw_request = raw_request or {}
     buy.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     buy.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    buy.revision = revision
+    buy.approved_at = approved_at
+    buy.confirmed_at = confirmed_at
     # Persisted MediaBuy.status — defaults to empty so _compute_status falls
     # through to date-derived behavior unless a test sets a blocker explicitly.
     buy.status = status
@@ -492,10 +498,17 @@ class TestGetMediaBuysImpl:
         mock_adapter.capabilities.supports_realtime_reporting = True
         mock_adapter.get_packages_snapshot.return_value = {"buy_1": {"pkg_1": snapshot}}
 
-        with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
+        identity = make_identity()
+        with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter) as mock_get_adapter:
             req = self._make_request(include_snapshot=True)
-            response = _get_media_buys_impl(req, identity=make_identity())
+            response = _get_media_buys_impl(req, identity=identity)
 
+        mock_get_adapter.assert_called_once_with(
+            mock_principal_obj.return_value,
+            dry_run=False,
+            testing_context=None,
+            tenant=identity.tenant,
+        )
         mock_adapter.get_packages_snapshot.assert_called_once()
         # The package_refs passed should include the platform_line_item_id
         call_args = mock_adapter.get_packages_snapshot.call_args[0][0]

@@ -63,14 +63,15 @@ def get_adapter(
         principal: The authenticated principal
         dry_run: Whether to run in dry-run mode
         testing_context: Optional test context for simulations
-        tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
+        tenant: Tenant context (from identity.tenant). Tool impls and threaded/background callers should pass this
+            explicitly; the ContextVar fallback is only a compatibility path for legacy callers.
     """
     import logging
 
     logger = logging.getLogger(__name__)
 
     if tenant is None:
-        # Fallback for callers that haven't been updated yet (e.g., async approval handlers)
+        # Compatibility fallback only. New impl, worker-thread, and background paths must pass tenant explicitly.
         from src.core.config_loader import get_current_tenant
 
         tenant = get_current_tenant()

@@ -166,8 +166,7 @@ class TestDailyDeliveryWebhookFlow:
 
     async def create_media_buy(self, client, product_id, pricing_option_id, delivery_webhook_server):
         """Phase 3: Create media buy with reporting_webhook."""
-        _, end_time = get_test_date_range(days_from_now=0, duration_days=7)
-        start_time = "asap"
+        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=7)
 
         media_buy_request = build_adcp_media_buy_request(
             product_ids=[product_id],

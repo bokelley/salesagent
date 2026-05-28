@@ -38,6 +38,8 @@ class TenantAdapterRow:
     tenant_id: str
     tenant_name: str
     adapter_type: str
+    sync_cadence_minutes: int | None = None
+    sync_ready: bool = True
 
 
 class TenantNotConfiguredError(Exception):
@@ -74,14 +76,32 @@ class AdapterConfigAdminRepository:
         ``TenantRepository`` in the codebase yet (only specialized ones
         for config / signing).
         """
+        has_gam_credentials = AdapterConfig.gam_refresh_token.is_not(
+            None
+        ) | AdapterConfig._gam_service_account_json.is_not(None)
         stmt = (
-            select(Tenant.tenant_id, Tenant.name, AdapterConfig.adapter_type)
+            select(
+                Tenant.tenant_id,
+                Tenant.name,
+                AdapterConfig.adapter_type,
+                Tenant.sync_cadence_minutes,
+                AdapterConfig.gam_network_code,
+                has_gam_credentials.label("has_gam_credentials"),
+            )
             .join(AdapterConfig, AdapterConfig.tenant_id == Tenant.tenant_id)
             .order_by(Tenant.name)
         )
         return [
-            TenantAdapterRow(tenant_id=tid, tenant_name=name, adapter_type=adapter_type)
-            for tid, name, adapter_type in self._session.execute(stmt).all()
+            TenantAdapterRow(
+                tenant_id=tid,
+                tenant_name=name,
+                adapter_type=adapter_type,
+                sync_cadence_minutes=sync_cadence_minutes,
+                sync_ready=adapter_type != "google_ad_manager" or bool(gam_network_code and has_gam_credentials),
+            )
+            for tid, name, adapter_type, sync_cadence_minutes, gam_network_code, has_gam_credentials in self._session.execute(
+                stmt
+            ).all()
         ]
 
 

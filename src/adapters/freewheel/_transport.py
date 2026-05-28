@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from src.adapters._logging import safe_upstream_body_excerpt
 from src.adapters._token_cache import BearerTokenCache
 
 logger = logging.getLogger(__name__)
@@ -203,16 +204,25 @@ class FreeWheelTransport:
         """
         assert self._username and self._password  # enforced in __init__
         url = f"{self.base_url}/auth/token"
-        response = self._session.post(
-            url,
-            data={
-                "grant_type": "password",
-                "username": self._username,
-                "password": self._password,
-            },
-            timeout=self.timeout,
-        )
+        try:
+            response = self._session.post(
+                url,
+                data={
+                    "grant_type": "password",
+                    "username": self._username,
+                    "password": self._password,
+                },
+                timeout=self.timeout,
+            )
+        except requests.RequestException:
+            logger.warning("FreeWheel token mint failed: phase=auth_token reason=request_exception", exc_info=True)
+            raise
         if not response.ok:
+            logger.warning(
+                "FreeWheel token mint failed: phase=auth_token status=%s body_excerpt=%s",
+                response.status_code,
+                safe_upstream_body_excerpt(response.text),
+            )
             raise FreeWheelAuthError(
                 f"FreeWheel /auth/token rejected credentials: HTTP {response.status_code}",
                 status_code=response.status_code,
@@ -221,6 +231,11 @@ class FreeWheelTransport:
         body = response.json() if response.content else {}
         token = body.get("access_token")
         if not token:
+            logger.warning(
+                "FreeWheel token mint failed: phase=auth_token status=%s reason=missing_access_token body_excerpt=%s",
+                response.status_code,
+                safe_upstream_body_excerpt(response.text),
+            )
             raise FreeWheelAuthError(
                 "FreeWheel /auth/token response missing access_token",
                 status_code=response.status_code,
@@ -268,13 +283,22 @@ class FreeWheelTransport:
         }
         if content_type:
             headers["Content-Type"] = content_type
-        return self._session.request(
-            method=method,
-            url=url,
-            headers=headers,
-            data=body,
-            timeout=self.timeout,
-        )
+        try:
+            return self._session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                data=body,
+                timeout=self.timeout,
+            )
+        except requests.RequestException:
+            logger.warning(
+                "FreeWheel API request failed: method=%s path=%s reason=request_exception",
+                method,
+                path,
+                exc_info=True,
+            )
+            raise
 
     def _raise_for_status(self, response: requests.Response, method: str, path: str) -> None:
         if response.ok:
@@ -282,6 +306,13 @@ class FreeWheelTransport:
         status = response.status_code
         body = response.text
         message = f"FreeWheel {method} {path} -> HTTP {status}"
+        logger.warning(
+            "FreeWheel API request failed: method=%s path=%s status=%s body_excerpt=%s",
+            method,
+            path,
+            status,
+            safe_upstream_body_excerpt(body),
+        )
         if status == 401:
             raise FreeWheelAuthError(message, status_code=status, body=body)
         if status == 403:

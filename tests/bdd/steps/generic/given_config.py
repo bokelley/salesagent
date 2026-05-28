@@ -17,6 +17,7 @@ from pytest_bdd import given, parsers
 
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import (
+    AGENT_URL,
     CATEGORY_MAP,
     FormatFactory,
     FormatIdFactory,
@@ -54,7 +55,7 @@ def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type:
 @given(parsers.parse('the registry has format "{name}" with format_id id "{fmt_id}"'))
 def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
     """Register a format with a known format_id."""
-    fid = FormatIdFactory.build(agent_url="https://creatives.adcontextprotocol.org", id=fmt_id)
+    fid = FormatIdFactory.build(agent_url=AGENT_URL, id=fmt_id)
     fmt = FormatFactory.build(name=name, format_id=fid)
     ctx.setdefault("registry_formats", []).append(fmt)
     _sync_registry(ctx)

@@ -39,9 +39,11 @@ from src.core.database.models import (
     Tenant,
 )
 from tests.factories import (
+    GamAdvertiserFactory,
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
+    SyncJobFactory,
     TenantFactory,
 )
 from tests.helpers.managed_tenant_api import bind_factories_to_session, install_management_api_key
@@ -697,6 +699,153 @@ class TestAdapterConfig:
         body = resp.get_json()
         assert body["success"] is True
         assert body["error"] is None
+        assert body["capability_checks"][0]["capability"] == "connect"
+        create_check = next(c for c in body["capability_checks"] if c["capability"] == "create_gam_advertiser")
+        assert create_check["status"] == "not_checked"
+
+
+class TestGamAdvertiserEnsure:
+    @staticmethod
+    def _post_ensure(client, auth_headers, tenant_id: str, name: str):
+        return client.post(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:ensure",
+            headers=auth_headers,
+            json={"name": name},
+        )
+
+    @staticmethod
+    def _stub_ensure_success(monkeypatch, *, advertiser_id: str = "adv_created", created: bool = True):
+        import src.admin.tenant_management_api as api_module
+        from src.core.helpers.account_provisioning import GamAdvertiserProvisionResult
+
+        def _create(**kwargs):
+            return GamAdvertiserProvisionResult(
+                advertiser_id=advertiser_id,
+                name=kwargs["name"],
+                created=created,
+            )
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _create)
+
+    @staticmethod
+    def _stub_ensure_error(monkeypatch, message: str):
+        import src.admin.tenant_management_api as api_module
+
+        def _fail(**_kwargs):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _fail)
+
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_gam_adv_ensure")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        tenant_id = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+        return tenant_id
+
+    def test_ensure_returns_existing_cached_advertiser_without_create(
+        self, client, auth_headers, tid, monkeypatch, bound_factories
+    ):
+        import src.admin.tenant_management_api as api_module
+
+        def _unexpected_create(**_kwargs):
+            raise AssertionError("existing cached advertiser should not call GAM create")
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _unexpected_create)
+
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+        tenant = TenantConfigRepository(bound_factories, tid).get_tenant()
+        assert tenant is not None
+        GamAdvertiserFactory(
+            tenant=tenant,
+            advertiser_id="adv_existing",
+            name="Interchange-default",
+            status="active",
+            synced_at=datetime.now(UTC),
+        )
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-default")
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["created"] is False
+        assert body["advertiser"]["id"] == "adv_existing"
+
+    def test_ensure_ignores_inactive_cached_advertiser(self, client, auth_headers, tid, monkeypatch, bound_factories):
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+        self._stub_ensure_success(monkeypatch, advertiser_id="adv_created")
+
+        tenant = TenantConfigRepository(bound_factories, tid).get_tenant()
+        assert tenant is not None
+        GamAdvertiserFactory(
+            tenant=tenant,
+            advertiser_id="adv_inactive",
+            name="Interchange-Inactive",
+            status="inactive",
+            synced_at=datetime.now(UTC),
+        )
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-Inactive")
+
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["created"] is True
+        assert body["advertiser"]["id"] == "adv_created"
+
+    def test_ensure_creates_and_caches_missing_advertiser(
+        self, client, auth_headers, tid, monkeypatch, bound_factories
+    ):
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+        self._stub_ensure_success(monkeypatch, advertiser_id="adv_created")
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-Nike")
+
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["created"] is True
+        assert body["advertiser"]["id"] == "adv_created"
+        cached = GAMSyncRepository(bound_factories, tid).get_advertiser("adv_created")
+        assert cached is not None
+        assert cached.name == "Interchange-Nike"
+
+    def test_ensure_maps_create_permission_failure(self, client, auth_headers, tid, monkeypatch):
+        self._stub_ensure_error(monkeypatch, "[AuthenticationError.NOT_ALLOWED @ networkCode]")
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-WPP")
+
+        assert resp.status_code == 403
+        assert resp.get_json()["error"] == "adapter_permission_denied"
+
+    def test_ensure_maps_network_not_found_failure(self, client, auth_headers, tid, monkeypatch):
+        self._stub_ensure_error(
+            monkeypatch,
+            "GAM fault from internal-gam-proxy.local [AuthenticationError.NETWORK_NOT_FOUND @ ; trigger:'12345']",
+        )
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-BadNetwork")
+
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["error"] == "adapter_network_not_found"
+        fault = body["details"]["vendor_fault"]
+        assert fault["vendor_message"] == "AuthenticationError.NETWORK_NOT_FOUND"
+        assert fault["gam"]["reason"] == "NETWORK_NOT_FOUND"
+        assert "internal-gam-proxy" not in str(body)
+
+    def test_ensure_maps_no_networks_to_permission_failure(self, client, auth_headers, tid, monkeypatch):
+        self._stub_ensure_error(monkeypatch, "[AuthenticationError.NO_NETWORKS_TO_ACCESS @ networkCode]")
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-NoNetworks")
+
+        assert resp.status_code == 403
+        body = resp.get_json()
+        assert body["error"] == "adapter_permission_denied"
+        assert body["details"]["vendor_fault"]["gam"]["reason"] == "NO_NETWORKS_TO_ACCESS"
 
 
 # ---------------------------------------------------------------------------
@@ -1141,7 +1290,7 @@ class TestTenantStatus:
         assert resp.get_json()["error"] == "tenant_not_found"
 
     def test_freshly_provisioned_tenant_returns_zero_state(self, client, auth_headers, managed_tenant):
-        """A new tenant has no syncs / workflows / buys / creatives — should return zero counts, not error."""
+        """A new tenant has no workflows / buys / creatives — should return zero counts, not error."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_json()
@@ -1150,10 +1299,16 @@ class TestTenantStatus:
         assert body["adapter"]["type"] == "google_ad_manager"
         assert body["adapter"]["connected"] is True
 
-        # Empty defaults
-        assert body["syncs"]["inventory"]["status"] == "never_run"
-        assert body["syncs"]["custom_targeting"]["status"] == "never_run"
-        assert body["syncs"]["advertisers"]["status"] == "never_run"
+        # Provisioning creates the initial pending inventory row; public
+        # status normalizes pending/queued to running.
+        assert body["syncs"]["inventory"]["status"] == "running"
+        assert body["syncs"]["inventory"]["severity"] == "warning"
+        assert body["syncs"]["inventory"]["last_success_at"] is None
+        assert body["syncs"]["inventory"]["issue"]["code"] == "sync_running"
+        assert body["syncs"]["custom_targeting"]["status"] == "running"
+        assert body["syncs"]["custom_targeting"]["severity"] == "warning"
+        assert body["syncs"]["advertisers"]["status"] == "running"
+        assert body["syncs"]["advertisers"]["severity"] == "warning"
         assert body["workflows"]["open_count"] == 0
         assert body["workflows"]["by_kind"] == {}
         assert body["media_buys"]["active_count"] == 0
@@ -1164,6 +1319,27 @@ class TestTenantStatus:
         assert body["creatives"]["pending_review_count"] == 0
         assert body["webhooks"] is None
         assert "fetched_at" in body
+
+    def test_pending_sync_renders_as_running_health(self, client, auth_headers, managed_tenant, bound_factories):
+        """Storefront callers should never see raw pending/queued DB states."""
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_status_pending",
+            status="pending",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=datetime.now(UTC),
+            completed_at=None,
+        )
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200
+        sync = resp.get_json()["syncs"]["inventory"]
+        assert sync["status"] == "running"
+        assert sync["severity"] == "warning"
+        assert sync["last_success_at"] is None
+        assert sync["issue"]["action"] == "wait"
 
     def test_status_reflects_active_media_buy(self, client, auth_headers, managed_tenant, bound_factories):
         """An active media buy bumps ``media_buys.active_count``."""

@@ -322,7 +322,10 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
                     # Update media buy status
                     media_buy.status = "scheduled"
-                    media_buy.approved_at = datetime.now(UTC)
+                    approved_at = datetime.now(UTC)
+                    media_buy.approved_at = approved_at
+                    if media_buy.confirmed_at is None:
+                        media_buy.confirmed_at = approved_at
                     media_buy.approved_by = user_email
                     db.commit()
 

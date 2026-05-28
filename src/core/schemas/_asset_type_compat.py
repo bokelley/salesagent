@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
+from pydantic import BaseModel
 
 # Inline copy of the inference rule (not imported from
 # ``src.core.tools.creatives._sync``) to avoid a circular import — schemas
@@ -81,6 +82,36 @@ def infer_asset_types(assets: dict[str, Any]) -> dict[str, Any]:
         else:
             inferred[key] = value
     return inferred
+
+
+def normalize_assets_for_wire(assets: dict[str, Any]) -> dict[str, Any]:
+    """Serialize asset values to the JSON shape validated by the SDK schema.
+
+    Pydantic asset variants include many optional fields as ``None`` by
+    default. The generated JSON schemas model those fields as non-nullable,
+    so keeping ``url_type: null`` or ``description: null`` makes an otherwise
+    valid asset fail the AssetVariant ``oneOf``. Normalize once for both DB
+    storage and listing responses.
+    """
+    return infer_asset_types(_strip_none(_model_dump_assets(assets)))
+
+
+def _model_dump_assets(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, dict):
+        return {key: _model_dump_assets(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_model_dump_assets(item) for item in value]
+    return value
+
+
+def _strip_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_none(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_strip_none(item) for item in value]
+    return value
 
 
 def _apply_patch() -> None:

@@ -28,16 +28,20 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
 
     def _lookup_principal(session):
         if tenant_id:
-            # If tenant_id specified, ONLY look in that tenant
+            tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
+            tenant_obj = session.scalars(tenant_stmt).first()
+            if not tenant_obj:
+                logger.warning("Token lookup rejected for inactive or missing tenant '%s'", tenant_id)
+                return None, None
+
+            # If tenant_id specified, ONLY look in that active tenant.
             stmt = select(Principal).filter_by(access_token=token, tenant_id=tenant_id)
             principal = session.scalars(stmt).first()
             if principal:
                 return principal.principal_id, None
 
             # Check if it's the admin token for this specific tenant
-            tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-            tenant_obj = session.scalars(tenant_stmt).first()
-            if tenant_obj and tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
+            if tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
                 logger.debug("Token matches admin token for tenant '%s'", tenant_id)
                 return f"{tenant_id}_admin", None
 

@@ -30,9 +30,13 @@ from src.admin.services.sync_webhook_emission import wait_for_dispatch
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.repositories.webhook_subscription import hash_secret
 from tests.factories import (
+    AdapterConfigFactory,
     ContextFactory,
+    GAMInventoryFactory,
     ObjectWorkflowMappingFactory,
     PrincipalFactory,
+    ProductFactory,
+    SyncJobFactory,
     TenantFactory,
     WebhookSubscriptionFactory,
     WorkflowStepFactory,
@@ -530,6 +534,13 @@ class TestExpandedEventCatalog:
         "principal.created",
         "product.created",
         "product.updated",
+        "product.priced",
+        "product.removed",
+        "signal.created",
+        "signal.updated",
+        "signal.priced",
+        "signal.removed",
+        "wholesale_feed.bulk_change",
         # Issue #463: inventory-sync visibility events. Catalog plumbing
         # only — the real ``SyncJob``-driven emission path is covered by
         # ``TestSyncTerminalEmission`` below.
@@ -595,6 +606,77 @@ class TestExpandedEventCatalog:
         assert envelope["event_type"] == event_type
         assert envelope["tenant_id"] == tenant.tenant_id
         assert envelope["data"] == {"sample_field": "sample_value"}
+
+    def test_signal_mapping_create_emits_signal_created_webhook(
+        self, client, auth_headers, bound_factories, monkeypatch
+    ):
+        """Managed signal writes publish Tenant Management catalog webhooks."""
+        bound_factories.info["management_api_caller"] = True
+        tenant = TenantFactory(
+            tenant_id="tenant_signal_webhook",
+            ad_server="google_ad_manager",
+            is_embedded=True,
+        )
+        AdapterConfigFactory(tenant=tenant, adapter_type="google_ad_manager", gam_network_code="123456")
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="audience_segment",
+            inventory_id="seg_auto_intenders",
+            name="Auto Intenders",
+            inventory_metadata={"type": "FIRST_PARTY"},
+        )
+        bound_factories.commit()
+        TestSyncTerminalEmission._subscribe(client, auth_headers, tenant.tenant_id, "signal.created")
+        receiver = TestSyncTerminalEmission._install_capture(monkeypatch)
+
+        response = client.post(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/signals",
+            headers=auth_headers,
+            json={
+                "signal_id": "audience_auto_intenders",
+                "name": "Auto Intenders",
+                "description": "First-party auto audience.",
+                "value_type": "binary",
+                "adapter_config": {
+                    "type": "passthrough",
+                    "kind": "audience_segment",
+                    "segment_id": "seg_auto_intenders",
+                },
+                "data_provider": "publisher_1p",
+                "targeting_dimension": "audience",
+            },
+        )
+
+        assert response.status_code == 201, response.get_data(as_text=True)
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "signal.created"
+        assert envelope["data"] == {"signal_id": "audience_auto_intenders", "name": "Auto Intenders"}
+
+    def test_wholesale_product_delete_emits_product_removed_webhook(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """Managed product deletes publish the event the schema accepts."""
+        ProductFactory(
+            tenant=tenant,
+            product_id="api_product_to_remove",
+            name="API Product To Remove",
+            allowed_principal_ids=[],
+        )
+        bound_factories.commit()
+        TestSyncTerminalEmission._subscribe(client, auth_headers, tenant.tenant_id, "product.removed")
+        receiver = TestSyncTerminalEmission._install_capture(monkeypatch)
+
+        response = client.delete(
+            f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products/api_product_to_remove",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.get_data(as_text=True)
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "product.removed"
+        assert envelope["data"] == {"product_id": "api_product_to_remove", "name": "API Product To Remove"}
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +848,110 @@ class TestSyncTerminalEmission:
         assert envelope["event_schema_version"] == "1"
         # Plaintext secret was returned at create time and used for signing.
         assert plaintext_secret  # smoke
+
+    def test_health_change_fires_only_when_severity_changes(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """A failed run with a fresh successful baseline degrades
+        ``ok -> warning`` and emits the derived storefront event."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+
+        now = datetime.now(UTC)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_prior_success",
+            status="completed",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(hours=1, minutes=5),
+            completed_at=now - timedelta(hours=1),
+            triggered_by="scheduler",
+        )
+        wait_for_dispatch()
+
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_health.changed")
+        receiver = self._install_capture(monkeypatch)
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_failed",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(minutes=2),
+            triggered_by="scheduler",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "failed"
+            row.completed_at = now - timedelta(minutes=1)
+            row.error_message = "Timeout while fetching inventory"
+            session.commit()
+
+        wait_for_dispatch()
+
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "sync_health.changed"
+        data = envelope["data"]
+        assert data["sync_type"] == "inventory"
+        assert data["adapter_type"] == "google_ad_manager"
+        assert data["health"] == "warning"
+        assert data["previous_health"] == "ok"
+        assert data["reason"] == "transient"
+        assert data["action"] == "retry_sync"
+        assert data["related_sync_run_id"] == sync_id
+
+    def test_health_change_does_not_fire_when_severity_is_unchanged(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        """Raw run events remain available, but the derived health event
+        stays quiet for ``ok -> ok`` transitions."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import SyncJob
+
+        now = datetime.now(UTC)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_still_ok_prior",
+            status="completed",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(hours=1, minutes=5),
+            completed_at=now - timedelta(hours=1),
+            triggered_by="scheduler",
+        )
+        wait_for_dispatch()
+
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_health.changed")
+        receiver = self._install_capture(monkeypatch)
+
+        sync_id = SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_health_still_ok_current",
+            status="running",
+            adapter_type="google_ad_manager",
+            sync_type="inventory",
+            started_at=now - timedelta(minutes=2),
+            triggered_by="scheduler",
+        ).sync_id
+
+        with get_db_session() as session:
+            row = session.get(SyncJob, sync_id)
+            row.status = "completed"
+            row.completed_at = now - timedelta(minutes=1)
+            row.summary = "Synced inventory"
+            session.commit()
+
+        wait_for_dispatch()
+
+        assert receiver.calls == []
 
     def test_provision_trigger_normalizes_to_provisioning(
         self, client, auth_headers, tenant, bound_factories, monkeypatch

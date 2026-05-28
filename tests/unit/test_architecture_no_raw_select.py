@@ -289,9 +289,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "patch_tenant"),
     ("src/admin/tenant_management_api.py", "deactivate_tenant"),
     ("src/admin/tenant_management_api.py", "reactivate_tenant"),
-    ("src/admin/tenant_management_api.py", "get_adapter_config"),
     ("src/admin/tenant_management_api.py", "put_adapter_config"),
-    ("src/admin/tenant_management_api.py", "adapter_test_connection"),
     # FIXME(embedded-mode-sprint-1.6/1.8): Account + buyer-advertiser-mappings + recent-buyers
     # + refresh endpoints landed before AccountRoutingRule / SyncJob / Tenant repositories
     # existed. Fold into repositories alongside the auto_provision_advertisers retirement
@@ -329,7 +327,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # for the /status snapshot. Fold into a StatusRepository or per-block repos.
     ("src/admin/services/tenant_status_service.py", "get_tenant_status"),
     ("src/admin/services/tenant_status_service.py", "_adapter_block"),
-    ("src/admin/services/tenant_status_service.py", "_syncs_block"),
     ("src/admin/services/tenant_status_service.py", "_workflows_block"),
     ("src/admin/services/tenant_status_service.py", "_setup_tasks_block"),
     # FIXME(embedded-mode-sprint-2): managed/embedded mode auth bypass loads tenant

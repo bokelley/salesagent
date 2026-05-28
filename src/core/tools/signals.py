@@ -481,9 +481,8 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
                     continue
 
             # Filter by min_coverage_percentage
-            if (
-                req.filters.min_coverage_percentage is not None
-                and (signal.coverage_percentage or 0.0) < req.filters.min_coverage_percentage
+            if req.filters.min_coverage_percentage is not None and (
+                signal.coverage_percentage is None or signal.coverage_percentage < req.filters.min_coverage_percentage
             ):
                 continue
 
