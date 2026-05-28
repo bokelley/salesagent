@@ -640,6 +640,14 @@
             "default": null,
             "title": "Password"
           },
+          "rate_currency": {
+            "default": "USD",
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "title": "Rate Currency",
+            "type": "string"
+          },
           "type": {
             "const": "springserve",
             "default": "springserve",
@@ -4717,6 +4725,14 @@
             "default": null,
             "title": "Password"
           },
+          "rate_currency": {
+            "default": "USD",
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "title": "Rate Currency",
+            "type": "string"
+          },
           "type": {
             "const": "springserve",
             "default": "springserve",
@@ -5306,6 +5322,14 @@
             ],
             "default": null,
             "title": "Password"
+          },
+          "rate_currency": {
+            "default": "USD",
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "title": "Rate Currency",
+            "type": "string"
           },
           "type": {
             "const": "springserve",
@@ -6573,6 +6597,15 @@
             "description": "Translate AdCP signals into SpringServe demand_tag_keys entries on created demand tags.",
             "title": "Enable Key Value Targeting",
             "type": "boolean"
+          },
+          "rate_currency": {
+            "default": "USD",
+            "description": "ISO 4217 currency used for SpringServe Campaign and Demand Tag rates.",
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "title": "Rate Currency",
+            "type": "string"
           },
           "type": {
             "const": "springserve",

@@ -118,6 +118,20 @@ class TestEnvironmentAndOptional:
         cfg = SpringServeConnectionConfig(api_token="t", default_demand_partner_id=42)
         assert cfg.default_demand_partner_id == 42
 
+    def test_rate_currency_defaults_to_usd(self):
+        cfg = SpringServeConnectionConfig(api_token="t")
+        assert cfg.rate_currency == "USD"
+
+    def test_rate_currency_normalizes_to_uppercase(self):
+        cfg = SpringServeConnectionConfig(api_token="t", rate_currency="eur")
+        assert cfg.rate_currency == "EUR"
+
+    def test_rate_currency_rejects_non_iso_shape(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            SpringServeConnectionConfig(api_token="t", rate_currency="EURO")
+
     def test_password_field_marked_secret_in_schema(self):
         schema = SpringServeConnectionConfig.model_json_schema()
         assert schema["properties"]["password"].get("secret") is True

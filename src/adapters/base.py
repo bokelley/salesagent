@@ -741,6 +741,20 @@ class AdServerAdapter(ABC):
         """
         return {"cpm"}
 
+    def get_pricing_option_support(self, pricing_option: Any) -> tuple[bool, str | None]:
+        """Return whether a buyer-visible pricing option can be booked by this adapter."""
+        pricing_model = getattr(pricing_option, "pricing_model", "")
+        pricing_model_str = getattr(pricing_model, "value", pricing_model)
+        supported = self.get_supported_pricing_models()
+
+        if pricing_model_str and str(pricing_model_str).lower() not in supported:
+            return (
+                False,
+                f"Current adapter does not support {str(pricing_model_str).upper()} pricing",
+            )
+
+        return True, None
+
     def get_targeting_capabilities(self) -> TargetingCapabilities:
         """Return targeting capabilities this adapter supports.
 

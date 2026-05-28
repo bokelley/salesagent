@@ -517,6 +517,9 @@ def _adapter_config_to_dict(adapter: AdapterConfigSchema) -> dict:
             "api_token": adapter.api_token.get_secret_value() if adapter.api_token else None,
             "environment": adapter.environment,
             "default_demand_partner_id": adapter.default_demand_partner_id,
+            "rate_currency": adapter.rate_currency,
+            "demand_class": adapter.demand_class,
+            "enable_key_value_targeting": adapter.enable_key_value_targeting,
         }
     raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
 
@@ -596,6 +599,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             api_token=adapter.api_token.get_secret_value() if adapter.api_token else None,
             environment=adapter.environment,
             default_demand_partner_id=adapter.default_demand_partner_id,
+            rate_currency=adapter.rate_currency,
             demand_class=adapter.demand_class,
             enable_key_value_targeting=adapter.enable_key_value_targeting,
         )
@@ -3194,6 +3198,7 @@ def _springserve_settings_from_adapter(adapter: AdapterConfig) -> SpringServeSet
     config = dict(adapter.config_json or {})
     return SpringServeSettings(
         default_demand_partner_id=config.get("default_demand_partner_id"),
+        rate_currency=config.get("rate_currency") or "USD",
         demand_class=config.get("demand_class") or "line_item",
         enable_key_value_targeting=bool(config.get("enable_key_value_targeting", False)),
     )
@@ -3553,6 +3558,7 @@ def put_springserve_settings(tenant_id: str):
 
         merged = dict(adapter.config_json or {})
         merged["default_demand_partner_id"] = settings.default_demand_partner_id
+        merged["rate_currency"] = settings.rate_currency
         merged["demand_class"] = settings.demand_class
         merged["enable_key_value_targeting"] = settings.enable_key_value_targeting
         validated_payload, error = _validated_connection_config_payload("springserve", merged)

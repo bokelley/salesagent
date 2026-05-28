@@ -2643,7 +2643,15 @@ class TestExtensionObligations:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        req = _make_request()
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_eur_fixed",
+                }
+            ]
+        )
         product = _mock_product("prod_1", currency="EUR")
 
         # Build adapter_config mock with GAM currency constraint

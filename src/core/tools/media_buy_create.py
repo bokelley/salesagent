@@ -11,6 +11,7 @@ Handles media buy creation including:
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
@@ -32,6 +33,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPError,
+    AdCPInvalidRequestError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPTermsRejectedError,
@@ -1816,6 +1818,8 @@ def _uses_first_pricing_option_alias(product: Any, pricing_option_id: str | None
     normalized = pricing_option_id.lower()
     if normalized == "default":
         return True
+    if normalized == "legacy_conversion":
+        return True
     return normalized == "test-pricing" and getattr(product, "product_id", None) == "test-product"
 
 
@@ -1869,9 +1873,16 @@ def _validate_pricing_model_selection(
     if _uses_first_pricing_option_alias(product, pricing_option_id):
         pricing_option_id = None
 
-    # If neither specified, use first pricing option from product
+    # If neither specified, use first pricing option from product. A
+    # campaign-level currency hint narrows legacy conversion aliases without
+    # mutating the request package into a concrete pricing_option_id too early.
     if not pricing_option_id and not pricing_model_fallback:
-        first_option = _unwrap_pricing_option(product.pricing_options[0])
+        candidate_options = [_unwrap_pricing_option(option) for option in product.pricing_options]
+        if campaign_currency:
+            currency_matches = [option for option in candidate_options if option.currency == campaign_currency]
+            if currency_matches:
+                candidate_options = currency_matches
+        first_option = candidate_options[0]
         return {
             "pricing_model": first_option.pricing_model,
             "rate": float(first_option.rate) if first_option.rate else None,
@@ -1882,22 +1893,30 @@ def _validate_pricing_model_selection(
 
     # Find matching pricing option
     selected_option = None
-    for option in product.pricing_options:
-        opt_inner = _unwrap_pricing_option(option)
-        option_id = _pricing_option_wire_id(opt_inner)
+    if pricing_option_id:
+        for option in product.pricing_options:
+            opt_inner = _unwrap_pricing_option(option)
+            option_id = _pricing_option_wire_id(opt_inner)
 
-        # Try matching by pricing_option_id first (AdCP spec)
-        if pricing_option_id and pricing_option_id.lower() == option_id.lower():
-            selected_option = opt_inner
-            break
-
-        # Fallback: match by pricing_model (legacy)
-        if pricing_model_fallback and opt_inner.pricing_model == pricing_model_fallback.value:
-            # If campaign currency specified, must match
-            if campaign_currency and opt_inner.currency != campaign_currency:
-                continue
-            selected_option = opt_inner
-            break
+            # Try matching by pricing_option_id first (AdCP spec)
+            if pricing_option_id.lower() == option_id.lower():
+                selected_option = opt_inner
+                break
+    elif pricing_model_fallback:
+        matching_options = [
+            _unwrap_pricing_option(option)
+            for option in product.pricing_options
+            if _unwrap_pricing_option(option).pricing_model == pricing_model_fallback.value
+        ]
+        if campaign_currency:
+            matching_options = [option for option in matching_options if option.currency == campaign_currency]
+        elif len({option.currency for option in matching_options if option.currency}) > 1:
+            raise AdCPValidationError(
+                f"Product {product.product_id} offers {pricing_model_fallback.value} pricing in multiple currencies. "
+                "Specify pricing_option_id instead of legacy pricing_model.",
+                details={"error_code": "PRICING_ERROR"},
+            )
+        selected_option = matching_options[0] if matching_options else None
 
     if not selected_option:
         # Show available options in same format as matching logic expects
@@ -1967,6 +1986,70 @@ def _validate_pricing_model_selection(
         "is_fixed": selected_option.is_fixed,
         "bid_price": float(package.bid_price) if package.bid_price else None,
     }
+
+
+def _collect_package_pricing_info_by_index(
+    packages: Sequence[PackageRequest | AdcpPackageRequest],
+    product_map: dict[str, Any],
+    *,
+    campaign_currency: str | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Resolve and validate selected pricing for request packages.
+
+    The returned dict is index-keyed because package IDs are generated later in
+    the create flow. Callers remap the entries after Package/MediaPackage
+    objects have their permanent package IDs.
+    """
+    package_pricing_info_by_index: dict[int, dict[str, Any]] = {}
+
+    for idx, package in enumerate(packages):
+        product_id = package.product_id
+        if not product_id or product_id not in product_map:
+            continue
+
+        package_pricing_info_by_index[idx] = _validate_pricing_model_selection(
+            package=package,
+            product=product_map[product_id],
+            campaign_currency=campaign_currency,
+        )
+
+    return package_pricing_info_by_index
+
+
+def _derive_single_request_currency(package_pricing_info_by_index: dict[int, dict[str, Any]]) -> str | None:
+    """Return the single selected currency for a media buy, or reject mixed currencies."""
+    currencies = sorted(
+        {
+            str(pricing_info["currency"])
+            for pricing_info in package_pricing_info_by_index.values()
+            if pricing_info.get("currency")
+        }
+    )
+    if not currencies:
+        return None
+    if len(currencies) > 1:
+        raise ValueError(
+            "All packages in a media buy must use the same currency. "
+            f"Selected currencies: {', '.join(currencies)}. "
+            "Create separate media buys for different currencies."
+        )
+    return currencies[0]
+
+
+def _derive_legacy_request_currency(req: CreateMediaBuyRequest) -> str | None:
+    """Best-effort currency extraction for deprecated request shapes."""
+    legacy_currency = getattr(req, "currency", None)
+    if legacy_currency:
+        return legacy_currency
+
+    legacy_budget = getattr(req, "budget", None)
+    if legacy_budget and hasattr(legacy_budget, "currency"):
+        return legacy_budget.currency
+
+    if req.packages and req.packages[0].budget and hasattr(req.packages[0].budget, "currency"):
+        return req.packages[0].budget.currency
+
+    return None
 
 
 async def _validate_and_convert_format_ids(
@@ -2474,71 +2557,29 @@ async def _create_media_buy_impl(
                     details={"missing_product_ids": sorted_missing, "field": "packages[].product_id"},
                 )
 
-            # Resolve legacy pricing_option_id values to actual product pricing_option_ids
-            # This happens when using the legacy product_ids parameter (auto-converted to packages)
+            # Resolve package pricing before currency-limit checks. Per AdCP,
+            # numeric package budgets inherit currency from the selected
+            # pricing_option_id, not from product ordering or a top-level field.
+            package_pricing_info_by_index: dict[int, dict[str, Any]] = {}
+            legacy_request_currency = _derive_legacy_request_currency(req)
             if req.packages:
-                for package in req.packages:
-                    if package.pricing_option_id == "legacy_conversion" and package.product_id in product_map:
-                        product = product_map[package.product_id]
-                        # Use the first pricing option from the product
-                        if product.pricing_options and len(product.pricing_options) > 0:
-                            package.pricing_option_id = _pricing_option_wire_id(product.pricing_options[0])
-                            logger.info(
-                                f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
-                            )
+                try:
+                    package_pricing_info_by_index = _collect_package_pricing_info_by_index(
+                        packages=req.packages,
+                        product_map=product_map,
+                        campaign_currency=legacy_request_currency,
+                    )
+                    request_currency = _derive_single_request_currency(package_pricing_info_by_index)
+                except AdCPError as e:
+                    # Re-raise pricing validation errors through the existing
+                    # buyer-fixable INVALID_REQUEST conversion below.
+                    raise ValueError(str(e)) from e
+            else:
+                request_currency = None
 
-            # Get currency from product pricing options (per AdCP spec)
-            request_currency: str | None = None
-
-            # First, try to get currency from first package's pricing option
-            if req.packages and len(req.packages) > 0:
-                first_package = req.packages[0]
-                package_product_ids = [first_package.product_id] if first_package.product_id else []
-
-                if package_product_ids and package_product_ids[0] in product_map:
-                    product = product_map[package_product_ids[0]]
-                    pricing_options = product.pricing_options or []
-
-                    # Helper to unwrap RootModel wrapper (adcp 2.14.0+ uses RootModel)
-                    def unwrap_po(po: Any) -> Any:
-                        return getattr(po, "root", po)
-
-                    # Find the pricing option matching the package's pricing_model (legacy field)
-                    first_package_pricing_model = getattr(first_package, "pricing_model", None)
-                    if first_package_pricing_model and pricing_options:
-                        matching_option = next(
-                            (
-                                unwrap_po(po)
-                                for po in pricing_options
-                                if unwrap_po(po).pricing_model == first_package_pricing_model
-                            ),
-                            None,
-                        )
-                        if matching_option:
-                            request_currency = matching_option.currency
-
-                    # If no pricing_model specified, use first pricing option's currency
-                    if not request_currency and pricing_options:
-                        request_currency = unwrap_po(pricing_options[0]).currency
-
-            # Fallback to deprecated/legacy sources
-            # Note: currency and budget fields no longer exist on CreateMediaBuyRequest per AdCP spec
-            # They have been moved to package level. Check with hasattr/getattr for backward compat.
-            legacy_currency = getattr(req, "currency", None)
-            legacy_budget = getattr(req, "budget", None)
-            if not request_currency and legacy_currency:
-                # Deprecated field, but still supported for backward compatibility
-                request_currency = legacy_currency
-            elif not request_currency and legacy_budget:
-                # Legacy: Extract currency from Budget object (if it's an object)
-                if hasattr(legacy_budget, "currency"):
-                    request_currency = legacy_budget.currency
-            elif not request_currency and req.packages and req.packages[0].budget:
-                # Legacy: Extract currency from package budget object (if it's an object)
-                if hasattr(req.packages[0].budget, "currency"):
-                    request_currency = req.packages[0].budget.currency
-
-            # Final fallback
+            # Fallback to deprecated/legacy sources only when package pricing
+            # could not establish a currency.
+            request_currency = request_currency or legacy_request_currency
             if not request_currency:
                 request_currency = "USD"
 
@@ -2575,32 +2616,6 @@ async def _create_media_buy_impl(
                         f"Contact the publisher to enable this currency in GAM."
                     )
                     raise ValueError(error_msg)
-
-            # NEW: Validate pricing_model selections (AdCP PR #88)
-            # Store validated pricing info for later use in adapter
-            # Use index-based keys since package IDs aren't generated yet
-            package_pricing_info_by_index = {}
-            if req.packages:
-                for idx, package in enumerate(req.packages):
-                    # Get product ID for this package (AdCP spec: single product per package)
-                    # Get product_id from package (AdCP spec has product_id field)
-                    package_product_ids = [package.product_id] if package.product_id else []
-
-                    # Validate pricing for the product
-                    if package_product_ids:
-                        product_id = package_product_ids[0]
-                        if product_id in product_map:
-                            try:
-                                pricing_info = _validate_pricing_model_selection(
-                                    package=package,
-                                    product=product_map[product_id],
-                                    campaign_currency=request_currency,
-                                )
-                                # Store by index (package IDs aren't generated yet)
-                                package_pricing_info_by_index[idx] = pricing_info
-                            except AdCPError as e:
-                                # Re-raise pricing validation errors
-                                raise ValueError(str(e)) from e
 
             # Validate minimum product spend (legacy + new pricing_options)
             if currency_limit.min_package_budget:
@@ -3785,7 +3800,7 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id, status="failed", error_message="Adapter validation failed"
                 )
-            raise AdCPValidationError(
+            raise AdCPInvalidRequestError(
                 "; ".join(pre_creation_errors),
                 details={"error_code": "ADAPTER_VALIDATION_FAILED"},
             )

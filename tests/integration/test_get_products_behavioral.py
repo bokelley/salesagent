@@ -19,7 +19,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import AdapterConfigFactory, PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -433,6 +433,61 @@ class TestAdapterSupportAnnotation:
         inner = response.products[0].pricing_options[0].root
         assert inner.supported is False
         assert "VCPM" in inner.unsupported_reason
+
+    @pytest.mark.asyncio
+    async def test_adapter_specific_pricing_option_support_reason_is_used(self, integration_db):
+        """Adapter-specific pricing constraints are reflected in get_products annotations."""
+        with ProductEnv(tenant_id="adpt-currency", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="adpt-currency", subdomain="adpt-currency")
+            PrincipalFactory(tenant=tenant, principal_id="p1")
+            p = ProductFactory(tenant=tenant, product_id="p1")
+            PricingOptionFactory(product=p, pricing_model="cpm", currency="EUR")
+
+            with patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter:
+                mock_adapter = MagicMock()
+                mock_adapter.get_supported_pricing_models.return_value = {"cpm"}
+                mock_adapter.get_pricing_option_support.return_value = (
+                    False,
+                    "SpringServe rate_currency (USD) does not support EUR pricing",
+                )
+                mock_get_adapter.return_value = mock_adapter
+
+                response = await env.call_impl(brief="campaign")
+
+        inner = response.products[0].pricing_options[0].root
+        assert inner.supported is False
+        assert inner.unsupported_reason == "SpringServe rate_currency (USD) does not support EUR pricing"
+
+    @pytest.mark.asyncio
+    async def test_springserve_rate_currency_annotates_pricing_options(self, integration_db):
+        """Persisted SpringServe rate_currency controls buyer-visible pricing support."""
+        with ProductEnv(tenant_id="adpt-ss-currency", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="adpt-ss-currency", subdomain="adpt-ss-currency", ad_server="springserve")
+            PrincipalFactory(tenant=tenant, principal_id="p1")
+            AdapterConfigFactory(
+                tenant=tenant,
+                adapter_type="springserve",
+                config_json={
+                    "api_token": "test-token",
+                    "environment": "production",
+                    "rate_currency": "EUR",
+                    "demand_class": "line_item",
+                    "enable_key_value_targeting": False,
+                },
+            )
+            p = ProductFactory(tenant=tenant, product_id="p1")
+            PricingOptionFactory(product=p, pricing_model="cpm", currency="USD")
+            PricingOptionFactory(product=p, pricing_model="cpm", currency="EUR")
+
+            response = await env.call_impl(brief="campaign")
+
+        support_by_currency = {
+            option.root.currency: (option.root.supported, getattr(option.root, "unsupported_reason", None))
+            for option in response.products[0].pricing_options
+        }
+        assert support_by_currency["EUR"] == (True, None)
+        assert support_by_currency["USD"][0] is False
+        assert "rate_currency (EUR)" in support_by_currency["USD"][1]
 
 
 # ---- Empty results pipeline stages: test 7 (S5) ----

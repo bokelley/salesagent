@@ -97,6 +97,74 @@ class TestCapabilities:
         video_types = {f["type"] for f in formats}
         assert video_types == {"video", "audio"}
 
+    def test_rate_currency_must_match_selected_pricing_currency(self, mock_principal, sample_request, sample_packages):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok", "rate_currency": "EUR"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+
+        errors = adapter.validate_media_buy_request(
+            sample_request,
+            sample_packages,
+            datetime(2026, 6, 1, tzinfo=UTC),
+            datetime(2026, 6, 30, tzinfo=UTC),
+            {
+                sample_packages[0].package_id: {
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "USD",
+                    "is_fixed": True,
+                    "bid_price": None,
+                }
+            },
+        )
+
+        assert any("rate_currency" in error and "USD" in error and "EUR" in error for error in errors)
+
+    def test_pricing_option_support_rejects_non_configured_currency(self, mock_principal):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok", "rate_currency": "USD"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        pricing_option = MagicMock(pricing_model="cpm", currency="EUR")
+
+        is_supported, unsupported_reason = adapter.get_pricing_option_support(pricing_option)
+
+        assert is_supported is False
+        assert unsupported_reason is not None
+        assert "rate_currency" in unsupported_reason
+        assert "USD" in unsupported_reason
+        assert "EUR" in unsupported_reason
+
+    def test_dry_run_create_allows_matching_non_usd_pricing(self, mock_principal, sample_request, sample_packages):
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok", "rate_currency": "EUR"},
+            principal=mock_principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+
+        response = invoke_create_media_buy(
+            adapter,
+            sample_request,
+            sample_packages,
+            {
+                sample_packages[0].package_id: {
+                    "pricing_model": "cpm",
+                    "rate": 10.0,
+                    "currency": "EUR",
+                    "is_fixed": True,
+                    "bid_price": None,
+                }
+            },
+        )
+
+        assert isinstance(response, CreateMediaBuySuccess)
+
 
 class TestAdapterDryRun:
     def test_dry_run_creates_buy_without_calling_client(self, mock_principal, sample_request, sample_packages):

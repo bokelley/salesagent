@@ -490,6 +490,7 @@ class TestTenantManagementAPIIntegration:
                 "api_token": "test_ss_token",
                 "environment": "production",
                 "default_demand_partner_id": 111,
+                "rate_currency": "USD",
                 "demand_class": "line_item",
                 "enable_key_value_targeting": False,
             },
@@ -503,11 +504,14 @@ class TestTenantManagementAPIIntegration:
         assert schema_response.status_code == 200
         assert schema_response.json["type"] == "springserve"
         schema_properties = schema_response.json["schema"]["properties"]
-        assert {"default_demand_partner_id", "demand_class", "enable_key_value_targeting"}.issubset(schema_properties)
+        assert {"default_demand_partner_id", "rate_currency", "demand_class", "enable_key_value_targeting"}.issubset(
+            schema_properties
+        )
 
         payload = {
             "type": "springserve",
             "default_demand_partner_id": 222,
+            "rate_currency": "EUR",
             "demand_class": "tag",
             "enable_key_value_targeting": True,
         }

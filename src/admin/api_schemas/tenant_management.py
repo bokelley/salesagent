@@ -191,8 +191,14 @@ class SpringServeAdapterConfig(BaseModel):
     api_token: SecretStr | None = None
     environment: Literal["production"] = "production"
     default_demand_partner_id: int | None = None
+    rate_currency: str = Field(default="USD", pattern="^[A-Z]{3}$", min_length=3, max_length=3)
     demand_class: Literal["line_item", "tag"] = "line_item"
     enable_key_value_targeting: bool = False
+
+    @field_validator("rate_currency", mode="before")
+    @classmethod
+    def _normalize_rate_currency(cls, value: str) -> str:
+        return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _require_credentials(self) -> SpringServeAdapterConfig:
@@ -332,6 +338,13 @@ class SpringServeSettings(BaseModel):
         default=None,
         description=("Fallback SpringServe Demand Partner ID for principals without an explicit SpringServe mapping."),
     )
+    rate_currency: str = Field(
+        default="USD",
+        pattern="^[A-Z]{3}$",
+        min_length=3,
+        max_length=3,
+        description="ISO 4217 currency used for SpringServe Campaign and Demand Tag rates.",
+    )
     demand_class: Literal["line_item", "tag"] = Field(
         default="line_item",
         description=(
@@ -343,6 +356,11 @@ class SpringServeSettings(BaseModel):
         default=False,
         description="Translate AdCP signals into SpringServe demand_tag_keys entries on created demand tags.",
     )
+
+    @field_validator("rate_currency", mode="before")
+    @classmethod
+    def _normalize_rate_currency(cls, value: str) -> str:
+        return value.upper() if isinstance(value, str) else value
 
 
 class AdapterSettingsValidationError(BaseModel):

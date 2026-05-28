@@ -53,6 +53,33 @@ def get_recommended_cpm(product: Any) -> float | None:
     return None
 
 
+def _default_pricing_option_support(pricing_option: Any, supported_models: set[str]) -> tuple[bool, str | None]:
+    pricing_model = getattr(pricing_option, "pricing_model", "")
+    pricing_model_str = getattr(pricing_model, "value", pricing_model)
+    is_supported = str(pricing_model_str).lower() in supported_models
+    if is_supported:
+        return True, None
+
+    return False, f"Current adapter does not support {str(pricing_model_str).upper()} pricing"
+
+
+def _get_pricing_option_support(
+    adapter: Any, pricing_option: Any, supported_models: set[str]
+) -> tuple[bool, str | None]:
+    support_checker = getattr(adapter, "get_pricing_option_support", None)
+    if callable(support_checker):
+        result = support_checker(pricing_option)
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], bool)
+            and (result[1] is None or isinstance(result[1], str))
+        ):
+            return result
+
+    return _default_pricing_option_support(pricing_option, supported_models)
+
+
 # Import conversion utilities from dedicated module to avoid circular imports
 from src.core.product_conversion import convert_product_model_to_resolved
 from src.core.resolved_product import ResolvedProduct
@@ -736,23 +763,19 @@ async def _get_products_impl(
             # Get adapter in dry-run mode (no actual ad server calls)
             adapter = get_adapter(principal, dry_run=True, tenant=tenant)
 
-            supported_models = adapter.get_supported_pricing_models()
+            supported_models = {str(model).lower() for model in adapter.get_supported_pricing_models()}
 
             for product in eligible_products:
                 if product.pricing_options:
                     # Annotate each pricing option with "supported" flag
                     for option in product.pricing_options:
                         inner = option.root
-                        # Get pricing model as string (handle both enum and literal)
-                        pricing_model = getattr(inner.pricing_model, "value", inner.pricing_model)
                         # Add supported annotation (will be included in response)
                         # Dynamic attributes on discriminated union types
-                        is_supported = pricing_model in supported_models
+                        is_supported, unsupported_reason = _get_pricing_option_support(adapter, inner, supported_models)
                         inner.supported = is_supported
                         if not is_supported:
-                            inner.unsupported_reason = (
-                                f"Current adapter does not support {str(pricing_model).upper()} pricing"
-                            )
+                            inner.unsupported_reason = unsupported_reason
         except (ImportError, RuntimeError, OSError, ValueError) as e:
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 

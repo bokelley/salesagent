@@ -7,7 +7,32 @@ import pytest
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import PricingModel
-from src.core.tools.media_buy_create import _validate_pricing_model_selection
+from src.core.tools.media_buy_create import (
+    _collect_package_pricing_info_by_index,
+    _derive_single_request_currency,
+    _validate_pricing_model_selection,
+)
+
+
+def _fixed_pricing_option(pricing_model: str = "cpm", currency: str = "USD", rate: str = "10.00") -> Mock:
+    pricing_option = Mock(spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package"])
+    pricing_option.pricing_model = pricing_model
+    pricing_option.currency = currency
+    pricing_option.is_fixed = True
+    pricing_option.rate = Decimal(rate)
+    pricing_option.min_spend_per_package = None
+    return pricing_option
+
+
+def _package(product_id: str, pricing_option_id: str | None, pricing_model: PricingModel | None = None) -> Mock:
+    package = Mock()
+    package.package_id = None
+    package.product_id = product_id
+    package.budget = 5000.0
+    package.pricing_option_id = pricing_option_id
+    package.pricing_model = pricing_model
+    package.bid_price = None
+    return package
 
 
 class TestPricingValidation:
@@ -269,6 +294,108 @@ class TestPricingValidation:
         assert result["pricing_model"] == "cpm"
         assert result["is_fixed"] is False
         assert result["bid_price"] == 18.0
+
+    def test_request_currency_comes_from_selected_pricing_option(self):
+        """Selected pricing_option_id, not first product option, determines currency."""
+        product = Mock()
+        product.product_id = "product_1"
+        product.pricing_options = [
+            _fixed_pricing_option(currency="USD"),
+            _fixed_pricing_option(currency="EUR"),
+        ]
+
+        package_pricing_info = _collect_package_pricing_info_by_index(
+            packages=[_package("product_1", "cpm_eur_fixed")],
+            product_map={"product_1": product},
+        )
+
+        assert package_pricing_info[0]["currency"] == "EUR"
+        assert _derive_single_request_currency(package_pricing_info) == "EUR"
+
+    def test_mixed_selected_currencies_are_rejected(self):
+        """A media buy cannot combine packages selected in different currencies."""
+        usd_product = Mock()
+        usd_product.product_id = "usd_product"
+        usd_product.pricing_options = [_fixed_pricing_option(currency="USD")]
+
+        eur_product = Mock()
+        eur_product.product_id = "eur_product"
+        eur_product.pricing_options = [_fixed_pricing_option(currency="EUR")]
+
+        package_pricing_info = _collect_package_pricing_info_by_index(
+            packages=[
+                _package("usd_product", "cpm_usd_fixed"),
+                _package("eur_product", "cpm_eur_fixed"),
+            ],
+            product_map={"usd_product": usd_product, "eur_product": eur_product},
+        )
+
+        with pytest.raises(ValueError, match="same currency"):
+            _derive_single_request_currency(package_pricing_info)
+
+    def test_legacy_campaign_currency_disambiguates_pricing_model_selection(self):
+        """Legacy currency fields still steer pricing_model fallback selection."""
+        usd_first_product = Mock()
+        usd_first_product.product_id = "usd_first_product"
+        usd_first_product.pricing_options = [
+            _fixed_pricing_option(currency="USD"),
+            _fixed_pricing_option(currency="EUR"),
+        ]
+
+        eur_first_product = Mock()
+        eur_first_product.product_id = "eur_first_product"
+        eur_first_product.pricing_options = [
+            _fixed_pricing_option(currency="EUR"),
+            _fixed_pricing_option(currency="USD"),
+        ]
+
+        package_pricing_info = _collect_package_pricing_info_by_index(
+            packages=[
+                _package("usd_first_product", None, PricingModel.cpm),
+                _package("eur_first_product", None, PricingModel.cpm),
+            ],
+            product_map={
+                "usd_first_product": usd_first_product,
+                "eur_first_product": eur_first_product,
+            },
+            campaign_currency="USD",
+        )
+
+        assert package_pricing_info[0]["currency"] == "USD"
+        assert package_pricing_info[1]["currency"] == "USD"
+        assert _derive_single_request_currency(package_pricing_info) == "USD"
+
+    def test_legacy_conversion_uses_campaign_currency_before_first_option(self):
+        """Legacy product_ids conversion honors request currency before product option order."""
+        product = Mock()
+        product.product_id = "legacy_product"
+        product.pricing_options = [
+            _fixed_pricing_option(currency="USD"),
+            _fixed_pricing_option(currency="EUR"),
+        ]
+
+        package_pricing_info = _collect_package_pricing_info_by_index(
+            packages=[_package("legacy_product", "legacy_conversion")],
+            product_map={"legacy_product": product},
+            campaign_currency="EUR",
+        )
+
+        assert package_pricing_info[0]["currency"] == "EUR"
+
+    def test_legacy_pricing_model_without_currency_rejects_multi_currency_options(self):
+        """Legacy pricing_model cannot silently pick from multiple currencies."""
+        product = Mock()
+        product.product_id = "legacy_product"
+        product.pricing_options = [
+            _fixed_pricing_option(currency="USD"),
+            _fixed_pricing_option(currency="EUR"),
+        ]
+
+        with pytest.raises(AdCPValidationError, match="multiple currencies"):
+            _collect_package_pricing_info_by_index(
+                packages=[_package("legacy_product", None, PricingModel.cpm)],
+                product_map={"legacy_product": product},
+            )
 
     def test_product_with_no_pricing_information(self):
         """Test product with no pricing_options should raise data integrity error."""

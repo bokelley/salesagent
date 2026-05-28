@@ -201,6 +201,7 @@ def get_adapter(
                             "api_token": ss_validated.api_token,
                             "environment": ss_validated.environment,
                             "default_demand_partner_id": ss_validated.default_demand_partner_id,
+                            "rate_currency": ss_validated.rate_currency,
                             "demand_class": ss_validated.demand_class,
                             "enable_key_value_targeting": ss_validated.enable_key_value_targeting,
                             "manual_approval_required": ss_validated.manual_approval_required,

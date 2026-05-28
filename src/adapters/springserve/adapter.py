@@ -162,6 +162,7 @@ class SpringServeAdapter(AdServerAdapter):
                 f"{sorted(DEMAND_CLASS_WIRE_VALUES.keys())}"
             )
         self.enable_key_value_targeting = bool(self.config.get("enable_key_value_targeting", False))
+        self.rate_currency = self._configured_rate_currency()
 
         if self.dry_run:
             self.log(
@@ -185,6 +186,51 @@ class SpringServeAdapter(AdServerAdapter):
 
     def get_supported_pricing_models(self) -> set[str]:
         return {"cpm", "flat_rate"}
+
+    def _configured_rate_currency(self) -> str:
+        return str(self.config.get("rate_currency", "USD")).upper()
+
+    def get_pricing_option_support(self, pricing_option: Any) -> tuple[bool, str | None]:
+        is_supported, unsupported_reason = super().get_pricing_option_support(pricing_option)
+        if not is_supported:
+            return is_supported, unsupported_reason
+
+        selected_currency = getattr(pricing_option, "currency", None)
+        configured_currency = self._configured_rate_currency()
+        if selected_currency and str(selected_currency).upper() != configured_currency:
+            return (
+                False,
+                f"SpringServe rate_currency ({configured_currency}) does not support {selected_currency} pricing",
+            )
+
+        return True, None
+
+    def validate_media_buy_request(
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[str]:
+        """Validate SpringServe constraints before creating upstream objects."""
+        errors = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+
+        selected_currencies = {
+            str(pricing["currency"]).upper()
+            for pricing in (package_pricing_info or {}).values()
+            if pricing.get("currency")
+        }
+        configured_currency = self._configured_rate_currency()
+        if selected_currencies and selected_currencies != {configured_currency}:
+            errors.append(
+                "SpringServe rate_currency "
+                f"({configured_currency}) does not match selected pricing currency "
+                f"({', '.join(sorted(selected_currencies))}). "
+                "Update the adapter rate_currency or choose matching product pricing."
+            )
+
+        return errors
 
     def get_creative_formats(self) -> list[dict[str, Any]]:
         """Return the static set of VAST video + audio formats this adapter supports."""
@@ -306,7 +352,7 @@ class SpringServeAdapter(AdServerAdapter):
             "end_date": end_time,
             "format": self._demand_tag_format(package),
             "rate": rate,
-            "rate_currency": self.config.get("rate_currency", "USD"),
+            "rate_currency": self.rate_currency,
             "demand_code": f"{po_number}_{package.package_id}" if po_number else package.package_id,
             "secondary_code": package.package_id,
             "note": (
@@ -341,7 +387,7 @@ class SpringServeAdapter(AdServerAdapter):
             return targeting_error
 
         buy_name = self._buy_name(request)
-        rate_currency = self.config.get("rate_currency", "USD")
+        rate_currency = self.rate_currency
 
         if self.dry_run:
             self.log(f"Would call: POST {self.base_url}/campaigns")

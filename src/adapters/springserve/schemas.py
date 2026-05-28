@@ -74,6 +74,17 @@ class SpringServeConnectionConfig(BaseConnectionConfig):
         ),
         json_schema_extra={"ui_order": 5},
     )
+    rate_currency: str = Field(
+        default="USD",
+        pattern="^[A-Z]{3}$",
+        min_length=3,
+        max_length=3,
+        description=(
+            "ISO 4217 currency used for SpringServe Campaign and Demand Tag rates. "
+            "Selected product pricing must use this currency."
+        ),
+        json_schema_extra={"ui_order": 6},
+    )
     demand_class: Literal["line_item", "tag"] = Field(
         default="line_item",
         description=(
@@ -86,7 +97,7 @@ class SpringServeConnectionConfig(BaseConnectionConfig):
             "Creatives tab; Tag class does not), so this is a per-tenant "
             "provisioning decision tied to the buyer integration model."
         ),
-        json_schema_extra={"ui_order": 6, "enum": ["line_item", "tag"]},
+        json_schema_extra={"ui_order": 7, "enum": ["line_item", "tag"]},
     )
     enable_key_value_targeting: bool = Field(
         default=False,
@@ -99,7 +110,7 @@ class SpringServeConnectionConfig(BaseConnectionConfig):
             "aren't reflected in their supply taxonomy and you want AdCP signals "
             "to drive those keys directly."
         ),
-        json_schema_extra={"ui_order": 7},
+        json_schema_extra={"ui_order": 8},
     )
 
     @property
@@ -123,6 +134,11 @@ class SpringServeConnectionConfig(BaseConnectionConfig):
     @classmethod
     def _decrypt_token(cls, value: str | None) -> str | None:
         return decrypt_secret_value(value)
+
+    @field_validator("rate_currency", mode="before")
+    @classmethod
+    def _normalize_rate_currency(cls, value: str) -> str:
+        return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _require_credentials(self) -> "SpringServeConnectionConfig":
