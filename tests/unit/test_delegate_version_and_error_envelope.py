@@ -171,6 +171,48 @@ class TestRequestedVersionWireAdaptation:
         assert wire["status"] == "canceled"
         assert "media_buy_status" not in wire
 
+    def test_list_creative_formats_3_0_omits_supported_macros(self) -> None:
+        response = {
+            "formats": [
+                {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "display_image",
+                        "width": 300,
+                        "height": 250,
+                    },
+                    "name": "Display 300x250",
+                    "type": "display",
+                    "supported_macros": ["MEDIA_BUY_ID", "CACHEBUSTER"],
+                }
+            ]
+        }
+
+        wire = _to_wire(response, requested_adcp_version="3.0", tool_name="list_creative_formats")
+
+        assert "supported_macros" not in wire["formats"][0]
+
+    def test_list_creative_formats_3_1_preserves_supported_macros(self) -> None:
+        response = {
+            "formats": [
+                {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "display_image",
+                        "width": 300,
+                        "height": 250,
+                    },
+                    "name": "Display 300x250",
+                    "type": "display",
+                    "supported_macros": ["MEDIA_BUY_ID", "CACHEBUSTER"],
+                }
+            ]
+        }
+
+        wire = _to_wire(response, requested_adcp_version=explicit_adcp_version(), tool_name="list_creative_formats")
+
+        assert wire["formats"][0]["supported_macros"] == ["MEDIA_BUY_ID", "CACHEBUSTER"]
+
 
 class TestMaybeRaiseLegacyErrors:
     """``_maybe_raise_legacy_errors`` promotes the legacy ``errors=[...]``

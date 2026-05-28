@@ -23,6 +23,11 @@ from src.core.tracing import traced
 logger = logging.getLogger(__name__)
 
 
+def _confirmed_at_for_wire(confirmed_at: datetime | None, created_at: datetime | None) -> datetime:
+    """Return a protocol-required commitment timestamp for legacy rows."""
+    return confirmed_at or created_at or datetime.now(UTC)
+
+
 @dataclass
 class _MediaBuyData:
     """Plain data extracted from a MediaBuy ORM row."""
@@ -262,7 +267,7 @@ def _get_media_buys_impl(
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
                 revision=getattr(buy, "revision", 1) or 1,
-                confirmed_at=buy.confirmed_at,
+                confirmed_at=_confirmed_at_for_wire(buy.confirmed_at, buy.created_at),
                 ext=buy_ext,
             )
         )

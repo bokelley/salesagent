@@ -18,6 +18,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.adcp_request_builder import parse_tool_result
+from tests.helpers.adcp_versions import explicit_adcp_version
 
 _EMBEDDED_ORG_ID = "e2e-webhook-org"
 
@@ -287,6 +288,7 @@ async def test_sync_accounts_registration_fires_account_product_and_signal_webho
         wholesale_result = await client.call_tool(
             "get_signals",
             {
+                "adcp_version": explicit_adcp_version(),
                 "discovery_mode": "wholesale",
                 "if_wholesale_feed_version": signal_payload["wholesale_feed_version"],
                 "if_pricing_version": signal_payload["wholesale_feed_version"],

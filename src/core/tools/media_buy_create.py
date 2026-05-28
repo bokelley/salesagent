@@ -2138,7 +2138,9 @@ def _build_idempotency_hit_result(
                 status="completed",
                 media_buy_status=_media_buy_status_for_create_replay(existing),
                 revision=1,
-                confirmed_at=getattr(existing, "confirmed_at", None),
+                confirmed_at=getattr(existing, "confirmed_at", None)
+                or getattr(existing, "created_at", None)
+                or datetime.now(UTC),
                 replayed=True,
             ),
             status=AdcpTaskStatus.completed.value,
@@ -3305,7 +3307,7 @@ async def _create_media_buy_impl(
                 status="completed",
                 media_buy_status=buy_status,
                 revision=1,
-                confirmed_at=None,
+                confirmed_at=datetime.now(UTC),
                 workflow_step_id=step.step_id,
             )
             ctx_manager.update_workflow_step(
@@ -3519,7 +3521,7 @@ async def _create_media_buy_impl(
                 status="completed",
                 media_buy_status=buy_status,
                 revision=1,
-                confirmed_at=None,
+                confirmed_at=datetime.now(UTC),
                 workflow_step_id=step.step_id,
             )
             ctx_manager.update_workflow_step(
@@ -3810,7 +3812,7 @@ async def _create_media_buy_impl(
                 if _request_has_creatives(req)
                 else MediaBuyStatus.pending_creatives,
                 revision=1,
-                confirmed_at=None,
+                confirmed_at=datetime.now(UTC),
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 

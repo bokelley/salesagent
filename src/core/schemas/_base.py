@@ -1,6 +1,6 @@
 import uuid
 import warnings
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
@@ -260,8 +260,8 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         ge=1,
         description="Monotonic media-buy revision for optimistic concurrency.",
     )
-    confirmed_at: datetime | None = Field(
-        default=None,
+    confirmed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp when the seller committed to the media buy.",
     )
     replayed: bool | None = Field(
@@ -2446,8 +2446,8 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
         ge=1,
         description="Monotonic media-buy revision for optimistic concurrency.",
     )
-    confirmed_at: datetime | None = Field(
-        default=None,
+    confirmed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp when the seller committed to the media buy.",
     )
     ext: dict | None = Field(

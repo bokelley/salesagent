@@ -220,7 +220,9 @@ class TestA2AWebhookPayloadTypes:
                                         total_budget=5000.0,
                                         # Future-dated window so the impl's "start time cannot
                                         # be in the past" guard doesn't fail the workflow step.
-                                        start_time="asap",
+                                        start_time=(datetime.now(UTC) + timedelta(days=1)).strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ"
+                                        ),
                                         end_time=(datetime.now(UTC) + timedelta(days=30)).strftime(
                                             "%Y-%m-%dT%H:%M:%SZ"
                                         ),

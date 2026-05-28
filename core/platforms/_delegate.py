@@ -306,6 +306,8 @@ def _adapt_response_for_requested_version(
     tool_name: str,
 ) -> dict[str, Any]:
     """Project newer media-buy response fields back to the requested release."""
+    if requested_adcp_version == "3.0" and tool_name == "list_creative_formats":
+        return _strip_legacy_3_0_incompatible_format_fields(wire)
     if requested_adcp_version != "3.0" or tool_name not in {"create_media_buy", "update_media_buy"}:
         return wire
     if wire.get("status") != "completed" or "media_buy_status" not in wire:
@@ -314,6 +316,25 @@ def _adapt_response_for_requested_version(
     adapted = dict(wire)
     media_buy_status = adapted.pop("media_buy_status")
     adapted["status"] = media_buy_status
+    return adapted
+
+
+def _strip_legacy_3_0_incompatible_format_fields(wire: dict[str, Any]) -> dict[str, Any]:
+    """Remove fields that cannot validate against the legacy 3.0 schema.
+
+    AdCP 3.0 modeled ``supported_macros`` as ``oneOf[UniversalMacro, string]``.
+    Standard macro names match both branches, so no string value can be emitted
+    portably there. AdCP 3.1 beta fixes that schema composition; preserve the
+    field for explicit 3.1 callers and omit it only for legacy-default buyers.
+    """
+    formats = wire.get("formats")
+    if not isinstance(formats, list):
+        return wire
+
+    adapted = dict(wire)
+    adapted["formats"] = [
+        {k: v for k, v in fmt.items() if k != "supported_macros"} if isinstance(fmt, dict) else fmt for fmt in formats
+    ]
     return adapted
 
 
@@ -803,11 +824,12 @@ async def _delegate_get_media_buy_delivery(req: Any, ctx: RequestContext[Any]) -
 async def _delegate_list_creative_formats(req: Any, ctx: RequestContext[Any]) -> dict[str, Any]:
     """Forward to ``src/core/tools/creative_formats.py:_list_creative_formats_impl``."""
     identity = _build_identity(ctx)
+    requested_adcp_version = _resolve_requested_version(req or {})
     req_model: Any = None
     if req is not None:
         req_model = _coerce_to_request_model(req, ListCreativeFormatsRequest)
     response = await asyncio.to_thread(_list_creative_formats_impl, req_model, identity)
-    return _to_wire(response)
+    return _to_wire(response, requested_adcp_version=requested_adcp_version, tool_name="list_creative_formats")
 
 
 @translate_adcp_errors

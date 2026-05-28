@@ -519,10 +519,11 @@ class TestWireShapeValidatesAgainstLibrary:
         """Spec contract: variant-1 with ``status='pending_creatives'`` is valid.
 
         Independent of our implementation, the discriminated union must accept
-        ``{media_buy_id, packages, status: 'pending_creatives'}`` as the
+        ``{media_buy_id, packages, status: 'completed',
+        media_buy_status: 'pending_creatives', revision, confirmed_at}`` as the
         sync-success shape for "buy minted, awaiting creatives sync." This is
-        the storyboard contract that PR #183 inadvertently broke by routing
-        the case through variant-3 (``submitted``).
+        the storyboard contract that PR #183 inadvertently broke by routing the
+        case through variant-3 (``submitted``).
         """
         from adcp.types import CreateMediaBuyResponse as LibResponse
         from pydantic import TypeAdapter
@@ -530,7 +531,10 @@ class TestWireShapeValidatesAgainstLibrary:
         wire = {
             "media_buy_id": "mb_test",
             "packages": [{"package_id": "pkg_test", "paused": False}],
-            "status": "pending_creatives",
+            "confirmed_at": "2026-05-28T00:00:00Z",
+            "revision": 1,
+            "media_buy_status": "pending_creatives",
+            "status": "completed",
         }
         # Raises ValidationError on spec drift; success means the discriminated
         # union resolves cleanly to the sync-success variant.
