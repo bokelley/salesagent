@@ -705,6 +705,37 @@ class TestAdapterConfig:
 
 
 class TestGamAdvertiserEnsure:
+    @staticmethod
+    def _post_ensure(client, auth_headers, tenant_id: str, name: str):
+        return client.post(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:ensure",
+            headers=auth_headers,
+            json={"name": name},
+        )
+
+    @staticmethod
+    def _stub_ensure_success(monkeypatch, *, advertiser_id: str = "adv_created", created: bool = True):
+        import src.admin.tenant_management_api as api_module
+        from src.core.helpers.account_provisioning import GamAdvertiserProvisionResult
+
+        def _create(**kwargs):
+            return GamAdvertiserProvisionResult(
+                advertiser_id=advertiser_id,
+                name=kwargs["name"],
+                created=created,
+            )
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _create)
+
+    @staticmethod
+    def _stub_ensure_error(monkeypatch, message: str):
+        import src.admin.tenant_management_api as api_module
+
+        def _fail(**_kwargs):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _fail)
+
     @pytest.fixture
     def tid(self, client, auth_headers, cleanup_tenants):
         payload = _provision_payload(external_org_id="org_gam_adv_ensure")
@@ -724,9 +755,9 @@ class TestGamAdvertiserEnsure:
 
         monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _unexpected_create)
 
-        session = GamAdvertiserFactory._meta.sqlalchemy_session
-        assert session is not None
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tid)).first()
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+        tenant = TenantConfigRepository(bound_factories, tid).get_tenant()
         assert tenant is not None
         GamAdvertiserFactory(
             tenant=tenant,
@@ -736,63 +767,85 @@ class TestGamAdvertiserEnsure:
             synced_at=datetime.now(UTC),
         )
 
-        resp = client.post(
-            f"/api/v1/tenant-management/tenants/{tid}/gam/advertisers:ensure",
-            headers=auth_headers,
-            json={"name": "Interchange-default"},
-        )
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-default")
 
         assert resp.status_code == 200
         body = resp.get_json()
         assert body["created"] is False
         assert body["advertiser"]["id"] == "adv_existing"
 
-    def test_ensure_creates_and_caches_missing_advertiser(self, client, auth_headers, tid, monkeypatch):
-        import src.admin.tenant_management_api as api_module
-        from src.core.helpers.account_provisioning import GamAdvertiserProvisionResult
+    def test_ensure_ignores_inactive_cached_advertiser(self, client, auth_headers, tid, monkeypatch, bound_factories):
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
 
-        def _create(**kwargs):
-            return GamAdvertiserProvisionResult(
-                advertiser_id="adv_created",
-                name=kwargs["name"],
-                created=True,
-            )
+        self._stub_ensure_success(monkeypatch, advertiser_id="adv_created")
 
-        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _create)
-
-        resp = client.post(
-            f"/api/v1/tenant-management/tenants/{tid}/gam/advertisers:ensure",
-            headers=auth_headers,
-            json={"name": "Interchange-Nike"},
+        tenant = TenantConfigRepository(bound_factories, tid).get_tenant()
+        assert tenant is not None
+        GamAdvertiserFactory(
+            tenant=tenant,
+            advertiser_id="adv_inactive",
+            name="Interchange-Inactive",
+            status="inactive",
+            synced_at=datetime.now(UTC),
         )
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-Inactive")
 
         assert resp.status_code == 201, resp.get_data(as_text=True)
         body = resp.get_json()
         assert body["created"] is True
         assert body["advertiser"]["id"] == "adv_created"
+
+    def test_ensure_creates_and_caches_missing_advertiser(
+        self, client, auth_headers, tid, monkeypatch, bound_factories
+    ):
         from src.core.database.repositories.gam_sync import GAMSyncRepository
 
-        with get_db_session() as session:
-            cached = GAMSyncRepository(session, tid).get_advertiser("adv_created")
-            assert cached is not None
-            assert cached.name == "Interchange-Nike"
+        self._stub_ensure_success(monkeypatch, advertiser_id="adv_created")
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-Nike")
+
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["created"] is True
+        assert body["advertiser"]["id"] == "adv_created"
+        cached = GAMSyncRepository(bound_factories, tid).get_advertiser("adv_created")
+        assert cached is not None
+        assert cached.name == "Interchange-Nike"
 
     def test_ensure_maps_create_permission_failure(self, client, auth_headers, tid, monkeypatch):
-        import src.admin.tenant_management_api as api_module
+        self._stub_ensure_error(monkeypatch, "[AuthenticationError.NOT_ALLOWED @ networkCode]")
 
-        def _deny(**_kwargs):
-            raise RuntimeError("[AuthenticationError.NOT_ALLOWED @ networkCode]")
-
-        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _deny)
-
-        resp = client.post(
-            f"/api/v1/tenant-management/tenants/{tid}/gam/advertisers:ensure",
-            headers=auth_headers,
-            json={"name": "Interchange-WPP"},
-        )
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-WPP")
 
         assert resp.status_code == 403
         assert resp.get_json()["error"] == "adapter_permission_denied"
+
+    def test_ensure_maps_network_not_found_failure(self, client, auth_headers, tid, monkeypatch):
+        self._stub_ensure_error(
+            monkeypatch,
+            "GAM fault from internal-gam-proxy.local [AuthenticationError.NETWORK_NOT_FOUND @ ; trigger:'12345']",
+        )
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-BadNetwork")
+
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["error"] == "adapter_network_not_found"
+        fault = body["details"]["vendor_fault"]
+        assert fault["vendor_message"] == "AuthenticationError.NETWORK_NOT_FOUND"
+        assert fault["gam"]["reason"] == "NETWORK_NOT_FOUND"
+        assert "internal-gam-proxy" not in str(body)
+
+    def test_ensure_maps_no_networks_to_permission_failure(self, client, auth_headers, tid, monkeypatch):
+        self._stub_ensure_error(monkeypatch, "[AuthenticationError.NO_NETWORKS_TO_ACCESS @ networkCode]")
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-NoNetworks")
+
+        assert resp.status_code == 403
+        body = resp.get_json()
+        assert body["error"] == "adapter_permission_denied"
+        assert body["details"]["vendor_fault"]["gam"]["reason"] == "NO_NETWORKS_TO_ACCESS"
 
 
 # ---------------------------------------------------------------------------

@@ -144,6 +144,8 @@ from src.admin.api_schemas.tenant_management import (
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import (
     ProbeResult,
+    _classify_gam_message,
+    _vendor_fault,
     preview_adapter,
     probe_adapter_connection,
 )
@@ -627,13 +629,13 @@ def _build_adapter_config_response(adapter: AdapterConfig | None) -> AdapterConf
 def _adapter_probe_config(adapter: AdapterConfig) -> dict[str, Any]:
     """Build the adapter probe/config dict expected by adapter services."""
     if adapter.adapter_type == "google_ad_manager":
-        return {
-            "network_code": adapter.gam_network_code,
-            "service_account_json": adapter.gam_service_account_json,
-            "refresh_token": adapter.gam_refresh_token,
-        }
+        return AdapterConfigRepository.get_gam_config(adapter)
     if adapter.adapter_type == "mock":
         return {"dry_run": bool(adapter.mock_dry_run)}
+    model = _connection_config_model(adapter.adapter_type)
+    if model is not None:
+        validated = model(**dict(adapter.config_json or {}))
+        return {field: getattr(validated, field) for field in model.model_fields}
     return dict(adapter.config_json or {})
 
 
@@ -5604,26 +5606,27 @@ def _gam_advertiser_schema(row: GamAdvertiser) -> GamAdvertiserSchema:
 def _gam_create_error_response(exc: Exception):
     """Map GAM advertiser creation failures to tenant-management API errors."""
     message = str(exc)
-    upper_message = message.upper()
-    if "NOT_ALLOWED" in upper_message or "PERMISSION" in upper_message or "AUTHORIZATION" in upper_message:
-        return _api_error(
-            "adapter_permission_denied",
-            "GAM credentials authenticated but cannot create advertiser companies.",
-            403,
-            details={"vendor_message": message[:500]},
-        )
-    if "AUTHENTICATION" in upper_message or "INVALID_GRANT" in upper_message:
-        return _api_error(
-            "adapter_invalid_credentials",
-            "GAM credentials are invalid or expired.",
-            400,
-            details={"vendor_message": message[:500]},
-        )
+    code, remediation, gam_extra = _classify_gam_message(message)
+    safe_message = (
+        f"{gam_extra.get('service')}.{gam_extra.get('reason')}"
+        if gam_extra.get("service") and gam_extra.get("reason")
+        else type(exc).__name__
+    )
+    details = _vendor_fault(
+        "gam",
+        "create_advertiser",
+        "CompanyService.createCompanies",
+        message=safe_message,
+        extra=gam_extra or None,
+    )
+    if remediation:
+        details["remediation"] = remediation
+
     return _api_error(
-        "adapter_advertiser_create_failed",
+        f"adapter_{code}",
         "GAM advertiser ensure failed.",
-        400,
-        details={"vendor_message": message[:500]},
+        403 if code == "permission_denied" else 400,
+        details=details,
     )
 
 
@@ -5740,7 +5743,7 @@ def ensure_gam_advertiser(tenant_id: str):
 
         gam_repo = GAMSyncRepository(session, tenant_id)
         cached = gam_repo.find_advertiser_by_name(name)
-        if cached is not None:
+        if cached is not None and cached.status == "active":
             response = EnsureGamAdvertiserResponse(
                 advertiser=_gam_advertiser_schema(cached),
                 created=False,
@@ -5756,7 +5759,12 @@ def ensure_gam_advertiser(tenant_id: str):
                 dry_run=req.dry_run,
             )
         except Exception as exc:
-            logger.warning("GAM advertiser ensure failed for tenant_id=%s name=%r: %s", tenant_id, name, exc)
+            logger.warning(
+                "GAM advertiser ensure failed for tenant_id=%s name=%r error_type=%s",
+                tenant_id,
+                name,
+                type(exc).__name__,
+            )
             return _gam_create_error_response(exc)
 
         if result.dry_run:
@@ -5783,6 +5791,17 @@ def ensure_gam_advertiser(tenant_id: str):
         except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        except IntegrityError:
+            session.rollback()
+            existing = GAMSyncRepository(session, tenant_id).get_advertiser(result.advertiser_id)
+            if existing is None:
+                raise
+            response = EnsureGamAdvertiserResponse(
+                advertiser=_gam_advertiser_schema(existing),
+                created=result.created,
+                dry_run=result.dry_run,
+            )
+            return jsonify(response.model_dump(mode="json")), 201 if result.created else 200
         session.refresh(row)
 
     response = EnsureGamAdvertiserResponse(
