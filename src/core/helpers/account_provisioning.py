@@ -31,6 +31,7 @@ Branching:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -46,6 +47,16 @@ logger = logging.getLogger(__name__)
 
 
 _ACCOUNT_GAM_KEY = "google_ad_manager"
+
+
+@dataclass(frozen=True)
+class GamAdvertiserProvisionResult:
+    """Result of an idempotent GAM advertiser provision attempt."""
+
+    advertiser_id: str
+    name: str
+    created: bool
+    dry_run: bool = False
 
 
 class AdCPAccountNotProvisioned(AdCPError):
@@ -88,22 +99,42 @@ def gam_create_advertiser_companyservice(
     *,
     dry_run: bool = False,
 ) -> str:
-    """Create a GAM advertiser via ``CompanyService.createCompanies``.
+    """Create or attach a GAM advertiser and return its id.
 
-    On a name-collision (existing company with the same name and
-    ``type='ADVERTISER'``), looks up the existing id and returns it
-    instead of failing — the salesagent's view is "logical advertiser
-    keyed by the natural name template," and a re-run shouldn't error
-    just because someone provisioned the same one before.
+    Backward-compatible wrapper for existing auto-provision call sites.
+    New management API surfaces should use
+    :func:`gam_ensure_advertiser_companyservice` so callers can tell whether
+    the endpoint actually proved create permission or attached an existing
+    company.
+    """
+    return gam_ensure_advertiser_companyservice(
+        network_code=network_code,
+        config=config,
+        name=name,
+        dry_run=dry_run,
+    ).advertiser_id
 
-    Returns the GAM advertiser id as a string. ``dry_run=True`` skips
-    the live API call and returns a synthetic id so dev / sandbox
-    environments don't burn real GAM company rows.
+
+def gam_ensure_advertiser_companyservice(
+    network_code: str,
+    config: dict[str, Any],
+    name: str,
+    *,
+    dry_run: bool = False,
+) -> GamAdvertiserProvisionResult:
+    """Idempotently ensure a GAM advertiser via ``CompanyService``.
+
+    On a name collision (an existing company with the same name and
+    ``type='ADVERTISER'``), looks up the existing id and returns
+    ``created=False`` instead of failing. A response with ``created=True`` is
+    the permission proof that the credential can create GAM advertisers.
+    ``created=False`` proves the advertiser can be found/read, not that create
+    permission exists.
     """
     if dry_run:
         synthetic = f"dryrun_{abs(hash(name)) % 10**10}"
         logger.info(f"[gam_create_advertiser] dry_run: would create {name!r}, returning {synthetic!r}")
-        return synthetic
+        return GamAdvertiserProvisionResult(advertiser_id=synthetic, name=name, created=False, dry_run=True)
 
     from src.adapters.gam.client import GAMClientManager
 
@@ -116,7 +147,7 @@ def gam_create_advertiser_companyservice(
             raise RuntimeError(f"GAM CompanyService.createCompanies returned empty for {name!r}")
         new_id = str(result[0]["id"])
         logger.info(f"[gam_create_advertiser] created GAM advertiser {new_id} ({name!r})")
-        return new_id
+        return GamAdvertiserProvisionResult(advertiser_id=new_id, name=name, created=True)
     except Exception as exc:
         # Name-collision attach. GAM raises an UNIQUE_NAME error inside an
         # ApplicationException; rather than parse the SOAP fault we just
@@ -136,7 +167,7 @@ def gam_create_advertiser_companyservice(
         if existing and getattr(existing, "results", None):
             attach_id = str(existing.results[0]["id"])
             logger.warning(f"[gam_create_advertiser] name collision on {name!r} — attaching existing id {attach_id}")
-            return attach_id
+            return GamAdvertiserProvisionResult(advertiser_id=attach_id, name=name, created=False)
         raise
 
 

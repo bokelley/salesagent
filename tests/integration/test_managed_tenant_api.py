@@ -39,6 +39,7 @@ from src.core.database.models import (
     Tenant,
 )
 from tests.factories import (
+    GamAdvertiserFactory,
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
@@ -698,6 +699,100 @@ class TestAdapterConfig:
         body = resp.get_json()
         assert body["success"] is True
         assert body["error"] is None
+        assert body["capability_checks"][0]["capability"] == "connect"
+        create_check = next(c for c in body["capability_checks"] if c["capability"] == "create_gam_advertiser")
+        assert create_check["status"] == "not_checked"
+
+
+class TestGamAdvertiserEnsure:
+    @pytest.fixture
+    def tid(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_gam_adv_ensure")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201
+        tenant_id = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+        return tenant_id
+
+    def test_ensure_returns_existing_cached_advertiser_without_create(
+        self, client, auth_headers, tid, monkeypatch, bound_factories
+    ):
+        import src.admin.tenant_management_api as api_module
+
+        def _unexpected_create(**_kwargs):
+            raise AssertionError("existing cached advertiser should not call GAM create")
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _unexpected_create)
+
+        session = GamAdvertiserFactory._meta.sqlalchemy_session
+        assert session is not None
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tid)).first()
+        assert tenant is not None
+        GamAdvertiserFactory(
+            tenant=tenant,
+            advertiser_id="adv_existing",
+            name="Interchange-default",
+            status="active",
+            synced_at=datetime.now(UTC),
+        )
+
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/gam/advertisers:ensure",
+            headers=auth_headers,
+            json={"name": "Interchange-default"},
+        )
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["created"] is False
+        assert body["advertiser"]["id"] == "adv_existing"
+
+    def test_ensure_creates_and_caches_missing_advertiser(self, client, auth_headers, tid, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+        from src.core.helpers.account_provisioning import GamAdvertiserProvisionResult
+
+        def _create(**kwargs):
+            return GamAdvertiserProvisionResult(
+                advertiser_id="adv_created",
+                name=kwargs["name"],
+                created=True,
+            )
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _create)
+
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/gam/advertisers:ensure",
+            headers=auth_headers,
+            json={"name": "Interchange-Nike"},
+        )
+
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["created"] is True
+        assert body["advertiser"]["id"] == "adv_created"
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+        with get_db_session() as session:
+            cached = GAMSyncRepository(session, tid).get_advertiser("adv_created")
+            assert cached is not None
+            assert cached.name == "Interchange-Nike"
+
+    def test_ensure_maps_create_permission_failure(self, client, auth_headers, tid, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        def _deny(**_kwargs):
+            raise RuntimeError("[AuthenticationError.NOT_ALLOWED @ networkCode]")
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _deny)
+
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{tid}/gam/advertisers:ensure",
+            headers=auth_headers,
+            json={"name": "Interchange-WPP"},
+        )
+
+        assert resp.status_code == 403
+        assert resp.get_json()["error"] == "adapter_permission_denied"
 
 
 # ---------------------------------------------------------------------------

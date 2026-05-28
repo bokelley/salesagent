@@ -289,9 +289,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "patch_tenant"),
     ("src/admin/tenant_management_api.py", "deactivate_tenant"),
     ("src/admin/tenant_management_api.py", "reactivate_tenant"),
-    ("src/admin/tenant_management_api.py", "get_adapter_config"),
     ("src/admin/tenant_management_api.py", "put_adapter_config"),
-    ("src/admin/tenant_management_api.py", "adapter_test_connection"),
     # FIXME(embedded-mode-sprint-1.6/1.8): Account + buyer-advertiser-mappings + recent-buyers
     # + refresh endpoints landed before AccountRoutingRule / SyncJob / Tenant repositories
     # existed. Fold into repositories alongside the auto_provision_advertisers retirement

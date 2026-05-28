@@ -1335,6 +1335,89 @@
         "title": "DeleteWholesaleProductResponse",
         "type": "object"
       },
+      "EnsureGamAdvertiserRequest.f44f287": {
+        "additionalProperties": false,
+        "description": "``POST /tenants/{tid}/gam/advertisers:ensure`` body.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "EnsureGamAdvertiserRequest",
+        "type": "object"
+      },
+      "EnsureGamAdvertiserResponse.f44f287": {
+        "additionalProperties": false,
+        "description": "Idempotent advertiser ensure response.\n\n``created`` is true only when the endpoint actually created a GAM company.\nIf the advertiser already existed in cache or GAM, ``created`` is false.",
+        "properties": {
+          "advertiser": {
+            "$ref": "#/components/schemas/EnsureGamAdvertiserResponse.f44f287.GamAdvertiser"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "advertiser",
+          "created"
+        ],
+        "title": "EnsureGamAdvertiserResponse",
+        "type": "object"
+      },
+      "EnsureGamAdvertiserResponse.f44f287.GamAdvertiser": {
+        "additionalProperties": false,
+        "description": "One row from the synced ``gam_advertisers`` cache, on the wire.\n\nSource of truth is GAM's ``CompanyService.getCompaniesByStatement\nWHERE type = 'ADVERTISER'``; this projection is what the Buyer\nRouting UI's picker renders.",
+        "properties": {
+          "currency_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency Code"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "GamAdvertiser",
+        "type": "object"
+      },
       "FreeWheelSettings.f44f287": {
         "additionalProperties": false,
         "description": "FreeWheel runtime settings that affect how buys are materialized.",
@@ -7187,6 +7270,13 @@
         "additionalProperties": false,
         "description": "Result of an adapter connection probe.\n\n``error_code`` classifies the fault into a closed set of typed values\nso the UI can branch without parsing the human-readable ``error``.\nThe same code appears as the suffix of the ``adapter_{code}`` error\nin :class:`ApiError` envelopes from the provision / PUT paths. See\n:mod:`src.admin.services.adapter_connection_tester`.\n\n``remediation`` (when populated) tells the UI WHO can fix the problem\n\u2014 useful for ``permission_denied`` (vendor enables a role vs customer\nrebinds the account) where the error code alone isn't actionable.",
         "properties": {
+          "capability_checks": {
+            "items": {
+              "$ref": "#/components/schemas/TestConnectionResponse.f44f287.AdapterCapabilityCheck"
+            },
+            "title": "Capability Checks",
+            "type": "array"
+          },
           "details": {
             "anyOf": [
               {
@@ -7264,6 +7354,96 @@
           "tested_at"
         ],
         "title": "TestConnectionResponse",
+        "type": "object"
+      },
+      "TestConnectionResponse.f44f287.AdapterCapabilityCheck": {
+        "additionalProperties": false,
+        "description": "One capability check result returned by adapter probes.\n\n``test-connection`` stays non-mutating, so write capabilities that require\na live mutation should be reported as ``not_checked`` rather than inferred\nfrom successful authentication.",
+        "properties": {
+          "capability": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Capability",
+            "type": "string"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Details"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "network_not_found",
+                  "permission_denied",
+                  "invalid_credentials",
+                  "invalid_config",
+                  "upstream_unavailable",
+                  "connection_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "vendor_enables_role",
+                  "customer_rebinds_account",
+                  "customer_rotates_token"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remediation"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_checked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "status"
+        ],
+        "title": "AdapterCapabilityCheck",
         "type": "object"
       },
       "UpdateBuyerAdvertiserMappingRequest.f44f287": {
@@ -11561,6 +11741,97 @@
           }
         },
         "summary": "Searchable, paginated read over the synced ``gam_advertisers`` cache.",
+        "tags": []
+      }
+    },
+    "/api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:ensure": {
+      "post": {
+        "description": "This is the explicit write path Storefront can call when the buyer-routing picker cannot find the desired ``Interchange-*`` advertiser. A 201 response with ``created=true`` is also the permission proof that the configured GAM credential can create advertiser companies. A 200 response with ``created=false`` means an existing advertiser was found or attached; it does not prove create permission.",
+        "operationId": "post__api_v1_tenant-management_tenants_{tenant_id}_gam_advertisers:ensure",
+        "parameters": [
+          {
+            "description": "",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnsureGamAdvertiserRequest.f44f287"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnsureGamAdvertiserResponse.f44f287"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnsureGamAdvertiserResponse.f44f287"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError.f44f287"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError.6a07bef"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Idempotently ensure a GAM advertiser exists.",
         "tags": []
       }
     },

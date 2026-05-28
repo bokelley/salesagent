@@ -681,6 +681,24 @@ class AdapterConfigResponse(BaseModel):
     refresh_token: str | None = None
 
 
+class AdapterCapabilityCheck(BaseModel):
+    """One capability check result returned by adapter probes.
+
+    ``test-connection`` stays non-mutating, so write capabilities that require
+    a live mutation should be reported as ``not_checked`` rather than inferred
+    from successful authentication.
+    """
+
+    model_config = _config()
+
+    capability: str = Field(..., min_length=1, max_length=128)
+    status: Literal["passed", "failed", "not_checked"]
+    message: str | None = Field(default=None, max_length=500)
+    error_code: AdapterErrorCode | None = None
+    remediation: RemediationHint | None = None
+    details: dict[str, Any] | None = None
+
+
 class TestConnectionResponse(BaseModel):
     """Result of an adapter connection probe.
 
@@ -702,6 +720,7 @@ class TestConnectionResponse(BaseModel):
     error_code: AdapterErrorCode | None = None
     remediation: RemediationHint | None = None
     details: dict[str, Any] | None = None
+    capability_checks: list[AdapterCapabilityCheck] = Field(default_factory=list)
     tested_at: datetime
 
 
@@ -1646,6 +1665,29 @@ class ListGamAdvertisersResponse(BaseModel):
     advertisers: list[GamAdvertiser]
     next_cursor: str | None = None
     synced_at: datetime | None = None
+
+
+class EnsureGamAdvertiserRequest(BaseModel):
+    """``POST /tenants/{tid}/gam/advertisers:ensure`` body."""
+
+    model_config = _config()
+
+    name: str = Field(..., min_length=1, max_length=255)
+    dry_run: bool = False
+
+
+class EnsureGamAdvertiserResponse(BaseModel):
+    """Idempotent advertiser ensure response.
+
+    ``created`` is true only when the endpoint actually created a GAM company.
+    If the advertiser already existed in cache or GAM, ``created`` is false.
+    """
+
+    model_config = _config()
+
+    advertiser: GamAdvertiser
+    created: bool
+    dry_run: bool = False
 
 
 # ---------------------------------------------------------------------------
