@@ -116,6 +116,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             name="Complete Tenant",
             subdomain="complete",
             ad_server="google_ad_manager",
+            default_gam_advertiser_id="12345",
             human_review_required=True,
             auto_approve_format_ids=["display_300x250"],
             slack_webhook_url="https://hooks.slack.com/test",
