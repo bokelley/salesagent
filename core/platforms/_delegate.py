@@ -190,6 +190,36 @@ def _build_identity(ctx: RequestContext[Any]) -> ResolvedIdentity:
     )
 
 
+def _enrich_resolved_account_identity(identity: Any, account_ref: Any) -> Any:
+    if not isinstance(identity, ResolvedIdentity):
+        return identity
+    if _is_tenant_routing_account_ref(identity, account_ref):
+        return identity
+    return enrich_identity_with_account(identity, account_ref)
+
+
+def _is_tenant_routing_account_ref(identity: ResolvedIdentity, account_ref: Any) -> bool:
+    """Return whether account_ref is only the framework's tenant selector.
+
+    ``SalesagentAccountStore`` accepts explicit refs like
+    ``{"account_id": "tenant_id:anything"}`` to route a request to the
+    tenant before the salesagent Account table is involved. Those are not
+    buyer billing accounts and should not be resolved through AccountUoW.
+    """
+    tenant_id = identity.tenant_id
+    if tenant_id is None:
+        return False
+
+    account_id: Any = None
+    if isinstance(account_ref, dict):
+        account_id = account_ref.get("account_id")
+    else:
+        root = getattr(account_ref, "root", account_ref)
+        account_id = getattr(root, "account_id", None)
+
+    return isinstance(account_id, str) and account_id.startswith(f"{tenant_id}:")
+
+
 def _coerce_to_request_model(req: Any, model_cls: type[BaseModel]) -> Any:
     """Coerce ``req`` (dict OR Pydantic model OR generated model) into
     the Pydantic model class the impl expects.
@@ -595,8 +625,8 @@ async def _delegate_get_products(req: GetProductsRequest, ctx: RequestContext[An
     the pre-validation-hook boundary in ``core.main`` before the SDK's
     permissive library model can accept or drop extra fields.
     """
-    identity = _build_identity(ctx)
     req_model = _coerce_to_request_model(req, GetProductsRequest)
+    identity = _enrich_resolved_account_identity(_build_identity(ctx), getattr(req_model, "account", None))
     response = await _get_products_impl(req_model, identity)
     return _to_wire(response)
 
@@ -625,7 +655,7 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
     """
     req_model = _coerce_to_request_model(req, CreateMediaBuyRequest)
     requested_adcp_version = _resolve_requested_version(req_model)
-    identity = _build_identity(ctx)
+    identity = _enrich_resolved_account_identity(_build_identity(ctx), getattr(req_model, "account", None))
     pnc = req_model.push_notification_config
     pnc_dict: dict[str, Any] | None
     if pnc is None:

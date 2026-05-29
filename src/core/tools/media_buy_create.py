@@ -248,6 +248,7 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
 )
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.sandbox_zero_rate import force_no_spend_testing_context, get_sandbox_zero_rate_policy
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
@@ -2303,6 +2304,9 @@ async def _create_media_buy_impl(
         raise AdCPValidationError("Identity is required")
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
+    sandbox_zero_rate_policy = get_sandbox_zero_rate_policy(identity)
+    if sandbox_zero_rate_policy is not None:
+        testing_ctx = force_no_spend_testing_context(testing_ctx, sandbox_zero_rate_policy)
 
     # Authentication and tenant setup
     principal_id = identity.principal_id
@@ -2355,10 +2359,18 @@ async def _create_media_buy_impl(
     # without auto-provision — surfaces to the buyer as a structured error.
     from src.core.helpers.account_provisioning import resolve_account_advertiser
 
-    _account_advertiser_id = resolve_account_advertiser(
-        identity,
-        dry_run=False,  # dry_run from testing_ctx is resolved later
-    )
+    if sandbox_zero_rate_policy is None:
+        _account_advertiser_id = resolve_account_advertiser(
+            identity,
+            dry_run=testing_ctx.dry_run,
+        )
+    else:
+        _account_advertiser_id = None
+        logger.info(
+            "[SANDBOX_ZERO_RATE] Skipping account advertiser resolution for account_id=%s reason=%s",
+            sandbox_zero_rate_policy.account_id,
+            sandbox_zero_rate_policy.reason,
+        )
     if _account_advertiser_id is not None:
         mappings = dict(principal.platform_mappings or {})
         gam_block = dict(mappings.get("google_ad_manager") or {})

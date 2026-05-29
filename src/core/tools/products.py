@@ -20,6 +20,7 @@ from src.core.auth import get_principal_object
 from src.core.embedded_runtime import mark_compose_disabled, publisher_owns_compose_products
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.sandbox_zero_rate import apply_zero_rate_card_to_products, get_sandbox_zero_rate_policy
 from src.core.schemas import (
     GetProductsResponse,  # Extends library Product
 )
@@ -703,6 +704,16 @@ async def _get_products_impl(
                     filtered_products.append(product)
         eligible_products = filtered_products
 
+    sandbox_zero_rate_policy = get_sandbox_zero_rate_policy(identity)
+    if sandbox_zero_rate_policy is not None:
+        apply_zero_rate_card_to_products(eligible_products, sandbox_zero_rate_policy)
+        logger.info(
+            "[SANDBOX_ZERO_RATE] Applied zero pricing to %s product(s) for account_id=%s reason=%s",
+            len(eligible_products),
+            sandbox_zero_rate_policy.account_id,
+            sandbox_zero_rate_policy.reason,
+        )
+
     # AI-powered product ranking (when tenant has product_ranking_prompt configured)
     product_ranking_prompt = tenant.get("product_ranking_prompt")
     if product_ranking_prompt and brief_text and eligible_products:
@@ -800,6 +811,8 @@ async def _get_products_impl(
         products=[r.wire for r in eligible_products],
         errors=None,
         context=req.context,
+        sandbox=sandbox_zero_rate_policy is not None,
+        ext=sandbox_zero_rate_policy.extension() if sandbox_zero_rate_policy is not None else None,
     )
     if not publisher_owns_compose_products():
         resp = mark_compose_disabled(resp)
