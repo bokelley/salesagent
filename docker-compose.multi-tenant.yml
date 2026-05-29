@@ -65,6 +65,8 @@ services:
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
       ADCP_SALES_PORT: "8080"
+      ENVIRONMENT: "production"
+      FLASK_ENV: production
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-}
@@ -93,11 +95,13 @@ services:
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       SKIP_NGINX: "true"
+      ENVIRONMENT: "production"
+      FLASK_ENV: production
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-false}
     depends_on:
       postgres:
         condition: service_healthy

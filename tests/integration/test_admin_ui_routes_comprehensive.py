@@ -33,6 +33,10 @@ class TestCoreRoutes:
         """Test /health/config returns data."""
         response = admin_client.get("/health/config")
         assert response.status_code == 200
+        body = response.get_json()
+        assert body["environment"] in {"development", "production", "staging"}
+        assert body["is_production"] is (body["environment"].lower() == "production")
+        assert body["pydantic_extra_mode"] in {"forbid", "ignore"}
 
     def test_metrics_endpoint(self, authenticated_admin_session):
         """Test /metrics endpoint."""

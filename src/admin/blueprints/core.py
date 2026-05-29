@@ -392,15 +392,20 @@ def health():
 def health_config():
     """Configuration health check endpoint."""
     try:
+        from src.core.config import get_config, get_pydantic_extra_mode, is_production
         from src.core.startup import validate_startup_requirements
 
         validate_startup_requirements()
+        config = get_config()
         return (
             jsonify(
                 {
                     "status": "healthy",
                     "service": "admin-ui",
                     "component": "configuration",
+                    "environment": config.environment,
+                    "is_production": is_production(),
+                    "pydantic_extra_mode": get_pydantic_extra_mode(),
                     "message": "All configuration validation passed",
                 }
             ),
