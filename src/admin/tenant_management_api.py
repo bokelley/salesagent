@@ -4370,7 +4370,7 @@ def patch_tenant(tenant_id: str):
                 TenantConfigRepository(session, tenant_id).invalidate_publisher_partner_aao_statuses(
                     "Agent URL changed; refresh publisher authorization."
                 )
-        if req.default_gam_advertiser_id is not None:
+        if "default_gam_advertiser_id" in req.model_fields_set:
             tenant.default_gam_advertiser_id = req.default_gam_advertiser_id
         if req.embed_breadcrumb_root is not None:
             tenant.embed_breadcrumb_root = req.embed_breadcrumb_root.model_dump()
@@ -4971,6 +4971,7 @@ def create_buyer_advertiser_mapping(tenant_id: str):
         except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        invalidate_status_cache(tenant_id)
         session.refresh(rule)
 
     return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json")), 201
@@ -5051,6 +5052,7 @@ def patch_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
         except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        invalidate_status_cache(tenant_id)
         session.refresh(rule)
 
     return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json"))
@@ -5084,6 +5086,7 @@ def delete_buyer_advertiser_mapping(tenant_id: str, mapping_id: str):
         except EmbeddedTenantWriteError as exc:
             session.rollback()
             return _api_error("managed_tenant_write_blocked", str(exc), 403)
+        invalidate_status_cache(tenant_id)
 
     return "", 204
 
@@ -5792,6 +5795,8 @@ def ensure_gam_advertiser(tenant_id: str):
             status="active",
             synced_at=datetime.now(UTC),
         )
+        if result.created:
+            adapter.gam_advertiser_create_permission_proven_at = datetime.now(UTC)
         try:
             session.commit()
         except EmbeddedTenantWriteError as exc:
@@ -5802,11 +5807,18 @@ def ensure_gam_advertiser(tenant_id: str):
             existing = GAMSyncRepository(session, tenant_id).get_advertiser(result.advertiser_id)
             if existing is None:
                 raise
+            if result.created:
+                refreshed_adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if refreshed_adapter is not None:
+                    refreshed_adapter.gam_advertiser_create_permission_proven_at = datetime.now(UTC)
+                    session.commit()
             response = EnsureGamAdvertiserResponse(
                 advertiser=_gam_advertiser_schema(existing),
                 created=result.created,
                 dry_run=result.dry_run,
             )
+            if result.created:
+                invalidate_status_cache(tenant_id)
             return jsonify(response.model_dump(mode="json")), 201 if result.created else 200
         session.refresh(row)
 
@@ -5815,6 +5827,8 @@ def ensure_gam_advertiser(tenant_id: str):
         created=result.created,
         dry_run=result.dry_run,
     )
+    if result.created:
+        invalidate_status_cache(tenant_id)
     return jsonify(response.model_dump(mode="json")), 201 if result.created else 200
 
 

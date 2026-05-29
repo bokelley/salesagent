@@ -1,5 +1,6 @@
 """Unit tests for GAM Orders Manager get_advertisers() method."""
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -282,3 +283,28 @@ class TestGetAdvertisers:
         assert len(result) == 2
         assert "Test" in result[0]["name"]
         assert "Test" in result[1]["name"]
+
+
+class TestCreateOrderAdvertiserRouting:
+    def test_create_order_uses_resolved_advertiser_id(self):
+        mock_client_manager = MagicMock()
+        order_service = MagicMock()
+        order_service.createOrders.return_value = [{"id": 123}]
+        mock_client_manager.get_service.return_value = order_service
+        manager = GAMOrdersManager(
+            client_manager=mock_client_manager,
+            advertiser_id="999111",
+            trafficker_id="777",
+            dry_run=False,
+        )
+
+        order_id = manager.create_order(
+            order_name="Resolved Advertiser Order",
+            total_budget=10.0,
+            start_time=datetime.now(UTC) + timedelta(days=1),
+            end_time=datetime.now(UTC) + timedelta(days=2),
+        )
+
+        assert order_id == "123"
+        created_order = order_service.createOrders.call_args.args[0][0]
+        assert created_order["advertiserId"] == "999111"

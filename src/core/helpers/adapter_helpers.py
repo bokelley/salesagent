@@ -51,7 +51,18 @@ from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.springserve import SpringServeAdapter
 from src.adapters.triton import TritonAdapter
 from src.core.database.database_session import get_db_session
+from src.core.platform_mappings import resolve_adapter_id
 from src.core.schemas import Principal
+
+
+def _tenant_default_gam_advertiser_id(tenant: Any) -> str | None:
+    if isinstance(tenant, dict):
+        return tenant.get("default_gam_advertiser_id")
+    return getattr(tenant, "default_gam_advertiser_id", None)
+
+
+def _principal_gam_advertiser_id(principal: Principal) -> str | None:
+    return resolve_adapter_id(principal.platform_mappings, "gam")
 
 
 def get_adapter(
@@ -117,27 +128,21 @@ def get_adapter(
                 targeting_config = repo.get_gam_targeting_config(config_row)
                 naming_templates = repo.get_gam_naming_templates(config_row)
 
-                # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
-                # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
-                advertiser_id: str | None = None
-                if principal.platform_mappings:
-                    # Try nested format first
-                    gam_mappings = principal.platform_mappings.get("google_ad_manager", {})
-                    advertiser_id = gam_mappings.get("advertiser_id")
+                # Buyer-specific mapping wins; tenant default is the fallback
+                # before GAM order creation fails closed.
+                advertiser_id = _principal_gam_advertiser_id(principal)
+                if advertiser_id:
                     logger.debug(
-                        f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, platform_mappings={principal.platform_mappings}, gam_mappings={gam_mappings}, advertiser_id={advertiser_id}"
+                        f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, "
+                        f"resolved buyer-specific GAM advertiser_id={advertiser_id}"
                     )
-
-                    # Fall back to root-level format if nested not found
-                    if not advertiser_id:
-                        advertiser_id = principal.platform_mappings.get("gam_advertiser_id")
-                        logger.debug(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
-
-                    adapter_config["company_id"] = advertiser_id
-                    logger.debug(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
                 else:
-                    adapter_config["company_id"] = None
-                    logger.debug("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
+                    advertiser_id = _tenant_default_gam_advertiser_id(tenant)
+                    logger.debug(
+                        f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, "
+                        f"using tenant default GAM advertiser_id={advertiser_id}"
+                    )
+                adapter_config["company_id"] = advertiser_id
             elif adapter_type in {"triton", "triton_digital"}:
                 # Triton credentials live in config_json. Rehydrate via the
                 # connection schema so the field validator decrypts password,

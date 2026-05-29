@@ -367,12 +367,14 @@ def _webhooks_block() -> StatusWebhooksBlock | None:
 
 # Per the design table:
 #   public_agent_url → platform on managed, publisher on open-instance
+#   gam_advertiser_create_permission → platform on managed because the
+#     proof action is a management API write, not a publisher UI action
 #   sso_configuration → hidden on managed (multi-tenant runtime already gates it
 #     out), publisher on open-instance
 #   authorized_properties (legacy) → hidden everywhere (deprecated)
 #   everything else → publisher, unless EMBEDDED_CAPABILITIES has handed the
 #     underlying workflow to the storefront (see _TASK_CAPABILITY below)
-_PLATFORM_KEYS_WHEN_MANAGED = frozenset(("public_agent_url",))
+_PLATFORM_KEYS_WHEN_MANAGED = frozenset(("public_agent_url", "gam_advertiser_create_permission"))
 _HIDDEN_KEYS = frozenset(("authorized_properties",))
 
 # Setup-task keys whose completion is gated on a storefront-ownable capability.
@@ -405,6 +407,8 @@ _CONFIGURE_PATHS: dict[str, str] = {
     # URL is shown but not editable).
     "public_agent_url": "/settings#account",
     "default_gam_advertiser_id": "/settings#advertiser-routing",
+    "gam_default_advertiser": "/buyer-routing",
+    "gam_advertiser_create_permission": "/buyer-routing",
     "ad_server_connected": "/settings#adserver",
     "currency_limits": "/settings#business-rules",
     "sso_configuration": "/users",

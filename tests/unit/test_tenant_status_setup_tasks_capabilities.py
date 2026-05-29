@@ -35,7 +35,7 @@ def _checklist_with_capability_tasks() -> dict:
     return {
         "progress_percent": 0,
         "completed_count": 0,
-        "total_count": 5,
+        "total_count": 6,
         "ready_for_orders": False,
         "critical": [
             {
@@ -48,6 +48,14 @@ def _checklist_with_capability_tasks() -> dict:
             },
         ],
         "recommended": [
+            {
+                "key": "gam_advertiser_create_permission",
+                "name": "GAM Advertiser Create Permission",
+                "description": "Prove the configured GAM credential can create advertiser companies",
+                "is_complete": False,
+                "action_url": "/tenant/t_managed/buyer-routing",
+                "details": "Run advertiser ensure",
+            },
             {
                 "key": "slack_integration",
                 "name": "Slack Integration",
@@ -131,6 +139,7 @@ class TestStorefrontOwnedTasksAreSuppressedOnManaged:
             block = _setup_tasks_block(fake_session, "t_managed")
 
         ids = _ids(block)
+        assert "gam_advertiser_create_permission" not in ids
         assert "slack_integration" not in ids
         # Other capability-gated items still appear (their capabilities aren't claimed).
         assert "creative_approval_guidelines" in ids
@@ -154,6 +163,7 @@ class TestStorefrontOwnedTasksAreSuppressedOnManaged:
             block = _setup_tasks_block(fake_session, "t_managed")
 
         ids = _ids(block)
+        assert "gam_advertiser_create_permission" not in ids
         assert "slack_integration" not in ids
         assert "creative_approval_guidelines" not in ids
         assert "gemini_api_key" not in ids
@@ -179,7 +189,8 @@ class TestStorefrontOwnedTasksAreSuppressedOnManaged:
 
         # Only currency_limits remains in critical tier → 1 blocker.
         assert block.blocker_count == 1
-        # Both warning-tier items (Slack, Creative Approval) suppressed → 0 warnings.
+        # Warning-tier publisher items (Slack, Creative Approval) and the
+        # platform-owned GAM proof task are suppressed → 0 warnings.
         assert block.warning_count == 0
 
 

@@ -659,9 +659,8 @@ class UpdateTenantRequest(BaseModel):
     # its public_agent_url flows through here.
     public_agent_url: str | None = Field(default=None, min_length=1, max_length=500)
     # Sprint 1.8 — fall-through advertiser. Patchable any time. PATCH with
-    # an explicit empty string is rejected by the handler (use null/omit
-    # to leave unchanged; no path to clear an already-set value, since
-    # clearing it would brick the routing chain).
+    # an explicit empty string is rejected by the schema. Omit to leave
+    # unchanged; send null to clear and re-open the routing readiness blocker.
     default_gam_advertiser_id: str | None = Field(default=None, min_length=1, max_length=64)
     # Embed-mode breadcrumb root override. Patch with a non-null object
     # to install/replace the override. PATCH with omitted key leaves the

@@ -15,6 +15,8 @@ from werkzeug.routing.exceptions import BuildError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
+    AdapterConfig,
+    AdvertiserRoutingRule,
     AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
@@ -311,6 +313,16 @@ class SetupChecklistService:
                 tid: count for tid, count in session.execute(verified_publisher_stmt).all()
             }
 
+            # Buyer-advertiser routing rules per tenant.
+            routing_rule_stmt = (
+                select(AdvertiserRoutingRule.tenant_id, func.count())
+                .where(AdvertiserRoutingRule.tenant_id.in_(uncached_ids))
+                .group_by(AdvertiserRoutingRule.tenant_id)
+            )
+            routing_rule_counts: dict[str, int] = {  # noqa: C416
+                tid: count for tid, count in session.execute(routing_rule_stmt).all()
+            }
+
             # Build status for each uncached tenant using pre-fetched data
             for tenant_id in uncached_ids:
                 tenant = tenants.get(tenant_id)
@@ -328,6 +340,7 @@ class SetupChecklistService:
                     gam_inventory_count=gam_inventory_counts.get(tenant_id, 0),
                     product_count=product_counts.get(tenant_id, 0),
                     principal_count=principal_counts.get(tenant_id, 0),
+                    routing_rule_count=routing_rule_counts.get(tenant_id, 0),
                 )
 
                 # Cache the result
@@ -395,6 +408,7 @@ class SetupChecklistService:
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
+        routing_rule_count: int,
     ) -> dict[str, Any]:
         """Build setup status from pre-fetched data (used by bulk query).
 
@@ -407,6 +421,7 @@ class SetupChecklistService:
             gam_inventory_count: Number of GAM inventory items
             product_count: Number of products
             principal_count: Number of principals
+            routing_rule_count: Number of configured buyer-advertiser routing rules
 
         Returns:
             Dict with same format as get_setup_status()
@@ -420,6 +435,7 @@ class SetupChecklistService:
             gam_inventory_count,
             product_count,
             principal_count,
+            routing_rule_count,
         )
         recommended_tasks = self._build_recommended_tasks(tenant, budget_limit_count, currency_count)
         optional_tasks = self._build_optional_tasks(tenant, currency_count)
@@ -542,6 +558,63 @@ class SetupChecklistService:
         # Unknown adapter type - show warning but don't block
         return True, f"{tenant.ad_server} adapter - verify configuration"
 
+    def _gam_routing_task(self, tenant: Tenant, routing_rule_count: int) -> list[SetupTask]:
+        """Critical GAM buyer-routing task.
+
+        Active GAM tenants need a tenant default advertiser before live
+        order creation can safely attach unmatched buyers to a GAM company.
+        Buyer-specific routes are overrides for known buyers; they do not
+        provide a tenant-wide fallback.
+        """
+        if not tenant.is_active or not tenant.is_gam_tenant:
+            return []
+
+        has_default = bool(tenant.default_gam_advertiser_id)
+        if has_default:
+            details = f"Default GAM advertiser configured: {tenant.default_gam_advertiser_id}"
+        elif routing_rule_count:
+            details = (
+                f"{routing_rule_count} buyer-specific GAM advertiser route(s) configured, "
+                "but no tenant default advertiser is set"
+            )
+        else:
+            details = "No default GAM advertiser is configured"
+
+        return [
+            SetupTask(
+                key="gam_default_advertiser",
+                name="GAM Default Advertiser",
+                description="Configure a tenant default GAM advertiser for unmatched buyer traffic",
+                is_complete=has_default,
+                action_url=self._route_url("buyer_routing.buyer_routing_page"),
+                details=details,
+            )
+        ]
+
+    def _gam_advertiser_create_permission_task(self, tenant: Tenant) -> list[SetupTask]:
+        """Recommended GAM adapter task for advertiser create-permission proof."""
+        if not tenant.is_active or not tenant.is_gam_tenant:
+            return []
+
+        adapter_config: AdapterConfig | None = tenant.adapter_config
+        proven_at = adapter_config.gam_advertiser_create_permission_proven_at if adapter_config is not None else None
+        details = (
+            f"Advertiser create permission proven at {proven_at.isoformat()}"
+            if proven_at is not None
+            else "Run advertiser ensure with a missing Interchange-* advertiser to prove create permission"
+        )
+
+        return [
+            SetupTask(
+                key="gam_advertiser_create_permission",
+                name="GAM Advertiser Create Permission",
+                description="Prove the configured GAM credential can create advertiser companies",
+                is_complete=proven_at is not None,
+                action_url=self._route_url("buyer_routing.buyer_routing_page"),
+                details=details,
+            )
+        ]
+
     def _check_critical_tasks(self, session, tenant: Tenant) -> list[SetupTask]:
         """Check critical tasks required before first order."""
         tasks = []
@@ -608,6 +681,16 @@ class SetupChecklistService:
                     ),
                 )
             )
+
+        # GAM routing is required before any live GAM order can be written.
+        if ad_server_fully_configured and tenant.is_gam_tenant:
+            stmt = (
+                select(func.count())
+                .select_from(AdvertiserRoutingRule)
+                .where(AdvertiserRoutingRule.tenant_id == self.tenant_id)
+            )
+            routing_rule_count = session.scalar(stmt) or 0
+            tasks.extend(self._gam_routing_task(tenant, routing_rule_count))
 
         # 4. Authorized Properties → green when EITHER:
         #    - ≥1 verified PublisherPartner (new AAO model — each
@@ -825,6 +908,8 @@ class SetupChecklistService:
             )
         )
 
+        tasks.extend(self._gam_advertiser_create_permission_task(tenant))
+
         # 4. AXE Segment Keys Configuration (RECOMMENDED - part of AdCP spec)
         # AXE (Audience Exchange) targeting is part of the AdCP protocol specification
         # This is recommended but not required - media buys can be created without AXE targeting
@@ -978,6 +1063,7 @@ class SetupChecklistService:
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
+        routing_rule_count: int,
     ) -> list[SetupTask]:
         """Build critical tasks from pre-fetched data (no session queries).
 
@@ -1038,6 +1124,9 @@ class SetupChecklistService:
                     ),
                 )
             )
+
+        if ad_server_fully_configured:
+            tasks.extend(self._gam_routing_task(tenant, routing_rule_count))
 
         # 4. Authorized Properties
         # Single source of truth: AuthorizedProperty table
@@ -1206,6 +1295,8 @@ class SetupChecklistService:
                 ),
             )
         )
+
+        tasks.extend(self._gam_advertiser_create_permission_task(tenant))
 
         # 4. AXE Segment Keys Configuration (RECOMMENDED - part of AdCP spec)
         # AXE (Audience Exchange) targeting is part of the AdCP protocol specification

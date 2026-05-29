@@ -29,6 +29,7 @@ from src.admin.api_schemas.tenant_management import (
     CreateBuyerAdvertiserMappingRequest,
     UpdateBuyerAdvertiserMappingRequest,
 )
+from src.admin.services.tenant_status_service import invalidate_status_cache
 from src.admin.tenant_management_api import (
     _is_routing_rule_unique_violation,
     _routing_rule_to_mapping,
@@ -295,11 +296,17 @@ def update_default_advertiser(tenant_id: str):
     ``{"default_gam_advertiser_id": "<id>"}``. Empty / missing → 400.
     """
     payload = request.get_json(silent=True) or {}
-    new_id = payload.get("default_gam_advertiser_id")
-    if not new_id or not isinstance(new_id, str):
+    if "default_gam_advertiser_id" not in payload:
         return _api_error_json(
             "invalid_default_advertiser",
-            "default_gam_advertiser_id must be a non-empty string.",
+            "default_gam_advertiser_id is required.",
+            400,
+        )
+    new_id = payload.get("default_gam_advertiser_id")
+    if new_id is not None and (not isinstance(new_id, str) or not new_id):
+        return _api_error_json(
+            "invalid_default_advertiser",
+            "default_gam_advertiser_id must be a non-empty string or null.",
             400,
         )
 
@@ -311,7 +318,7 @@ def update_default_advertiser(tenant_id: str):
 
         # Reject ids that aren't in the synced cache (graceful when cache
         # is empty — same rule as POST /buyer-advertiser-mappings).
-        if not _validate_gam_advertiser_id(session, tenant_id, new_id):
+        if new_id is not None and not _validate_gam_advertiser_id(session, tenant_id, new_id):
             return _api_error_json(
                 "invalid_advertiser_id",
                 f"gam_advertiser_id {new_id!r} is not in the synced advertisers cache "
@@ -328,6 +335,7 @@ def update_default_advertiser(tenant_id: str):
             session.rollback()
             return _api_error_json("managed_tenant_write_blocked", str(exc), 403)
 
+        invalidate_status_cache(tenant_id)
         return jsonify({"default_gam_advertiser_id": new_id})
 
 
@@ -391,6 +399,7 @@ def create_rule(tenant_id: str):
                     },
                 )
             raise
+        invalidate_status_cache(tenant_id)
         session.refresh(rule)
         return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json")), 201
 
@@ -461,6 +470,7 @@ def patch_rule(tenant_id: str, rule_id: str):
                     },
                 )
             raise
+        invalidate_status_cache(tenant_id)
         session.refresh(rule)
         return jsonify(_routing_rule_to_mapping(rule).model_dump(mode="json"))
 
@@ -485,6 +495,7 @@ def delete_rule(tenant_id: str, rule_id: str):
 
         session.delete(rule)
         session.commit()
+        invalidate_status_cache(tenant_id)
     return "", 204
 
 

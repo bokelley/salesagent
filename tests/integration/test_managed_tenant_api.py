@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -39,6 +40,7 @@ from src.core.database.models import (
     Tenant,
 )
 from tests.factories import (
+    AdapterConfigFactory,
     GamAdvertiserFactory,
     MediaBuyFactory,
     PrincipalFactory,
@@ -799,6 +801,7 @@ class TestGamAdvertiserEnsure:
     def test_ensure_creates_and_caches_missing_advertiser(
         self, client, auth_headers, tid, monkeypatch, bound_factories
     ):
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
         from src.core.database.repositories.gam_sync import GAMSyncRepository
 
         self._stub_ensure_success(monkeypatch, advertiser_id="adv_created")
@@ -809,9 +812,31 @@ class TestGamAdvertiserEnsure:
         body = resp.get_json()
         assert body["created"] is True
         assert body["advertiser"]["id"] == "adv_created"
+        bound_factories.expire_all()
         cached = GAMSyncRepository(bound_factories, tid).get_advertiser("adv_created")
         assert cached is not None
         assert cached.name == "Interchange-Nike"
+        adapter = AdapterConfigRepository(bound_factories, tid).find_by_tenant()
+        assert adapter is not None
+        assert adapter.gam_advertiser_create_permission_proven_at is not None
+
+    def test_ensure_existing_advertiser_does_not_prove_create_permission(
+        self, client, auth_headers, tid, monkeypatch, bound_factories
+    ):
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+        self._stub_ensure_success(monkeypatch, advertiser_id="adv_existing_attached", created=False)
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-Existing")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["created"] is False
+        assert body["advertiser"]["id"] == "adv_existing_attached"
+        bound_factories.expire_all()
+        adapter = AdapterConfigRepository(bound_factories, tid).find_by_tenant()
+        assert adapter is not None
+        assert adapter.gam_advertiser_create_permission_proven_at is None
 
     def test_ensure_maps_create_permission_failure(self, client, auth_headers, tid, monkeypatch):
         self._stub_ensure_error(monkeypatch, "[AuthenticationError.NOT_ALLOWED @ networkCode]")
@@ -1456,14 +1481,58 @@ class TestStatusSetupTasks:
         assert scopes <= {"publisher"}, f"Embedded tenant /status surfaced platform items: {scopes}"
 
     def test_default_advertiser_blocker_when_unset(self, client, auth_headers, managed_tenant):
-        """Tenant without default_gam_advertiser_id sees the task as a publisher-scope blocker."""
+        """Tenant without default_gam_advertiser_id or routing rules sees a blocker."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
-        items = resp.get_json()["setup_tasks"]["items"]
-        # default_gam_advertiser_id isn't in the existing setup_checklist tasks today;
-        # it'll be a publisher-scope item once the checklist surfaces it. For now,
-        # assert that any *publisher*-scope item we DO surface carries the right shape.
-        assert all(item["scope"] in ("platform", "publisher") for item in items)
-        assert all(item["severity"] in ("blocker", "warning", "info") for item in items)
+        items = {item["id"]: item for item in resp.get_json()["setup_tasks"]["items"]}
+
+        task = items["gam_default_advertiser"]
+        assert task["severity"] == "blocker"
+        assert task["scope"] == "publisher"
+        assert task["is_complete"] is False
+        assert task["configure_path"] == "/buyer-routing"
+
+    def test_default_advertiser_blocker_clears_when_default_configured(self, client, auth_headers, managed_tenant):
+        patch_resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}",
+            headers=auth_headers,
+            json={"default_gam_advertiser_id": "55555"},
+        )
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = {item["id"]: item for item in resp.get_json()["setup_tasks"]["items"]}
+
+        task = items["gam_default_advertiser"]
+        assert task["severity"] == "info"
+        assert task["is_complete"] is True
+
+    def test_gam_create_permission_missing_is_platform_owned_for_embedded_tenant(
+        self, client, auth_headers, managed_tenant
+    ):
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = {item["id"]: item for item in resp.get_json()["setup_tasks"]["items"]}
+
+        assert "gam_advertiser_create_permission" not in items
+
+    def test_default_advertiser_blocker_remains_with_buyer_route_only(self, client, auth_headers, managed_tenant):
+        mapping_resp = client.post(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/buyer-advertiser-mappings",
+            headers=auth_headers,
+            json={
+                "operator_domain": "interchange.io",
+                "brand_house": "nike.com",
+                "brand_id": "nike",
+                "gam_advertiser_id": "12345",
+            },
+        )
+        assert mapping_resp.status_code == 201, mapping_resp.get_data(as_text=True)
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        items = {item["id"]: item for item in resp.get_json()["setup_tasks"]["items"]}
+
+        task = items["gam_default_advertiser"]
+        assert task["severity"] == "blocker"
+        assert task["is_complete"] is False
 
     def test_complete_tasks_render_severity_info(self, client, auth_headers, managed_tenant):
         """Completed items become severity=info regardless of tier."""
@@ -2118,6 +2187,122 @@ class TestDefaultGamAdvertiserId:
         )
         assert resp.status_code == 200
         assert resp.get_json()["default_gam_advertiser_id"] == "55555"
+
+    def test_patch_null_clears_default_gam_advertiser_id(self, client, auth_headers, tid):
+        client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"default_gam_advertiser_id": "55555"},
+        )
+
+        resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"default_gam_advertiser_id": None},
+        )
+
+        assert resp.status_code == 200
+        assert resp.get_json()["default_gam_advertiser_id"] is None
+
+
+class TestRuntimeGamAdvertiserRouting:
+    class _CapturedGamAdapter:
+        def __init__(
+            self,
+            config,
+            principal,
+            *,
+            network_code,
+            advertiser_id,
+            trafficker_id,
+            dry_run,
+            tenant_id,
+            targeting_config,
+            naming_templates,
+        ):
+            self.config = config
+            self.principal = principal
+            self.network_code = network_code
+            self.advertiser_id = advertiser_id
+            self.trafficker_id = trafficker_id
+            self.dry_run = dry_run
+            self.tenant_id = tenant_id
+            self.targeting_config = targeting_config
+            self.naming_templates = naming_templates
+
+    @staticmethod
+    def _gam_tenant(default_advertiser_id: str | None = "111"):
+        tenant = TenantFactory(
+            ad_server="google_ad_manager",
+            default_gam_advertiser_id=default_advertiser_id,
+        )
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type="google_ad_manager",
+            gam_network_code="12345",
+            gam_trafficker_id="77",
+        )
+        return tenant
+
+    def test_get_adapter_falls_back_to_tenant_default_gam_advertiser(self, bound_factories, monkeypatch):
+        from src.core.helpers import adapter_helpers
+
+        monkeypatch.setattr(adapter_helpers, "GoogleAdManager", self._CapturedGamAdapter)
+        tenant = self._gam_tenant(default_advertiser_id="111")
+        principal = PrincipalFactory(tenant=tenant, platform_mappings={"mock": {"advertiser_id": "mock_adv"}})
+
+        adapter = adapter_helpers.get_adapter(principal, dry_run=True, tenant=tenant)
+
+        assert adapter.advertiser_id == "111"
+
+    def test_get_adapter_prefers_buyer_specific_gam_mapping_over_tenant_default(self, bound_factories, monkeypatch):
+        from src.core.helpers import adapter_helpers
+
+        monkeypatch.setattr(adapter_helpers, "GoogleAdManager", self._CapturedGamAdapter)
+        tenant = self._gam_tenant(default_advertiser_id="111")
+        principal = PrincipalFactory(
+            tenant=tenant,
+            platform_mappings={"google_ad_manager": {"advertiser_id": "222"}},
+        )
+
+        adapter = adapter_helpers.get_adapter(principal, dry_run=True, tenant=tenant)
+
+        assert adapter.advertiser_id == "222"
+
+    @pytest.mark.parametrize(
+        "platform_mappings",
+        [
+            {"google_ad_manager": {"id": "222"}},
+            {"google_ad_manager": {"company_id": "222"}},
+        ],
+    )
+    def test_get_adapter_honors_legacy_gam_mapping_fields(self, bound_factories, monkeypatch, platform_mappings):
+        from src.core.helpers import adapter_helpers
+
+        monkeypatch.setattr(adapter_helpers, "GoogleAdManager", self._CapturedGamAdapter)
+        tenant = self._gam_tenant(default_advertiser_id="111")
+        principal = PrincipalFactory(
+            tenant=tenant,
+            platform_mappings=platform_mappings,
+        )
+
+        adapter = adapter_helpers.get_adapter(principal, dry_run=True, tenant=tenant)
+
+        assert adapter.advertiser_id == "222"
+
+    def test_get_adapter_honors_flat_legacy_gam_mapping_field(self, bound_factories, monkeypatch):
+        from src.core.helpers import adapter_helpers
+
+        monkeypatch.setattr(adapter_helpers, "GoogleAdManager", self._CapturedGamAdapter)
+        tenant = self._gam_tenant(default_advertiser_id="111")
+        principal = SimpleNamespace(
+            principal_id="legacy-flat",
+            platform_mappings={"gam_advertiser_id": "222"},
+        )
+
+        adapter = adapter_helpers.get_adapter(principal, dry_run=True, tenant=tenant)
+
+        assert adapter.advertiser_id == "222"
 
 
 # ---------------------------------------------------------------------------

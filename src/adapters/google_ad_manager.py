@@ -483,6 +483,11 @@ class GoogleAdManager(AdServerAdapter):
             if not self.trafficker_id:
                 missing.append("trafficker_id")
             error_msg += ", ".join(missing)
+            if not self.advertiser_id:
+                error_msg += (
+                    ". Configure a tenant default GAM advertiser or a buyer-specific advertiser mapping "
+                    "before creating GAM media buys."
+                )
 
             self.log(f"[red]Error: {error_msg}[/red]")
             return CreateMediaBuyError(

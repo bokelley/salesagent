@@ -1425,6 +1425,9 @@ class AdapterConfig(Base):
     gam_manual_approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
     gam_order_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
     gam_line_item_name_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gam_advertiser_create_permission_proven_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # AXE (Audience Exchange) custom targeting keys (AdCP spec requires separate keys for each purpose)
     # These are adapter-agnostic and work with GAM, Mock, or any other adapter
