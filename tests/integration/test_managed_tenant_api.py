@@ -41,10 +41,12 @@ from src.core.database.models import (
 )
 from tests.factories import (
     AdapterConfigFactory,
+    AuthorizedPropertyFactory,
     GamAdvertiserFactory,
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
+    PublisherPartnerFactory,
     SyncJobFactory,
     TenantFactory,
 )
@@ -634,10 +636,26 @@ class TestLifecycle:
         assert resp.status_code == 200
         assert resp.get_json()["is_active"] is False
 
-    def test_hard_delete_requires_confirmation_header(self, client, auth_headers, managed_tenant):
+    def test_hard_delete_requires_confirmation_header(self, client, auth_headers, managed_tenant, bound_factories):
         no_header = client.delete(f"/api/v1/tenant-management/tenants/{managed_tenant}?hard=true", headers=auth_headers)
         assert no_header.status_code == 400
         assert no_header.get_json()["error"] == "confirmation_required"
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        PublisherPartnerFactory(
+            tenant=tenant,
+            publisher_domain="delete-check.example.com",
+            display_name="Delete Check",
+            is_verified=True,
+            sync_status="success",
+        )
+        AuthorizedPropertyFactory(
+            tenant=tenant,
+            property_id="delete_check_example",
+            publisher_domain="delete-check.example.com",
+            name="Delete Check Example",
+            verification_status="verified",
+        )
 
         with_header = client.delete(
             f"/api/v1/tenant-management/tenants/{managed_tenant}?hard=true",

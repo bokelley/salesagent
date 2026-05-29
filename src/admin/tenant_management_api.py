@@ -165,6 +165,7 @@ from src.core.database.models import (
     Account,
     AdapterConfig,
     AdvertiserRoutingRule,
+    AuthorizedProperty,
     CurrencyLimit,
     FreeWheelInventory,
     GamAdvertiser,
@@ -175,6 +176,7 @@ from src.core.database.models import (
     Principal,
     Product,
     PropertyTag,
+    PublisherPartner,
     SpringServeInventory,
     SyncJob,
     Tenant,
@@ -4076,9 +4078,12 @@ def delete_tenant(tenant_id):
                 )
             tenant_detail = _tenant_to_detail(tenant, adapter_configured=False)
             # Hard delete relies on Tenant's ``cascade="all, delete-orphan"`` relationships
-            # for most child tables. PropertyTag uses a backref without a delete cascade,
-            # so wipe its rows first via the FK ON DELETE rule. Issuing the bulk delete
-            # explicitly avoids the unit-of-work attempting to NULL composite-PK columns.
+            # for most child tables. These publisher-authorization tables use backrefs
+            # without a delete cascade, so wipe their rows first via bulk deletes. Issuing
+            # the bulk deletes explicitly avoids the unit-of-work attempting to NULL
+            # non-nullable or composite-PK tenant_id columns.
+            db_session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == tenant_id))
+            db_session.execute(delete(PublisherPartner).where(PublisherPartner.tenant_id == tenant_id))
             db_session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == tenant_id))
             db_session.delete(tenant)
             db_session.commit()
