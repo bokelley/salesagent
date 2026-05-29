@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from flask import Flask
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.admin.tenant_management_api import (
     _spawn_refresh_workers as _LIVE_SPAWN_REFRESH_WORKERS,
@@ -28,6 +28,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
 from src.core.database.models import (
     AdapterConfig,
+    AgentAccountAccess,
     AuthorizedProperty,
     Creative,
     CurrencyLimit,
@@ -1749,6 +1750,73 @@ class TestPreMapAdvertiser:
         assert a1.get_json()["account_id"] != a2.get_json()["account_id"]
         assert a1.get_json()["buyer_agent_principal_id"] == "scope3-buyer"
         assert a2.get_json()["buyer_agent_principal_id"] == "other-buyer"
+
+    def test_billing_agent_grants_access_when_principal_exists(self, client, auth_headers, tid):
+        with bind_factories_to_session() as session:
+            tenant = session.get(Tenant, tid)
+            assert tenant is not None
+            PrincipalFactory(tenant=tenant, principal_id="scope3-buyer")
+
+        resp = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            billing="agent",
+            buyer_agent_principal_id="scope3-buyer",
+            gam_advertiser_id="agent_adv_1",
+        )
+
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        account_id = resp.get_json()["account_id"]
+        with bind_factories_to_session() as session:
+            grant = session.scalars(
+                select(AgentAccountAccess).where(
+                    AgentAccountAccess.tenant_id == tid,
+                    AgentAccountAccess.principal_id == "scope3-buyer",
+                    AgentAccountAccess.account_id == account_id,
+                )
+            ).first()
+        assert grant is not None
+
+    def test_billing_agent_reupsert_grants_access_after_principal_exists(self, client, auth_headers, tid):
+        first = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            billing="agent",
+            buyer_agent_principal_id="late-buyer",
+            gam_advertiser_id="agent_adv_1",
+        )
+        assert first.status_code == 201, first.get_data(as_text=True)
+        account_id = first.get_json()["account_id"]
+
+        with bind_factories_to_session() as session:
+            tenant = session.get(Tenant, tid)
+            assert tenant is not None
+            PrincipalFactory(tenant=tenant, principal_id="late-buyer")
+
+        second = self._post_account(
+            client,
+            auth_headers,
+            tid,
+            billing="agent",
+            buyer_agent_principal_id="late-buyer",
+            gam_advertiser_id="agent_adv_1",
+        )
+        assert second.status_code == 200, second.get_data(as_text=True)
+        assert second.get_json()["account_id"] == account_id
+
+        with bind_factories_to_session() as session:
+            grant_count = session.scalar(
+                select(func.count())
+                .select_from(AgentAccountAccess)
+                .where(
+                    AgentAccountAccess.tenant_id == tid,
+                    AgentAccountAccess.principal_id == "late-buyer",
+                    AgentAccountAccess.account_id == account_id,
+                )
+            )
+        assert grant_count == 1
 
     def test_sandbox_rejects_advertiser_id(self, client, auth_headers, tid):
         resp = self._post_account(

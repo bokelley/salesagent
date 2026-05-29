@@ -663,7 +663,7 @@ def process_and_upload_package_creatives(
     import logging
 
     # Lazy import to avoid circular dependency
-    from src.core.exceptions import AdCPAdapterError
+    from src.core.exceptions import AdCPAdapterError, AdCPError, AdCPValidationError
     from src.core.tools.creatives import _sync_creatives_impl
 
     logger = logging.getLogger(__name__)
@@ -692,7 +692,45 @@ def process_and_upload_package_creatives(
                 identity=context,  # ResolvedIdentity for principal_id extraction
             )
 
-            # Extract creative IDs from response
+            failed_results = [
+                result
+                for result in sync_response.creatives
+                if str(getattr(result.action, "value", result.action)).lower() == "failed" or result.errors
+            ]
+            if failed_results:
+                creative_errors = [
+                    {
+                        "creative_id": result.creative_id,
+                        "errors": [
+                            {
+                                "code": getattr(error, "code", None),
+                                "message": str(error.message if hasattr(error, "message") else error),
+                            }
+                            for error in result.errors or []
+                        ],
+                    }
+                    for result in failed_results
+                ]
+                transient_error_codes = {
+                    "creative_agent_unreachable",
+                    "preview_generation_failed",
+                    "processing_failed",
+                }
+                error_cls = (
+                    AdCPAdapterError
+                    if any(
+                        error.get("code") in transient_error_codes
+                        for creative_error in creative_errors
+                        for error in creative_error["errors"]
+                    )
+                    else AdCPValidationError
+                )
+                raise error_cls(
+                    f"Failed to upload creatives for package with product_id {product_id}",
+                    details={"error_code": "CREATIVES_UPLOAD_FAILED", "creative_errors": creative_errors},
+                )
+
+            # Extract creative IDs from successful response rows only.
             uploaded_ids = [result.creative_id for result in sync_response.creatives if result.creative_id]
 
             logger.info(
@@ -715,6 +753,8 @@ def process_and_upload_package_creatives(
             # Track uploads for return value
             uploaded_by_product[product_id] = uploaded_ids
 
+        except AdCPError:
+            raise
         except Exception as e:
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)

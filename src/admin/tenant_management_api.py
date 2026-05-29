@@ -179,6 +179,7 @@ from src.core.database.models import (
     Tenant,
     TenantSignal,
 )
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
 from src.core.database.repositories.gam_sync import GAMSyncRepository
@@ -4643,6 +4644,35 @@ def _find_account_by_natural_key(session, tenant_id: str, req: CreateAccountRequ
     return session.scalars(stmt).first()
 
 
+def _grant_account_access_for_existing_principal(
+    session,
+    tenant_id: str,
+    principal_id: str | None,
+    account_id: str,
+) -> None:
+    """Grant AgentAccountAccess for pre-mapped agent-billed accounts.
+
+    Tenant-management callers may create accounts before the buyer principal
+    has been provisioned. In that case Account.principal_id still records the
+    intended owner, and the later sync_accounts path will grant access once the
+    principal exists. When the principal already exists, grant immediately so
+    list_accounts/create_media_buy authorization sees the account without an
+    extra sync_accounts round trip.
+    """
+    if principal_id is None:
+        return
+    principal = session.get(Principal, (tenant_id, principal_id))
+    if principal is None:
+        logger.info(
+            "Skipping AgentAccountAccess grant for account %s: principal %s/%s does not exist yet",
+            account_id,
+            tenant_id,
+            principal_id,
+        )
+        return
+    AccountRepository(session, tenant_id).ensure_access(principal_id, account_id)
+
+
 @tenant_management_api.route("/tenants/<tenant_id>/accounts", methods=["POST"])
 @require_tenant_management_api_key
 @spec.validate(
@@ -4703,6 +4733,12 @@ def upsert_account(tenant_id: str):
             if req.gam_advertiser_id:
                 _set_account_advertiser(account, req.gam_advertiser_id, req.gam_advertiser_name)
             session.add(account)
+            _grant_account_access_for_existing_principal(
+                session,
+                tenant_id,
+                req.buyer_agent_principal_id if req.billing == "agent" else None,
+                account.account_id,
+            )
             try:
                 session.commit()
             except EmbeddedTenantWriteError as exc:
@@ -4725,6 +4761,12 @@ def upsert_account(tenant_id: str):
             existing.payment_terms = req.payment_terms
         if req.rate_card is not None:
             existing.rate_card = req.rate_card
+        _grant_account_access_for_existing_principal(
+            session,
+            tenant_id,
+            existing.principal_id if existing.billing == "agent" else None,
+            existing.account_id,
+        )
         existing.updated_at = datetime.now(UTC)
 
         try:

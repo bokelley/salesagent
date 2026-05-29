@@ -50,7 +50,10 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySuccess,
+    Error,
     PricingOption,
+    SyncCreativeResult,
+    SyncCreativesResponse,
 )
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.spec_required_kwargs import required_request_kwargs
@@ -1095,6 +1098,107 @@ class TestInlineCreativesProcessedBeforeApproval:
         assert call_order.index("creatives_processed") < call_order.index("approval_check"), (
             f"Creatives must be processed before approval check. Order: {call_order}"
         )
+
+    def test_inline_creative_sync_failure_raises_before_id_merge(self):
+        """Failed inline creative sync must not become a missing creative_id later."""
+        from src.core.helpers.creative_helpers import process_and_upload_package_creatives
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creatives": [
+                        {
+                            "creative_id": "inline_creative_1",
+                            "name": "Test Ad",
+                            "format_id": {
+                                "agent_url": "https://creative.example.com/",
+                                "id": "display_300x250_image",
+                            },
+                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                            "variants": [],
+                        }
+                    ],
+                },
+            ]
+        )
+        failed_response = SyncCreativesResponse(
+            creatives=[
+                SyncCreativeResult(
+                    creative_id="inline_creative_1",
+                    action="failed",
+                    errors=[Error(code="validation_failed", message="missing asset dimensions")],
+                )
+            ]
+        )
+
+        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=failed_response):
+            with pytest.raises(AdCPValidationError) as exc_info:
+                process_and_upload_package_creatives(
+                    packages=req.packages,
+                    context=ResolvedIdentity(
+                        principal_id="principal_1",
+                        tenant_id="test_tenant",
+                        tenant={"tenant_id": "test_tenant"},
+                    ),
+                    testing_ctx=AdCPTestContext(),
+                )
+
+        assert exc_info.value.details["error_code"] == "CREATIVES_UPLOAD_FAILED"
+        assert exc_info.value.details["creative_errors"][0]["creative_id"] == "inline_creative_1"
+        assert exc_info.value.details["creative_errors"][0]["errors"][0]["code"] == "validation_failed"
+
+    def test_inline_creative_transient_sync_failure_raises_adapter_error(self):
+        """Creative-agent outages should stay transient, not validation errors."""
+        from src.core.helpers.creative_helpers import process_and_upload_package_creatives
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creatives": [
+                        {
+                            "creative_id": "inline_creative_1",
+                            "name": "Test Ad",
+                            "format_id": {
+                                "agent_url": "https://creative.example.com/",
+                                "id": "display_300x250_image",
+                            },
+                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                            "variants": [],
+                        }
+                    ],
+                },
+            ]
+        )
+        failed_response = SyncCreativesResponse(
+            creatives=[
+                SyncCreativeResult(
+                    creative_id="inline_creative_1",
+                    action="failed",
+                    errors=[Error(code="creative_agent_unreachable", message="agent unavailable")],
+                )
+            ]
+        )
+
+        with patch("src.core.tools.creatives._sync_creatives_impl", return_value=failed_response):
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                process_and_upload_package_creatives(
+                    packages=req.packages,
+                    context=ResolvedIdentity(
+                        principal_id="principal_1",
+                        tenant_id="test_tenant",
+                        tenant={"tenant_id": "test_tenant"},
+                    ),
+                    testing_ctx=AdCPTestContext(),
+                )
+
+        assert exc_info.value.details["error_code"] == "CREATIVES_UPLOAD_FAILED"
+        assert exc_info.value.details["creative_errors"][0]["errors"][0]["code"] == "creative_agent_unreachable"
 
 
 class TestMultipleInvalidCreativesAccumulated:

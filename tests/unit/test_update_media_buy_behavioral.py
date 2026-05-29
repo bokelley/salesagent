@@ -15,7 +15,7 @@ BDD scenario cross-references:
 - T-UC-003-ext-l (impl-level): test_package_not_found_returns_error
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import repeat
 from unittest.mock import ANY, MagicMock, Mock, patch
@@ -78,6 +78,7 @@ def _make_mock_media_buy(media_buy_id="mb_test", currency="USD", revision=1, sta
     mb.currency = currency
     mb.revision = revision
     mb.status = status
+    mb.raw_request = {}
     mb.approved_at = datetime(2025, 1, 1, tzinfo=UTC)
     mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
     mb.end_time = datetime(2025, 12, 31, tzinfo=UTC)
@@ -208,6 +209,131 @@ def test_successful_update_increments_revision(standard_mocks):
     assert result.revision == 2
     standard_mocks["uow_instance"].media_buys.get_by_id_for_update.assert_called_once_with("mb_revision")
     standard_mocks["uow_instance"].media_buys.increment_revision.assert_called_once_with("mb_revision")
+
+
+def test_pause_persists_media_buy_status_and_flag(standard_mocks):
+    """Pause must update the DB/readback state, not only the response envelope."""
+    current = _make_mock_media_buy("mb_pause", revision=1, status="pending_creatives")
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.side_effect = None
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = current
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = current
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_pause",
+        affected_packages=[],
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_pause",
+        paused=True,
+        revision=1,
+    )
+
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert _enum_value(result.media_buy_status) == "paused"
+    standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
+        "mb_pause",
+        status="paused",
+        is_paused=True,
+        raw_request={"_pause_previous_status": "pending_creatives"},
+    )
+
+
+def test_resume_restores_pre_pause_blocker_status(standard_mocks):
+    """Resume must not collapse a pre-pause pending_creatives buy to active."""
+    current = _make_mock_media_buy("mb_resume", revision=2, status="paused")
+    current.raw_request = {"_pause_previous_status": "pending_creatives"}
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.side_effect = None
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = current
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = current
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_resume",
+        affected_packages=[],
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_resume",
+        paused=False,
+        revision=2,
+    )
+
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert _enum_value(result.media_buy_status) == "pending_creatives"
+    standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
+        "mb_resume",
+        status="pending_creatives",
+        is_paused=False,
+        raw_request={},
+    )
+
+
+def test_resume_derives_pre_pause_date_status_from_current_dates(standard_mocks):
+    """Resume from pending_start should return active once the flight is live."""
+    current = _make_mock_media_buy("mb_resume_dates", revision=2, status="paused")
+    current.raw_request = {"_pause_previous_status": "pending_start"}
+    current.start_time = datetime.now(UTC) - timedelta(days=1)
+    current.end_time = datetime.now(UTC) + timedelta(days=30)
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.side_effect = None
+    standard_mocks["uow_instance"].media_buys.get_by_id_for_update.return_value = current
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = current
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_resume_dates",
+        affected_packages=[],
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_resume_dates",
+        paused=False,
+        revision=2,
+    )
+
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuySuccess)
+    assert _enum_value(result.media_buy_status) == "active"
+    standard_mocks["uow_instance"].media_buys.update_fields.assert_called_once_with(
+        "mb_resume_dates",
+        status="active",
+        is_paused=False,
+        raw_request={},
+    )
+
+
+def test_package_pause_not_persisted_when_later_package_validation_fails(standard_mocks):
+    """A failed package update must not commit an earlier package pause."""
+    current = _make_mock_media_buy("mb_pkg_pause", revision=1)
+    standard_mocks["uow_instance"].media_buys.get_by_id.return_value = current
+    standard_mocks["uow_instance"].media_buys.get_package.return_value = MagicMock(
+        package_id="pkg_1",
+        package_config={"paused": False},
+    )
+    standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value.min_package_budget = Decimal("10")
+    standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
+        media_buy_id="mb_pkg_pause",
+        affected_packages=[],
+    )
+
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(
+        **required_request_kwargs(),
+        media_buy_id="mb_pkg_pause",
+        packages=[{"package_id": "pkg_1", "paused": True, "budget": 1}],
+    )
+
+    result = _update_media_buy_impl(req=req, identity=identity)
+
+    assert isinstance(result, UpdateMediaBuyError)
+    assert result.errors[0].code == "budget_below_minimum"
+    standard_mocks["uow_instance"].media_buys.update_package_config.assert_not_called()
 
 
 def test_package_reference_only_update_does_not_increment_revision(standard_mocks):

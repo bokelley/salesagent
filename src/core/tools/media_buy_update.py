@@ -176,6 +176,82 @@ def _apply_creative_attachment_status_transition(media_buy_obj: Any, media_buy_i
     )
 
 
+def _persist_media_buy_pause_state(
+    media_buys: MediaBuyRepository,
+    media_buy_obj: Any,
+    media_buy_id: str | None,
+    paused: bool,
+) -> str:
+    """Persist pause state and return the lifecycle status to report."""
+    if not media_buy_id:
+        return "paused" if paused else "active"
+
+    raw_request = dict(getattr(media_buy_obj, "raw_request", None) or {})
+    if paused:
+        previous_status = str(getattr(media_buy_obj, "status", "") or "active")
+        if previous_status != "paused":
+            raw_request["_pause_previous_status"] = previous_status
+        media_buys.update_fields(
+            media_buy_id,
+            status="paused",
+            is_paused=True,
+            raw_request=raw_request,
+        )
+        return "paused"
+
+    had_previous_status = "_pause_previous_status" in raw_request
+    restored_status = str(raw_request.pop("_pause_previous_status", None) or "active")
+    if restored_status == "paused":
+        restored_status = "active"
+    if had_previous_status:
+        restored_status = _derive_resumed_media_buy_status(media_buy_obj, restored_status)
+    media_buys.update_fields(
+        media_buy_id,
+        status=restored_status,
+        is_paused=False,
+        raw_request=raw_request,
+    )
+    return restored_status
+
+
+def _derive_resumed_media_buy_status(media_buy_obj: Any, restored_status: str) -> str:
+    """Derive the unpaused lifecycle state from blockers and current dates."""
+    if restored_status in {"pending_creatives", "rejected", "canceled"}:
+        return restored_status
+    if restored_status not in {"pending_start", "active", "completed"}:
+        return "active"
+
+    start_value = getattr(media_buy_obj, "start_time", None) or getattr(media_buy_obj, "start_date", None)
+    end_value = getattr(media_buy_obj, "end_time", None) or getattr(media_buy_obj, "end_date", None)
+    if start_value is None or end_value is None:
+        return restored_status
+    start_day = start_value.date() if hasattr(start_value, "date") else start_value
+    end_day = end_value.date() if hasattr(end_value, "date") else end_value
+    today = datetime.now(UTC).date()
+    if today < start_day:
+        return "pending_start"
+    if today > end_day:
+        return "completed"
+    return "active"
+
+
+def _persist_package_pause_state(
+    media_buys: MediaBuyRepository,
+    media_buy_id: str | None,
+    package_id: str | None,
+    paused: bool,
+) -> None:
+    """Persist package-level paused in MediaPackage.package_config."""
+    if not media_buy_id or not package_id:
+        return
+    package = media_buys.get_package(media_buy_id, package_id)
+    if package is None:
+        return
+    package_config = dict(package.package_config or {})
+    package_config["paused"] = paused
+    media_buys.update_package_config(media_buy_id, package_id, package_config)
+
+
 def _is_explicit_cancel_request(req: UpdateMediaBuyRequest) -> bool:
     """Return True only when the buyer explicitly sent ``canceled=True``.
 
@@ -971,12 +1047,15 @@ def _update_media_buy_impl(
                 media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                 affected_pkgs = getattr(result, "affected_packages", [])
 
-                # Echo the resulting media-buy lifecycle status — ``paused`` after a
-                # pause, ``active`` after a resume. Buyers need this to
-                # confirm the transition; the
-                # ``media_buy_state_machine / {pause,resume}_buy`` storyboards
-                # assert on ``field_present @ /media_buy_status`` (#353).
-                resulting_media_buy_status = "paused" if req.paused else "active"
+                # Echo the resulting media-buy lifecycle status. Resume restores
+                # the pre-pause blocker/date state instead of blindly reporting
+                # active, so the response and get_media_buys readback agree.
+                resulting_media_buy_status = _persist_media_buy_pause_state(
+                    uow.media_buys,
+                    current_mb,
+                    req.media_buy_id,
+                    req.paused,
+                )
                 response_revision = _increment_revision_for_response(
                     uow.media_buys,
                     req.media_buy_id,
@@ -1014,6 +1093,7 @@ def _update_media_buy_impl(
         # (Package existence pre-validated above for issue #251 — every
         # package_id has already been confirmed to exist on this buy.)
         if req.packages:
+            pending_package_pause_states: list[tuple[str, bool]] = []
             for pkg_update in req.packages:
                 # Handle paused state
                 if pkg_update.paused is not None:
@@ -1039,6 +1119,8 @@ def _update_media_buy_impl(
                             error_message=error_message,
                         )
                         return response_data
+                    if pkg_update.package_id:
+                        pending_package_pause_states.append((pkg_update.package_id, pkg_update.paused))
 
                 # Handle budget updates
                 if pkg_update.budget is not None:
@@ -1595,6 +1677,14 @@ def _update_media_buy_impl(
                             buyer_package_ref=pkg_update.package_id,  # Legacy compatibility
                         )
                     )
+
+            for package_id, paused in pending_package_pause_states:
+                _persist_package_pause_state(
+                    uow.media_buys,
+                    req.media_buy_id,
+                    package_id,
+                    paused,
+                )
 
         # Handle budget updates (handle both float and Budget object)
         if req.budget is not None:
