@@ -248,6 +248,14 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
 )
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.sandbox import (
+    account_ref_from_request,
+    mark_sandbox_trafficking_request,
+    sandbox_mode_for_request,
+    sandbox_mode_for_rows,
+    sandbox_trafficking_packages,
+    sandbox_trafficking_pricing_info,
+)
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
@@ -1053,6 +1061,27 @@ def _execute_adapter_media_buy_creation(
         raise
 
 
+def _apply_account_advertiser_mapping(
+    identity: ResolvedIdentity,
+    principal: Principal,
+    *,
+    dry_run: bool,
+) -> str | None:
+    """Resolve account advertiser routing and stamp it on the adapter principal."""
+    from src.core.helpers.account_provisioning import resolve_account_advertiser
+
+    account_advertiser_id = resolve_account_advertiser(identity, dry_run=dry_run)
+    if account_advertiser_id is None:
+        return None
+
+    mappings = dict(principal.platform_mappings or {})
+    gam_block = dict(mappings.get("google_ad_manager") or {})
+    gam_block["advertiser_id"] = account_advertiser_id
+    mappings["google_ad_manager"] = gam_block
+    principal.platform_mappings = mappings
+    return account_advertiser_id
+
+
 def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
     """Execute adapter creation for a manually approved media buy.
 
@@ -1347,8 +1376,34 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 logger.error(f"[APPROVAL] {error_msg}")
                 return False, error_msg
 
+            account = None
+            media_buy_account_id = getattr(media_buy, "account_id", None)
+            if isinstance(media_buy_account_id, str) and media_buy_account_id:
+                from src.core.database.repositories.account import AccountRepository
+
+                account = AccountRepository(session, tenant_id).get_by_id(media_buy_account_id)
+            sandbox_mode = sandbox_mode_for_rows(account=account)
+            if sandbox_mode.active:
+                logger.info(
+                    "[SANDBOX] Approved media buy %s will traffic against sandbox advertiser with zero economics: %s",
+                    media_buy_id,
+                    sandbox_mode.diagnostic,
+                )
+                mark_sandbox_trafficking_request(request)
+                packages = sandbox_trafficking_packages(packages)
+                package_pricing_info = sandbox_trafficking_pricing_info(package_pricing_info)
+
             # Create testing context (dry_run should be False for approved buys)
             testing_ctx = TestingContext(dry_run=False, test_session_id=None)
+
+            approval_identity = ResolvedIdentity(
+                principal_id=media_buy.principal_id,
+                tenant_id=tenant_id,
+                tenant=tenant_context,
+                protocol="mcp",
+                account_id=media_buy_account_id if isinstance(media_buy_account_id, str) else None,
+            )
+            _apply_account_advertiser_mapping(approval_identity, principal, dry_run=False)
 
             logger.info(
                 f"[APPROVAL] Calling adapter for {media_buy_id}: "
@@ -1827,6 +1882,8 @@ def _validate_pricing_model_selection(
     package: Package | PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
     campaign_currency: str | None,
+    *,
+    sandbox_trafficking: bool = False,
 ) -> dict[str, Any]:
     """Validate pricing model selection for a package against product's pricing options.
 
@@ -1935,7 +1992,7 @@ def _validate_pricing_model_selection(
         raise AdCPValidationError(error_msg, details={"error_code": "PRICING_ERROR"})
 
     # Validate auction pricing
-    if not selected_option.is_fixed:
+    if not selected_option.is_fixed and not sandbox_trafficking:
         if not package.bid_price:
             raise AdCPValidationError(
                 f"Package requires bid_price for auction-based {selected_option.pricing_model} pricing. "
@@ -1957,7 +2014,7 @@ def _validate_pricing_model_selection(
             )
 
     # Validate fixed pricing has rate
-    if selected_option.is_fixed and not selected_option.rate:
+    if selected_option.is_fixed and not selected_option.rate and not sandbox_trafficking:
         raise AdCPValidationError(
             f"Product {product.product_id} pricing option has is_fixed=true but no rate specified",
             details={"error_code": "PRICING_ERROR"},
@@ -1965,7 +2022,7 @@ def _validate_pricing_model_selection(
         )
 
     # Validate minimum spend per package
-    if selected_option.min_spend_per_package:
+    if selected_option.min_spend_per_package and not sandbox_trafficking:
         package_budget = None
         if package.budget is not None:
             # Package.budget is now always float | None (per AdCP spec)
@@ -1993,6 +2050,7 @@ def _collect_package_pricing_info_by_index(
     product_map: dict[str, Any],
     *,
     campaign_currency: str | None = None,
+    sandbox_trafficking: bool = False,
 ) -> dict[int, dict[str, Any]]:
     """Resolve and validate selected pricing for request packages.
 
@@ -2011,6 +2069,7 @@ def _collect_package_pricing_info_by_index(
             package=package,
             product=product_map[product_id],
             campaign_currency=campaign_currency,
+            sandbox_trafficking=sandbox_trafficking,
         )
 
     return package_pricing_info_by_index
@@ -2332,11 +2391,10 @@ async def _create_media_buy_impl(
             )
             raise AdCPValidationError(error_msg, recovery="terminal") from e
 
-    # Validate principal exists BEFORE creating context (foreign key constraint)
+    # Validate principal exists after setup checks.
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
         error_msg = f"Principal {principal_id} not found"
-        # Cannot create context or workflow step without valid principal
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
                 errors=[Error(code="authentication_error", message=error_msg, details=None)],
@@ -2345,26 +2403,15 @@ async def _create_media_buy_impl(
             status=AdcpTaskStatus.failed.value,
         )
 
-    # Sprint 1.6 piece C: when the buyer references an Account, the
-    # advertiser id flows from Account.platform_mappings — not the legacy
-    # Principal.platform_mappings path. resolve_account_advertiser() returns
-    # the resolved id (creating a GAM advertiser lazily when the tenant has
-    # auto_provision_advertisers=True), or None when there's no account
-    # context (legacy buyers fall through to Principal mappings). Raises
-    # AdCPAccountNotProvisioned for pending_provision accounts on tenants
-    # without auto-provision — surfaces to the buyer as a structured error.
-    from src.core.helpers.account_provisioning import resolve_account_advertiser
+    sandbox_mode = sandbox_mode_for_request(identity=identity, account_ref=account_ref_from_request(req))
+    if sandbox_mode.active:
+        logger.info("[SANDBOX] create_media_buy will traffic with zero economics: %s", sandbox_mode.diagnostic)
 
-    _account_advertiser_id = resolve_account_advertiser(
-        identity,
-        dry_run=False,  # dry_run from testing_ctx is resolved later
-    )
+    # Account-scoped buyers route through Account.platform_mappings (or the
+    # sandbox advertiser cache) by stamping the resolved advertiser on the
+    # in-memory Principal used for adapter construction.
+    _account_advertiser_id = _apply_account_advertiser_mapping(identity, principal, dry_run=testing_ctx.dry_run)
     if _account_advertiser_id is not None:
-        mappings = dict(principal.platform_mappings or {})
-        gam_block = dict(mappings.get("google_ad_manager") or {})
-        gam_block["advertiser_id"] = _account_advertiser_id
-        mappings["google_ad_manager"] = gam_block
-        principal.platform_mappings = mappings
         logger.info(
             f"[ACCOUNT_ADVERTISER] account_id={identity.account_id!r} resolved to "
             f"GAM advertiser {_account_advertiser_id!r}; overriding principal mapping"
@@ -2431,8 +2478,14 @@ async def _create_media_buy_impl(
         # Validate input parameters
         # 1. Budget validation
         total_budget = req.get_total_budget()
-        if total_budget <= 0:
-            error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
+        if sandbox_mode.active:
+            budget_invalid = total_budget < 0
+            budget_requirement = "non-negative"
+        else:
+            budget_invalid = total_budget <= 0
+            budget_requirement = "positive"
+        if budget_invalid:
+            error_msg = f"Invalid budget: {total_budget}. Budget must be {budget_requirement}."
             raise ValueError(error_msg)
 
         # 2. DateTime validation
@@ -2570,6 +2623,7 @@ async def _create_media_buy_impl(
                         packages=req.packages,
                         product_map=product_map,
                         campaign_currency=legacy_request_currency,
+                        sandbox_trafficking=sandbox_mode.active,
                     )
                     request_currency = _derive_single_request_currency(package_pricing_info_by_index)
                 except AdCPError as e:
@@ -2620,7 +2674,7 @@ async def _create_media_buy_impl(
                     raise ValueError(error_msg)
 
             # Validate minimum product spend (legacy + new pricing_options)
-            if currency_limit.min_package_budget:
+            if not sandbox_mode.active and currency_limit.min_package_budget:
                 # Build map of product_id -> minimum spend
                 product_min_spends = {}
                 for product in products:
@@ -2716,7 +2770,7 @@ async def _create_media_buy_impl(
 
             # Validate maximum daily spend per package (if set)
             # This is per-package to prevent buyers from splitting large budgets across many packages
-            if currency_limit.max_daily_package_spend:
+            if not sandbox_mode.active and currency_limit.max_daily_package_spend:
                 flight_days = (end_time_val - start_time_val).days
                 if flight_days <= 0:
                     flight_days = 1
@@ -2861,6 +2915,10 @@ async def _create_media_buy_impl(
             publisher_owns_campaign=campaign_approval_owned,
         )
         if not campaign_approval_owned:
+            _suppress_adapter_manual_approval(adapter, "create_media_buy")
+            setattr(req, "_already_approved", True)  # noqa: B010
+        if sandbox_mode.active:
+            manual_approval_required = False
             _suppress_adapter_manual_approval(adapter, "create_media_buy")
             setattr(req, "_already_approved", True)  # noqa: B010
         if not creative_approval_owned:
@@ -3754,6 +3812,13 @@ async def _create_media_buy_impl(
         logger.debug(f"[PRICING] Mapped {len(remapped_package_pricing_info)} package pricing info")
         # Reassign to package_pricing_info for use later
         package_pricing_info = remapped_package_pricing_info
+        if sandbox_mode.active:
+            mark_sandbox_trafficking_request(req)
+            packages = sandbox_trafficking_packages(packages)
+            package_pricing_info = sandbox_trafficking_pricing_info(
+                package_pricing_info,
+                default_currency=request_currency or "USD",
+            )
 
         # Create the media buy using the adapter (SYNCHRONOUS operation)
         # Defensive null check: ensure start_time and end_time are set
@@ -3810,7 +3875,10 @@ async def _create_media_buy_impl(
         # Dry-run mode: skip adapter call entirely, return simulated response
         # All validation (products, pricing, budgets, creatives) has passed above.
         if testing_ctx.dry_run:
-            logger.info("[DRY_RUN] Validation passed, returning simulated response without adapter call")
+            if sandbox_mode.active:
+                logger.info("[SANDBOX] Validation passed, returning no-spend simulated response without adapter call")
+            else:
+                logger.info("[DRY_RUN] Validation passed, returning simulated response without adapter call")
             simulated_packages = [
                 ResponsePackage(
                     package_id=pkg.package_id,
@@ -3820,7 +3888,7 @@ async def _create_media_buy_impl(
                 for pkg in packages
             ]
             simulated_response = CreateMediaBuySuccess(
-                media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
+                media_buy_id=f"{'sandbox' if sandbox_mode.active else 'dry_run'}_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
                 status="completed",
                 media_buy_status=MediaBuyStatus.pending_start
@@ -3922,7 +3990,7 @@ async def _create_media_buy_impl(
                     req=req,
                     principal_id=principal_id,
                     advertiser_name=principal.name,
-                    budget=total_budget,
+                    budget=0.0 if sandbox_mode.active else total_budget,
                     currency=request_currency,
                     start_time=start_time,
                     end_time=end_time,
@@ -4499,7 +4567,7 @@ async def _create_media_buy_impl(
                 tenant_id=tenant["tenant_id"],
                 principal_name=principal_name,
                 media_buy_id=response.media_buy_id,
-                budget=total_budget,  # Extract total budget
+                budget=0.0 if sandbox_mode.active else total_budget,
                 duration_days=duration_days,
                 action="created",
             )
@@ -4508,14 +4576,18 @@ async def _create_media_buy_impl(
             logger.warning(f"Failed to log media buy creation to activity feed: {e}")
 
         # Apply testing hooks to response with campaign information (resolved from 'asap' if needed)
-        campaign_info = {"start_date": start_time, "end_date": end_time, "total_budget": total_budget}
+        campaign_info = {
+            "start_date": start_time,
+            "end_date": end_time,
+            "total_budget": 0.0 if sandbox_mode.active else total_budget,
+        }
 
         hooks_result = apply_testing_hooks(
             testing_ctx,
             "create_media_buy",
             campaign_info,
             media_buy_id=adcp_response.media_buy_id,
-            spend_amount=total_budget,
+            spend_amount=0.0 if sandbox_mode.active else total_budget,
         )
 
         # Only mutation that survives: test_ prefix on media_buy_id in dry-run mode
@@ -4572,7 +4644,7 @@ async def _create_media_buy_impl(
             # Note: creatives field no longer exists on CreateMediaBuyRequest per AdCP spec
             notification_creatives = getattr(req, "creatives", None)
             success_details = {
-                "total_budget": total_budget,
+                "total_budget": 0.0 if sandbox_mode.active else total_budget,
                 "po_number": req.po_number,
                 "start_time": start_time.isoformat(),  # Resolved from 'asap' if needed
                 "end_time": end_time.isoformat(),
@@ -4607,7 +4679,7 @@ async def _create_media_buy_impl(
             success=True,
             details={
                 "media_buy_id": response.media_buy_id,
-                "total_budget": total_budget,
+                "total_budget": 0.0 if sandbox_mode.active else total_budget,
                 "po_number": req.po_number,
                 "duration_days": (end_time_val - start_time_val).days + 1,  # Resolved from 'asap' if needed
                 "product_count": len(req.get_product_ids()),

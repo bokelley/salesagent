@@ -10,8 +10,7 @@ Covers:
   Account, flips status to active, returns id.
 - Account in ``pending_provision`` + tenant.auto_provision_advertisers=False
   → raises ``AdCPAccountNotProvisioned``.
-- Sandbox account → returns None (sprint 1.6 follow-up wires the per-
-  tenant sandbox advertiser).
+- Sandbox account → returns the per-tenant sandbox advertiser.
 - Account row not found → returns None (let upstream ref-validation fail).
 """
 
@@ -23,7 +22,7 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Account, Tenant
+from src.core.database.models import Account, AdapterConfig, Tenant
 from src.core.helpers import account_provisioning
 from src.core.helpers.account_provisioning import (
     AdCPAccountNotProvisioned,
@@ -58,6 +57,7 @@ def _make_tenant(*, auto_provision: bool = False, ad_server: str = "google_ad_ma
                 auto_provision_advertisers=auto_provision,
             )
         )
+        session.add(AdapterConfig(tenant_id=tid, adapter_type="mock"))
         session.commit()
     return tid
 
@@ -170,14 +170,17 @@ class TestResolveAccountAdvertiser:
         # No GAM call attempted on the deny path.
         assert stub_gam_create == []
 
-    def test_sandbox_account_returns_none(self, integration_db):
-        """Sandbox accounts skip account-based resolution today —
-        sprint 1.6 follow-up will wire the per-tenant sandbox advertiser."""
+    def test_sandbox_account_returns_tenant_sandbox_advertiser(self, integration_db):
+        """Sandbox accounts route to the tenant sandbox advertiser."""
         tid = _make_tenant(auto_provision=True)
         aid = _make_account(tid, status="active", sandbox=True, advertiser_id="should_be_ignored")
         identity = _identity(tenant_id=tid, account_id=aid)
 
-        assert resolve_account_advertiser(identity) is None
+        assert resolve_account_advertiser(identity) == f"sandbox-{tid}"
+        with get_db_session() as session:
+            account = session.scalars(select(Account).filter_by(account_id=aid)).first()
+            assert account.platform_mappings["google_ad_manager"]["advertiser_id"] == f"sandbox-{tid}"
+            assert account.platform_mappings["google_ad_manager"]["provisioned_by"] == "auto:sandbox"
 
     def test_account_row_not_found_returns_none(self, integration_db):
         """Buyer references an account_id that doesn't exist in this tenant
