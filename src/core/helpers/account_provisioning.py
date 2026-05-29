@@ -17,11 +17,10 @@ Branching:
 - ``Account.status == "pending_provision"`` + ``auto_provision_advertisers=False``
   → return :class:`AdCPAccountNotProvisioned`. Caller raises; publisher
   ops maps manually via the Admin UI / Tenant Mgmt API.
-- Sandbox accounts → not handled here yet (sprint 1.6 follow-up). The
-  sandbox advertiser cache lives on ``AdapterConfig.gam_sandbox_advertiser_id``;
-  resolver returns ``None`` and the caller falls back to legacy resolution
-  for sandbox=True today. Updating sandbox to use the per-tenant cached
-  advertiser is a separate landable.
+- Sandbox accounts → return the per-tenant sandbox advertiser cached on
+  ``AdapterConfig.gam_sandbox_advertiser_id``. The caller traffics these
+  buys with zero platform economics instead of falling back to the legacy
+  Principal mapping.
 - ``identity.account_id is None`` (legacy buyers without ``account`` in
   the request) → return ``None``. Caller uses the legacy
   Principal.platform_mappings path. **Backward-compatible — existing
@@ -41,6 +40,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
 from src.core.exceptions import AdCPError
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.sandbox import INTERCHANGE_SANDBOX_ZERO_RATE_CARD
 from src.services.protocol_change_webhooks import notify_account_status_changed
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,11 @@ def gam_create_advertiser_companyservice(
     ).advertiser_id
 
 
+def _is_gam_company_name_collision(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "unique_name" in message or "not_unique" in message or "already exists" in message
+
+
 def gam_ensure_advertiser_companyservice(
     network_code: str,
     config: dict[str, Any],
@@ -154,7 +159,7 @@ def gam_ensure_advertiser_companyservice(
         # query for the existing company by name and return its id. If THAT
         # fails too, re-raise — caller treats this as a hard provisioning
         # error.
-        if "UNIQUE_NAME" not in str(exc) and "already exists" not in str(exc).lower():
+        if not _is_gam_company_name_collision(exc):
             raise
 
         from googleads import ad_manager
@@ -207,10 +212,30 @@ def resolve_account_advertiser(
             # principal mapping either, the adapter raises its own error.
             return None
 
-        # Sandbox accounts: deferred to a follow-up. Returning None means
-        # the legacy Principal path takes over for now.
-        if account.sandbox:
-            return None
+        if account.sandbox or account.rate_card == INTERCHANGE_SANDBOX_ZERO_RATE_CARD:
+            from src.services.buyer_advertiser_routing import ensure_sandbox_advertiser
+
+            sandbox_advertiser_id = ensure_sandbox_advertiser(session, tenant_id, dry_run=dry_run)
+            _set_account_advertiser_mapping(
+                account,
+                sandbox_advertiser_id,
+                advertiser_name="Sandbox (auto-created by salesagent — do not bill)",
+                source="auto:sandbox",
+            )
+            old_status = account.status
+            if old_status != "active":
+                account.status = "active"
+            account.updated_at = datetime.now(UTC)
+            session.commit()
+            if old_status != "active":
+                notify_account_status_changed(
+                    tenant_id=tenant_id,
+                    account_id=account.account_id,
+                    from_status=old_status,
+                    to_status="active",
+                    principal_id=account.principal_id,
+                )
+            return sandbox_advertiser_id
 
         # Active + already mapped → fast path.
         if account.status == "active":

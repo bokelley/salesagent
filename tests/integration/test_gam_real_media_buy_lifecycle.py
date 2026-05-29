@@ -29,6 +29,7 @@ from src.core.database.models import MediaBuy as DBMediaBuy
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.resolved_identity import ResolvedIdentity
 from tests.factories import (
+    AccountFactory,
     AdapterConfigFactory,
     GAMInventoryFactory,
     PricingOptionFactory,
@@ -156,6 +157,15 @@ def gam_order_archive_cleanup(wonderstruck_creds):
     yield created_orders
 
     try:
+        for order_id in created_orders:
+            try:
+                sb0 = ad_manager.StatementBuilder()
+                sb0.Where("id = :id").WithBindVariable("id", int(order_id))
+                order_service.performOrderAction({"xsi_type": "ArchiveOrders"}, sb0.ToStatement())
+                print(f"INFO: archived GAM order {order_id}")
+            except Exception as exc:  # pragma: no cover - cleanup best effort
+                print(f"WARN: failed to archive GAM order {order_id}: {exc}")
+
         sb = ad_manager.StatementBuilder()
         sb.Where("advertiserId = :a AND isArchived = :archived").WithBindVariable(
             "a", int(WONDERSTRUCK_ADVERTISER_ID)
@@ -189,6 +199,7 @@ def _seed_gam_tenant(wonderstruck_creds: str):
         human_review_required=False,
         # Skip auto-naming: no tenant-level Gemini key.
         auto_naming_enabled=False,
+        default_gam_advertiser_id=WONDERSTRUCK_ADVERTISER_ID,
         # validate_setup_complete also requires SSO config + auth_setup_mode off.
         # See #43.
         auth_setup_mode=False,
@@ -264,6 +275,14 @@ def _seed_gam_tenant(wonderstruck_creds: str):
         currency="USD",
         is_fixed=True,
     )
+    PricingOptionFactory(
+        product=product,
+        pricing_model="cpm",
+        rate=None,
+        currency="USD",
+        is_fixed=False,
+        price_guidance={"floor": 4.0, "p50": 6.0, "p75": 8.0, "p90": 10.0},
+    )
 
     return tenant
 
@@ -284,6 +303,15 @@ def _identity() -> ResolvedIdentity:
 
 def _future(days: int) -> datetime:
     return datetime.now(UTC) + timedelta(days=days)
+
+
+def _gam_value(obj, key: str):
+    if isinstance(obj, dict):
+        return obj.get(key)
+    try:
+        return obj[key]
+    except (KeyError, TypeError):
+        return getattr(obj, key, None)
 
 
 class TestGAMRealMediaBuyLifecycle:
@@ -410,6 +438,88 @@ class TestGAMRealMediaBuyLifecycle:
             errors = delivery_resp.errors or []
             unexpected = [e for e in errors if getattr(e, "code", None) != "adapter_error"]
             assert not unexpected, f"Unexpected delivery errors: {unexpected}"
+
+    async def test_sandbox_account_traffics_house_zero_cpm_against_real_gam(
+        self,
+        integration_db,
+        wonderstruck_creds,
+        gam_order_archive_cleanup,
+    ):
+        from googleads import ad_manager
+
+        from src.adapters.gam.client import GAMClientManager
+        from src.core.schemas import CreateMediaBuyRequest
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        with IntegrationEnv(tenant_id=GAM_TENANT_ID, principal_id=GAM_PRINCIPAL_ID):
+            _seed_gam_tenant(wonderstruck_creds)
+            sandbox_account = AccountFactory(
+                tenant_id=GAM_TENANT_ID,
+                account_id="acct_wonderstruck_sandbox",
+                name="Wonderstruck Sandbox",
+                status="active",
+                operator="wonderstruck.example.com",
+                brand={"domain": "testbrand.com"},
+                sandbox=True,
+            )
+            identity = _identity().model_copy(update={"account_id": sandbox_account.account_id})
+
+            create_result = await _create_media_buy_impl(
+                req=CreateMediaBuyRequest(
+                    **required_request_kwargs(account_id=sandbox_account.account_id),
+                    brand={"domain": "testbrand.com"},
+                    start_time=_future(1),
+                    end_time=_future(8),
+                    po_number=f"E2E-SBX-{uuid.uuid4().hex[:6]}",
+                    packages=[
+                        {
+                            "product_id": GAM_PRODUCT_ID,
+                            "budget": 250.0,
+                            "pricing_option_id": "cpm_usd_auction",
+                            "bid_price": 2.23,
+                        }
+                    ],
+                ),
+                identity=identity,
+            )
+            assert create_result.status not in ("failed",), (
+                f"create_media_buy failed: status={create_result.status}, "
+                f"errors={getattr(create_result.response, 'errors', None)}"
+            )
+            order_id = create_result.response.media_buy_id
+            assert order_id
+            gam_order_archive_cleanup.append(order_id)
+
+            cm = GAMClientManager(
+                {"service_account_json": wonderstruck_creds},
+                network_code=WONDERSTRUCK_NETWORK_CODE,
+            )
+
+            order_service = cm.get_service("OrderService")
+            order_stmt = ad_manager.StatementBuilder()
+            order_stmt.Where("id = :id").WithBindVariable("id", int(order_id))
+            order_page = order_service.getOrdersByStatement(order_stmt.ToStatement())
+            orders = getattr(order_page, "results", None) or []
+            assert orders, f"GAM order {order_id} not found"
+            order = orders[0]
+            assert str(_gam_value(order, "advertiserId")) != WONDERSTRUCK_ADVERTISER_ID
+            assert _gam_value(_gam_value(order, "totalBudget"), "microAmount") == 0
+
+            line_item_service = cm.get_service("LineItemService")
+            line_item_stmt = ad_manager.StatementBuilder()
+            line_item_stmt.Where("orderId = :order_id").WithBindVariable("order_id", int(order_id))
+            line_item_page = line_item_service.getLineItemsByStatement(line_item_stmt.ToStatement())
+            line_items = getattr(line_item_page, "results", None) or []
+            assert line_items, f"GAM line items for order {order_id} not found"
+            line_item = line_items[0]
+            assert _gam_value(line_item, "lineItemType") == "HOUSE"
+            assert _gam_value(line_item, "priority") == 16
+            assert _gam_value(line_item, "costType") == "CPM"
+            assert _gam_value(_gam_value(line_item, "costPerUnit"), "microAmount") == 0
+            primary_goal = _gam_value(line_item, "primaryGoal")
+            assert _gam_value(primary_goal, "goalType") == "DAILY"
+            assert _gam_value(primary_goal, "unitType") == "IMPRESSIONS"
+            assert _gam_value(primary_goal, "units") == 100
 
 
 class TestGAMOrderProgressesPastDraft:

@@ -45,6 +45,7 @@ from src.adapters.gam.managers.orders import (
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
+from src.core.sandbox import is_sandbox_trafficking_request
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AffectedPackage,
@@ -716,7 +717,10 @@ class GoogleAdManager(AdServerAdapter):
         order_name = truncate_name_with_suffix(full_order_name, GAM_NAME_LIMITS["max_order_name_length"])
 
         # Calculate total budget from package budgets (AdCP v2.2.0)
-        total_budget_amount = request.get_total_budget()
+        sandbox_trafficking = is_sandbox_trafficking_request(request)
+        total_budget_amount = 0.0 if sandbox_trafficking else request.get_total_budget()
+        if sandbox_trafficking:
+            self.log("[SANDBOX] Creating GAM order against sandbox advertiser with totalBudget=0")
 
         order_id = self.orders_manager.create_order(
             order_name=order_name,

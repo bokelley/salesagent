@@ -20,7 +20,7 @@ from src.core.auth import get_principal_object
 from src.core.embedded_runtime import mark_compose_disabled, publisher_owns_compose_products
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.sandbox_zero_rate import apply_zero_rate_card_to_products, get_sandbox_zero_rate_policy
+from src.core.sandbox import account_ref_from_request, sandbox_mode_for_request, zero_pricing_for_sandbox
 from src.core.schemas import (
     GetProductsResponse,  # Extends library Product
 )
@@ -251,6 +251,10 @@ async def _get_products_impl(
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
+    request_account_ref = account_ref_from_request(req)
+    sandbox_mode = sandbox_mode_for_request(identity=identity, account_ref=request_account_ref)
+    if sandbox_mode.active:
+        logger.info("[GET_PRODUCTS] Sandbox/no-spend mode active: %s", sandbox_mode.diagnostic)
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
@@ -704,16 +708,6 @@ async def _get_products_impl(
                     filtered_products.append(product)
         eligible_products = filtered_products
 
-    sandbox_zero_rate_policy = get_sandbox_zero_rate_policy(identity)
-    if sandbox_zero_rate_policy is not None:
-        apply_zero_rate_card_to_products(eligible_products, sandbox_zero_rate_policy)
-        logger.info(
-            "[SANDBOX_ZERO_RATE] Applied zero pricing to %s product(s) for account_id=%s reason=%s",
-            len(eligible_products),
-            sandbox_zero_rate_policy.account_id,
-            sandbox_zero_rate_policy.reason,
-        )
-
     # AI-powered product ranking (when tenant has product_ranking_prompt configured)
     product_ranking_prompt = tenant.get("product_ranking_prompt")
     if product_ranking_prompt and brief_text and eligible_products:
@@ -793,6 +787,9 @@ async def _get_products_impl(
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues
     buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
+    if sandbox_mode.active:
+        eligible_products = zero_pricing_for_sandbox(eligible_products)
+
     if principal_id is None and buying_mode != "wholesale":  # Anonymous non-feed discovery
         # Remove pricing data from products for anonymous users
         # Set to empty list to hide pricing for curated discovery responses.
@@ -811,8 +808,6 @@ async def _get_products_impl(
         products=[r.wire for r in eligible_products],
         errors=None,
         context=req.context,
-        sandbox=sandbox_zero_rate_policy is not None,
-        ext=sandbox_zero_rate_policy.extension() if sandbox_zero_rate_policy is not None else None,
     )
     if not publisher_owns_compose_products():
         resp = mark_compose_disabled(resp)
@@ -822,8 +817,9 @@ async def _get_products_impl(
     # by — see #22 for the principal→account refactor that will eventually
     # make this lookup go through the Account record directly.
     elapsed_ms = int((time.time() - start_time) * 1000)
-    account = req.account
-    operator = account.operator if account is not None and account.operator else principal_id
+    account = request_account_ref
+    account_inner = getattr(account, "root", account)
+    operator = getattr(account_inner, "operator", None) or principal_id
     brand_domain = req.brand.domain if req.brand else None
     pricing_visibility = "full" if principal_id is not None or buying_mode == "wholesale" else "suppressed"
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -839,6 +835,7 @@ async def _get_products_impl(
             "has_filters": req.filters is not None,
             "buying_mode": buying_mode,
             "pricing_visibility": pricing_visibility,
+            "sandbox_mode": sandbox_mode.diagnostic,
             "is_anonymous": principal_id is None,
             "operator": operator,
             "brand_domain": brand_domain,

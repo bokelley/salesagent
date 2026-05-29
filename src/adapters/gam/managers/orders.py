@@ -15,6 +15,12 @@ from googleads import ad_manager
 
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError
+from src.core.sandbox import (
+    SANDBOX_TRAFFICKING_COST_TYPE,
+    SANDBOX_TRAFFICKING_LINE_ITEM_TYPE,
+    SANDBOX_TRAFFICKING_PRICING_MODEL,
+    SANDBOX_TRAFFICKING_PRIORITY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -728,6 +734,7 @@ class GAMOrdersManager:
                 pricing_model = pricing_info["pricing_model"]
                 is_fixed_price = pricing_info["is_fixed"]  # Fixed vs auction pricing (pricing type)
                 currency = pricing_info["currency"]
+                sandbox_trafficking = bool(pricing_info.get("sandbox_trafficking"))
 
                 # Determine delivery guarantee from product (not pricing)
                 # IMPORTANT: delivery_type (guaranteed/non-guaranteed inventory) is SEPARATE from
@@ -793,7 +800,21 @@ class GAMOrdersManager:
                 # NETWORK: Only supports DAILY goal type (percentage-based)
                 # STANDARD: Supports LIFETIME goal type (impression-based)
                 # PRICE_PRIORITY: Supports NONE, LIFETIME, DAILY goal types (impression-based)
-                if line_item_type == "SPONSORSHIP":
+                if sandbox_trafficking:
+                    pricing_model = SANDBOX_TRAFFICKING_PRICING_MODEL
+                    rate = 0.0
+                    cost_type = SANDBOX_TRAFFICKING_COST_TYPE
+                    cost_per_unit_micro = 0
+                    line_item_type = SANDBOX_TRAFFICKING_LINE_ITEM_TYPE
+                    priority = SANDBOX_TRAFFICKING_PRIORITY
+                    goal_type = "DAILY"
+                    goal_unit_type = "IMPRESSIONS"
+                    goal_units = 100
+                    log(
+                        "  [SANDBOX] Ignoring buyer price for GAM trafficking: "
+                        f"{line_item_type} @ $0.00 {currency}, priority={priority}"
+                    )
+                elif line_item_type == "SPONSORSHIP":
                     # SPONSORSHIP line items require DAILY goals with percentage-based units
                     goal_type = "DAILY"
 
@@ -815,7 +836,7 @@ class GAMOrdersManager:
                     pass  # Keep goal_type from impl_config (set earlier)
 
                 # Update goal units based on pricing model (for non-SPONSORSHIP or non-FLAT_RATE)
-                if pricing_model != "flat_rate":
+                if not sandbox_trafficking and pricing_model != "flat_rate":
                     if pricing_model == "cpc":
                         # CPC: goal should be in clicks, not impressions
                         goal_unit_type = "CLICKS"
