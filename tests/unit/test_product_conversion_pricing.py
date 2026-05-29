@@ -23,6 +23,7 @@ def _make_pricing_option(
     pricing_model: str,
     is_fixed: bool,
     currency: str = "USD",
+    pricing_option_id: str | None = None,
     rate: float | None = None,
     price_guidance: dict | None = None,
     parameters: dict | None = None,
@@ -34,6 +35,8 @@ def _make_pricing_option(
         "is_fixed": is_fixed,
         "currency": currency,
     }
+    if pricing_option_id is not None:
+        po["pricing_option_id"] = pricing_option_id
     if rate is not None:
         po["rate"] = rate
     if price_guidance is not None:
@@ -43,6 +46,15 @@ def _make_pricing_option(
     if min_spend_per_package is not None:
         po["min_spend_per_package"] = min_spend_per_package
     return po
+
+
+def test_existing_pricing_option_id_is_preserved():
+    po = _make_pricing_option("cpm", is_fixed=True, pricing_option_id="cpm_usd_fixed", rate=5.00)
+
+    result = convert_pricing_option_to_adcp(po)
+
+    assert isinstance(result, CpmPricingOption)
+    assert result.pricing_option_id == "cpm_usd_fixed"
 
 
 # ---------------------------------------------------------------------------

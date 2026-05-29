@@ -128,6 +128,7 @@ from src.admin.api_schemas.tenant_management import (
     WholesaleInventory,
     WholesaleInventoryExecution,
     WholesalePricingOption,
+    WholesalePricingOptionResponse,
     WholesaleProductPreviewResponse,
     WholesaleProductRequest,
     WholesaleProductResponse,
@@ -445,6 +446,34 @@ def _tenant_to_summary(tenant: Tenant, adapter_configured: bool) -> dict:
     ).model_dump(mode="json")
 
 
+def _creative_approval_from_tenant(tenant: Tenant) -> str:
+    return {
+        "auto-approve": "auto",
+        "require-human": "manual",
+        "ai-powered": "ai",
+    }.get(tenant.approval_mode or "require-human", "manual")
+
+
+def _media_buy_approval_from_tenant(tenant: Tenant) -> str:
+    return "manual" if tenant.human_review_required else "auto"
+
+
+def _tenant_creative_approval_mode(value: str) -> str:
+    return {
+        "auto": "auto-approve",
+        "manual": "require-human",
+        "ai": "ai-powered",
+    }[value]
+
+
+def _seed_local_example_publisher_authorization(session, tenant_id: str) -> None:
+    """Install the example.com publisher fixture for local embedded E2E runs."""
+    if os.environ.get("ADCP_TESTING", "").lower() != "true":
+        return
+
+    TenantConfigRepository(session, tenant_id).ensure_example_publisher_authorization()
+
+
 def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
     """Serialize a :class:`Tenant` as a :class:`TenantDetail`-compatible dict."""
     contact_email = tenant.billing_contact if tenant.billing_contact and "@" in (tenant.billing_contact or "") else None
@@ -470,6 +499,8 @@ def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
         public_agent_url=tenant.public_agent_url,
         default_gam_advertiser_id=tenant.default_gam_advertiser_id,
         embed_breadcrumb_root=tenant.embed_breadcrumb_root,
+        creative_approval=_creative_approval_from_tenant(tenant),
+        media_buy_approval=_media_buy_approval_from_tenant(tenant),
     ).model_dump(mode="json")
 
 
@@ -1246,8 +1277,11 @@ def _product_status(product: Product) -> str:
     return str((product.implementation_config or {}).get("status") or "active")
 
 
-def _pricing_option_schema(option: PricingOption) -> WholesalePricingOption:
-    return WholesalePricingOption(
+def _pricing_option_schema(option: PricingOption) -> WholesalePricingOptionResponse:
+    pricing_model = option.pricing_model.lower()
+    pricing_option_id = f"{pricing_model}_{option.currency.lower()}_{'fixed' if option.is_fixed else 'auction'}"
+    return WholesalePricingOptionResponse(
+        pricing_option_id=pricing_option_id,
         pricing_model=option.pricing_model,
         rate=option.rate,
         currency=option.currency,
@@ -4180,6 +4214,7 @@ def provision_tenant():
                 description="Default property tag for all inventory",
             )
         )
+        _seed_local_example_publisher_authorization(session, tenant_id)
 
         if req.initial_principal is not None:
             initial_principal_id = f"principal_{uuid.uuid4().hex[:8]}"
@@ -4374,6 +4409,18 @@ def patch_tenant(tenant_id: str):
             tenant.default_gam_advertiser_id = req.default_gam_advertiser_id
         if req.embed_breadcrumb_root is not None:
             tenant.embed_breadcrumb_root = req.embed_breadcrumb_root.model_dump()
+        if req.creative_approval is not None:
+            tenant.approval_mode = _tenant_creative_approval_mode(req.creative_approval)
+        if req.media_buy_approval is not None:
+            manual_approval_required = req.media_buy_approval == "manual"
+            tenant.human_review_required = manual_approval_required
+            adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+            if adapter is not None:
+                if adapter.adapter_type == "google_ad_manager":
+                    adapter.gam_manual_approval_required = manual_approval_required
+                elif adapter.adapter_type == "mock":
+                    adapter.mock_manual_approval_required = manual_approval_required
+                adapter.updated_at = datetime.now(UTC)
         tenant.updated_at = datetime.now(UTC)
 
         try:

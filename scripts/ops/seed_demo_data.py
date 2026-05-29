@@ -8,7 +8,7 @@ the rows that otherwise have to be configured through the admin UI:
 - ``currency_limits``: one USD row
 - ``property_tags``: ``all_inventory``
 - ``principals``: ``ci-test-principal`` with ``ci-test-token`` (mock advertiser)
-- ``publisher_partners``: one verified demo publisher (satisfies the
+- ``publisher_partners`` / ``authorized_properties``: verified demo publishers (satisfies the
   "Authorized Properties" setup gate)
 - ``products`` + ``pricing_options``: CPM display products for demo and storyboard runs
 - ``tenant_signing_credentials``: local webhook-signing key for SDK receiver storyboards
@@ -121,19 +121,52 @@ def _seed(session) -> None:
         },
     )
 
-    # 5) Publisher partner (satisfies the "Authorized Properties" setup gate).
+    # 5) Publisher fixtures (satisfy setup gates and local lifecycle examples).
+    for publisher_domain, display_name in (
+        ("demo.example.com", "Demo Publisher"),
+        ("example.com", "Example Publisher"),
+    ):
+        session.execute(
+            text(
+                """
+                INSERT INTO publisher_partners (
+                    tenant_id, publisher_domain, display_name, is_verified,
+                    sync_status, total_properties, authorized_properties, aao_status_kind
+                )
+                VALUES (:tid, :publisher_domain, :display_name, true, 'success', 1, 1, 'authorized')
+                ON CONFLICT (tenant_id, publisher_domain) DO UPDATE
+                SET is_verified = true,
+                    sync_status = 'success',
+                    total_properties = COALESCE(publisher_partners.total_properties, 1),
+                    authorized_properties = COALESCE(publisher_partners.authorized_properties, 1),
+                    aao_status_kind = COALESCE(publisher_partners.aao_status_kind, 'authorized')
+                """
+            ),
+            {"tid": DEFAULT_TENANT_ID, "publisher_domain": publisher_domain, "display_name": display_name},
+        )
     session.execute(
         text(
             """
-            INSERT INTO publisher_partners (
-                tenant_id, publisher_domain, display_name, is_verified,
-                sync_status, total_properties, authorized_properties
+            INSERT INTO authorized_properties (
+                tenant_id, property_id, property_type, name, identifiers, tags,
+                publisher_domain, verification_status
             )
-            VALUES (:tid, 'demo.example.com', 'Demo Publisher', true, 'success', 1, 1)
-            ON CONFLICT DO NOTHING
+            VALUES (
+                :tid, 'example_com', 'website', 'Example Website',
+                CAST(:identifiers AS jsonb), CAST(:tags AS jsonb), 'example.com', 'verified'
+            )
+            ON CONFLICT (tenant_id, property_id) DO UPDATE
+            SET identifiers = EXCLUDED.identifiers,
+                tags = EXCLUDED.tags,
+                publisher_domain = EXCLUDED.publisher_domain,
+                verification_status = EXCLUDED.verification_status
             """
         ),
-        {"tid": DEFAULT_TENANT_ID},
+        {
+            "tid": DEFAULT_TENANT_ID,
+            "identifiers": json.dumps([{"type": "domain", "value": "example.com"}]),
+            "tags": json.dumps(["all_inventory"]),
+        },
     )
 
     # 6) Local webhook-signing key so SDK receiver storyboards can register

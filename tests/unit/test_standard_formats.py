@@ -127,9 +127,9 @@ class TestIsStandardAgent:
     def test_trailing_slash_tolerated(self):
         assert is_standard_agent(STANDARD_AGENT_URL + "/") is True
 
-    def test_public_format_agent_alias_rejected(self):
-        assert is_standard_agent("https://adcontextprotocol.org/agents/formats") is False
-        assert is_standard_agent("https://adcontextprotocol.org/agents/formats/mcp/") is False
+    def test_public_format_agent_alias_tolerated(self):
+        assert is_standard_agent("https://adcontextprotocol.org/agents/formats") is True
+        assert is_standard_agent("https://adcontextprotocol.org/agents/formats/mcp/") is True
 
     def test_other_url_rejected(self):
         assert is_standard_agent("https://example.com") is False

@@ -287,11 +287,11 @@ class TestSyncCreativesFormatValidation:
         assert validated.format_id.height == 250
         mock_network.assert_not_called()
 
-    def test_format_validation_rejects_unregistered_http_agent_without_network(self):
-        """An invalid HTTP agent URL fails before any remote format lookup."""
+    def test_format_validation_accepts_legacy_reference_agent_url_without_network(self):
+        """Product-advertised legacy reference-agent URLs canonicalize to the registered agent."""
         creative = CreativeAsset(
-            creative_id="creative_bad_agent",
-            name="Bad Agent Creative",
+            creative_id="creative_legacy_reference_agent",
+            name="Legacy Reference Agent Creative",
             format_id={"agent_url": "https://adcontextprotocol.org/agents/formats", "id": "display_300x250"},
             assets={
                 "main": {
@@ -306,17 +306,18 @@ class TestSyncCreativesFormatValidation:
         )
         registry = CreativeAgentRegistry()
 
-        with (
-            patch.object(registry, "get_formats_for_agent") as mock_network,
-            pytest.raises(ValueError, match="not registered"),
-        ):
-            _validate_creative_input(
+        with patch.object(registry, "get_formats_for_agent") as mock_network:
+            validated = _validate_creative_input(
                 creative,
                 registry,
                 "principal_123",
                 registered_agent_urls={"https://creative.adcontextprotocol.org"},
             )
 
+        assert str(validated.format_id.agent_url).rstrip("/") == "https://adcontextprotocol.org/agents/formats"
+        assert validated.format_id.id == "display_image"
+        assert validated.format_id.width == 300
+        assert validated.format_id.height == 250
         mock_network.assert_not_called()
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):

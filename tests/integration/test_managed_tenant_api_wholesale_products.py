@@ -332,6 +332,7 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
     created_body = created.get_json()
     assert created_body["product_id"] == "homepage_takeover"
     assert created_body["inventory_profile_id"] == "homepage_takeover"
+    assert created_body["pricing_options"][0]["pricing_option_id"] == "cpm_usd_fixed"
     assert created_body["pricing_options"][0]["rate"] == "40.00"
     assert created_body["inventory"]["execution"]["selectors"][0]["selector_type"] == "placement"
 
@@ -341,6 +342,7 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
     )
     assert listing.status_code == 200, listing.get_data(as_text=True)
     assert listing.get_json()["count"] == 1
+    assert listing.get_json()["wholesale_products"][0]["pricing_options"][0]["pricing_option_id"] == "cpm_usd_fixed"
 
     updated_payload = _wholesale_payload(
         name="Homepage Takeover Updated",

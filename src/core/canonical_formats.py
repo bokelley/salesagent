@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+LEGACY_REFERENCE_CREATIVE_AGENT_URLS = frozenset(
+    {
+        "https://adcontextprotocol.org/agents/formats",
+        "https://adcontextprotocol.org/agents/formats/mcp",
+    }
+)
 
 
 CANONICAL_DISPLAY_FORMAT_IDS = ("display_image", "display_html", "display_js")
@@ -52,7 +58,7 @@ def normalize_creative_agent_url(agent_url: Any) -> str:
     if normalized.endswith("/mcp"):
         normalized = normalized.removesuffix("/mcp").rstrip("/")
 
-    if normalized == DEFAULT_CREATIVE_AGENT_URL:
+    if normalized == DEFAULT_CREATIVE_AGENT_URL or normalized in LEGACY_REFERENCE_CREATIVE_AGENT_URLS:
         return DEFAULT_CREATIVE_AGENT_URL
     return normalized
 
@@ -75,6 +81,7 @@ __all__ = [
     "CANONICAL_NATIVE_FORMAT_IDS",
     "CANONICAL_VIDEO_FORMAT_IDS",
     "DEFAULT_CREATIVE_AGENT_URL",
+    "LEGACY_REFERENCE_CREATIVE_AGENT_URLS",
     "DISPLAY_FORMAT_LABELS",
     "canonical_format_ref",
     "is_reference_creative_agent_url",

@@ -131,7 +131,9 @@ def convert_pricing_option_to_adcp(
     is_fixed = get_attr(pricing_option, "is_fixed")  # Internal flag, not sent to API
     currency = get_attr(pricing_option, "currency")
 
-    pricing_option_id = f"{pricing_model}_{currency.lower()}_{'fixed' if is_fixed else 'auction'}"
+    pricing_option_id = get_attr(pricing_option, "pricing_option_id") or (
+        f"{pricing_model}_{currency.lower()}_{'fixed' if is_fixed else 'auction'}"
+    )
 
     # Build common fields shared across all pricing options (V3 format)
     # Note: is_fixed and rate are added during serialization for v2.x compat

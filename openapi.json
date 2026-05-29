@@ -3696,9 +3696,9 @@
         "title": "WholesaleInventoryExecution",
         "type": "object"
       },
-      "ListWholesaleProductsResponse.f44f287.WholesalePricingOption": {
+      "ListWholesaleProductsResponse.f44f287.WholesalePricingOptionResponse": {
         "additionalProperties": false,
-        "description": "One pricing option accepted by the buyer-facing product.",
+        "description": "One pricing option returned to embedder clients.",
         "properties": {
           "currency": {
             "default": "USD",
@@ -3757,6 +3757,12 @@
             "title": "Pricing Model",
             "type": "string"
           },
+          "pricing_option_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Pricing Option Id",
+            "type": "string"
+          },
           "rate": {
             "anyOf": [
               {
@@ -3772,9 +3778,10 @@
           }
         },
         "required": [
-          "pricing_model"
+          "pricing_model",
+          "pricing_option_id"
         ],
-        "title": "WholesalePricingOption",
+        "title": "WholesalePricingOptionResponse",
         "type": "object"
       },
       "ListWholesaleProductsResponse.f44f287.WholesaleProductResponse": {
@@ -3915,7 +3922,7 @@
           },
           "pricing_options": {
             "items": {
-              "$ref": "#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesalePricingOption"
+              "$ref": "#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesalePricingOptionResponse"
             },
             "title": "Pricing Options",
             "type": "array"
@@ -6679,6 +6686,23 @@
             "title": "Created At",
             "type": "string"
           },
+          "creative_approval": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto",
+                  "manual",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Creative Approval"
+          },
           "default_currency": {
             "anyOf": [
               {
@@ -6749,6 +6773,22 @@
           "managed_externally": {
             "title": "Managed Externally",
             "type": "boolean"
+          },
+          "media_buy_approval": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto",
+                  "manual"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Media Buy Approval"
           },
           "name": {
             "title": "Name",
@@ -7579,6 +7619,16 @@
             "default": null,
             "title": "Contact Email"
           },
+          "creative_approval": {
+            "default": null,
+            "enum": [
+              "auto",
+              "manual",
+              "ai"
+            ],
+            "title": "Creative Approval",
+            "type": "string"
+          },
           "default_gam_advertiser_id": {
             "anyOf": [
               {
@@ -7603,6 +7653,15 @@
               }
             ],
             "default": null
+          },
+          "media_buy_approval": {
+            "default": null,
+            "enum": [
+              "auto",
+              "manual"
+            ],
+            "title": "Media Buy Approval",
+            "type": "string"
           },
           "name": {
             "anyOf": [
@@ -8802,7 +8861,7 @@
           },
           "pricing_options": {
             "items": {
-              "$ref": "#/components/schemas/WholesaleProductResponse.f44f287.WholesalePricingOption"
+              "$ref": "#/components/schemas/WholesaleProductResponse.f44f287.WholesalePricingOptionResponse"
             },
             "title": "Pricing Options",
             "type": "array"
@@ -9099,9 +9158,9 @@
         "title": "WholesaleInventoryExecution",
         "type": "object"
       },
-      "WholesaleProductResponse.f44f287.WholesalePricingOption": {
+      "WholesaleProductResponse.f44f287.WholesalePricingOptionResponse": {
         "additionalProperties": false,
-        "description": "One pricing option accepted by the buyer-facing product.",
+        "description": "One pricing option returned to embedder clients.",
         "properties": {
           "currency": {
             "default": "USD",
@@ -9160,6 +9219,12 @@
             "title": "Pricing Model",
             "type": "string"
           },
+          "pricing_option_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Pricing Option Id",
+            "type": "string"
+          },
           "rate": {
             "anyOf": [
               {
@@ -9175,9 +9240,10 @@
           }
         },
         "required": [
-          "pricing_model"
+          "pricing_model",
+          "pricing_option_id"
         ],
-        "title": "WholesalePricingOption",
+        "title": "WholesalePricingOptionResponse",
         "type": "object"
       },
       "WholesaleProductResponse.f44f287.WholesaleSlotRequirement": {

@@ -2549,9 +2549,9 @@ components:
       - adapter
       title: WholesaleInventoryExecution
       type: object
-    ListWholesaleProductsResponse.f44f287.WholesalePricingOption:
+    ListWholesaleProductsResponse.f44f287.WholesalePricingOptionResponse:
       additionalProperties: false
-      description: One pricing option accepted by the buyer-facing product.
+      description: One pricing option returned to embedder clients.
       properties:
         currency:
           default: USD
@@ -2589,6 +2589,11 @@ components:
           minLength: 1
           title: Pricing Model
           type: string
+        pricing_option_id:
+          maxLength: 128
+          minLength: 1
+          title: Pricing Option Id
+          type: string
         rate:
           anyOf:
           - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
@@ -2598,7 +2603,8 @@ components:
           title: Rate
       required:
       - pricing_model
-      title: WholesalePricingOption
+      - pricing_option_id
+      title: WholesalePricingOptionResponse
       type: object
     ListWholesaleProductsResponse.f44f287.WholesaleProductResponse:
       additionalProperties: false
@@ -2682,7 +2688,7 @@ components:
           type: object
         pricing_options:
           items:
-            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesalePricingOption'
+            $ref: '#/components/schemas/ListWholesaleProductsResponse.f44f287.WholesalePricingOptionResponse'
           title: Pricing Options
           type: array
         product_id:
@@ -4628,6 +4634,16 @@ components:
           format: date-time
           title: Created At
           type: string
+        creative_approval:
+          anyOf:
+          - enum:
+            - auto
+            - manual
+            - ai
+            type: string
+          - type: 'null'
+          default: null
+          title: Creative Approval
         default_currency:
           anyOf:
           - type: string
@@ -4666,6 +4682,15 @@ components:
         managed_externally:
           title: Managed Externally
           type: boolean
+        media_buy_approval:
+          anyOf:
+          - enum:
+            - auto
+            - manual
+            type: string
+          - type: 'null'
+          default: null
+          title: Media Buy Approval
         name:
           title: Name
           type: string
@@ -5275,6 +5300,14 @@ components:
           - type: 'null'
           default: null
           title: Contact Email
+        creative_approval:
+          default: null
+          enum:
+          - auto
+          - manual
+          - ai
+          title: Creative Approval
+          type: string
         default_gam_advertiser_id:
           anyOf:
           - maxLength: 64
@@ -5288,6 +5321,13 @@ components:
           - $ref: '#/components/schemas/UpdateTenantRequest.f44f287.EmbedBreadcrumbRoot'
           - type: 'null'
           default: null
+        media_buy_approval:
+          default: null
+          enum:
+          - auto
+          - manual
+          title: Media Buy Approval
+          type: string
         name:
           anyOf:
           - maxLength: 255
@@ -6094,7 +6134,7 @@ components:
           type: object
         pricing_options:
           items:
-            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesalePricingOption'
+            $ref: '#/components/schemas/WholesaleProductResponse.f44f287.WholesalePricingOptionResponse'
           title: Pricing Options
           type: array
         product_id:
@@ -6301,9 +6341,9 @@ components:
       - adapter
       title: WholesaleInventoryExecution
       type: object
-    WholesaleProductResponse.f44f287.WholesalePricingOption:
+    WholesaleProductResponse.f44f287.WholesalePricingOptionResponse:
       additionalProperties: false
-      description: One pricing option accepted by the buyer-facing product.
+      description: One pricing option returned to embedder clients.
       properties:
         currency:
           default: USD
@@ -6341,6 +6381,11 @@ components:
           minLength: 1
           title: Pricing Model
           type: string
+        pricing_option_id:
+          maxLength: 128
+          minLength: 1
+          title: Pricing Option Id
+          type: string
         rate:
           anyOf:
           - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
@@ -6350,7 +6395,8 @@ components:
           title: Rate
       required:
       - pricing_model
-      title: WholesalePricingOption
+      - pricing_option_id
+      title: WholesalePricingOptionResponse
       type: object
     WholesaleProductResponse.f44f287.WholesaleSlotRequirement:
       additionalProperties: false

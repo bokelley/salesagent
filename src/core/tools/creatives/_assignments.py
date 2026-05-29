@@ -36,6 +36,10 @@ def _process_assignments(
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
+    failed_result_ids = {
+        result.creative_id for result in results if getattr(result.action, "value", result.action) == "failed"
+    }
+    successful_result_ids = {result.creative_id for result in results} - failed_result_ids
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
     # normalise to dict form {creative_id: [package_ids]} for internal processing.
@@ -59,6 +63,17 @@ def _process_assignments(
                     assignment_errors_by_creative[creative_id] = {}
 
                 for package_id in package_ids:
+                    if creative_id in failed_result_ids:
+                        assignment_errors_by_creative[creative_id][package_id] = (
+                            f"Creative {creative_id} failed validation; assignment skipped"
+                        )
+                        logger.warning(
+                            "Skipping assignment for failed creative: creative=%s package=%s",
+                            creative_id,
+                            package_id,
+                        )
+                        continue
+
                     # Find which media buy this package belongs to
                     pkg_result = assignment_repo.find_package_with_media_buy(package_id, principal_id=principal_id)
 
@@ -83,6 +98,13 @@ def _process_assignments(
 
                     # Validate creative format against package product formats
                     db_creative_result = assignment_repo.get_creative_by_id(creative_id)
+                    if db_creative_result is None and creative_id not in successful_result_ids:
+                        error_msg = f"Creative not found: {creative_id}"
+                        assignment_errors_by_creative[creative_id][package_id] = error_msg
+                        if validation_mode == "strict":
+                            raise AdCPNotFoundError(error_msg, recovery="correctable")
+                        logger.warning("Creative not found during assignment: %s, skipping", creative_id)
+                        continue
 
                     # Get product_id from package_config
                     product_id = db_package.package_config.get("product_id") if db_package.package_config else None

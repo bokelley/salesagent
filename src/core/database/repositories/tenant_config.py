@@ -85,6 +85,55 @@ class TenantConfigRepository:
         self._session.flush()
         return partner
 
+    def get_authorized_property_by_id(self, property_id: str) -> AuthorizedProperty | None:
+        """Get one authorized property by ID for the tenant."""
+        stmt = select(AuthorizedProperty).filter_by(tenant_id=self._tenant_id, property_id=property_id)
+        return self._session.scalars(stmt).first()
+
+    def ensure_example_publisher_authorization(self) -> None:
+        """Install the example.com publisher fixture for local embedded E2E runs."""
+        partner = self.get_publisher_partner_by_domain("example.com")
+        if partner is None:
+            self._session.add(
+                PublisherPartner(
+                    tenant_id=self._tenant_id,
+                    publisher_domain="example.com",
+                    display_name="Example Publisher",
+                    is_verified=True,
+                    sync_status="success",
+                    total_properties=1,
+                    authorized_properties=1,
+                    aao_status_kind="authorized",
+                )
+            )
+        else:
+            partner.is_verified = True
+            partner.sync_status = "success"
+            partner.total_properties = partner.total_properties or 1
+            partner.authorized_properties = partner.authorized_properties or 1
+            partner.aao_status_kind = partner.aao_status_kind or "authorized"
+
+        authorized_property = self.get_authorized_property_by_id("example_com")
+        if authorized_property is None:
+            self._session.add(
+                AuthorizedProperty(
+                    tenant_id=self._tenant_id,
+                    property_id="example_com",
+                    property_type="website",
+                    name="Example Website",
+                    identifiers=[{"type": "domain", "value": "example.com"}],
+                    tags=["all_inventory"],
+                    publisher_domain="example.com",
+                    verification_status="verified",
+                )
+            )
+        else:
+            authorized_property.publisher_domain = "example.com"
+            authorized_property.identifiers = [{"type": "domain", "value": "example.com"}]
+            authorized_property.tags = ["all_inventory"]
+            authorized_property.verification_status = "verified"
+        self._session.flush()
+
     def list_authorized_properties(self) -> list[AuthorizedProperty]:
         """Get authorized properties for the tenant."""
         stmt = (

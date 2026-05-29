@@ -225,6 +225,31 @@ class TestProvision:
             assert adapter.gam_auth_method == "service_account"
             assert adapter.gam_refresh_token is None
 
+    def test_provision_seeds_example_domain_authorization_in_local_testing(
+        self, client, auth_headers, cleanup_tenants, monkeypatch
+    ):
+        monkeypatch.setenv("ADCP_TESTING", "true")
+
+        payload = _provision_payload(external_org_id="org_local_example")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+
+        assert response.status_code == 201, response.get_data(as_text=True)
+        tenant_id = response.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+        with get_db_session() as session:
+            partner = session.scalars(
+                select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain="example.com")
+            ).first()
+            authorized_property = session.scalars(
+                select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id="example_com")
+            ).first()
+
+        assert partner is not None
+        assert partner.is_verified is True
+        assert authorized_property is not None
+        assert authorized_property.publisher_domain == "example.com"
+        assert authorized_property.verification_status == "verified"
+
     def test_provision_returns_absolute_tenant_surface_urls(self, client, auth_headers, cleanup_tenants, monkeypatch):
         monkeypatch.setenv("SALES_AGENT_DOMAIN", "localtest.me:3091")
         monkeypatch.delenv("ADCP_BASE_URL", raising=False)
@@ -335,6 +360,38 @@ class TestProvision:
         assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
         body = patch_resp.get_json()
         assert body["public_agent_url"] == "https://interchange.io"
+
+    def test_patch_updates_embedded_approval_settings(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_approval_patch")
+        provision_resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        tid = provision_resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        with get_db_session() as session:
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=tid)).first()
+            assert adapter is not None
+            adapter.gam_manual_approval_required = True
+            session.commit()
+
+        patch_resp = client.patch(
+            f"/api/v1/tenant-management/tenants/{tid}",
+            headers=auth_headers,
+            json={"creative_approval": "auto", "media_buy_approval": "auto"},
+        )
+
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+        body = patch_resp.get_json()
+        assert body["creative_approval"] == "auto"
+        assert body["media_buy_approval"] == "auto"
+
+        with get_db_session() as session:
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tid)).first()
+            assert tenant is not None
+            assert tenant.approval_mode == "auto-approve"
+            assert tenant.human_review_required is False
+            adapter = session.scalars(select(AdapterConfig).filter_by(tenant_id=tid)).first()
+            assert adapter is not None
+            assert adapter.gam_manual_approval_required is False
 
     def test_patch_public_agent_url_invalidates_authorization_cache(
         self, client, auth_headers, cleanup_tenants, bound_factories

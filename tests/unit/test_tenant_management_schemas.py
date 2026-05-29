@@ -35,6 +35,8 @@ from src.admin.api_schemas.tenant_management import (
     TenantSummary,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
+    WholesalePricingOption,
+    WholesalePricingOptionResponse,
 )
 from src.admin.api_schemas.tenant_management import (
     TestConnectionResponse as ConnectionTestResponse,
@@ -355,6 +357,49 @@ def test_tenant_detail_inherits_summary_fields():
 def test_update_tenant_request_all_optional():
     req = UpdateTenantRequest()
     assert req.name is None and req.contact_email is None and req.billing_plan is None
+
+
+def test_update_tenant_request_accepts_embedded_approval_settings():
+    req = UpdateTenantRequest.model_validate({"creative_approval": "auto", "media_buy_approval": "auto"})
+
+    assert req.creative_approval == "auto"
+    assert req.media_buy_approval == "auto"
+
+
+def test_update_tenant_request_rejects_null_embedded_approval_settings():
+    with pytest.raises(ValidationError):
+        UpdateTenantRequest.model_validate({"creative_approval": None})
+
+    with pytest.raises(ValidationError):
+        UpdateTenantRequest.model_validate({"media_buy_approval": None})
+
+
+def test_wholesale_pricing_option_id_is_response_only():
+    request_option = WholesalePricingOption.model_validate(
+        {"pricing_model": "cpm", "currency": "USD", "is_fixed": True, "rate": "40.00"}
+    )
+    response_option = WholesalePricingOptionResponse.model_validate(
+        {
+            "pricing_option_id": "cpm_usd_fixed",
+            "pricing_model": "cpm",
+            "currency": "USD",
+            "is_fixed": True,
+            "rate": "40.00",
+        }
+    )
+
+    assert not hasattr(request_option, "pricing_option_id")
+    assert response_option.pricing_option_id == "cpm_usd_fixed"
+    with pytest.raises(ValidationError):
+        WholesalePricingOption.model_validate(
+            {
+                "pricing_option_id": "premium_cpm",
+                "pricing_model": "cpm",
+                "currency": "USD",
+                "is_fixed": True,
+                "rate": "40.00",
+            }
+        )
 
 
 def test_update_tenant_request_does_not_expose_external_org_id():

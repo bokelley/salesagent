@@ -513,6 +513,52 @@ class TestLenientAssignmentSkip:
         # Valid assignment recorded in assigned_to
         assert results[0].assigned_to == ["pkg_valid"]
 
+    def test_assignment_for_failed_creative_is_skipped_without_fk_write(self, tenant, _make_db_package):
+        """A validation-failed creative must not be inserted into creative_assignments."""
+        db_package, db_media_buy = _make_db_package(package_id="pkg_1")
+        results = [SyncCreativeResult(creative_id="c_failed", action="failed")]
+
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
+            assignment_list = _process_assignments(
+                assignments={"c_failed": ["pkg_1"]},
+                results=results,
+                tenant=tenant,
+                validation_mode="strict",
+            )
+
+        assert assignment_list == []
+        mock_repo.find_package_with_media_buy.assert_not_called()
+        mock_repo.get_creative_by_id.assert_not_called()
+        mock_repo.create.assert_not_called()
+        assert results[0].assignment_errors == {"pkg_1": "Creative c_failed failed validation; assignment skipped"}
+
+    def test_strict_mode_missing_unprocessed_creative_raises_before_create(self, tenant, _make_db_package):
+        """Assignment-only references still fail clearly before an FK write."""
+        db_package, db_media_buy = _make_db_package(package_id="pkg_1")
+        results = [SyncCreativeResult(creative_id="c_other", action="created")]
+
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+        mock_repo.get_creative_by_id.return_value = None
+
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
+            with pytest.raises(AdCPNotFoundError, match="Creative not found: c_missing"):
+                _process_assignments(
+                    assignments={"c_missing": ["pkg_1"]},
+                    results=results,
+                    tenant=tenant,
+                    validation_mode="strict",
+                )
+
+        mock_repo.create.assert_not_called()
+
 
 # ========================================================================
 # BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode

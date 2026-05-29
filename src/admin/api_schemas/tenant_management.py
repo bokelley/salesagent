@@ -22,6 +22,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from src.admin.api_schemas.composition import TenantSignalCreate
 from src.admin.api_schemas.publisher_properties import PublisherPropertySelector
@@ -633,6 +634,10 @@ class TenantDetail(TenantSummary):
     # Embed-mode breadcrumb root override (only meaningful when
     # ``is_embedded`` is true).
     embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
+    # Storefront-facing approval controls. These are compact aliases for the
+    # seller's internal approval fields.
+    creative_approval: Literal["auto", "manual", "ai"] | None = None
+    media_buy_approval: Literal["auto", "manual"] | None = None
 
 
 class ListTenantsResponse(BaseModel):
@@ -667,6 +672,15 @@ class UpdateTenantRequest(BaseModel):
     # current value alone (other fields use the same omit-to-leave
     # semantic).
     embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
+    creative_approval: Literal["auto", "manual", "ai"] | SkipJsonSchema[None] = None
+    media_buy_approval: Literal["auto", "manual"] | SkipJsonSchema[None] = None
+
+    @field_validator("creative_approval", "media_buy_approval")
+    @classmethod
+    def _reject_null_approval_aliases(cls, value: str | None) -> str | None:
+        if value is None:
+            raise ValueError("omit approval fields to leave them unchanged; null is not supported")
+        return value
 
     # Sprint 1.8 §6: same public_agent_url validator as ProvisionTenantRequest.
     # ``mode='before'`` lets us short-circuit on None (PATCH with field
@@ -808,6 +822,12 @@ class WholesalePricingOption(BaseModel):
     min_spend_per_package: Decimal | None = None
 
 
+class WholesalePricingOptionResponse(WholesalePricingOption):
+    """One pricing option returned to embedder clients."""
+
+    pricing_option_id: str = Field(..., min_length=1, max_length=128)
+
+
 class WholesaleSlotRequirement(BaseModel):
     """Optional slot-level requirements for multi-asset formats."""
 
@@ -875,8 +895,8 @@ class WholesaleInventory(BaseModel):
 WholesaleProductStatus = Literal["draft", "active", "archived"]
 
 
-class WholesaleProductRequest(BaseModel):
-    """Create/update body for wholesale-product authoring."""
+class WholesaleProductBase(BaseModel):
+    """Shared wholesale-product fields."""
 
     model_config = _config()
 
@@ -886,7 +906,6 @@ class WholesaleProductRequest(BaseModel):
     status: WholesaleProductStatus = "active"
     delivery_type: str = Field(default="guaranteed", min_length=1, max_length=50)
     channels: list[str] | None = None
-    pricing_options: list[WholesalePricingOption] = Field(default_factory=list)
     forecast: dict[str, Any] | None = None
     inventory: WholesaleInventory
     targeting_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -897,11 +916,18 @@ class WholesaleProductRequest(BaseModel):
     allowed_principal_ids: list[str] | None = None
 
 
-class WholesaleProductResponse(WholesaleProductRequest):
+class WholesaleProductRequest(WholesaleProductBase):
+    """Create/update body for wholesale-product authoring."""
+
+    pricing_options: list[WholesalePricingOption] = Field(default_factory=list)
+
+
+class WholesaleProductResponse(WholesaleProductBase):
     """Wholesale product as persisted and returned to embedder clients."""
 
     wholesale_product_id: str = Field(..., min_length=1, max_length=100)
     product_id: str = Field(..., min_length=1, max_length=100)
+    pricing_options: list[WholesalePricingOptionResponse] = Field(default_factory=list)
     inventory_profile_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
