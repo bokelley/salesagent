@@ -15,7 +15,13 @@ from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    InventoryProfileFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -241,14 +247,19 @@ class TestPrincipalScopedProductVisibility:
                 subdomain="scope-anon-wholesale",
                 brand_manifest_policy="public",
             )
-            p_open = ProductFactory(tenant=tenant, product_id="open-wholesale", allowed_principal_ids=None)
-            PricingOptionFactory(product=p_open)
-            p_closed = ProductFactory(
+            InventoryProfileFactory(
                 tenant=tenant,
-                product_id="closed-wholesale",
-                allowed_principal_ids=["some-principal"],
+                tenant_id=tenant.tenant_id,
+                profile_id="open-wholesale",
+                name="Open Wholesale Bundle",
             )
-            PricingOptionFactory(product=p_closed)
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                profile_id="closed-wholesale",
+                name="Closed Wholesale Bundle",
+                constraints={"allowed_principal_ids": ["some-principal"]},
+            )
 
             env._identity = _lazy_identity("scope-anon-wholesale", principal_id=None)
             result = await env.call_impl(buying_mode="wholesale", brief=None, brand=None, filters={})

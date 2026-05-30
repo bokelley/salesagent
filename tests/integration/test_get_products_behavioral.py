@@ -720,10 +720,18 @@ class TestNoBriefSkipsRanking:
                 product_ranking_prompt="Rank products",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
-            p1 = ProductFactory(tenant=tenant, product_id="first_in_db")
-            PricingOptionFactory(product=p1)
-            p2 = ProductFactory(tenant=tenant, product_id="second_in_db")
-            PricingOptionFactory(product=p2)
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                profile_id="first_in_db",
+                name="First Bundle",
+            )
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                profile_id="second_in_db",
+                name="Second Bundle",
+            )
 
             with patch("src.services.ai.factory.get_factory") as mock_factory:
                 response = await env.call_impl(buying_mode="wholesale", brief="")
@@ -739,8 +747,12 @@ class TestNoBriefSkipsRanking:
         with ProductEnv(tenant_id="no-brief-rel", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="no-brief-rel", subdomain="no-brief-rel")
             PrincipalFactory(tenant=tenant, principal_id="p1")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p)
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant.tenant_id,
+                profile_id="p1",
+                name="P1 Bundle",
+            )
 
             response = await env.call_impl(buying_mode="wholesale", brief="")
 

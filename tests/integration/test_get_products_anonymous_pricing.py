@@ -16,7 +16,13 @@ import pytest
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    InventoryProfileFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -44,6 +50,31 @@ class TestAnonymousPricingSuppression:
     returned, only pricing is hidden. Wholesale feed reads keep pricing so the
     response remains AdCP schema-valid for catalog cache population.
     """
+
+    def _seed_inventory_bundle(
+        self,
+        tenant,
+        profile_id: str,
+        *,
+        allowed_principal_ids: list[str] | None = None,
+    ):
+        constraints = {"allowed_principal_ids": allowed_principal_ids} if allowed_principal_ids is not None else None
+        return InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            profile_id=profile_id,
+            name=f"{profile_id} Bundle",
+            constraints=constraints,
+            pricing_availability={
+                "pricing_guidance_by_model": {
+                    "cpm": {
+                        "p25": 1.0,
+                        "p50": 5.0,
+                        "p75": 8.0,
+                    }
+                }
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_anonymous_request_products_have_empty_pricing_options(self, integration_db):
@@ -82,18 +113,7 @@ class TestAnonymousPricingSuppression:
                 subdomain="anon-pricing-wholesale",
                 brand_manifest_policy="public",
             )
-            p = ProductFactory(
-                tenant=tenant,
-                product_id="wholesale_priced_product",
-                delivery_type="non_guaranteed",
-            )
-            PricingOptionFactory(
-                product=p,
-                pricing_model="cpm",
-                rate=None,
-                is_fixed=False,
-                price_guidance={"floor": 1.0, "p50": 5.0, "p75": 8.0},
-            )
+            self._seed_inventory_bundle(tenant, "wholesale_priced_product")
 
             env._identity = _lazy_identity("anon-pricing-wholesale", principal_id=None)
 
@@ -113,20 +133,8 @@ class TestAnonymousPricingSuppression:
                 subdomain="anon-pricing-wholesale-acl",
                 brand_manifest_policy="public",
             )
-            public_product = ProductFactory(
-                tenant=tenant,
-                product_id="public_wholesale_product",
-                delivery_type="non_guaranteed",
-                allowed_principal_ids=None,
-            )
-            PricingOptionFactory(product=public_product)
-            restricted_product = ProductFactory(
-                tenant=tenant,
-                product_id="restricted_wholesale_product",
-                delivery_type="non_guaranteed",
-                allowed_principal_ids=["buyer-1"],
-            )
-            PricingOptionFactory(product=restricted_product)
+            self._seed_inventory_bundle(tenant, "public_wholesale_product")
+            self._seed_inventory_bundle(tenant, "restricted_wholesale_product", allowed_principal_ids=["buyer-1"])
 
             env._identity = _lazy_identity("anon-pricing-wholesale-acl", principal_id=None)
 
@@ -149,12 +157,7 @@ class TestAnonymousPricingSuppression:
                 subdomain="anon-pricing-wholesale-audit",
                 brand_manifest_policy="public",
             )
-            product = ProductFactory(
-                tenant=tenant,
-                product_id="audited_wholesale_product",
-                delivery_type="non_guaranteed",
-            )
-            PricingOptionFactory(product=product)
+            self._seed_inventory_bundle(tenant, "audited_wholesale_product")
 
             env._identity = _lazy_identity("anon-pricing-wholesale-audit", principal_id=None)
 
