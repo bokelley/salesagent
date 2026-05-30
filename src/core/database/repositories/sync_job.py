@@ -215,6 +215,21 @@ class SyncJobRepository:
         )
         return self._session.scalars(stmt).first()
 
+    def latest_running_for_stream(self, *, adapter_type: str, sync_type: str) -> SyncJob | None:
+        """Return the newest in-flight row for a tenant + adapter + stream."""
+        stmt = (
+            select(SyncJob)
+            .where(
+                SyncJob.tenant_id == self._tenant_id,
+                SyncJob.adapter_type == adapter_type,
+                SyncJob.sync_type == sync_type,
+                SyncJob.status.in_(("pending", "queued", "running", "in_progress")),
+            )
+            .order_by(SyncJob.started_at.desc(), SyncJob.sync_id.desc())
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first()
+
     def latest_success_for_stream(self, *, adapter_type: str, sync_type: str) -> SyncJob | None:
         """Return the newest successful baseline for a tenant + adapter + stream."""
         stmt = (
@@ -231,18 +246,37 @@ class SyncJobRepository:
         )
         return self._session.scalars(stmt).first()
 
+    def latest_failed_for_stream(self, *, adapter_type: str, sync_type: str) -> SyncJob | None:
+        """Return the newest failed terminal row for a tenant + adapter + stream."""
+        stmt = (
+            select(SyncJob)
+            .where(
+                SyncJob.tenant_id == self._tenant_id,
+                SyncJob.adapter_type == adapter_type,
+                SyncJob.sync_type == sync_type,
+                SyncJob.status.in_(("failed", "error")),
+                SyncJob.completed_at.is_not(None),
+            )
+            .order_by(SyncJob.completed_at.desc(), SyncJob.sync_id.desc())
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first()
+
     def health_inputs_for_stream(self, *, adapter_type: str, sync_type: str) -> list[SyncJob]:
         """Return just the rows needed to derive public sync health.
 
-        The derivation needs the latest run plus the latest successful
-        baseline. This avoids truncating history while keeping callers from
-        loading every old run.
+        The derivation needs the latest in-flight/started row plus the latest
+        successful and failed terminal rows. This avoids truncating history
+        while still letting terminal completion time, not only start time,
+        determine which completed state is current.
         """
         rows = [
             row
             for row in (
                 self.latest_for_stream(adapter_type=adapter_type, sync_type=sync_type),
+                self.latest_running_for_stream(adapter_type=adapter_type, sync_type=sync_type),
                 self.latest_success_for_stream(adapter_type=adapter_type, sync_type=sync_type),
+                self.latest_failed_for_stream(adapter_type=adapter_type, sync_type=sync_type),
             )
             if row is not None
         ]

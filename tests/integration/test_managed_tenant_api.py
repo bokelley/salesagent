@@ -12,7 +12,7 @@ Covers the full sprint-1 acceptance criteria:
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -1441,6 +1441,145 @@ class TestTenantStatus:
         assert sync["severity"] == "warning"
         assert sync["last_success_at"] is None
         assert sync["issue"]["action"] == "wait"
+
+    def test_latest_successful_custom_targeting_clears_retry_health(
+        self, client, auth_headers, cleanup_tenants, bound_factories
+    ):
+        """A newer completed custom-targeting run wins over an older failed retry state."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        provision_resp = client.post(
+            "/api/v1/tenant-management/tenants/provision",
+            headers=auth_headers,
+            json=_provision_payload(
+                external_org_id="org_status_network_12271007",
+                adapter={
+                    "type": "google_ad_manager",
+                    "network_code": "12271007",
+                    "service_account_email": "sa-12271007@example.com",
+                    "service_account_key_json": '{"type":"service_account"}',
+                },
+            ),
+        )
+        assert provision_resp.status_code == 201, provision_resp.get_data(as_text=True)
+        tenant_id = provision_resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        assert bound_factories.get(AdapterConfig, tenant_id).gam_network_code == "12271007"
+        bound_factories.execute(
+            SyncJob.__table__.delete().where(SyncJob.tenant_id == tenant_id, SyncJob.sync_type == "custom_targeting")
+        )
+        bound_factories.commit()
+
+        success_at = datetime.now(UTC) - timedelta(minutes=1)
+        failed_at = success_at - timedelta(minutes=1)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_12271007_custom_targeting_failed_retry",
+            adapter_type="google_ad_manager",
+            sync_type="custom_targeting",
+            status="failed",
+            started_at=success_at - timedelta(minutes=4),
+            completed_at=failed_at,
+            error_message="Timeout while reading GAM custom targeting",
+            progress={"counts": {"keys_failed": 1}},
+        )
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_12271007_custom_targeting_success",
+            adapter_type="google_ad_manager",
+            sync_type="custom_targeting",
+            status="completed",
+            started_at=success_at - timedelta(minutes=10),
+            completed_at=success_at,
+            progress={"counts": {"signals_updated": 7}},
+        )
+
+        status_resp = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}/status", headers=auth_headers)
+        assert status_resp.status_code == 200, status_resp.get_data(as_text=True)
+        status_body = status_resp.get_json()
+        custom_targeting = status_body["syncs"]["custom_targeting"]
+        assert custom_targeting["status"] == "success"
+        assert custom_targeting["severity"] == "ok"
+        assert custom_targeting["issue"] is None
+        assert custom_targeting["error"] is None
+        assert "Custom targeting sync retrying automatically" not in {
+            item["name"] for item in status_body["setup_tasks"]["items"]
+        }
+
+        history_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/sync-history?sync_type=custom_targeting&limit=10",
+            headers=auth_headers,
+        )
+        assert history_resp.status_code == 200, history_resp.get_data(as_text=True)
+        runs = {run["sync_id"]: run for run in history_resp.get_json()["runs"]}
+        success_run = runs["sync_12271007_custom_targeting_success"]
+        failed_run = runs["sync_12271007_custom_targeting_failed_retry"]
+        assert success_run["status"] == "success"
+        assert success_run["completed_at"] >= failed_run["completed_at"]
+
+        bound_factories.execute(
+            SyncJob.__table__.delete().where(SyncJob.tenant_id == tenant_id, SyncJob.sync_type == "custom_targeting")
+        )
+        failure_at = datetime.now(UTC) - timedelta(minutes=1)
+        stale_success_at = failure_at - timedelta(minutes=1)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_12271007_custom_targeting_success_stale",
+            adapter_type="google_ad_manager",
+            sync_type="custom_targeting",
+            status="completed",
+            started_at=stale_success_at - timedelta(minutes=2),
+            completed_at=stale_success_at,
+        )
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_12271007_custom_targeting_failed_current",
+            adapter_type="google_ad_manager",
+            sync_type="custom_targeting",
+            status="failed",
+            started_at=stale_success_at - timedelta(minutes=10),
+            completed_at=failure_at,
+            error_message="Timeout while reading GAM custom targeting",
+        )
+        invalidate_status_cache(tenant_id)
+
+        failed_status_resp = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}/status", headers=auth_headers)
+        assert failed_status_resp.status_code == 200, failed_status_resp.get_data(as_text=True)
+        failed_custom_targeting = failed_status_resp.get_json()["syncs"]["custom_targeting"]
+        assert failed_custom_targeting["status"] == "failed"
+        assert failed_custom_targeting["severity"] == "warning"
+        assert failed_custom_targeting["issue"]["action"] == "retry_sync"
+
+        bound_factories.execute(
+            SyncJob.__table__.delete().where(SyncJob.tenant_id == tenant_id, SyncJob.sync_type == "custom_targeting")
+        )
+        current_at = datetime.now(UTC) - timedelta(minutes=1)
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_12271007_custom_targeting_running_overlap",
+            adapter_type="google_ad_manager",
+            sync_type="custom_targeting",
+            status="running",
+            started_at=current_at - timedelta(minutes=10),
+            completed_at=None,
+        )
+        SyncJobFactory(
+            tenant=tenant,
+            sync_id="sync_12271007_custom_targeting_overlap_success",
+            adapter_type="google_ad_manager",
+            sync_type="custom_targeting",
+            status="completed",
+            started_at=current_at - timedelta(minutes=5),
+            completed_at=current_at,
+        )
+        invalidate_status_cache(tenant_id)
+
+        running_status_resp = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}/status", headers=auth_headers)
+        assert running_status_resp.status_code == 200, running_status_resp.get_data(as_text=True)
+        running_custom_targeting = running_status_resp.get_json()["syncs"]["custom_targeting"]
+        assert running_custom_targeting["status"] == "running"
 
     def test_status_reflects_active_media_buy(self, client, auth_headers, managed_tenant, bound_factories):
         """An active media buy bumps ``media_buys.active_count``."""

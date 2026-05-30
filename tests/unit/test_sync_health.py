@@ -142,6 +142,75 @@ class TestDeriveSyncHealth:
         assert health.issue is not None
         assert health.issue.action == "wait"
 
+    def test_success_completed_after_later_started_failure_clears_health(self):
+        """Completion time, not start time, owns terminal sync recency."""
+        success_at = NOW - timedelta(minutes=1)
+        health = _health(
+            [
+                _run(
+                    sync_run_id="sync_z_failed",
+                    status="failed",
+                    started_at=NOW - timedelta(minutes=5),
+                    completed_at=success_at,
+                    error_message="Timeout while reading GAM custom targeting",
+                ),
+                _run(
+                    sync_run_id="sync_a_success",
+                    status="completed",
+                    started_at=NOW - timedelta(minutes=10),
+                    completed_at=success_at,
+                ),
+            ]
+        )
+
+        assert health.status == "success"
+        assert health.severity == "ok"
+        assert health.issue is None
+        assert health.last_success_at == success_at
+        assert health.related_sync_run_id == "sync_a_success"
+
+    def test_overlapping_running_run_stays_visible_until_terminal(self):
+        health = _health(
+            [
+                _run(
+                    sync_run_id="sync_success",
+                    status="completed",
+                    started_at=NOW - timedelta(minutes=10),
+                    completed_at=NOW - timedelta(minutes=1),
+                ),
+                _run(
+                    sync_run_id="sync_running",
+                    status="running",
+                    started_at=NOW - timedelta(minutes=5),
+                    completed_at=None,
+                ),
+            ]
+        )
+
+        assert health.status == "running"
+        assert health.related_sync_run_id == "sync_running"
+
+    def test_older_started_running_run_stays_visible_until_terminal(self):
+        health = _health(
+            [
+                _run(
+                    sync_run_id="sync_running",
+                    status="running",
+                    started_at=NOW - timedelta(minutes=10),
+                    completed_at=None,
+                ),
+                _run(
+                    sync_run_id="sync_success",
+                    status="completed",
+                    started_at=NOW - timedelta(minutes=5),
+                    completed_at=NOW - timedelta(minutes=1),
+                ),
+            ]
+        )
+
+        assert health.status == "running"
+        assert health.related_sync_run_id == "sync_running"
+
 
 class TestHealthChangedPayload:
     def test_previous_runs_for_transition_reconstructs_running_state(self):

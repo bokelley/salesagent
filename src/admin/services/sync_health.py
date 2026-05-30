@@ -263,7 +263,27 @@ def build_sync_health_changed_payload(
 def _latest_run(runs: Sequence[SyncRunSnapshot]) -> SyncRunSnapshot | None:
     if not runs:
         return None
-    return max(runs, key=lambda run: (run.started_at or datetime.min.replace(tzinfo=UTC), run.sync_run_id))
+
+    terminal_runs = [run for run in runs if normalize_sync_status(run.status) in {"success", "failed"}]
+    running_runs = [run for run in runs if normalize_sync_status(run.status) == "running"]
+    latest_terminal = max(terminal_runs, key=_terminal_run_recency_key) if terminal_runs else None
+    latest_running = max(running_runs, key=_started_run_recency_key) if running_runs else None
+
+    if latest_running is not None:
+        return latest_running
+    if latest_terminal is not None:
+        return latest_terminal
+    return max(runs, key=_started_run_recency_key)
+
+
+def _terminal_run_recency_key(run: SyncRunSnapshot) -> tuple[datetime, int, str]:
+    public_status = normalize_sync_status(run.status)
+    status_rank = {"never_run": 0, "failed": 1, "running": 2, "success": 3}[public_status]
+    return (run.completed_at or run.started_at or datetime.min.replace(tzinfo=UTC), status_rank, run.sync_run_id)
+
+
+def _started_run_recency_key(run: SyncRunSnapshot) -> tuple[datetime, str]:
+    return (run.started_at or datetime.min.replace(tzinfo=UTC), run.sync_run_id)
 
 
 def _latest_success(runs: Sequence[SyncRunSnapshot]) -> SyncRunSnapshot | None:
