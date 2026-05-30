@@ -3847,7 +3847,7 @@
             "title": "Created At"
           },
           "delivery_type": {
-            "default": "guaranteed",
+            "default": "non_guaranteed",
             "maxLength": 50,
             "minLength": 1,
             "title": "Delivery Type",
@@ -8141,7 +8141,7 @@
       },
       "WholesaleProductRequest.f44f287": {
         "additionalProperties": false,
-        "description": "Create/update body for wholesale-product authoring.",
+        "description": "Create/update body for wholesale-product authoring.\n\n``pricing_options`` remains accepted for backward compatibility. Runtime\nwholesale pricing is derived from the inventory-bundle analytics projection:\nnon-guaranteed CPM auction with a zero floor.",
         "properties": {
           "allowed_actions": {
             "anyOf": [
@@ -8189,9 +8189,8 @@
             "title": "Channels"
           },
           "delivery_type": {
-            "default": "guaranteed",
-            "maxLength": 50,
-            "minLength": 1,
+            "const": "non_guaranteed",
+            "default": "non_guaranteed",
             "title": "Delivery Type",
             "type": "string"
           },
@@ -8538,7 +8537,7 @@
       },
       "WholesaleProductRequest.f44f287.WholesalePricingOption": {
         "additionalProperties": false,
-        "description": "One pricing option accepted by the buyer-facing product.",
+        "description": "One legacy pricing option accepted for backward-compatible requests.",
         "properties": {
           "currency": {
             "default": "USD",
@@ -8786,7 +8785,7 @@
             "title": "Created At"
           },
           "delivery_type": {
-            "default": "guaranteed",
+            "default": "non_guaranteed",
             "maxLength": 50,
             "minLength": 1,
             "title": "Delivery Type",
@@ -13569,7 +13568,7 @@
             "description": "Unprocessable Content"
           }
         },
-        "summary": "Create a wholesale product backed by Product + InventoryProfile.",
+        "summary": "Create a wholesale product backed by an InventoryProfile bundle.",
         "tags": []
       }
     },

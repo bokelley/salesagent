@@ -1697,6 +1697,11 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # Shape: {"formats": [format_id, ...], "channels": [channel, ...],
     #         "targeting_dimensions": [dim_name, ...]}
     constraints: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Delivery forecast and pricing availability analytics produced by
+    # adapter syncs. Wholesale GetProducts projects these onto the bundle's
+    # buyer-facing Product shape without creating a durable products row.
+    forecast: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    pricing_availability: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Content hash for cache invalidation via If-None-Match on the REST API.
     etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
 

@@ -22,7 +22,12 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.inventory_profile_projection import (
+    inventory_profile_to_product_model,
+    is_complete_inventory_profile,
+)
 from src.services.catalog_sync_helpers import (
     CatalogSyncResult,
     create_running_catalog_sync_job,
@@ -152,18 +157,31 @@ def _sync_product_guidance(
     with get_db_session() as session:
         session.info["platform_background_worker"] = True
         adapter_config = AdapterConfigRepository(session, tenant_id).get_by_tenant()
+        product_repo = ProductRepository(session, tenant_id)
         currency = adapter_config.gam_network_currency or _default_pricing_currency(
-            ProductRepository(session, tenant_id).get_all_pricing_options()
+            product_repo.get_all_pricing_options()
         )
         currency_limits = {
             limit.currency_code.upper(): limit for limit in CurrencyLimitRepository(session, tenant_id).list_all()
         }
-        products = ProductRepository(session, tenant_id).list_all_with_inventory()
-        product_specs = _product_specs(products)
+        products = product_repo.list_all_with_inventory()
+        existing_product_ids = {product.product_id for product in products}
+        inventory_profiles = [
+            profile
+            for profile in InventoryProfileRepository(session, tenant_id).list_all()
+            if profile.profile_id not in existing_product_ids and is_complete_inventory_profile(profile)
+        ]
+        bundle_products = [
+            inventory_profile_to_product_model(profile, default_currency=currency) for profile in inventory_profiles
+        ]
+        product_specs = [
+            *_product_specs(products, source="product"),
+            *_product_specs(bundle_products, source="inventory_profile"),
+        ]
 
     placement_ids = sorted({placement_id for spec in product_specs for placement_id in spec["placement_ids"]})
     if not placement_ids:
-        return [], _empty_counts(products_seen=len(products), products_with_placements=0), {}
+        return [], _empty_counts(products_seen=len(products) + len(inventory_profiles), products_with_placements=0), {}
     report_countries = _report_country_filters(product_specs)
 
     capacity_guidance = reporting.get_line_item_capacity_guidance(
@@ -198,8 +216,17 @@ def _sync_product_guidance(
     with get_db_session() as session:
         session.info["platform_background_worker"] = True
         repo = ProductRepository(session, tenant_id)
+        inventory_repo = InventoryProfileRepository(session, tenant_id)
         for spec in product_specs:
-            product = repo.get_by_id_with_pricing(spec["product_id"])
+            if spec["source"] == "inventory_profile":
+                profile = inventory_repo.get_by_id(spec["product_id"])
+                product = (
+                    inventory_profile_to_product_model(profile, default_currency=currency)
+                    if profile is not None
+                    else None
+                )
+            else:
+                product = repo.get_by_id_with_pricing(spec["product_id"])
             if product is None:
                 continue
             product_rows = _rows_for_product(line_item_rows, spec)
@@ -215,9 +242,15 @@ def _sync_product_guidance(
                 report=report,
                 currency_limits=currency_limits,
             )
-            product.forecast = guidance["forecast"]
-            _merge_pricing_availability_metadata(product, guidance)
-            updated_for_product = _apply_pricing_guidance(product.pricing_options or [], guidance)
+            if spec["source"] == "inventory_profile":
+                assert profile is not None
+                profile.forecast = guidance["forecast"]
+                profile.pricing_availability = _pricing_availability_metadata(guidance)
+                updated_for_product = 1 if _has_pricing_guidance(guidance, "cpm") else 0
+            else:
+                product.forecast = guidance["forecast"]
+                _merge_pricing_availability_metadata(product, guidance)
+                updated_for_product = _apply_pricing_guidance(product.pricing_options or [], guidance)
             pricing_options_updated += updated_for_product
             if not guidance["bookability"]["bookable"]:
                 products_unbookable += 1
@@ -225,7 +258,7 @@ def _sync_product_guidance(
         session.commit()
 
     counts = {
-        "products_seen": len(products),
+        "products_seen": len(products) + len(inventory_profiles),
         "products_with_placements": len(product_specs),
         "products_updated": len(updated_product_ids),
         "products_unbookable": products_unbookable,
@@ -257,7 +290,11 @@ def _default_pricing_currency(pricing_options: list[PricingOption]) -> str:
     return "USD"
 
 
-def _product_specs(products: list[Product]) -> list[dict[str, Any]]:
+def _product_specs(
+    products: list[Product],
+    *,
+    source: Literal["product", "inventory_profile"],
+) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for product in products:
         placement_ids = _product_targeted_placement_ids(product)
@@ -267,6 +304,7 @@ def _product_specs(products: list[Product]) -> list[dict[str, Any]]:
         specs.append(
             {
                 "product_id": product.product_id,
+                "source": source,
                 "placement_ids": placement_ids,
                 "countries": _normalized_country_filters(country_values),
                 "report_countries": country_values,
@@ -548,12 +586,22 @@ def _delivery_forecast(
 
 def _merge_pricing_availability_metadata(product: Product, guidance: dict[str, Any]) -> None:
     config = dict(product.implementation_config or {})
-    config["pricing_availability"] = {
+    config["pricing_availability"] = _pricing_availability_metadata(guidance)
+    product.implementation_config = config
+
+
+def _pricing_availability_metadata(guidance: dict[str, Any]) -> dict[str, Any]:
+    return {
         "bookability": guidance["bookability"],
         "totals": guidance["totals"],
         "pricing_guidance_by_model": guidance["pricing_guidance_by_model"],
     }
-    product.implementation_config = config
+
+
+def _has_pricing_guidance(guidance: dict[str, Any], pricing_model: str) -> bool:
+    by_model = guidance["pricing_guidance_by_model"]
+    model_guidance = by_model.get(pricing_model)
+    return bool(model_guidance and any(value is not None for value in model_guidance.values()))
 
 
 def _apply_pricing_guidance(pricing_options: list[PricingOption], guidance: dict[str, Any]) -> int:

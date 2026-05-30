@@ -60,6 +60,7 @@ def sample_packages():
     return [
         MediaPackage(
             package_id="pkg_001",
+            product_id="prod_123",
             name="Package 1",
             delivery_type="guaranteed",
             impressions=10000,
@@ -67,12 +68,31 @@ def sample_packages():
         ),
         MediaPackage(
             package_id="pkg_002",
+            product_id="prod_456",
             name="Package 2",
             delivery_type="guaranteed",
             impressions=20000,
             format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
         ),
     ]
+
+
+def _mock_gam_product_lookup(mock_db_session):
+    """Mock product lookup with inventory targeting required by GAM preflight."""
+    mock_session = MagicMock()
+    mock_db_session.return_value.__enter__.return_value = mock_session
+
+    mock_product = Mock()
+    mock_product.product_id = "prod_test"
+    mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+    mock_product.effective_implementation_config = {"targeted_ad_unit_ids": ["123456"]}
+    mock_product.gemini_api_key = None
+    mock_product.order_name_template = None
+
+    mock_result = Mock()
+    mock_result.first.return_value = mock_product
+    mock_result.all.return_value = []
+    mock_session.scalars.return_value = mock_result
 
 
 class TestGAMManualApprovalPath:
@@ -100,8 +120,10 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
                 mock_workflow.return_value = "workflow_step_123"
+                _mock_gam_product_lookup(mock_db_session)
 
                 # Act
                 start_time = datetime.now()
@@ -218,24 +240,7 @@ class TestGAMActivationWorkflowPath:
                 mock_check_guaranteed.return_value = (True, ["STANDARD"])  # Guaranteed line items
                 mock_activation_workflow.return_value = "activation_workflow_123"
 
-                # Mock database session - need to return products with inventory config
-                mock_session = MagicMock()
-                mock_db_session.return_value.__enter__.return_value = mock_session
-
-                # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                mock_product.effective_implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
-
-                # Simpler approach: Always return mock_product for .first(), empty for .all()
-                mock_result = Mock()
-                mock_result.first.return_value = mock_product
-                mock_result.all.return_value = []
-                mock_session.scalars.return_value = mock_result
+                _mock_gam_product_lookup(mock_db_session)
 
                 # Act
                 start_time = datetime.now()
@@ -308,24 +313,7 @@ class TestGAMSuccessPath:
                 mock_create_line_items.return_value = mock_line_item_ids
                 mock_check_guaranteed.return_value = (False, ["PRICE_PRIORITY"])  # Non-guaranteed
 
-                # Mock database session - need to return products with inventory config
-                mock_session = MagicMock()
-                mock_db_session.return_value.__enter__.return_value = mock_session
-
-                # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                mock_product.effective_implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
-
-                # Simpler approach: Always return mock_product for .first(), empty for .all()
-                mock_result = Mock()
-                mock_result.first.return_value = mock_product
-                mock_result.all.return_value = []
-                mock_session.scalars.return_value = mock_result
+                _mock_gam_product_lookup(mock_db_session)
 
                 # Act
                 start_time = datetime.now()

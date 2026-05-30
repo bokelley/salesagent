@@ -1174,6 +1174,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             from sqlalchemy.orm import selectinload
 
             from src.core.database.models import Product as ProductModel
+            from src.core.inventory_profile_projection import project_visible_inventory_profile_product
 
             packages: list[MediaPackage] = []
             package_pricing_info: dict[str, dict[str, Any]] = {}
@@ -1200,6 +1201,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         )
                     )
                     product = session.scalars(stmt_product).first()
+
+                    if not product:
+                        product = project_visible_inventory_profile_product(session, tenant_id, product_id)
 
                     if not product:
                         error_msg = f"Product {product_id} not found for package {package_id}"
@@ -1325,9 +1329,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         f"[APPROVAL] Package {package_id}: Successfully converted all {len(format_ids_list)} formats"
                     )
 
-                    product_implementation_config = _dict_implementation_config(
-                        getattr(product, "implementation_config", None)
-                    )
+                    product_implementation_config = _dict_implementation_config(product.effective_implementation_config)
 
                     media_package = MediaPackage(
                         package_id=package_id,
@@ -2578,8 +2580,13 @@ async def _create_media_buy_impl(
         from src.core.database.models import CurrencyLimit
         from src.core.database.models import Product as ProductModel
         from src.core.database.repositories import MediaBuyUoW
+        from src.core.inventory_profile_projection import (
+            is_materialized_wholesale_product,
+            project_visible_inventory_profile_product,
+        )
 
         # Get products first to determine currency from pricing options
+        projected_bundle_resolved_map: dict[str, Any] = {}
         with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
             # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
             assert validation_uow.session is not None
@@ -2590,12 +2597,38 @@ async def _create_media_buy_impl(
             products_stmt = (
                 select(ProductModel)
                 .where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
-                .options(selectinload(ProductModel.pricing_options))
+                .options(selectinload(ProductModel.pricing_options), selectinload(ProductModel.inventory_profile))
             )
-            products = session.scalars(products_stmt).all()
+            products = [
+                product
+                for product in session.scalars(products_stmt).all()
+                if not is_materialized_wholesale_product(product)
+            ]
 
             # Build product lookup map
             product_map = {p.product_id: p for p in products}
+            missing_product_ids = set(product_ids) - set(product_map.keys())
+            if missing_product_ids:
+                projected_bundle_products = [
+                    product
+                    for product_id in sorted(missing_product_ids)
+                    if (
+                        product := project_visible_inventory_profile_product(
+                            session,
+                            tenant["tenant_id"],
+                            product_id,
+                        )
+                    )
+                ]
+                products.extend(projected_bundle_products)
+                product_map.update({p.product_id: p for p in projected_bundle_products})
+                if projected_bundle_products:
+                    from src.core.product_conversion import convert_product_model_to_resolved
+
+                    projected_bundle_resolved_map = {
+                        product.product_id: convert_product_model_to_resolved(product)
+                        for product in projected_bundle_products
+                    }
 
             # Validate all requested product_ids exist. Raise the typed
             # AdCPProductNotFoundError so the boundary translator maps it to
@@ -3397,6 +3430,14 @@ async def _create_media_buy_impl(
         catalog = get_product_catalog(tenant_id=identity.tenant_id)
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
+        catalog_product_ids = {p.product_id for p in products_in_buy}
+        missing_catalog_product_ids = set(product_ids) - catalog_product_ids
+        if missing_catalog_product_ids:
+            products_in_buy.extend(
+                projected_bundle_resolved_map[product_id]
+                for product_id in sorted(missing_catalog_product_ids)
+                if product_id in projected_bundle_resolved_map
+            )
 
         # Validate and auto-generate GAM implementation_config for each product if needed.
         # ``effective_configs`` lets us thread the auto-generated value through the

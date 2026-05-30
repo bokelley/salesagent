@@ -412,14 +412,54 @@ async def _get_products_impl(
     # Query products via repository (tenant-scoped)
     from src.core.database.repositories.uow import ProductUoW
 
+    buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
     with ProductUoW(tenant["tenant_id"]) as uow:
         assert uow.products is not None
-        db_products = [product for product in uow.products.list_all() if _is_buyer_visible_product_model(product)]
+        from src.core.inventory_profile_projection import is_materialized_wholesale_product
+
+        db_products = [
+            product
+            for product in uow.products.list_all()
+            if _is_buyer_visible_product_model(product) and not is_materialized_wholesale_product(product)
+        ]
 
         # Convert database Product models to ResolvedProduct (wire-shape +
         # internal fields). Filter pipeline below operates on these; at the
         # response boundary we project ``[r.wire for r in eligible]``.
         products = convert_product_models_to_resolved(db_products, tenant_adapter_type, "static")
+        if buying_mode == "wholesale":
+            from src.core.inventory_profile_projection import (
+                default_wholesale_currency,
+                inventory_profiles_to_resolved_products,
+            )
+
+            assert uow.currency_limits is not None
+            assert uow.inventory_profiles is not None
+            assert uow.adapter_configs is not None
+            existing_product_ids = {product.product_id for product in db_products}
+            inventory_profiles = [
+                profile
+                for profile in uow.inventory_profiles.list_all()
+                if profile.profile_id not in existing_product_ids
+            ]
+            adapter_config = uow.adapter_configs.find_by_tenant()
+            preferred_currency = (
+                adapter_config.gam_network_currency
+                if adapter_config is not None
+                and adapter_config.adapter_type == "google_ad_manager"
+                and adapter_config.gam_network_currency
+                else None
+            )
+            products.extend(
+                inventory_profiles_to_resolved_products(
+                    inventory_profiles,
+                    adapter_type=tenant_adapter_type,
+                    default_currency=default_wholesale_currency(
+                        uow.currency_limits.list_all(),
+                        preferred=preferred_currency,
+                    ),
+                )
+            )
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
 
@@ -786,7 +826,6 @@ async def _get_products_impl(
 
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues
-    buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
     if sandbox_mode.active:
         eligible_products = zero_pricing_for_sandbox(eligible_products)
 

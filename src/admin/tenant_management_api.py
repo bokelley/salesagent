@@ -151,9 +151,9 @@ from src.admin.services.adapter_connection_tester import (
     probe_adapter_connection,
 )
 from src.admin.services.catalog_webhook_events import (
+    catalog_acl_notification_scope,
     publish_product_catalog_change,
     publish_product_record_catalog_change,
-    publish_product_record_update_catalog_change,
     publish_signal_catalog_change,
 )
 from src.admin.services.publisher_property_authorization import (
@@ -187,6 +187,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
+from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.freewheel_inventory import FreeWheelInventoryRepository
 from src.core.database.repositories.gam_sync import GAMSyncRepository
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
@@ -197,6 +198,14 @@ from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.core.domain_config import get_tenant_url
 from src.core.helpers.account_provisioning import gam_ensure_advertiser_companyservice
+from src.core.inventory_profile_projection import (
+    WHOLESALE_PROFILE_MANAGED_BY,
+    default_wholesale_currency,
+    inventory_profile_to_product_model,
+    is_complete_inventory_profile,
+    is_materialized_wholesale_product,
+    is_wholesale_owned_inventory_profile,
+)
 from src.core.security.url_validator import check_url_ssrf
 from src.services.aao_lookup_service import get_publisher_partner_status
 from src.services.agent_url_resolver import resolve_agent_url
@@ -213,7 +222,7 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
-_WHOLESALE_PROFILE_MANAGED_BY = "wholesale_products_api"
+_WHOLESALE_PROFILE_MANAGED_BY = WHOLESALE_PROFILE_MANAGED_BY
 
 # OpenAPI spec is served by spectree under the blueprint's `path="docs"`:
 #   spec:       {blueprint_prefix}/docs/openapi.json
@@ -1292,6 +1301,15 @@ def _pricing_option_schema(option: PricingOption) -> WholesalePricingOptionRespo
 
 def _creative_format_schema(format_id: dict[str, Any], product: Product) -> WholesaleCreativeFormat:
     creative_formats = (product.implementation_config or {}).get("creative_formats") or []
+    format_bindings = (product.implementation_config or {}).get("format_bindings") or []
+    return _creative_format_schema_from_stored(format_id, creative_formats, format_bindings)
+
+
+def _creative_format_schema_from_stored(
+    format_id: dict[str, Any],
+    creative_formats: list[dict[str, Any]],
+    format_bindings: list[dict[str, Any]],
+) -> WholesaleCreativeFormat:
     for fmt in creative_formats:
         raw_format_id = fmt.get("format_id") or {}
         if raw_format_id.get("agent_url") == format_id.get("agent_url") and raw_format_id.get("id") == format_id.get(
@@ -1299,9 +1317,8 @@ def _creative_format_schema(format_id: dict[str, Any], product: Product) -> Whol
         ):
             return WholesaleCreativeFormat(**fmt)
 
-    bindings = (product.implementation_config or {}).get("format_bindings") or []
     slot_requirements: list[dict[str, Any]] = []
-    for binding in bindings:
+    for binding in format_bindings:
         binding_format = binding.get("format_id") or {}
         if binding_format.get("agent_url") == format_id.get("agent_url") and binding_format.get("id") == format_id.get(
             "id"
@@ -1316,6 +1333,10 @@ def _creative_format_schema(format_id: dict[str, Any], product: Product) -> Whol
 
 def _execution_from_product(product: Product, adapter_type: str) -> WholesaleInventoryExecution:
     config = dict(product.effective_implementation_config or {})
+    return _execution_from_config(config, adapter_type)
+
+
+def _execution_from_config(config: dict[str, Any], adapter_type: str) -> WholesaleInventoryExecution:
     raw_selectors = config.get("selectors")
     if raw_selectors is None:
         raw_selectors = []
@@ -1365,19 +1386,75 @@ def _wholesale_response_from_product(product: Product, adapter_type: str | None 
     )
 
 
+def _profile_constraints(profile: InventoryProfile) -> dict[str, Any]:
+    return profile.constraints if isinstance(profile.constraints, dict) else {}
+
+
+def _wholesale_status_from_profile(profile: InventoryProfile) -> str:
+    status = str(_profile_constraints(profile).get("status") or "active")
+    return status if status in {"draft", "active", "archived"} else "active"
+
+
+def _wholesale_response_from_profile(
+    profile: InventoryProfile,
+    adapter_type: str,
+    default_currency: str,
+) -> WholesaleProductResponse:
+    constraints = _profile_constraints(profile)
+    config = profile.inventory_config if isinstance(profile.inventory_config, dict) else {}
+    product_projection = inventory_profile_to_product_model(profile, default_currency=default_currency)
+    creative_formats = list(constraints.get("creative_formats") or [])
+    format_bindings = list(config.get("format_bindings") or [])
+    format_ids = profile.format_ids or []
+    return WholesaleProductResponse(
+        wholesale_product_id=profile.profile_id,
+        product_id=profile.profile_id,
+        inventory_profile_id=profile.profile_id,
+        name=profile.name,
+        description=profile.description,
+        status=_wholesale_status_from_profile(profile),
+        delivery_type="non_guaranteed",
+        channels=constraints.get("channels") or None,
+        pricing_options=[_pricing_option_schema(option) for option in product_projection.pricing_options or []],
+        forecast=profile.forecast,
+        inventory=WholesaleInventory(
+            publisher_properties=coerce_stored_publisher_property_selectors(profile.publisher_properties or []),
+            creative_formats=[
+                _creative_format_schema_from_stored(format_id, creative_formats, format_bindings)
+                for format_id in format_ids
+            ],
+            execution=_execution_from_config(config, adapter_type),
+        ),
+        targeting_capabilities=constraints.get("targeting_capabilities") or profile.targeting_template or {},
+        optimization_capabilities=constraints.get("optimization_capabilities") or {},
+        allowed_actions=constraints.get("allowed_actions") or None,
+        format_options=constraints.get("format_options") or None,
+        vendor_metric_optimization=constraints.get("vendor_metric_optimization") or None,
+        allowed_principal_ids=constraints.get("allowed_principal_ids") or None,
+    )
+
+
+def _default_wholesale_currency_for_authoring(
+    session,
+    tenant_id: str,
+    adapter: AdapterConfig | None,
+) -> str:
+    preferred_currency = (
+        adapter.gam_network_currency
+        if adapter is not None and adapter.adapter_type == "google_ad_manager" and adapter.gam_network_currency
+        else None
+    )
+    return default_wholesale_currency(
+        CurrencyLimitRepository(session, tenant_id).list_all(),
+        preferred=preferred_currency,
+    )
+
+
 def _validation_issues_for_wholesale_product(
     req: WholesaleProductRequest,
     adapter_type: str,
 ) -> list[WholesaleValidationIssue]:
     issues: list[WholesaleValidationIssue] = []
-    if not req.pricing_options:
-        issues.append(
-            WholesaleValidationIssue(
-                code="missing_pricing",
-                field="pricing_options",
-                message="At least one pricing option is required.",
-            )
-        )
     if not req.inventory.publisher_properties:
         issues.append(
             WholesaleValidationIssue(
@@ -2039,6 +2116,7 @@ def _wholesale_profile_constraints(
     req: WholesaleProductRequest,
     product_id: str,
     format_ids: list[dict[str, str]],
+    adapter_type: str,
 ) -> dict[str, Any]:
     return {
         "formats": [fmt["id"] for fmt in format_ids],
@@ -2046,15 +2124,17 @@ def _wholesale_profile_constraints(
         "targeting_dimensions": list((req.targeting_capabilities or {}).get("allowed_dimensions") or []),
         "managed_by": _WHOLESALE_PROFILE_MANAGED_BY,
         "owner_product_id": product_id,
+        "status": req.status,
+        "delivery_type": "non_guaranteed",
+        "adapter": adapter_type,
+        "creative_formats": [fmt.model_dump(mode="json") for fmt in req.inventory.creative_formats],
+        "targeting_capabilities": req.targeting_capabilities,
+        "optimization_capabilities": req.optimization_capabilities,
+        "allowed_actions": req.allowed_actions,
+        "format_options": req.format_options,
+        "vendor_metric_optimization": req.vendor_metric_optimization,
+        "allowed_principal_ids": req.allowed_principal_ids,
     }
-
-
-def _is_wholesale_owned_profile(profile: InventoryProfile, product_id: str) -> bool:
-    constraints = profile.constraints or {}
-    return (
-        constraints.get("managed_by") == _WHOLESALE_PROFILE_MANAGED_BY
-        and constraints.get("owner_product_id") == product_id
-    )
 
 
 def _inventory_profile_conflict(product_id: str):
@@ -2077,7 +2157,7 @@ def _build_wholesale_product_models(
     publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
     inventory_config = _execution_inventory_config(req.inventory.execution)
     implementation_config = _wholesale_implementation_config(req, adapter_type)
-    profile_constraints = _wholesale_profile_constraints(req, product_id, format_ids)
+    profile_constraints = _wholesale_profile_constraints(req, product_id, format_ids, adapter_type)
 
     profile = existing_profile or InventoryProfile(
         tenant_id=tenant_id,
@@ -2133,7 +2213,7 @@ def _update_product_from_wholesale_request(
     format_ids = _creative_format_id_dicts(req.inventory.creative_formats)
     publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
     implementation_config = _wholesale_implementation_config(req, adapter_type)
-    profile_constraints = _wholesale_profile_constraints(req, product.product_id, format_ids)
+    profile_constraints = _wholesale_profile_constraints(req, product.product_id, format_ids, adapter_type)
 
     product.name = req.name
     product.description = req.description
@@ -2166,15 +2246,61 @@ def _update_product_from_wholesale_request(
         profile.constraints = profile_constraints
 
 
-def _buyer_projection(req: WholesaleProductRequest, product_id: str) -> dict[str, Any]:
+def _build_wholesale_inventory_profile(
+    tenant_id: str,
+    product_id: str,
+    req: WholesaleProductRequest,
+    adapter_type: str,
+    existing_profile: InventoryProfile | None = None,
+) -> InventoryProfile:
+    """Build or update the durable wholesale-product primitive.
+
+    Storefront-facing wholesale products are inventory bundles. Buyer-facing
+    Product rows are projected at protocol time and are not persisted here.
+    """
+    format_ids = _creative_format_id_dicts(req.inventory.creative_formats)
+    publisher_properties = _publisher_property_dicts(req.inventory.publisher_properties)
+    inventory_config = _execution_inventory_config(req.inventory.execution)
+    profile_constraints = _wholesale_profile_constraints(req, product_id, format_ids, adapter_type)
+
+    profile = existing_profile or InventoryProfile(
+        tenant_id=tenant_id,
+        profile_id=product_id,
+    )
+    profile.name = req.name
+    profile.description = req.description
+    profile.inventory_config = inventory_config
+    profile.format_ids = format_ids
+    profile.publisher_properties = publisher_properties
+    profile.targeting_template = req.targeting_capabilities or {}
+    profile.constraints = profile_constraints
+    profile.forecast = req.forecast
+    return profile
+
+
+def _default_wholesale_pricing_response(default_currency: str) -> WholesalePricingOptionResponse:
+    currency = default_currency.upper()
+    return WholesalePricingOptionResponse(
+        pricing_option_id=f"cpm_{currency.lower()}_auction",
+        pricing_model="cpm",
+        rate=None,
+        currency=currency,
+        is_fixed=False,
+        price_guidance={"floor": 0.0},
+        parameters=None,
+        min_spend_per_package=None,
+    )
+
+
+def _buyer_projection(req: WholesaleProductRequest, product_id: str, default_currency: str = "USD") -> dict[str, Any]:
     return {
         "product_id": product_id,
         "name": req.name,
         "description": req.description,
-        "delivery_type": req.delivery_type,
+        "delivery_type": "non_guaranteed",
         "format_ids": _creative_format_id_dicts(req.inventory.creative_formats),
         "publisher_properties": _publisher_property_dicts(req.inventory.publisher_properties),
-        "pricing_options": [option.model_dump(mode="json", exclude_none=True) for option in req.pricing_options],
+        "pricing_options": [_default_wholesale_pricing_response(default_currency).model_dump(mode="json")],
         "forecast": req.forecast,
     }
 
@@ -2951,9 +3077,10 @@ def preview_wholesale_product(tenant_id: str):
         assert tenant is not None
         adapter_type = _tenant_adapter_type(tenant, adapter)
         validation = _validate_wholesale_product(session, tenant_id, req, adapter_type, check_selector_cache=True)
+        default_currency = _default_wholesale_currency_for_authoring(session, tenant_id, adapter)
         response = WholesaleProductPreviewResponse(
             validation=validation,
-            buyer_projection=_buyer_projection(req, product_id),
+            buyer_projection=_buyer_projection(req, product_id, default_currency),
             adapter_projection=_adapter_projection(req, adapter_type),
         )
         return jsonify(response.model_dump())
@@ -2970,10 +3097,24 @@ def list_wholesale_products(tenant_id: str):
             return error
         assert tenant is not None
         adapter_type = _tenant_adapter_type(tenant, adapter)
-        products = ProductRepository(session, tenant_id).list_all_with_inventory()
+        default_currency = _default_wholesale_currency_for_authoring(session, tenant_id, adapter)
+        profiles = [
+            profile
+            for profile in InventoryProfileRepository(session, tenant_id).list_all()
+            if is_complete_inventory_profile(profile) and is_wholesale_owned_inventory_profile(profile)
+        ]
+        profile_ids = {profile.profile_id for profile in profiles}
+        legacy_products = [
+            product
+            for product in ProductRepository(session, tenant_id).list_all()
+            if product.product_id not in profile_ids and not is_materialized_wholesale_product(product)
+        ]
         response = ListWholesaleProductsResponse(
-            wholesale_products=[_wholesale_response_from_product(product, adapter_type) for product in products],
-            count=len(products),
+            wholesale_products=[
+                *[_wholesale_response_from_profile(profile, adapter_type, default_currency) for profile in profiles],
+                *[_wholesale_response_from_product(product, adapter_type) for product in legacy_products],
+            ],
+            count=len(profiles) + len(legacy_products),
         )
         return jsonify(response.model_dump(mode="json"))
 
@@ -2985,7 +3126,7 @@ def list_wholesale_products(tenant_id: str):
     resp=Response(HTTP_201=WholesaleProductResponse, HTTP_400=ApiError, HTTP_404=ApiError, HTTP_409=ApiError),
 )
 def create_wholesale_product(tenant_id: str):
-    """Create a wholesale product backed by Product + InventoryProfile."""
+    """Create a wholesale product backed by an InventoryProfile bundle."""
     req: WholesaleProductRequest = _validated_json_payload()
     product_id = req.wholesale_product_id or f"wp_{uuid.uuid4().hex[:12]}"
     with get_db_session() as session:
@@ -3003,14 +3144,15 @@ def create_wholesale_product(tenant_id: str):
                 400,
                 details={"issues": [issue.model_dump() for issue in validation.issues]},
             )
-        product_repo = ProductRepository(session, tenant_id)
-        if product_repo.get_by_id(product_id) is not None:
+        if ProductRepository(session, tenant_id).get_by_id(product_id) is not None:
             return _api_error("wholesale_product_exists", f"Wholesale product {product_id!r} already exists", 409)
         profile_repo = InventoryProfileRepository(session, tenant_id)
         existing_profile = profile_repo.get_by_id(product_id)
-        if existing_profile is not None and not _is_wholesale_owned_profile(existing_profile, product_id):
+        if existing_profile is not None and is_wholesale_owned_inventory_profile(existing_profile, product_id):
+            return _api_error("wholesale_product_exists", f"Wholesale product {product_id!r} already exists", 409)
+        if existing_profile is not None and not is_wholesale_owned_inventory_profile(existing_profile, product_id):
             return _inventory_profile_conflict(product_id)
-        product, profile = _build_wholesale_product_models(
+        profile = _build_wholesale_inventory_profile(
             tenant_id,
             product_id,
             req,
@@ -3019,14 +3161,17 @@ def create_wholesale_product(tenant_id: str):
         )
         if existing_profile is None:
             profile_repo.add(profile)
-            session.flush()
-        product.inventory_profile = profile
-        product.pricing_options = _pricing_option_rows(tenant_id, product_id, req.pricing_options)
-        product_repo.create(product)
         session.commit()
 
-        publish_product_record_catalog_change(tenant_id=tenant_id, action="created", product=product)
-        response = _wholesale_response_from_product(product, adapter_type)
+        publish_product_catalog_change(
+            tenant_id=tenant_id,
+            action="created",
+            product_id=product_id,
+            data={"name": profile.name},
+            principal_ids=req.allowed_principal_ids or None,
+        )
+        default_currency = _default_wholesale_currency_for_authoring(session, tenant_id, adapter)
+        response = _wholesale_response_from_profile(profile, adapter_type, default_currency)
         return jsonify(response.model_dump(mode="json")), 201
 
 
@@ -3040,11 +3185,22 @@ def get_wholesale_product(tenant_id: str, product_id: str):
         if error is not None:
             return error
         assert tenant is not None
-        product = ProductRepository(session, tenant_id).get_by_id_with_pricing(product_id)
-        if product is None:
+        profile = InventoryProfileRepository(session, tenant_id).get_by_id(product_id)
+        if (
+            profile is not None
+            and is_complete_inventory_profile(profile)
+            and is_wholesale_owned_inventory_profile(profile, product_id)
+        ):
+            adapter_type = _tenant_adapter_type(tenant, adapter)
+            default_currency = _default_wholesale_currency_for_authoring(session, tenant_id, adapter)
+            return jsonify(
+                _wholesale_response_from_profile(profile, adapter_type, default_currency).model_dump(mode="json")
+            )
+        legacy_product = ProductRepository(session, tenant_id).get_by_id_with_pricing(product_id)
+        if legacy_product is None:
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
         adapter_type = _tenant_adapter_type(tenant, adapter)
-        return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
+        return jsonify(_wholesale_response_from_product(legacy_product, adapter_type).model_dump(mode="json"))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/wholesale-products/<product_id>", methods=["PUT"])
@@ -3077,26 +3233,36 @@ def put_wholesale_product(tenant_id: str, product_id: str):
                 400,
                 details={"issues": [issue.model_dump() for issue in validation.issues]},
             )
-        product_repo = ProductRepository(session, tenant_id)
-        product = product_repo.get_by_id_with_pricing(product_id)
-        if product is None:
+        profile_repo = InventoryProfileRepository(session, tenant_id)
+        profile = profile_repo.get_by_id(product_id)
+        if profile is None:
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
-        if product.inventory_profile is not None and not _is_wholesale_owned_profile(
-            product.inventory_profile, product_id
-        ):
+        if not is_wholesale_owned_inventory_profile(profile, product_id):
             return _inventory_profile_conflict(product_id)
-        previous_allowed_principal_ids = list(product.allowed_principal_ids) if product.allowed_principal_ids else None
-        _update_product_from_wholesale_request(product, req, adapter_type)
-        product_repo.replace_pricing_options(product, _pricing_option_rows(tenant_id, product_id, req.pricing_options))
+        previous_allowed_principal_ids = list(_profile_constraints(profile).get("allowed_principal_ids") or [])
+        profile = _build_wholesale_inventory_profile(
+            tenant_id,
+            product_id,
+            req,
+            adapter_type,
+            existing_profile=profile,
+        )
+        legacy_product = ProductRepository(session, tenant_id).get_by_id(product_id)
+        if legacy_product is not None:
+            ProductRepository(session, tenant_id).delete(legacy_product)
         session.commit()
 
-        publish_product_record_update_catalog_change(
+        publish_product_catalog_change(
             tenant_id=tenant_id,
-            product=product,
-            previous_allowed_principal_ids=previous_allowed_principal_ids,
-            pricing_changed=True,
+            action="updated",
+            product_id=product_id,
+            data={"name": profile.name},
+            principal_ids=catalog_acl_notification_scope(previous_allowed_principal_ids, req.allowed_principal_ids),
         )
-        return jsonify(_wholesale_response_from_product(product, adapter_type).model_dump(mode="json"))
+        default_currency = _default_wholesale_currency_for_authoring(session, tenant_id, adapter)
+        return jsonify(
+            _wholesale_response_from_profile(profile, adapter_type, default_currency).model_dump(mode="json")
+        )
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/wholesale-products/<product_id>", methods=["DELETE"])
@@ -3110,20 +3276,28 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
         if error is not None:
             return error
         assert tenant is not None
-        product_repo = ProductRepository(session, tenant_id)
-        product = product_repo.get_by_id(product_id)
-        if product is None:
+        profile_repo = InventoryProfileRepository(session, tenant_id)
+        profile = profile_repo.get_by_id(product_id)
+        legacy_product = ProductRepository(session, tenant_id).get_by_id(product_id)
+        if profile is None and legacy_product is None:
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
-        product_name = product.name
-        allowed_principal_ids = product.allowed_principal_ids or None
-        profile_pk = product.inventory_profile_id
-        profile = product.inventory_profile
-        delete_profile = profile is not None and _is_wholesale_owned_profile(profile, product_id)
-        product_repo.delete(product)
-        if delete_profile and profile_pk is not None and not product_repo.list_by_inventory_profile(profile_pk):
-            profile = InventoryProfileRepository(session, tenant_id).get_by_pk(profile_pk)
-            if profile is not None:
-                InventoryProfileRepository(session, tenant_id).delete(profile)
+        if legacy_product is not None and (
+            profile is None or not is_wholesale_owned_inventory_profile(profile, product_id)
+        ):
+            ProductRepository(session, tenant_id).delete(legacy_product)
+            session.commit()
+            publish_product_record_catalog_change(tenant_id=tenant_id, action="deleted", product=legacy_product)
+            response = DeleteWholesaleProductResponse(success=True, message=f"Wholesale product {product_id!r} deleted")
+            return jsonify(response.model_dump())
+        if profile is not None and not is_wholesale_owned_inventory_profile(profile, product_id):
+            return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
+
+        assert profile is not None
+        product_name = profile.name
+        allowed_principal_ids = _profile_constraints(profile).get("allowed_principal_ids") or None
+        if legacy_product is not None:
+            ProductRepository(session, tenant_id).delete(legacy_product)
+        profile_repo.delete(profile)
         session.commit()
 
         publish_product_catalog_change(

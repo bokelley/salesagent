@@ -1,7 +1,7 @@
 # Wholesale Product API
 
 **Status:** Design note
-**Last updated:** 2026-05-26
+**Last updated:** 2026-05-30
 
 For the implemented end-to-end API guide, use
 [Embedded Wholesale Products API](../integration/embedded-wholesale-products-api.md).
@@ -17,20 +17,20 @@ object:
 
 1. **Where can this run?** Publisher properties plus ad-server inventory selectors.
 2. **What creative can a buyer send?** Accepted creative format IDs and optional slot requirements.
-3. **What does it cost?** Pricing options, delivery type, and forecast.
+3. **What does it cost?** Derived non-guaranteed CPM auction pricing, delivery analytics, and forecast.
 4. **What composition is allowed?** Targeting and optimization capabilities.
 5. **How does the adapter execute it?** Adapter-specific selector and format-binding configuration.
 
 An inventory component can still exist internally as a reusable component, but it
 should not be the primary public API noun. The external API should expose
 **wholesale products** because that is the object the storefront is building:
-buyer-facing merchandising plus the supply, pricing, targeting, optimization,
+buyer-facing merchandising plus the supply, targeting, optimization,
 and adapter execution details needed to materialize it.
 
-The existing database models are `Product` and `InventoryProfile`. The first
-implementation can persist the inventory portion in `InventoryProfile` while
-using `Product` for the buyer-facing product, pricing, delivery, and forecast
-fields. That split should remain an implementation detail of the migration.
+Wholesale products persist as `InventoryProfile` rows. Buyer-facing `Product`
+objects are protocol projections built from those bundles. This keeps wholesale
+mode aligned with the durable inventory-bundle primitive and avoids storing
+shadow Product rows for the same sellable object.
 
 ## Core Model
 
@@ -40,14 +40,15 @@ fields. That split should remain an implementation detail of the migration.
   "name": "Homepage Takeover",
   "description": "High-impact homepage package.",
   "status": "active",
-  "delivery_type": "guaranteed",
+  "delivery_type": "non_guaranteed",
 
   "pricing_options": [
     {
+      "pricing_option_id": "cpm_usd_auction",
       "pricing_model": "cpm",
       "currency": "USD",
-      "is_fixed": true,
-      "rate": 40
+      "is_fixed": false,
+      "price_guidance": {"floor": 0.0}
     }
   ],
 
@@ -145,7 +146,7 @@ fields. That split should remain an implementation detail of the migration.
 | Field | Owner | Visible in `get_products` | Notes |
 |---|---|---:|---|
 | `wholesale_product_id`, `name`, `description` | Wholesale product | Yes | Buyer-facing merchandising text. |
-| `delivery_type`, `pricing_options`, `forecast` | Wholesale product | Yes | Commercial offer and availability. |
+| `delivery_type`, `pricing_options`, `forecast` | Sales Agent projection + analytics | Yes | Wholesale products expose non-guaranteed CPM auction pricing with a zero floor; sync can add pricing and delivery analytics. |
 | `inventory.publisher_properties` | Wholesale product inventory | Yes | AdCP publisher-property selector shape. |
 | `inventory.creative_formats` | Wholesale product inventory | Yes as `format_ids`; slot details when schema allows | Buyer knows what creative to submit. |
 | `targeting_capabilities` | Wholesale product | Yes | Narrows what buyer/storefront can compose. |
@@ -603,10 +604,10 @@ Existing inventory-component path:
 /api/v1/tenant-management/tenants/{tenant_id}/inventory-profiles
 ```
 
-`inventory-profiles` can remain for existing clients that explicitly manage
-reusable inventory components. It should not be the primary embedded/storefront
-API, and new wholesale-product clients should only use it indirectly through
-the nested `inventory` field.
+`inventory-profiles` can remain for clients that explicitly manage reusable
+inventory components. The storefront-facing `wholesale-products` routes now use
+the same `InventoryProfile` backing store while preserving the external noun
+that embedded clients already use.
 
 ### Wholesale Product Validation
 
@@ -638,8 +639,9 @@ PUT    /api/v1/tenant-management/tenants/{tenant_id}/products/{product_id}
 DELETE /api/v1/tenant-management/tenants/{tenant_id}/products/{product_id}
 ```
 
-The compatibility write shape should accept the old profile linkage while the
-new wholesale-product path accepts the nested `inventory` shape:
+The compatibility write shape may still accept the old profile linkage for
+legacy curated Product rows. It is separate from wholesale products, which are
+inventory bundles and are exposed through `/wholesale-products`:
 
 ```json
 {
@@ -677,12 +679,12 @@ Projection rules:
 | `product_id`, `name`, `description` | Wholesale product |
 | `publisher_properties` | `inventory.publisher_properties` |
 | `format_ids` | `inventory.creative_formats[].format_id` |
-| `pricing_options` | Wholesale product |
+| `pricing_options` | Sales Agent wholesale projection: non-guaranteed CPM auction, zero floor, enriched by analytics |
 | `property_targeting_allowed` | Wholesale product capabilities |
 | `signal_targeting_allowed` | Wholesale product capabilities |
 | `targeting_capabilities` | Wholesale product, if supported by schema extension |
 | `optimization_capabilities` | Wholesale product, if supported by schema extension |
-| `forecast` | Wholesale product |
+| `forecast` | InventoryProfile forecast/availability sync |
 | `allowed_actions` | Wholesale product plus adapter |
 
 ## Adapter Coverage
@@ -873,8 +875,8 @@ For embedded tenants specifically:
 1. Add schemas for `WholesaleProductCreate`, `WholesaleProductUpdate`,
    `WholesaleProductRead`, `InventorySelectorRead`, and
    `AdapterInventoryCapabilitiesRead`.
-2. Add `/wholesale-products` routes backed by the existing `Product` service
-   plus the linked `InventoryProfile` storage for `inventory`.
+2. Add `/wholesale-products` routes backed by `InventoryProfile`; do not
+   materialize Product rows for wholesale products.
 3. Expand `InventoryProfile` JSON usage for the nested `inventory` object:
    - `format_ids` remains accepted for simple formats.
    - `creative_formats` can be stored in `constraints` or a new JSON column in

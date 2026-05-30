@@ -35,8 +35,10 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification import PushNotificationConfigRepository
@@ -145,7 +147,8 @@ class MediaBuyUoW(BaseUoW):
 class ProductUoW(BaseUoW):
     """Unit of Work for Product operations.
 
-    Wraps a database session and provides a tenant-scoped ProductRepository.
+    Wraps a database session and provides tenant-scoped repositories for
+    product catalog rows and inventory bundle projections.
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -153,13 +156,22 @@ class ProductUoW(BaseUoW):
     """
 
     products: ProductRepository | None
+    inventory_profiles: InventoryProfileRepository | None
+    currency_limits: CurrencyLimitRepository | None
+    adapter_configs: AdapterConfigRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.inventory_profiles = InventoryProfileRepository(self._session, self._tenant_id)
+        self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
+        self.adapter_configs = AdapterConfigRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.products = None
+        self.inventory_profiles = None
+        self.currency_limits = None
+        self.adapter_configs = None
 
 
 class WorkflowUoW(BaseUoW):

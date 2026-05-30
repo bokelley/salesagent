@@ -9,20 +9,24 @@ Requires PostgreSQL (integration_db).
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
 
+from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     InventoryProfile,
     PricingOption,
     Principal,
 )
+from src.core.database.repositories import ProductRepository
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CreateMediaBuyRequest
+from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories import CurrencyLimitFactory, InventoryProfileFactory, PrincipalFactory, TenantFactory
 from tests.factories.spec_required_kwargs import required_request_kwargs
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 
@@ -43,6 +47,150 @@ def _get_future_date_range() -> tuple[datetime, datetime]:
     start = datetime.now(UTC) + timedelta(days=1)
     end = start + timedelta(days=7)
     return start, end
+
+
+@pytest.mark.requires_db
+async def test_create_media_buy_with_inventory_profile_as_wholesale_product(factory_session):
+    """Inventory bundles are wholesale products even without Product rows."""
+    tenant = TenantFactory()
+    principal = PrincipalFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        principal_id="test_principal_bundle_product",
+        platform_mappings={"mock": {"id": "test_advertiser"}},
+    )
+    CurrencyLimitFactory(tenant=tenant, tenant_id=tenant.tenant_id, currency_code="EUR")
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        profile_id="test_bundle_product_media_buy",
+        name="Bundle Product for Media Buy",
+        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+        publisher_properties=[
+            {
+                "publisher_domain": "example.com",
+                "property_tags": ["all_inventory"],
+                "selection_type": "by_tag",
+            }
+        ],
+    )
+
+    assert ProductRepository(factory_session, tenant.tenant_id).get_by_id(profile.profile_id) is None
+
+    start_time, end_time = _get_future_date_range()
+    ctx = _make_context(tenant.tenant_id, principal.principal_id)
+    req = CreateMediaBuyRequest(
+        **required_request_kwargs(),
+        brand={"domain": "testbrand.com"},
+        packages=[
+            create_test_package_request(
+                product_id=profile.profile_id,
+                pricing_option_id="cpm_usd_auction",
+                bid_price=1.0,
+                budget=150.0,
+            )
+        ],
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    response, task_status = await _create_media_buy_impl(req=req, identity=ctx)
+
+    assert task_status == "completed"
+    assert response.media_buy_id is not None
+    assert response.packages is not None
+    assert [package.product_id for package in response.packages] == [profile.profile_id]
+    assert ProductRepository(factory_session, tenant.tenant_id).get_by_id(profile.profile_id) is None
+
+
+@pytest.mark.requires_db
+def test_gam_adapter_accepts_inventory_profile_as_wholesale_product(factory_session):
+    """GAM product-config lookup resolves buyer-visible bundle projections."""
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    principal = PrincipalFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        principal_id="test_principal_gam_bundle_product",
+        platform_mappings={"google_ad_manager": {"advertiser_id": "123456"}},
+    )
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        tenant_id=tenant.tenant_id,
+        profile_id="test_gam_bundle_product_media_buy",
+        name="GAM Bundle Product for Media Buy",
+        inventory_config={
+            "adapter": "google_ad_manager",
+            "placements": ["pl_bundle"],
+            "include_descendants": True,
+            "selectors": [{"selector_type": "placement", "external_id": "pl_bundle"}],
+        },
+        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+        publisher_properties=[
+            {
+                "publisher_domain": "example.com",
+                "property_tags": ["all_inventory"],
+                "selection_type": "by_tag",
+            }
+        ],
+    )
+    factory_session.commit()
+    assert ProductRepository(factory_session, tenant.tenant_id).get_by_id(profile.profile_id) is None
+
+    package = MediaPackage(
+        package_id="pkg_test_gam_bundle_product_media_buy",
+        name=profile.name,
+        delivery_type="non_guaranteed",
+        impressions=1000,
+        format_ids=[FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")],
+        product_id=profile.profile_id,
+        budget=100.0,
+    )
+    request = CreateMediaBuyRequest(
+        **required_request_kwargs(),
+        brand={"domain": "testbrand.com"},
+        packages=[
+            create_test_package_request(
+                product_id=profile.profile_id,
+                pricing_option_id="cpm_usd_auction",
+                bid_price=1.0,
+                budget=100.0,
+            )
+        ],
+        start_time=_get_future_date_range()[0],
+        end_time=_get_future_date_range()[1],
+    )
+
+    adapter = GoogleAdManager(
+        config={"manual_approval_required": True, "manual_approval_operations": ["create_media_buy"]},
+        principal=principal,
+        network_code="123456",
+        advertiser_id="123456",
+        trafficker_id="654321",
+        tenant_id=tenant.tenant_id,
+        dry_run=True,
+    )
+    with patch.object(adapter.workflow_manager, "create_manual_order_workflow_step", return_value="step_bundle"):
+        response = adapter.create_media_buy(
+            request=request,
+            packages=[package],
+            start_time=request.start_time,
+            end_time=request.end_time,
+            package_pricing_info={
+                package.package_id: {
+                    "pricing_model": "cpm",
+                    "currency": "USD",
+                    "is_fixed": False,
+                    "rate": None,
+                    "bid_price": 1.0,
+                }
+            },
+        )
+
+    assert getattr(response, "media_buy_id", None) is not None
+    assert getattr(response, "errors", None) is None
+    assert getattr(response, "packages", None)
+    assert response.packages[0].package_id == package.package_id
+    assert ProductRepository(factory_session, tenant.tenant_id).get_by_id(profile.profile_id) is None
 
 
 @pytest.mark.requires_db

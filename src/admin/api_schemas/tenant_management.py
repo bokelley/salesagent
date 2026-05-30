@@ -809,7 +809,7 @@ class FormatIdRef(BaseModel):
 
 
 class WholesalePricingOption(BaseModel):
-    """One pricing option accepted by the buyer-facing product."""
+    """One legacy pricing option accepted for backward-compatible requests."""
 
     model_config = _config()
 
@@ -904,7 +904,7 @@ class WholesaleProductBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
     status: WholesaleProductStatus = "active"
-    delivery_type: str = Field(default="guaranteed", min_length=1, max_length=50)
+    delivery_type: str = Field(default="non_guaranteed", min_length=1, max_length=50)
     channels: list[str] | None = None
     forecast: dict[str, Any] | None = None
     inventory: WholesaleInventory
@@ -917,8 +917,14 @@ class WholesaleProductBase(BaseModel):
 
 
 class WholesaleProductRequest(WholesaleProductBase):
-    """Create/update body for wholesale-product authoring."""
+    """Create/update body for wholesale-product authoring.
 
+    ``pricing_options`` remains accepted for backward compatibility. Runtime
+    wholesale pricing is derived from the inventory-bundle analytics projection:
+    non-guaranteed CPM auction with a zero floor.
+    """
+
+    delivery_type: Literal["non_guaranteed"] = "non_guaranteed"
     pricing_options: list[WholesalePricingOption] = Field(default_factory=list)
 
 

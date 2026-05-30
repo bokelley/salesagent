@@ -499,6 +499,7 @@ class GoogleAdManager(AdServerAdapter):
 
         from src.core.database.database_session import get_db_session
         from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+        from src.core.inventory_profile_projection import project_visible_inventory_profile_product
 
         products_map = {}
         with get_db_session() as db_session:
@@ -510,12 +511,17 @@ class GoogleAdManager(AdServerAdapter):
                 # package.product_id is like "prod_610fbb8b"
                 product_id = package.product_id
                 logger.info(f"Looking up product for package {package.package_id}: product_id={product_id}")
+                if not product_id:
+                    logger.error(f"Package {package.package_id} is missing product_id")
+                    continue
 
                 stmt = select(Product).filter_by(
                     tenant_id=self.tenant_id,
                     product_id=product_id,
                 )
                 product = db_session.scalars(stmt).first()
+                if not product:
+                    product = project_visible_inventory_profile_product(db_session, self.tenant_id, product_id)
                 if product:
                     logger.info(f"Found product: {product.product_id} (name={product.name})")
                     # Start with the effective config so profile-backed products
@@ -590,7 +596,7 @@ class GoogleAdManager(AdServerAdapter):
             if not product_config:
                 error_msg = (
                     f"Product configuration missing for package '{package.package_id}'. "
-                    f"Product must exist in database with valid configuration before media buy creation."
+                    f"Product must exist as a catalog row or buyer-visible inventory bundle before media buy creation."
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 return CreateMediaBuyError(
@@ -609,9 +615,9 @@ class GoogleAdManager(AdServerAdapter):
                     f"GAM requires all products to have either ad units or placements configured. "
                     f"\n\n⚠️  SETUP REQUIRED: Please configure this product's inventory before accepting media buy requests."
                     f"\n\nTo fix:"
-                    f"\n  1. Go to Admin UI → Products → '{pkg_product_id}'"
+                    f"\n  1. Go to Admin UI → Inventory Bundles or Products → '{pkg_product_id}'"
                     f"\n  2. Click 'Sync Inventory' to load ad units from GAM"
-                    f"\n  3. Assign ad units or placements to this product"
+                    f"\n  3. Assign ad units or placements to this product or bundle"
                     f"\n  4. Save changes"
                     f"\n\nAlternatively, for testing you can use Mock adapter instead of GAM (set ad_server='mock' on tenant)."
                 )

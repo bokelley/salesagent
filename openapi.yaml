@@ -2642,7 +2642,7 @@ components:
           default: null
           title: Created At
         delivery_type:
-          default: guaranteed
+          default: non_guaranteed
           maxLength: 50
           minLength: 1
           title: Delivery Type
@@ -5677,7 +5677,14 @@ components:
       type: object
     WholesaleProductRequest.f44f287:
       additionalProperties: false
-      description: Create/update body for wholesale-product authoring.
+      description: 'Create/update body for wholesale-product authoring.
+
+
+        ``pricing_options`` remains accepted for backward compatibility. Runtime
+
+        wholesale pricing is derived from the inventory-bundle analytics projection:
+
+        non-guaranteed CPM auction with a zero floor.'
       properties:
         allowed_actions:
           anyOf:
@@ -5704,9 +5711,8 @@ components:
           default: null
           title: Channels
         delivery_type:
-          default: guaranteed
-          maxLength: 50
-          minLength: 1
+          const: non_guaranteed
+          default: non_guaranteed
           title: Delivery Type
           type: string
         description:
@@ -5942,7 +5948,7 @@ components:
       type: object
     WholesaleProductRequest.f44f287.WholesalePricingOption:
       additionalProperties: false
-      description: One pricing option accepted by the buyer-facing product.
+      description: One legacy pricing option accepted for backward-compatible requests.
       properties:
         currency:
           default: USD
@@ -6088,7 +6094,7 @@ components:
           default: null
           title: Created At
         delivery_type:
-          default: guaranteed
+          default: non_guaranteed
           maxLength: 50
           minLength: 1
           title: Delivery Type
@@ -9233,7 +9239,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ValidationError.6a07bef'
           description: Unprocessable Content
-      summary: Create a wholesale product backed by Product + InventoryProfile.
+      summary: Create a wholesale product backed by an InventoryProfile bundle.
       tags: []
   /api/v1/tenant-management/tenants/{tenant_id}/wholesale-products/{product_id}:
     delete:

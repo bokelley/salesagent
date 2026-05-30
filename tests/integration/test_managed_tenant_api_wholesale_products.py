@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.core.database.models import AuthorizedProperty
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
+from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.aao_lookup_service import PublisherPartnerStatus
 from tests.factories import (
@@ -100,7 +102,7 @@ def _wholesale_payload(**overrides):
         "name": "Homepage Takeover",
         "description": "High-impact homepage package.",
         "status": "active",
-        "delivery_type": "guaranteed",
+        "delivery_type": "non_guaranteed",
         "channels": ["display"],
         "pricing_options": [
             {
@@ -305,7 +307,9 @@ def test_publisher_properties_lookup_enables_api_only_product_authoring(manageme
     assert created_body["inventory"]["publisher_properties"][0]["publisher_domain"] == "wonderstruck.org"
 
 
-def test_wholesale_product_crud_persists_product_inventory_and_pricing(management_api_client, gam_tenant):
+def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
+    management_api_client, gam_tenant, bound_factories
+):
     client, auth_headers = management_api_client
     payload = _wholesale_payload()
 
@@ -334,9 +338,20 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
     created_body = created.get_json()
     assert created_body["product_id"] == "homepage_takeover"
     assert created_body["inventory_profile_id"] == "homepage_takeover"
-    assert created_body["pricing_options"][0]["pricing_option_id"] == "cpm_usd_fixed"
-    assert created_body["pricing_options"][0]["rate"] == "40.00"
+    assert created_body["delivery_type"] == "non_guaranteed"
+    assert created_body["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
+    assert created_body["pricing_options"][0]["is_fixed"] is False
+    assert created_body["pricing_options"][0]["price_guidance"] == {"floor": 0.0}
     assert created_body["inventory"]["execution"]["selectors"][0]["selector_type"] == "placement"
+    assert ProductRepository(bound_factories, gam_tenant.tenant_id).get_by_id("homepage_takeover") is None
+
+    duplicate = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=payload,
+    )
+    assert duplicate.status_code == 409, duplicate.get_data(as_text=True)
+    assert duplicate.get_json()["error"] == "wholesale_product_exists"
 
     listing = client.get(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
@@ -344,7 +359,7 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
     )
     assert listing.status_code == 200, listing.get_data(as_text=True)
     assert listing.get_json()["count"] == 1
-    assert listing.get_json()["wholesale_products"][0]["pricing_options"][0]["pricing_option_id"] == "cpm_usd_fixed"
+    assert listing.get_json()["wholesale_products"][0]["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
 
     updated_payload = _wholesale_payload(
         name="Homepage Takeover Updated",
@@ -367,7 +382,7 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
     updated_body = updated.get_json()
     assert updated_body["name"] == "Homepage Takeover Updated"
     assert updated_body["status"] == "draft"
-    assert updated_body["pricing_options"][0]["rate"] == "45.00"
+    assert updated_body["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
 
     detail = client.get(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/homepage_takeover",
@@ -430,7 +445,7 @@ def test_local_example_domain_self_heals_existing_fixture_tenant(
         "name": "New Example Profile",
         "description": "Local fixture product using the sample publisher domain.",
         "status": "active",
-        "delivery_type": "guaranteed",
+        "delivery_type": "non_guaranteed",
         "pricing_options": [{"pricing_model": "cpm", "currency": "USD", "is_fixed": True, "rate": "5.00"}],
         "inventory": {
             "publisher_properties": [{"publisher_domain": "example.com", "selection_type": "all"}],
@@ -592,6 +607,11 @@ def test_profile_backed_generic_selectors_round_trip_without_legacy_gam_keys(
         },
         format_ids=format_ids,
         publisher_properties=publisher_properties,
+        constraints={
+            "managed_by": "wholesale_products_api",
+            "owner_product_id": "springserve_homepage",
+            "status": "active",
+        },
     )
     product = ProductFactory(
         tenant=tenant,
@@ -646,6 +666,11 @@ def test_wholesale_products_tolerate_extra_stored_publisher_property_fields(
         inventory_config={"adapter": "google_ad_manager", "selectors": []},
         format_ids=format_ids,
         publisher_properties=publisher_properties,
+        constraints={
+            "managed_by": "wholesale_products_api",
+            "owner_product_id": "extra_fields_profile",
+            "status": "active",
+        },
     )
     product = ProductFactory(
         tenant=gam_tenant,
@@ -718,13 +743,35 @@ def test_wholesale_validation_checks_discovered_creative_formats(management_api_
     assert {issue["code"] for issue in body["issues"]} >= {"creative_format_not_found"}
 
 
-def test_wholesale_create_rejects_existing_unowned_inventory_profile(management_api_client, gam_tenant):
+def test_wholesale_create_rejects_existing_unowned_inventory_profile(
+    management_api_client, gam_tenant, bound_factories
+):
     client, auth_headers = management_api_client
-    InventoryProfileFactory(
+    profile = InventoryProfileFactory(
         tenant=gam_tenant,
         profile_id="homepage_takeover",
         constraints={"formats": ["display_300x250"]},
     )
+
+    listing = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+    )
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    assert listing.get_json()["count"] == 0
+
+    detail = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/homepage_takeover",
+        headers=auth_headers,
+    )
+    assert detail.status_code == 404, detail.get_data(as_text=True)
+
+    deleted = client.delete(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/homepage_takeover",
+        headers=auth_headers,
+    )
+    assert deleted.status_code == 404, deleted.get_data(as_text=True)
+    assert InventoryProfileRepository(bound_factories, gam_tenant.tenant_id).get_by_id(profile.profile_id) is not None
 
     created = client.post(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",

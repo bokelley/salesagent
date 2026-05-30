@@ -9,17 +9,27 @@ Each test is traced to a BDD scenario from BR-UC-001-discover-available-inventor
 Tests are ordered by migration risk: HIGH_RISK first, then MEDIUM_RISK.
 """
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.database.repositories.product import ProductRepository
 from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPInvalidRequestError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
-from tests.factories import AdapterConfigFactory, PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AdapterConfigFactory,
+    CurrencyLimitFactory,
+    InventoryProfileFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -944,6 +954,103 @@ class TestBuyingModeValidation:
             response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
 
         assert [p.product_id for p in response.products] == ["p_wholesale"]
+
+    @pytest.mark.asyncio
+    async def test_wholesale_projects_inventory_bundle_as_product_without_product_row(
+        self, integration_db, factory_session
+    ):
+        """Inventory bundles are wholesale products even before an explicit Product row exists."""
+        with ProductEnv(tenant_id="whole-bundle", principal_id="p1") as env:
+            tenant = self._seed_tenant_principal("whole-bundle")
+            tenant_id = tenant.tenant_id
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant_id,
+                profile_id="homepage_bundle",
+                name="Homepage Bundle",
+                forecast={
+                    "method": "estimate",
+                    "currency": "USD",
+                    "forecast_range_unit": "availability",
+                    "generated_at": datetime.now(UTC),
+                    "valid_until": datetime.now(UTC) + timedelta(hours=1),
+                    "points": [
+                        {
+                            "label": "Homepage Bundle",
+                            "product_id": "homepage_bundle",
+                            "metrics": {"impressions": {"mid": 1000.0}},
+                        }
+                    ],
+                },
+                pricing_availability={
+                    "pricing_guidance_by_model": {
+                        "cpm": {
+                            "p25": 1.25,
+                            "p50": 2.0,
+                        }
+                    }
+                },
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+                publisher_properties=[
+                    {
+                        "publisher_domain": "whole-bundle.example.com",
+                        "property_ids": ["homepage"],
+                        "selection_type": "by_id",
+                    }
+                ],
+            )
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
+
+        factory_session.expire_all()
+        assert [p.product_id for p in response.products] == ["homepage_bundle"]
+        bundle = response.products[0]
+        pricing = bundle.pricing_options[0].root
+        assert ProductRepository(factory_session, tenant_id).get_by_id("homepage_bundle") is None
+        assert bundle.name == "Homepage Bundle"
+        assert bundle.delivery_type.value == "non_guaranteed"
+        assert pricing.pricing_model == "cpm"
+        assert pricing.floor_price == 0.0
+        assert pricing.price_guidance.p25 == 1.25
+        assert bundle.forecast.points[0].product_id == "homepage_bundle"
+        assert getattr(pricing, "fixed_price", None) is None
+        first_property = bundle.publisher_properties[0].root
+        assert first_property.selection_type == "by_id"
+        assert [property_id.root for property_id in first_property.property_ids] == ["homepage"]
+
+    @pytest.mark.asyncio
+    async def test_wholesale_bundle_pricing_prefers_gam_network_currency(self, integration_db, factory_session):
+        """Bundle pricing uses the GAM network currency, not alphabetical limits."""
+        with ProductEnv(tenant_id="whole-bundle-currency", principal_id="p1") as env:
+            tenant = self._seed_tenant_principal("whole-bundle-currency")
+            tenant_id = tenant.tenant_id
+            AdapterConfigFactory(
+                tenant=tenant,
+                tenant_id=tenant_id,
+                adapter_type="google_ad_manager",
+                gam_network_currency="USD",
+            )
+            CurrencyLimitFactory(tenant=tenant, tenant_id=tenant_id, currency_code="EUR")
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant_id,
+                profile_id="currency_bundle",
+                name="Currency Bundle",
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+                publisher_properties=[
+                    {
+                        "publisher_domain": "whole-bundle.example.com",
+                        "property_ids": ["homepage"],
+                        "selection_type": "by_id",
+                    }
+                ],
+            )
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
+
+        factory_session.expire_all()
+        pricing = response.products[0].pricing_options[0].root
+        assert response.products[0].product_id == "currency_bundle"
+        assert pricing.pricing_option_id == "cpm_usd_auction"
+        assert pricing.currency == "USD"
 
     @pytest.mark.asyncio
     async def test_wholesale_with_empty_string_brief_returns_catalog(self, integration_db):

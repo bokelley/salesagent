@@ -2,17 +2,22 @@
 
 **Status:** Implemented
 **Audience:** Host products embedding salesagent and managing publisher setup through APIs
-**Last updated:** 2026-05-26
+**Last updated:** 2026-05-30
 
 This guide shows the API-only path for setting up an embedded tenant and
 creating wholesale products. A host product can use this flow to build its own
 storefront UI without relying on salesagent internals or adapter-specific
 OpenAPI files.
 
-Wholesale products are the sellable objects exposed to buyers through AdCP
-`get_products`. Each product combines buyer-facing merchandising with the
-publisher domains, creative formats, pricing, targeting, optimization, and
-ad-server selectors needed to execute the buy.
+Wholesale products are the sellable inventory bundles exposed to buyers through
+AdCP `get_products` in wholesale mode. They persist as `InventoryProfile` rows;
+buyer-facing `Product` objects are projected at protocol time. Brief-mode
+`get_products` continues to use curated `Product` rows.
+
+Wholesale pricing is derived by the Sales Agent: non-guaranteed CPM auction with
+a zero floor, enriched by pricing and delivery analytics when sync data exists.
+Storefront requests may still include `pricing_options` for backward
+compatibility, but runtime pricing is not persisted as Product pricing rows.
 
 ## API Reference And Auth
 
@@ -321,16 +326,8 @@ A minimal GAM-backed draft looks like this:
   "name": "Homepage Takeover",
   "description": "High-impact homepage package.",
   "status": "active",
-  "delivery_type": "guaranteed",
+  "delivery_type": "non_guaranteed",
   "channels": ["display"],
-  "pricing_options": [
-    {
-      "pricing_model": "cpm",
-      "currency": "USD",
-      "is_fixed": true,
-      "rate": "40.00"
-    }
-  ],
   "forecast": {
     "impressions": 1000000
   },
@@ -453,6 +450,10 @@ Validation currently checks:
 - At least one creative format is present.
 - The execution adapter matches the tenant adapter.
 - Selector types are supported by the tenant adapter.
+
+The response includes `pricing_options`, but they are the derived wholesale
+projection (`cpm_<currency>_auction`, `is_fixed: false`, `price_guidance.floor:
+0.0`), not caller-supplied fixed-rate pricing.
 - Selector IDs exist when the adapter inventory cache has data for that
   selector type.
 
