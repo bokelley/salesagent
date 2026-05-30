@@ -61,8 +61,8 @@ async def test_sandbox_account_get_products_zeroes_pricing(integration_db):
         _seed_priced_product(tenant)
 
         response = await env.call_impl(
-            buying_mode="wholesale",
-            brief="",
+            buying_mode="brief",
+            brief="sandbox product",
             account={"account_id": account.account_id},
             identity=env.identity.model_copy(update={"account_id": account.account_id}),
         )
@@ -91,8 +91,8 @@ async def test_zero_rate_card_account_get_products_zeroes_pricing(integration_db
         _seed_priced_product(tenant)
 
         response = await env.call_impl(
-            buying_mode="wholesale",
-            brief="",
+            buying_mode="brief",
+            brief="sandbox product",
             account={"account_id": account.account_id},
             identity=env.identity.model_copy(update={"account_id": account.account_id}),
         )
