@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.database.models import AuthorizedProperty
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.aao_lookup_service import PublisherPartnerStatus
 from tests.factories import (
     AdapterConfigFactory,
@@ -390,6 +392,166 @@ def test_wholesale_product_crud_persists_product_inventory_and_pricing(managemen
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_local_example_domain_self_heals_existing_fixture_tenant(
+    management_api_client,
+    bound_factories,
+    monkeypatch,
+):
+    client, auth_headers = management_api_client
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
+    monkeypatch.delenv("FLASK_ENV", raising=False)
+
+    tenant = TenantFactory(
+        tenant_id="tenant_wholesale_local_example",
+        subdomain="wholesale-local-example",
+        ad_server="mock",
+        is_embedded=True,
+    )
+    AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+    InventoryProfileFactory(
+        tenant=tenant,
+        profile_id="existing_example_profile",
+        inventory_config={"adapter": "mock", "selectors": []},
+        format_ids=[],
+        publisher_properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+    )
+    bound_factories.commit()
+
+    assert (
+        bound_factories.get(AuthorizedProperty, {"tenant_id": tenant.tenant_id, "property_id": "example_com"}) is None
+    )
+
+    payload = {
+        "wholesale_product_id": "new_example_profile",
+        "name": "New Example Profile",
+        "description": "Local fixture product using the sample publisher domain.",
+        "status": "active",
+        "delivery_type": "guaranteed",
+        "pricing_options": [{"pricing_model": "cpm", "currency": "USD", "is_fixed": True, "rate": "5.00"}],
+        "inventory": {
+            "publisher_properties": [{"publisher_domain": "example.com", "selection_type": "all"}],
+            "creative_formats": [
+                {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "display_300x250",
+                    }
+                }
+            ],
+            "execution": {
+                "adapter": "mock",
+                "selectors": [],
+                "format_bindings": [
+                    {
+                        "format_id": {
+                            "agent_url": "https://creative.adcontextprotocol.org",
+                            "id": "display_300x250",
+                        },
+                        "adapter_config": {},
+                    }
+                ],
+            },
+        },
+    }
+
+    validation = client.post(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products:validate",
+        headers=auth_headers,
+        json=payload,
+    )
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    assert validation.get_json()["valid"] is True
+
+    preview = client.post(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products:preview",
+        headers=auth_headers,
+        json=payload,
+    )
+    assert preview.status_code == 200, preview.get_data(as_text=True)
+    assert preview.get_json()["validation"]["valid"] is True
+    bound_factories.expire_all()
+    assert (
+        bound_factories.get(AuthorizedProperty, {"tenant_id": tenant.tenant_id, "property_id": "example_com"}) is None
+    )
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=payload,
+    )
+
+    assert created.status_code == 201, created.get_data(as_text=True)
+    bound_factories.expire_all()
+    authorized_property = bound_factories.get(
+        AuthorizedProperty,
+        {"tenant_id": tenant.tenant_id, "property_id": "example_com"},
+    )
+    assert authorized_property is not None
+    assert authorized_property.publisher_domain == "example.com"
+    assert authorized_property.verification_status == "verified"
+    partner = TenantConfigRepository(bound_factories, tenant.tenant_id).get_publisher_partner_by_domain("example.com")
+    assert partner is not None
+    assert partner.is_verified is True
+
+
+def test_wholesale_replace_self_heals_local_example_authorization(
+    management_api_client,
+    gam_tenant,
+    bound_factories,
+    monkeypatch,
+):
+    client, auth_headers = management_api_client
+    product_id = "replace_example_profile"
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
+    monkeypatch.delenv("FLASK_ENV", raising=False)
+
+    profile = InventoryProfileFactory(
+        tenant=gam_tenant,
+        profile_id=product_id,
+        inventory_config={"adapter": "google_ad_manager", "selectors": []},
+        format_ids=[],
+        publisher_properties=[],
+        constraints={
+            "formats": [],
+            "channels": [],
+            "targeting_dimensions": [],
+            "managed_by": "wholesale_products_api",
+            "owner_product_id": product_id,
+        },
+    )
+    product = ProductFactory(
+        tenant=gam_tenant,
+        product_id=product_id,
+        name="Replace Example Profile",
+        implementation_config={"adapter": "google_ad_manager", "status": "active"},
+        inventory_profile=profile,
+        properties=[],
+        property_tags=None,
+    )
+    PricingOptionFactory(product=product)
+    bound_factories.commit()
+    config_repo = TenantConfigRepository(bound_factories, gam_tenant.tenant_id)
+    assert config_repo.get_authorized_property_by_id("example_com") is None
+
+    payload = _wholesale_payload(wholesale_product_id=product_id, name="Replace Example Profile")
+    payload["inventory"]["publisher_properties"] = [{"publisher_domain": "example.com", "selection_type": "all"}]
+    replaced = client.put(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/{product_id}",
+        headers=auth_headers,
+        json=payload,
+    )
+
+    assert replaced.status_code == 200, replaced.get_data(as_text=True)
+    bound_factories.expire_all()
+    authorized_property = config_repo.get_authorized_property_by_id("example_com")
+    assert authorized_property is not None
+    assert authorized_property.publisher_domain == "example.com"
 
 
 def test_profile_backed_generic_selectors_round_trip_without_legacy_gam_keys(

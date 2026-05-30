@@ -2,10 +2,54 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from src.admin.api_schemas.publisher_properties import PublisherPropertySelector
+from src.admin.utils.helpers import is_admin_production
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def should_seed_local_example_publisher_authorization() -> bool:
+    """Return True when the local example.com fixture should self-heal."""
+    if is_admin_production():
+        return False
+    return (
+        _env_truthy("ADCP_TESTING")
+        or _env_truthy("SEED_LOCAL_EXAMPLE_PUBLISHER_AUTHORIZATION")
+        or _env_truthy("ADCP_AUTH_TEST_MODE")
+    )
+
+
+def seed_local_example_publisher_authorization(session: Any, tenant_id: str) -> None:
+    """Install the example.com publisher fixture for local embedded E2E runs."""
+    if not should_seed_local_example_publisher_authorization():
+        return
+
+    previous_management_caller = session.info.get("management_api_caller")
+    session.info["management_api_caller"] = True
+    try:
+        TenantConfigRepository(session, tenant_id).ensure_example_publisher_authorization()
+    finally:
+        if previous_management_caller is None:
+            session.info.pop("management_api_caller", None)
+        else:
+            session.info["management_api_caller"] = previous_management_caller
+
+
+def seed_local_example_publisher_authorization_for_selectors(
+    *,
+    session: Any,
+    tenant_id: str,
+    selectors: list[PublisherPropertySelector],
+) -> None:
+    """Self-heal the local example.com fixture only when a selector needs it."""
+    if any(selector.publisher_domain.lower() == "example.com" for selector in selectors):
+        seed_local_example_publisher_authorization(session, tenant_id)
 
 
 def validate_publisher_property_selectors(

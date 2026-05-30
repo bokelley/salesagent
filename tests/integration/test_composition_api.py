@@ -44,6 +44,22 @@ def _seed_tenant(tenant_id: str) -> None:
     )
 
 
+def _seed_embedded_mock_tenant(factory_session, *, tenant_id: str, subdomain: str):
+    from tests.factories import TenantFactory
+
+    factory_session.info["management_api_caller"] = True
+    tenant = TenantFactory(
+        tenant_id=tenant_id,
+        subdomain=subdomain,
+        ad_server="mock",
+        is_embedded=True,
+        brand_manifest_policy="public",
+    )
+    factory_session.commit()
+    factory_session.info.pop("management_api_caller", None)
+    return tenant
+
+
 def _identity(tenant_id: str) -> ResolvedIdentity:
     return ResolvedIdentity(
         tenant_id=tenant_id,
@@ -303,6 +319,87 @@ def test_inventory_profile_create_infers_publisher_property_selection_type(
             "property_ids": ["publisher_example_sports"],
         }
     ]
+
+
+def test_inventory_profile_create_self_heals_local_example_authorization(
+    admin_client,
+    factory_session,
+    monkeypatch,
+):
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    tenant = _seed_embedded_mock_tenant(
+        factory_session,
+        tenant_id="composition_api_local_example",
+        subdomain="composition-api-local-example",
+    )
+    config_repo = TenantConfigRepository(factory_session, tenant.tenant_id)
+    assert config_repo.get_authorized_property_by_id("example_com") is None
+
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
+    monkeypatch.delenv("FLASK_ENV", raising=False)
+    payload = _inventory_profile_payload("local_example_profile")
+    payload["publisher_properties"] = [{"publisher_domain": "example.com", "selection_type": "all"}]
+
+    response = admin_client.post(
+        f"/api/v1/tenants/{tenant.tenant_id}/inventory-profiles",
+        json=payload,
+        headers=_headers(monkeypatch),
+    )
+
+    assert response.status_code == 201, response.get_data(as_text=True)
+    assert response.get_json()["profile_id"] == "local_example_profile"
+    factory_session.expire_all()
+    authorized_property = config_repo.get_authorized_property_by_id("example_com")
+    assert authorized_property is not None
+    assert authorized_property.publisher_domain == "example.com"
+    partner = config_repo.get_publisher_partner_by_domain("example.com")
+    assert partner is not None
+    assert partner.is_verified is True
+
+
+def test_inventory_profile_update_self_heals_local_example_authorization(
+    admin_client,
+    factory_session,
+    monkeypatch,
+):
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    tenant = _seed_embedded_mock_tenant(
+        factory_session,
+        tenant_id="composition_api_update_local_example",
+        subdomain="composition-api-update-local-example",
+    )
+    config_repo = TenantConfigRepository(factory_session, tenant.tenant_id)
+    headers = _headers(monkeypatch)
+
+    create_payload = _inventory_profile_payload("update_local_example_profile")
+    create_payload["publisher_properties"] = []
+    create_response = admin_client.post(
+        f"/api/v1/tenants/{tenant.tenant_id}/inventory-profiles",
+        json=create_payload,
+        headers=headers,
+    )
+    assert create_response.status_code == 201, create_response.get_data(as_text=True)
+    assert config_repo.get_authorized_property_by_id("example_com") is None
+
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
+    monkeypatch.delenv("FLASK_ENV", raising=False)
+    update_response = admin_client.put(
+        f"/api/v1/tenants/{tenant.tenant_id}/inventory-profiles/update_local_example_profile",
+        json={"publisher_properties": [{"publisher_domain": "example.com", "selection_type": "all"}]},
+        headers=headers,
+    )
+
+    assert update_response.status_code == 200, update_response.get_data(as_text=True)
+    factory_session.expire_all()
+    authorized_property = config_repo.get_authorized_property_by_id("example_com")
+    assert authorized_property is not None
+    assert authorized_property.publisher_domain == "example.com"
 
 
 def test_inventory_profile_create_rejects_unauthorized_publisher_property_selector(

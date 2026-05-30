@@ -79,7 +79,10 @@ from src.admin.services.catalog_webhook_events import (
     publish_product_record_update_catalog_change,
     publish_signal_catalog_change,
 )
-from src.admin.services.publisher_property_authorization import validate_publisher_property_selectors
+from src.admin.services.publisher_property_authorization import (
+    seed_local_example_publisher_authorization_for_selectors,
+    validate_publisher_property_selectors,
+)
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdvertiserRoutingRule,
@@ -229,6 +232,11 @@ def create_inventory_profile(tenant_id: str):
                 f"Inventory profile {payload.profile_id!r} already exists.",
                 409,
             )
+        seed_local_example_publisher_authorization_for_selectors(
+            session=session,
+            tenant_id=tenant_id,
+            selectors=payload.publisher_properties,
+        )
         publisher_property_issues = validate_publisher_property_selectors(
             session=session,
             tenant_id=tenant_id,
@@ -290,6 +298,11 @@ def update_inventory_profile(tenant_id: str, profile_id: str):
             if value is not None:
                 setattr(profile, field, value)
         if payload.publisher_properties is not None:
+            seed_local_example_publisher_authorization_for_selectors(
+                session=session,
+                tenant_id=tenant_id,
+                selectors=payload.publisher_properties,
+            )
             publisher_property_issues = validate_publisher_property_selectors(
                 session=session,
                 tenant_id=tenant_id,

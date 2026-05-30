@@ -156,7 +156,10 @@ from src.admin.services.catalog_webhook_events import (
     publish_product_record_update_catalog_change,
     publish_signal_catalog_change,
 )
-from src.admin.services.publisher_property_authorization import validate_publisher_property_selectors
+from src.admin.services.publisher_property_authorization import (
+    seed_local_example_publisher_authorization_for_selectors,
+    validate_publisher_property_selectors,
+)
 from src.admin.services.tenant_status_service import get_tenant_status, invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.embedded_tenant_guard import EmbeddedTenantWriteError
@@ -467,14 +470,6 @@ def _tenant_creative_approval_mode(value: str) -> str:
         "manual": "require-human",
         "ai": "ai-powered",
     }[value]
-
-
-def _seed_local_example_publisher_authorization(session, tenant_id: str) -> None:
-    """Install the example.com publisher fixture for local embedded E2E runs."""
-    if os.environ.get("ADCP_TESTING", "").lower() != "true":
-        return
-
-    TenantConfigRepository(session, tenant_id).ensure_example_publisher_authorization()
 
 
 def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
@@ -1430,6 +1425,11 @@ def _publisher_property_validation_issues(
     tenant_id: str,
     req: WholesaleProductRequest,
 ) -> list[WholesaleValidationIssue]:
+    seed_local_example_publisher_authorization_for_selectors(
+        session=session,
+        tenant_id=tenant_id,
+        selectors=req.inventory.publisher_properties,
+    )
     return [
         WholesaleValidationIssue(**issue)
         for issue in validate_publisher_property_selectors(
@@ -4220,7 +4220,6 @@ def provision_tenant():
                 description="Default property tag for all inventory",
             )
         )
-        _seed_local_example_publisher_authorization(session, tenant_id)
 
         if req.initial_principal is not None:
             initial_principal_id = f"principal_{uuid.uuid4().hex[:8]}"

@@ -228,12 +228,15 @@ class TestProvision:
             assert adapter.gam_auth_method == "service_account"
             assert adapter.gam_refresh_token is None
 
-    def test_provision_seeds_example_domain_authorization_in_local_testing(
+    def test_provision_does_not_seed_example_domain_authorization_in_local_test_mode(
         self, client, auth_headers, cleanup_tenants, monkeypatch
     ):
-        monkeypatch.setenv("ADCP_TESTING", "true")
+        monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        monkeypatch.delenv("FLASK_ENV", raising=False)
 
-        payload = _provision_payload(external_org_id="org_local_example")
+        payload = _provision_payload(external_org_id="org_no_provision_example")
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
 
         assert response.status_code == 201, response.get_data(as_text=True)
@@ -247,11 +250,8 @@ class TestProvision:
                 select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id="example_com")
             ).first()
 
-        assert partner is not None
-        assert partner.is_verified is True
-        assert authorized_property is not None
-        assert authorized_property.publisher_domain == "example.com"
-        assert authorized_property.verification_status == "verified"
+        assert partner is None
+        assert authorized_property is None
 
     def test_provision_returns_absolute_tenant_surface_urls(self, client, auth_headers, cleanup_tenants, monkeypatch):
         monkeypatch.setenv("SALES_AGENT_DOMAIN", "localtest.me:3091")
