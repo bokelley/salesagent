@@ -98,6 +98,48 @@ logger = logging.getLogger(__name__)
 PreValidationHook = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
+def _env_bool(name: str, *, default: bool) -> bool:
+    """Parse an environment boolean with an explicit default."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_optional_positive_float(name: str, *, default: float) -> float | None:
+    """Parse an optional positive float environment value."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    if raw.lower() in {"", "0", "none", "off", "disable", "disabled"}:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a number; using default %s", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("%s=%r is not positive; using default %s", name, raw, default)
+        return default
+    return value
+
+
+def _env_positive_int(name: str) -> int | None:
+    """Parse an optional positive integer environment value."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; leaving unset", name, raw)
+        return None
+    if value <= 0:
+        logger.warning("%s=%r is not positive; leaving unset", name, raw)
+        return None
+    return value
+
+
 # Tools callable without a bearer token. Buyers need to discover the agent
 # before they have credentials.
 #
@@ -833,23 +875,25 @@ def _serve_kwargs(
         "enable_dns_rebinding_protection": _enable_dns_rebinding_protection(
             include_subdomain_routing=include_subdomain_routing
         ),
-        # MCP streamable-HTTP session mode (adcp>=5.0). Stateful (default)
-        # keeps ``StreamableHTTPSessionManager._server_instances`` alive
-        # across requests for session-reuse perf, but the dict is process-
-        # local — multi-replica deployments without sticky LB routing on
-        # ``Mcp-Session-Id`` see ``tools/list`` and ``tools/call`` randomly
-        # 404 when a request lands on a replica that didn't handle
-        # ``initialize``. ``FASTMCP_STATELESS_HTTP`` env alone won't work
-        # — ``adcp.server.serve`` overrides FastMCP's reader by setting
-        # ``mcp.settings.stateless_http`` from this kwarg directly. Flip
-        # to ``true`` only on multi-replica prod deployments where session
-        # affinity isn't configurable; keep stateful in single-replica /
-        # dev / in-process test (the compliance-runner storyboard sweep
-        # is the workload that most benefits from session reuse, so
-        # leaving this off in test runs is intentional). See
+        # MCP streamable-HTTP session mode (adcp>=5.0). Keep stateful mode
+        # as the default because reused sessions avoid repeated initialize +
+        # tools/list overhead on chatty AdCP flows. Preserve the SDK's
+        # 30-minute default idle reap so valid stateful clients can pause
+        # and reuse a session without surprise 404s. Operators can tune
+        # ADCP_SESSION_IDLE_TIMEOUT down for one-shot service clients, set
+        # it to "none"/"off"/"0" to disable idle reaping, and set a hard
+        # active-session cap with ADCP_MAX_ACTIVE_SESSIONS.
+        #
+        # ``FASTMCP_STATELESS_HTTP`` env alone won't work —
+        # ``adcp.server.serve`` overrides FastMCP's reader by setting
+        # ``mcp.settings.stateless_http`` from this kwarg directly. Set
+        # ``ADCP_STATELESS_HTTP=true`` only for deployments where session
+        # affinity is unavailable or client reuse is impossible. See
         # https://gofastmcp.com/v2/deployment/http for the upstream
         # recommendation.
-        "stateless_http": os.environ.get("ADCP_STATELESS_HTTP", "false").lower() == "true",
+        "stateless_http": _env_bool("ADCP_STATELESS_HTTP", default=False),
+        "session_idle_timeout": _env_optional_positive_float("ADCP_SESSION_IDLE_TIMEOUT", default=1800.0),
+        "max_active_sessions": _env_positive_int("ADCP_MAX_ACTIVE_SESSIONS"),
         # Per-request agent-card public URL resolver. Honors PUBLIC_URL
         # env when set (single-host) and otherwise derives from
         # X-Forwarded-Host / Host (multi-tenant subdomain). See
@@ -941,6 +985,9 @@ def build_app():
         # rejected before the tool dispatcher runs.
         enable_dns_rebinding_protection=False,
         auth=kwargs["auth"],
+        stateless_http=kwargs["stateless_http"],
+        session_idle_timeout=kwargs["session_idle_timeout"],
+        max_active_sessions=kwargs["max_active_sessions"],
         pre_validation_hooks=pre_validation_hooks,
         # Forward lifespan hooks so the proposal-store close hook
         # fires on shutdown (``open_proposal_store`` is gone — pool

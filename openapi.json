@@ -3974,6 +3974,21 @@
             "default": null,
             "title": "Vendor Metric Optimization"
           },
+          "video_placement_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Video Placement Types"
+          },
           "wholesale_product_id": {
             "maxLength": 100,
             "minLength": 1,
@@ -8285,6 +8300,21 @@
             "default": null,
             "title": "Vendor Metric Optimization"
           },
+          "video_placement_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Video Placement Types"
+          },
           "wholesale_product_id": {
             "anyOf": [
               {
@@ -8912,6 +8942,21 @@
             ],
             "default": null,
             "title": "Vendor Metric Optimization"
+          },
+          "video_placement_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Video Placement Types"
           },
           "wholesale_product_id": {
             "maxLength": 100,

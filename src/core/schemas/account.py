@@ -14,9 +14,11 @@ from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.base import AdCPBaseModel
-from adcp.types.generated_poc.account.list_accounts_response import Account as LibraryAccountDomain
 from adcp.types.generated_poc.account.sync_accounts_response import (
     SyncAccountsResponse1 as LibrarySyncAccountsSuccess,
+)
+from adcp.types.generated_poc.core.account_with_authorization import (
+    AccountWithAuthorization as LibraryAccountDomain,
 )
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from pydantic import ConfigDict, Field, field_validator
@@ -34,7 +36,7 @@ class Account(LibraryAccountDomain):
 
     Library provides: account_id, name, advertiser, billing_proxy, status,
     brand, operator, billing, rate_card, payment_terms, credit_limit, setup,
-    account_scope, governance_agents, sandbox, ext.
+    account_scope, governance_agents, sandbox, authorization, ext.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())

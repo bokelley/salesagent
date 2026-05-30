@@ -445,6 +445,8 @@ class Product(Base, JSONValidatorMixin):
     allowed_actions: Mapped[list | None] = mapped_column(JSONType, nullable=True)
     # Type hint: list of FormatOption objects advertised by the product
     format_options: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    # Type hint: list of VideoPlacementType enum values advertised by the product
+    video_placement_types: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: vendor metric optimization metadata
     vendor_metric_optimization: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 

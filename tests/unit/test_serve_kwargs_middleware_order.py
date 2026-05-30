@@ -232,7 +232,7 @@ def test_dns_rebinding_env_override_wins(value, expected):
     assert kwargs["enable_dns_rebinding_protection"] is expected
 
 
-@pytest.mark.parametrize("value", ["true", "TRUE", "True"])
+@pytest.mark.parametrize("value", ["true", "TRUE", "True", "1", "yes", "on"])
 def test_stateless_http_env_var_enables_stateless_mode(value):
     """``ADCP_STATELESS_HTTP`` flips the MCP transport to stateless mode.
 
@@ -255,9 +255,8 @@ def test_stateless_http_env_var_enables_stateless_mode(value):
 @pytest.mark.parametrize("value", ["false", "0", "", "no", "anything-else"])
 def test_stateless_http_defaults_off(value):
     """Single-replica dev / test / single-pod prod gets stateful sessions
-    by default — preserves the session-reuse perf for chatty workloads
-    (compliance sweeps, BDD, local dev) and matches the upstream
-    FastMCP default."""
+    by default for session-reuse performance, with idle timeout bounding
+    abandoned sessions."""
     kwargs = _kwargs_with({"ADCP_STATELESS_HTTP": value})
     assert kwargs["stateless_http"] is False, (
         f"ADCP_STATELESS_HTTP={value!r} must leave stateless_http=False; got {kwargs.get('stateless_http')!r}"
@@ -285,8 +284,8 @@ def test_auth_optional_tools_known_to_sdk_validator():
 
 
 def test_stateless_http_unset_is_stateful():
-    """Unset env var must yield stateful mode — no surprise behavior on
-    deployments that haven't opted in."""
+    """Unset env var must yield stateful mode so clients that reuse
+    sessions get the faster initialize-once path."""
     import os as _os
 
     saved = _os.environ.pop("ADCP_STATELESS_HTTP", None)
@@ -296,3 +295,65 @@ def test_stateless_http_unset_is_stateful():
     finally:
         if saved is not None:
             _os.environ["ADCP_STATELESS_HTTP"] = saved
+
+
+def test_session_idle_timeout_unset_preserves_sdk_default():
+    """Unset env keeps the SDK's 30-minute default so valid stateful
+    clients can pause and reuse a session without surprise 404s."""
+    import os as _os
+
+    saved = _os.environ.pop("ADCP_SESSION_IDLE_TIMEOUT", None)
+    try:
+        kwargs = _kwargs_with({})
+        assert kwargs["session_idle_timeout"] == 1800.0
+    finally:
+        if saved is not None:
+            _os.environ["ADCP_SESSION_IDLE_TIMEOUT"] = saved
+
+
+def test_session_idle_timeout_env_override():
+    """Operators can tune the stateful-session reap window down for
+    one-shot service clients."""
+    kwargs = _kwargs_with({"ADCP_SESSION_IDLE_TIMEOUT": "12.5"})
+    assert kwargs["session_idle_timeout"] == 12.5
+
+
+@pytest.mark.parametrize("value", ["", "0", "none", "off", "disable", "disabled"])
+def test_session_idle_timeout_disable_env(value):
+    """Operators can disable idle reaping if client compatibility requires it."""
+    kwargs = _kwargs_with({"ADCP_SESSION_IDLE_TIMEOUT": value})
+    assert kwargs["session_idle_timeout"] is None
+
+
+@pytest.mark.parametrize("value", ["-1", "not-a-number"])
+def test_session_idle_timeout_invalid_env_falls_back(value):
+    """Bad timeout env values should not disable or break session reaping."""
+    kwargs = _kwargs_with({"ADCP_SESSION_IDLE_TIMEOUT": value})
+    assert kwargs["session_idle_timeout"] == 1800.0
+
+
+def test_max_active_sessions_unset_defaults_to_no_cap():
+    """Session caps are operator-tuned so normal stateful reuse is not
+    constrained unless the deployment opts in."""
+    import os as _os
+
+    saved = _os.environ.pop("ADCP_MAX_ACTIVE_SESSIONS", None)
+    try:
+        kwargs = _kwargs_with({})
+        assert kwargs["max_active_sessions"] is None
+    finally:
+        if saved is not None:
+            _os.environ["ADCP_MAX_ACTIVE_SESSIONS"] = saved
+
+
+def test_max_active_sessions_env_override():
+    """Operators can set a hard cap for active stateful MCP sessions."""
+    kwargs = _kwargs_with({"ADCP_MAX_ACTIVE_SESSIONS": "250"})
+    assert kwargs["max_active_sessions"] == 250
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "12.5", "not-a-number"])
+def test_max_active_sessions_invalid_env_is_unset(value):
+    """Bad cap env values should not create a zero/negative session limit."""
+    kwargs = _kwargs_with({"ADCP_MAX_ACTIVE_SESSIONS": value})
+    assert kwargs["max_active_sessions"] is None

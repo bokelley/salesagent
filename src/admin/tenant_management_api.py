@@ -1360,6 +1360,7 @@ def _wholesale_response_from_product(product: Product, adapter_type: str | None 
         optimization_capabilities=config.get("optimization_capabilities") or {},
         allowed_actions=product.allowed_actions,
         format_options=product.format_options,
+        video_placement_types=product.video_placement_types,
         vendor_metric_optimization=product.vendor_metric_optimization,
         allowed_principal_ids=product.allowed_principal_ids,
     )
@@ -2118,6 +2119,7 @@ def _build_wholesale_product_models(
         forecast=req.forecast,
         allowed_actions=req.allowed_actions,
         format_options=req.format_options,
+        video_placement_types=req.video_placement_types,
         vendor_metric_optimization=req.vendor_metric_optimization,
         archived_at=datetime.now(UTC) if req.status == "archived" else None,
         allowed_principal_ids=req.allowed_principal_ids,
@@ -2151,6 +2153,7 @@ def _update_product_from_wholesale_request(
     product.forecast = req.forecast
     product.allowed_actions = req.allowed_actions
     product.format_options = req.format_options
+    product.video_placement_types = req.video_placement_types
     product.vendor_metric_optimization = req.vendor_metric_optimization
     product.archived_at = datetime.now(UTC) if req.status == "archived" else None
     product.allowed_principal_ids = req.allowed_principal_ids
