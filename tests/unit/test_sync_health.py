@@ -29,11 +29,11 @@ def _run(**overrides) -> SyncRunSnapshot:
     return SyncRunSnapshot(**defaults)
 
 
-def _health(runs: list[SyncRunSnapshot]):
+def _health(runs: list[SyncRunSnapshot], *, sync_type: str = "inventory"):
     return derive_sync_health(
         runs,
         adapter_type="google_ad_manager",
-        sync_type="inventory",
+        sync_type=sync_type,
         tenant_created_at=NOW - timedelta(hours=2),
         now=NOW,
     )
@@ -169,7 +169,7 @@ class TestDeriveSyncHealth:
         assert health.last_success_at == success_at
         assert health.related_sync_run_id == "sync_a_success"
 
-    def test_overlapping_running_run_stays_visible_until_terminal(self):
+    def test_success_completed_after_running_started_clears_retry(self):
         health = _health(
             [
                 _run(
@@ -187,29 +187,55 @@ class TestDeriveSyncHealth:
             ]
         )
 
-        assert health.status == "running"
-        assert health.related_sync_run_id == "sync_running"
+        assert health.status == "success"
+        assert health.related_sync_run_id == "sync_success"
 
-    def test_older_started_running_run_stays_visible_until_terminal(self):
+    def test_running_run_after_success_stays_visible_until_terminal(self):
         health = _health(
             [
                 _run(
-                    sync_run_id="sync_running",
-                    status="running",
-                    started_at=NOW - timedelta(minutes=10),
-                    completed_at=None,
-                ),
-                _run(
                     sync_run_id="sync_success",
                     status="completed",
+                    started_at=NOW - timedelta(minutes=10),
+                    completed_at=NOW - timedelta(minutes=6),
+                ),
+                _run(
+                    sync_run_id="sync_running",
+                    status="running",
                     started_at=NOW - timedelta(minutes=5),
-                    completed_at=NOW - timedelta(minutes=1),
+                    completed_at=None,
                 ),
             ]
         )
 
         assert health.status == "running"
         assert health.related_sync_run_id == "sync_running"
+
+    def test_later_success_clears_older_running_retry(self):
+        health = _health(
+            [
+                _run(
+                    sync_run_id="sync_12271007_custom_targeting_retry",
+                    sync_type="custom_targeting",
+                    status="running",
+                    started_at=NOW - timedelta(minutes=10),
+                    completed_at=None,
+                ),
+                _run(
+                    sync_run_id="sync_12271007_custom_targeting_success",
+                    sync_type="custom_targeting",
+                    status="completed",
+                    started_at=NOW - timedelta(minutes=5),
+                    completed_at=NOW - timedelta(minutes=1),
+                ),
+            ],
+            sync_type="custom_targeting",
+        )
+
+        assert health.status == "success"
+        assert health.severity == "ok"
+        assert health.issue is None
+        assert health.related_sync_run_id == "sync_12271007_custom_targeting_success"
 
 
 class TestHealthChangedPayload:

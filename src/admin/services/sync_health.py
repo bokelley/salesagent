@@ -269,11 +269,22 @@ def _latest_run(runs: Sequence[SyncRunSnapshot]) -> SyncRunSnapshot | None:
     latest_terminal = max(terminal_runs, key=_terminal_run_recency_key) if terminal_runs else None
     latest_running = max(running_runs, key=_started_run_recency_key) if running_runs else None
 
-    if latest_running is not None:
+    if latest_running is not None and _is_running_newer_than_terminal(latest_running, latest_terminal):
         return latest_running
     if latest_terminal is not None:
         return latest_terminal
     return max(runs, key=_started_run_recency_key)
+
+
+def _is_running_newer_than_terminal(
+    running: SyncRunSnapshot,
+    terminal: SyncRunSnapshot | None,
+) -> bool:
+    if terminal is None:
+        return True
+    terminal_at = terminal.completed_at or terminal.started_at or datetime.min.replace(tzinfo=UTC)
+    running_started_at = running.started_at or datetime.min.replace(tzinfo=UTC)
+    return running_started_at > terminal_at
 
 
 def _terminal_run_recency_key(run: SyncRunSnapshot) -> tuple[datetime, int, str]:

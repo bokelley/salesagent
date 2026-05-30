@@ -1576,10 +1576,18 @@ class TestTenantStatus:
         )
         invalidate_status_cache(tenant_id)
 
-        running_status_resp = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}/status", headers=auth_headers)
-        assert running_status_resp.status_code == 200, running_status_resp.get_data(as_text=True)
-        running_custom_targeting = running_status_resp.get_json()["syncs"]["custom_targeting"]
-        assert running_custom_targeting["status"] == "running"
+        recovered_status_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/status", headers=auth_headers
+        )
+        assert recovered_status_resp.status_code == 200, recovered_status_resp.get_data(as_text=True)
+        recovered_body = recovered_status_resp.get_json()
+        recovered_custom_targeting = recovered_body["syncs"]["custom_targeting"]
+        assert recovered_custom_targeting["status"] == "success"
+        assert recovered_custom_targeting["severity"] == "ok"
+        assert recovered_custom_targeting["issue"] is None
+        assert "Custom targeting sync retrying automatically" not in {
+            item["name"] for item in recovered_body["setup_tasks"]["items"]
+        }
 
     def test_status_reflects_active_media_buy(self, client, auth_headers, managed_tenant, bound_factories):
         """An active media buy bumps ``media_buys.active_count``."""
