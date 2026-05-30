@@ -35,7 +35,7 @@ def _wire_envelope(prefix: str) -> dict:
 @pytest.fixture
 def anonymous_wholesale_default_catalog(factory_session):
     """Seed localhost's anonymous default-tenant catalog before the MCP server starts."""
-    from tests.factories import PricingOptionFactory, ProductFactory, PropertyTagFactory, TenantFactory
+    from tests.factories import InventoryProfileFactory, PropertyTagFactory, TenantFactory
 
     tenant = TenantFactory(
         tenant_id="default",
@@ -44,20 +44,22 @@ def anonymous_wholesale_default_catalog(factory_session):
         public_agent_url="https://default.example.com/agent",
     )
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-    product = ProductFactory(
+    bundle = InventoryProfileFactory(
         tenant=tenant,
-        product_id="anonymous_wholesale_product",
-        delivery_type="non_guaranteed",
-    )
-    PricingOptionFactory(
-        product=product,
-        pricing_model="cpm",
-        rate=None,
-        is_fixed=False,
-        price_guidance={"floor": 1.0, "p50": 5.0, "p75": 8.0},
+        tenant_id=tenant.tenant_id,
+        profile_id="anonymous_wholesale_product",
+        name="Anonymous Wholesale Product",
+        pricing_availability={
+            "pricing_guidance_by_model": {
+                "cpm": {
+                    "p50": 5.0,
+                    "p75": 8.0,
+                }
+            }
+        },
     )
     factory_session.commit()
-    return product.product_id
+    return bundle.profile_id
 
 
 @pytest.mark.integration
