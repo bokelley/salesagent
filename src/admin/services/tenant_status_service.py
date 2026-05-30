@@ -369,13 +369,27 @@ def _webhooks_block() -> StatusWebhooksBlock | None:
 #   public_agent_url → platform on managed, publisher on open-instance
 #   gam_advertiser_create_permission → platform on managed because the
 #     proof action is a management API write, not a publisher UI action
-#   sso_configuration → hidden on managed (multi-tenant runtime already gates it
-#     out), publisher on open-instance
+#   sso_configuration → hidden on managed (embedded identity comes from
+#     X-Identity-* headers), publisher on open-instance
+#   tenant_cname → hidden on managed (the platform supplies public_agent_url /
+#     iframe routing), publisher on open-instance
+#   multiple_currencies → hidden on managed (adapter/provisioning-derived, not
+#     a publisher setup action), publisher on open-instance
+#   budget_controls → hidden on managed (dynamic price/availability guidance is
+#     the embedded readiness signal; static per-currency caps are not setup)
 #   authorized_properties (legacy) → hidden everywhere (deprecated)
 #   everything else → publisher, unless EMBEDDED_CAPABILITIES has handed the
 #     underlying workflow to the storefront (see _TASK_CAPABILITY below)
 _PLATFORM_KEYS_WHEN_MANAGED = frozenset(("public_agent_url", "gam_advertiser_create_permission"))
 _HIDDEN_KEYS = frozenset(("authorized_properties",))
+_HIDDEN_KEYS_WHEN_MANAGED = frozenset(
+    (
+        "sso_configuration",
+        "tenant_cname",
+        "multiple_currencies",
+        "budget_controls",
+    )
+)
 
 # Setup-task keys whose completion is gated on a storefront-ownable capability.
 # When the storefront owns the capability (EMBEDDED_CAPABILITIES[<cap>] ==
@@ -421,6 +435,8 @@ _CONFIGURE_PATHS: dict[str, str] = {
 def _scope_for_task(key: str, *, is_managed: bool) -> str | None:
     """Return ``platform``/``publisher`` for a task key, or None to hide."""
     if key in _HIDDEN_KEYS:
+        return None
+    if is_managed and key in _HIDDEN_KEYS_WHEN_MANAGED:
         return None
     if key in _PLATFORM_KEYS_WHEN_MANAGED:
         return "platform" if is_managed else "publisher"

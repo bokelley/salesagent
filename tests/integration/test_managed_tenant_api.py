@@ -1703,6 +1703,25 @@ class TestStatusSetupTasks:
         # Only publisher-scope items should appear on an embedded tenant.
         assert scopes <= {"publisher"}, f"Embedded tenant /status surfaced platform items: {scopes}"
 
+    def test_embedded_setup_tasks_omit_non_actionable_managed_items(self, client, auth_headers, managed_tenant):
+        """Embedded tenants should not receive publisher-action tasks for
+        platform-owned/moot setup surfaces.
+
+        These are still valid setup checklist concepts for open instances,
+        but in embedded mode identity comes from upstream headers, public
+        routing is platform-owned, and currency/budget readiness is derived
+        from adapter provisioning and dynamic guidance rather than seller
+        form edits.
+        """
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        assert resp.status_code == 200
+
+        item_ids = {item["id"] for item in resp.get_json()["setup_tasks"]["items"]}
+        assert "sso_configuration" not in item_ids
+        assert "tenant_cname" not in item_ids
+        assert "multiple_currencies" not in item_ids
+        assert "budget_controls" not in item_ids
+
     def test_default_advertiser_blocker_when_unset(self, client, auth_headers, managed_tenant):
         """Tenant without default_gam_advertiser_id or routing rules sees a blocker."""
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)

@@ -94,6 +94,71 @@ def _checklist_with_capability_tasks() -> dict:
     }
 
 
+def _checklist_with_embedded_irrelevant_tasks() -> dict:
+    """Minimal setup payload for tasks that are valid on open instances but
+    should not be sent to embedded publishers."""
+    return {
+        "progress_percent": 0,
+        "completed_count": 0,
+        "total_count": 6,
+        "ready_for_orders": True,
+        "critical": [
+            {
+                "key": "currency_limits",
+                "name": "Currency Configuration",
+                "description": "At least one currency must be configured",
+                "is_complete": True,
+                "action_url": "/tenant/t_managed/settings#business-rules",
+                "details": "1 currencies configured",
+            },
+        ],
+        "recommended": [
+            {
+                "key": "naming_conventions",
+                "name": "Naming Conventions",
+                "description": "Customize order and line item naming templates",
+                "is_complete": False,
+                "action_url": "/tenant/t_managed/settings#business-rules",
+                "details": "Using default naming templates",
+            },
+            {
+                "key": "budget_controls",
+                "name": "Budget Controls",
+                "description": "Set maximum daily budget limits for safety",
+                "is_complete": False,
+                "action_url": "/tenant/t_managed/settings#business-rules",
+                "details": "Budget limits can be set per currency",
+            },
+            {
+                "key": "tenant_cname",
+                "name": "Custom Domain (CNAME)",
+                "description": "Configure custom domain for your sales agent",
+                "is_complete": False,
+                "action_url": "/tenant/t_managed/settings#account",
+                "details": "Using default subdomain",
+            },
+        ],
+        "optional": [
+            {
+                "key": "sso_configuration",
+                "name": "Single Sign-On (SSO)",
+                "description": "Configure tenant-specific SSO authentication",
+                "is_complete": False,
+                "action_url": "/tenant/t_managed/users",
+                "details": "SSO not configured",
+            },
+            {
+                "key": "multiple_currencies",
+                "name": "Multiple Currencies",
+                "description": "Support international advertisers with EUR, GBP, etc.",
+                "is_complete": False,
+                "action_url": "/tenant/t_managed/settings#business-rules",
+                "details": "Only 1 currency configured",
+            },
+        ],
+    }
+
+
 def _make_session(tenant):
     """Stand-in for the sqlalchemy Session shape ``_setup_tasks_block`` consumes:
     ``session.scalars(stmt).first()`` returning a Tenant row."""
@@ -245,4 +310,44 @@ class TestOpenInstanceIgnoresCapabilities:
         # Every non-hidden task surfaces to the open-instance publisher.
         assert {"slack_integration", "creative_approval_guidelines", "gemini_api_key", "signals_agent"} <= ids
         # All items carry publisher scope on open instances.
+        assert all(item.scope == "publisher" for item in block.items)
+
+
+class TestManagedOnlyTasksAreHidden:
+    """Embedded mode suppresses tasks that the publisher cannot act on."""
+
+    def test_embedded_irrelevant_tasks_are_not_sent_to_managed_publishers(self, monkeypatch, fake_session):
+        monkeypatch.setenv("MANAGED_INSTANCE", "true")
+
+        with patch(
+            "src.services.setup_checklist_service.SetupChecklistService.get_setup_status",
+            return_value=_checklist_with_embedded_irrelevant_tasks(),
+        ):
+            block = _setup_tasks_block(fake_session, "t_managed")
+
+        ids = _ids(block)
+        assert "budget_controls" not in ids
+        assert "tenant_cname" not in ids
+        assert "sso_configuration" not in ids
+        assert "multiple_currencies" not in ids
+        # Still publisher-actionable in embedded mode.
+        assert ids == {"currency_limits", "naming_conventions"}
+        assert block.warning_count == 1
+
+    def test_open_instance_keeps_tasks_that_are_only_hidden_for_managed(self, monkeypatch, open_session):
+        monkeypatch.delenv("MANAGED_INSTANCE", raising=False)
+
+        with patch(
+            "src.services.setup_checklist_service.SetupChecklistService.get_setup_status",
+            return_value=_checklist_with_embedded_irrelevant_tasks(),
+        ):
+            block = _setup_tasks_block(open_session, "t_open")
+
+        ids = _ids(block)
+        assert {
+            "budget_controls",
+            "tenant_cname",
+            "sso_configuration",
+            "multiple_currencies",
+        } <= ids
         assert all(item.scope == "publisher" for item in block.items)
