@@ -459,8 +459,10 @@ def test_inventory_profile_create_rejects_unsupported_publisher_property_fields(
     assert response.get_json()["error"] == "invalid_request"
 
 
-def test_wholesale_discovery_retains_profile_backed_product_pricing(admin_client, factory_session, monkeypatch):
-    """Wholesale discovery retains Composition API product pricing.
+def test_wholesale_discovery_returns_inventory_bundle_not_profile_backed_product(
+    admin_client, factory_session, monkeypatch
+):
+    """Wholesale discovery projects inventory bundles instead of Product rows.
 
     Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-05A
     """
@@ -492,16 +494,15 @@ def test_wholesale_discovery_retains_profile_backed_product_pricing(admin_client
         )
     )
 
-    assert [product.product_id for product in products.products] == [product_id]
+    assert [product.product_id for product in products.products] == [profile_id]
     discovered_product = products.products[0].model_dump(mode="json")
     assert len(discovered_product["pricing_options"]) == 1
     pricing = discovered_product["pricing_options"][0]
     assert pricing["pricing_model"] == "cpm"
     assert pricing["currency"] == "USD"
     assert pricing["pricing_option_id"] == "cpm_usd_auction"
-    assert pricing["floor_price"] == 3.0
-    assert pricing["price_guidance"]["p50"] == 4.0
-    assert pricing["price_guidance"]["p75"] == 5.0
+    assert pricing["floor_price"] == 0.0
+    assert pricing.get("price_guidance") is None
     LibraryGetProductsResponse.model_validate(products.model_dump(mode="json"))
 
 

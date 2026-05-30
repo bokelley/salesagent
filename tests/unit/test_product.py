@@ -128,7 +128,7 @@ class TestProductMainFlow:
         with ProductEnv() as env:
             env.add_product(product_id="wholesale_product", name="Wholesale Product")
 
-            response = await env.call_impl(brief=None, buying_mode="wholesale")
+            response = await env.call_impl(brief="display", buying_mode="brief")
             payload = response.model_dump(mode="json", exclude_none=True)
 
             product_payload = payload["products"][0]

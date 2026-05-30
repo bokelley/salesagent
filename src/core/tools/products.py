@@ -414,19 +414,6 @@ async def _get_products_impl(
 
     buying_mode = getattr(req.buying_mode, "value", req.buying_mode)
     with ProductUoW(tenant["tenant_id"]) as uow:
-        assert uow.products is not None
-        from src.core.inventory_profile_projection import is_materialized_wholesale_product
-
-        db_products = [
-            product
-            for product in uow.products.list_all()
-            if _is_buyer_visible_product_model(product) and not is_materialized_wholesale_product(product)
-        ]
-
-        # Convert database Product models to ResolvedProduct (wire-shape +
-        # internal fields). Filter pipeline below operates on these; at the
-        # response boundary we project ``[r.wire for r in eligible]``.
-        products = convert_product_models_to_resolved(db_products, tenant_adapter_type, "static")
         if buying_mode == "wholesale":
             from src.core.inventory_profile_projection import (
                 default_wholesale_currency,
@@ -436,12 +423,6 @@ async def _get_products_impl(
             assert uow.currency_limits is not None
             assert uow.inventory_profiles is not None
             assert uow.adapter_configs is not None
-            existing_product_ids = {product.product_id for product in db_products}
-            inventory_profiles = [
-                profile
-                for profile in uow.inventory_profiles.list_all()
-                if profile.profile_id not in existing_product_ids
-            ]
             adapter_config = uow.adapter_configs.find_by_tenant()
             preferred_currency = (
                 adapter_config.gam_network_currency
@@ -450,16 +431,28 @@ async def _get_products_impl(
                 and adapter_config.gam_network_currency
                 else None
             )
-            products.extend(
-                inventory_profiles_to_resolved_products(
-                    inventory_profiles,
-                    adapter_type=tenant_adapter_type,
-                    default_currency=default_wholesale_currency(
-                        uow.currency_limits.list_all(),
-                        preferred=preferred_currency,
-                    ),
-                )
+            products = inventory_profiles_to_resolved_products(
+                uow.inventory_profiles.list_all(),
+                adapter_type=tenant_adapter_type,
+                default_currency=default_wholesale_currency(
+                    uow.currency_limits.list_all(),
+                    preferred=preferred_currency,
+                ),
             )
+        else:
+            assert uow.products is not None
+            from src.core.inventory_profile_projection import is_materialized_wholesale_product
+
+            db_products = [
+                product
+                for product in uow.products.list_all()
+                if _is_buyer_visible_product_model(product) and not is_materialized_wholesale_product(product)
+            ]
+
+            # Convert database Product models to ResolvedProduct (wire-shape +
+            # internal fields). Filter pipeline below operates on these; at the
+            # response boundary we project ``[r.wire for r in eligible]``.
+            products = convert_product_models_to_resolved(db_products, tenant_adapter_type, "static")
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
 
@@ -523,20 +516,21 @@ async def _get_products_impl(
     try:
         from src.services.dynamic_products import generate_variants_for_brief
 
-        # Get our agent URL for deployment specification
-        our_agent_url = tenant.get("virtual_host")  # Our sales agent URL (e.g., https://sales.example.com)
+        if buying_mode != "wholesale":
+            # Get our agent URL for deployment specification
+            our_agent_url = tenant.get("virtual_host")  # Our sales agent URL (e.g., https://sales.example.com)
 
-        dynamic_variants = await generate_variants_for_brief(tenant["tenant_id"], brief_text, our_agent_url)
-        if dynamic_variants:
-            dynamic_variants = [product for product in dynamic_variants if _is_buyer_visible_product_model(product)]
-            # Convert Product models to Product schemas for response
+            dynamic_variants = await generate_variants_for_brief(tenant["tenant_id"], brief_text, our_agent_url)
+            if dynamic_variants:
+                dynamic_variants = [product for product in dynamic_variants if _is_buyer_visible_product_model(product)]
+                # Convert Product models to Product schemas for response
 
-            # Convert database models to ResolvedProduct (matches the static-product
-            # path above so the filter pipeline sees a uniform list type).
-            converted_dynamic = convert_product_models_to_resolved(dynamic_variants, tenant_adapter_type, "dynamic")
-            products.extend(converted_dynamic)
+                # Convert database models to ResolvedProduct (matches the static-product
+                # path above so the filter pipeline sees a uniform list type).
+                converted_dynamic = convert_product_models_to_resolved(dynamic_variants, tenant_adapter_type, "dynamic")
+                products.extend(converted_dynamic)
 
-            logger.info("[GET_PRODUCTS] Added %s dynamic product variants", len(converted_dynamic))
+                logger.info("[GET_PRODUCTS] Added %s dynamic product variants", len(converted_dynamic))
     except (ImportError, RuntimeError, OSError) as e:
         logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 

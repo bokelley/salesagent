@@ -946,14 +946,43 @@ class TestBuyingModeValidation:
         product = ProductFactory(tenant=tenant, product_id=product_id)
         PricingOptionFactory(product=product)
 
+    def _seed_inventory_bundle(self, tenant_id: str, profile_id: str):
+        tenant = self._seed_tenant_principal(tenant_id)
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            profile_id=profile_id,
+            name=f"{profile_id} Bundle",
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            publisher_properties=[
+                {
+                    "publisher_domain": f"{tenant_id}.example.com",
+                    "property_ids": ["homepage"],
+                    "selection_type": "by_id",
+                }
+            ],
+        )
+        return tenant
+
     @pytest.mark.asyncio
-    async def test_wholesale_without_search_criteria_returns_catalog(self, integration_db):
-        """Wholesale mode can request raw inventory without brief, brand, or filters."""
+    async def test_wholesale_without_search_criteria_returns_inventory_bundles(self, integration_db):
+        """Wholesale mode returns inventory bundles without brief, brand, or filters."""
         with ProductEnv(tenant_id="whole-empty", principal_id="p1") as env:
-            self._seed_catalog_product("whole-empty", "p_wholesale")
+            self._seed_inventory_bundle("whole-empty", "p_wholesale")
             response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
 
         assert [p.product_id for p in response.products] == ["p_wholesale"]
+
+    @pytest.mark.asyncio
+    async def test_wholesale_excludes_product_rows_when_bundle_exists(self, integration_db):
+        """Wholesale mode is backed by inventory bundles, not Product rows."""
+        with ProductEnv(tenant_id="whole-products-hidden", principal_id="p1") as env:
+            tenant = self._seed_inventory_bundle("whole-products-hidden", "homepage_bundle")
+            product = ProductFactory(tenant=tenant, product_id="legacy_product_row")
+            PricingOptionFactory(product=product)
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
+
+        assert [p.product_id for p in response.products] == ["homepage_bundle"]
 
     @pytest.mark.asyncio
     async def test_wholesale_projects_inventory_bundle_as_product_without_product_row(
@@ -1053,10 +1082,10 @@ class TestBuyingModeValidation:
         assert pricing.currency == "USD"
 
     @pytest.mark.asyncio
-    async def test_wholesale_with_empty_string_brief_returns_catalog(self, integration_db):
+    async def test_wholesale_with_empty_string_brief_returns_inventory_bundles(self, integration_db):
         """An empty brief does not turn wholesale mode into a narrowed search."""
         with ProductEnv(tenant_id="whole-empty-brief", principal_id="p1") as env:
-            self._seed_catalog_product("whole-empty-brief", "p_wholesale_empty")
+            self._seed_inventory_bundle("whole-empty-brief", "p_wholesale_empty")
             response = await self._call_get_products(env, buying_mode="wholesale", brief="", brand=None, filters=None)
 
         assert [p.product_id for p in response.products] == ["p_wholesale_empty"]
@@ -1102,19 +1131,19 @@ class TestBuyingModeValidation:
         assert [p.product_id for p in response.products] == ["p_brief"]
 
     @pytest.mark.asyncio
-    async def test_wholesale_with_brand_returns_catalog(self, integration_db):
+    async def test_wholesale_with_brand_returns_inventory_bundles(self, integration_db):
         """Wholesale mode still accepts a brand reference."""
         with ProductEnv(tenant_id="brand-ok", principal_id="p1") as env:
-            self._seed_catalog_product("brand-ok", "p_brand")
+            self._seed_inventory_bundle("brand-ok", "p_brand")
             response = await env.call_impl(buying_mode="wholesale", brief=None, brand={"domain": "nike.com"})
 
         assert [p.product_id for p in response.products] == ["p_brand"]
 
     @pytest.mark.asyncio
-    async def test_wholesale_with_filters_returns_catalog(self, integration_db):
+    async def test_wholesale_with_filters_returns_inventory_bundles(self, integration_db):
         """Wholesale mode still accepts filters."""
         with ProductEnv(tenant_id="filt-ok", principal_id="p1") as env:
-            self._seed_catalog_product("filt-ok", "p_filters")
+            self._seed_inventory_bundle("filt-ok", "p_filters")
             response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters={})
 
         assert [p.product_id for p in response.products] == ["p_filters"]
