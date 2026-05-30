@@ -380,6 +380,7 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         "forecast",
         "allowed_actions",
         "format_options",
+        "video_placement_types",
         "vendor_metric_optimization",
     )
     for field_name in _OPTIONAL_PASSTHROUGH:

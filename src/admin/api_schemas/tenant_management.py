@@ -912,6 +912,7 @@ class WholesaleProductBase(BaseModel):
     optimization_capabilities: dict[str, Any] = Field(default_factory=dict)
     allowed_actions: list[str] | None = None
     format_options: list[dict[str, Any]] | None = None
+    video_placement_types: list[str] | None = None
     vendor_metric_optimization: dict[str, Any] | None = None
     allowed_principal_ids: list[str] | None = None
 
