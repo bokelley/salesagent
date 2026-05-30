@@ -1,7 +1,7 @@
 """Add inventory profile forecast and pricing analytics.
 
-Revision ID: h8i9j0k1l2m3
-Revises: g7h8i9j0k1l2
+Revision ID: d75c3a94f2b8
+Revises: h8i9j0k1l2m3
 Create Date: 2026-05-30 00:00:00.000000
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "h8i9j0k1l2m3"
-down_revision: str | None = "g7h8i9j0k1l2"
+revision: str = "d75c3a94f2b8"
+down_revision: str | None = "h8i9j0k1l2m3"
 branch_labels: str | None = None
 depends_on: str | None = None
 
