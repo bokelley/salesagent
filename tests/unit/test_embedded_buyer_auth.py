@@ -8,13 +8,27 @@ protocol endpoints (`/mcp/`, `/a2a`) authenticate via ``X-Principal-Id`` +
 Contract gates:
   * ``MANAGED_INSTANCE=true`` deployment env (or returns None)
   * ``tenant.is_embedded=True`` (or returns None)
-  * Either an explicit valid ``X-Principal-Id``, or exactly one principal
-    in the tenant (the backfill default).
+  * Required ``X-Identity-*`` headers, with the org id matched when the
+    tenant has an embedding entity id configured
+  * An explicit valid ``X-Principal-Id`` in the tenant
 """
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def _identity_headers(*, org_id="org_a"):
+    return {
+        "X-Identity-Email": "buyer@example.com",
+        "X-Identity-Org-Id": org_id,
+        "X-Identity-Role": "admin",
+        "X-Identity-Source": "storefront",
+    }
+
+
+def _embedded_tenant():
+    return {"tenant_id": "tenant_a", "is_embedded": True, "external_org_id": "org_a"}
 
 
 def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=True):
@@ -57,6 +71,34 @@ def _call(headers, tenant_context, principals_in_tenant, *, require_valid_token=
 
 
 class TestEmbeddedBuyerIdentity:
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on"])
+    def test_managed_instance_boolean_parsing_matches_core(self, monkeypatch, value):
+        from src.admin.utils.embedded_mode_auth import is_managed_instance
+
+        monkeypatch.setenv("MANAGED_INSTANCE", value)
+        assert is_managed_instance() is True
+
+    def test_serialized_tenant_context_contains_external_org_id(self):
+        from src.core.tenant_context import TenantContext
+        from src.core.utils.tenant_utils import serialize_tenant_to_dict
+
+        tenant = MagicMock()
+        tenant.tenant_id = "tenant_a"
+        tenant.name = "Tenant A"
+        tenant.subdomain = "tenant-a"
+        tenant.is_embedded = True
+        tenant.external_org_id = "org_a"
+
+        serialized = serialize_tenant_to_dict(tenant)
+
+        assert serialized["external_org_id"] == "org_a"
+        assert (
+            TenantContext.from_dict(
+                {"tenant_id": serialized["tenant_id"], "external_org_id": serialized["external_org_id"]}
+            ).external_org_id
+            == "org_a"
+        )
+
     def test_returns_none_when_managed_instance_disabled(self):
         from src.core import auth as auth_module
 
@@ -86,8 +128,16 @@ class TestEmbeddedBuyerIdentity:
 
     def test_resolves_explicit_principal_when_match_exists(self):
         result = _call(
-            headers={"X-Principal-Id": "principal_x"},
-            tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
+            headers={"X-Principal-Id": "principal_x", **_identity_headers()},
+            tenant_context=_embedded_tenant(),
+            principals_in_tenant=[{"principal_id": "principal_x"}],
+        )
+        assert result == "principal_x"
+
+    def test_resolves_principal_when_embedding_entity_id_not_configured(self):
+        result = _call(
+            headers={"X-Principal-Id": "principal_x", **_identity_headers(org_id="storefront_a")},
+            tenant_context={"tenant_id": "tenant_a", "is_embedded": True, "external_org_id": None},
             principals_in_tenant=[{"principal_id": "principal_x"}],
         )
         assert result == "principal_x"
@@ -97,47 +147,56 @@ class TestEmbeddedBuyerIdentity:
 
         with pytest.raises(AdCPAuthenticationError):
             _call(
-                headers={"X-Principal-Id": "principal_other"},
-                tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
+                headers={"X-Principal-Id": "principal_other", **_identity_headers()},
+                tenant_context=_embedded_tenant(),
                 principals_in_tenant=[{"principal_id": "principal_x"}],
                 require_valid_token=True,
             )
 
     def test_explicit_principal_mismatch_returns_none_when_not_require_valid(self):
         result = _call(
-            headers={"X-Principal-Id": "principal_other"},
-            tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
+            headers={"X-Principal-Id": "principal_other", **_identity_headers()},
+            tenant_context=_embedded_tenant(),
             principals_in_tenant=[{"principal_id": "principal_x"}],
             require_valid_token=False,
         )
         assert result is None
 
-    def test_defaults_to_lone_principal_when_no_header(self):
-        # Backfill path: existing embedded tenants have exactly one principal.
-        # No X-Principal-Id needed — the lone principal is the default.
+    def test_missing_principal_header_raises_when_require_valid(self):
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with pytest.raises(AdCPAuthenticationError):
+            _call(
+                headers=_identity_headers(),
+                tenant_context=_embedded_tenant(),
+                principals_in_tenant=[{"principal_id": "principal_lone"}],
+            )
+
+    def test_missing_principal_header_returns_none_when_not_require_valid(self):
         result = _call(
-            headers={},
-            tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
+            headers=_identity_headers(),
+            tenant_context=_embedded_tenant(),
             principals_in_tenant=[{"principal_id": "principal_lone"}],
-        )
-        assert result == "principal_lone"
-
-    def test_returns_none_when_multiple_principals_and_no_header(self):
-        # Ambiguous — refuse to guess. Caller must send X-Principal-Id.
-        result = _call(
-            headers={},
-            tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
-            principals_in_tenant=[
-                {"principal_id": "principal_a"},
-                {"principal_id": "principal_b"},
-            ],
+            require_valid_token=False,
         )
         assert result is None
 
-    def test_returns_none_when_zero_principals_and_no_header(self):
-        result = _call(
-            headers={},
-            tenant_context={"tenant_id": "tenant_a", "is_embedded": True},
-            principals_in_tenant=[],
-        )
-        assert result is None
+    def test_missing_identity_headers_raise_when_require_valid(self):
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with pytest.raises(AdCPAuthenticationError):
+            _call(
+                headers={"X-Principal-Id": "principal_x"},
+                tenant_context=_embedded_tenant(),
+                principals_in_tenant=[{"principal_id": "principal_x"}],
+            )
+
+    def test_identity_org_mismatch_raises_when_require_valid(self):
+        from src.core.exceptions import AdCPAuthenticationError
+
+        with pytest.raises(AdCPAuthenticationError):
+            _call(
+                headers={"X-Principal-Id": "principal_x", **_identity_headers(org_id="org_other")},
+                tenant_context=_embedded_tenant(),
+                principals_in_tenant=[{"principal_id": "principal_x"}],
+            )

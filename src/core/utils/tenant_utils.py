@@ -65,4 +65,5 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         # buyer-protocol calls via X-Identity-* + X-Principal-Id from a
         # trusted network, not via per-principal access tokens.
         "is_embedded": tenant.is_embedded,
+        "external_org_id": tenant.external_org_id,
     }

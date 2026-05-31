@@ -105,6 +105,41 @@ def test_buyer_protocol_origin_guard_wired_before_signing(middleware_classes):
     assert guard_index < signing_index
 
 
+def test_managed_instance_skips_host_based_subdomain_routing(monkeypatch):
+    """Embedded buyer protocol traffic is tenant-scoped by trusted headers."""
+    from core import main as core_main
+
+    monkeypatch.setenv("MANAGED_INSTANCE", "true")
+    with (
+        patch.object(core_main, "build_router", return_value=MagicMock()),
+        patch("src.admin.app.create_app", return_value=MagicMock()),
+        patch("core.main.build_subdomain_router", return_value=MagicMock()) as mock_build_subdomain_router,
+    ):
+        kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
+
+    middleware_names = [entry[0].__name__ for entry in kwargs["asgi_middleware"]]
+    assert "SubdomainTenantMiddleware" not in middleware_names
+    assert kwargs["enable_dns_rebinding_protection"] is True
+    mock_build_subdomain_router.assert_not_called()
+
+
+def test_managed_public_url_ignores_forwarded_host(monkeypatch):
+    """Managed instances do not reflect arbitrary X-Forwarded-Host values."""
+    from core import main as core_main
+
+    class Request:
+        headers = {
+            "host": "localhost:3001",
+            "x-forwarded-host": "attacker.example",
+            "x-forwarded-proto": "https",
+        }
+
+    monkeypatch.setenv("MANAGED_INSTANCE", "true")
+    monkeypatch.delenv("PUBLIC_URL", raising=False)
+
+    assert core_main._resolve_public_url(Request()) == "http://localhost:3001/"
+
+
 def test_pre_validation_hooks_wired():
     """Heuristic backfills for pre-v3 / pre-4.4 buyers must stay wired.
 

@@ -140,6 +140,35 @@ class TestResolveIdentity:
         assert identity.tenant_id == "default"
         assert identity.is_authenticated is False
 
+    @patch("src.core.auth_utils.get_principal_from_token")
+    @patch("src.core.resolved_identity._resolve_embedded_buyer_identity", return_value="principal_embedded")
+    @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
+    @patch("src.core.resolved_identity.get_tenant_by_subdomain")
+    def test_resolve_embedded_identity_without_bearer(
+        self,
+        mock_get_subdomain,
+        mock_get_vhost,
+        mock_resolve_embedded,
+        mock_get_principal,
+    ):
+        """resolve_identity() accepts trusted embedded identity when no bearer exists."""
+        tenant_context = {"tenant_id": "tenant_embedded", "is_embedded": True}
+        mock_get_subdomain.return_value = tenant_context
+        headers = {"x-adcp-tenant": "tenant_embedded", "X-Principal-Id": "principal_embedded"}
+
+        identity = resolve_identity(
+            headers=headers,
+            auth_token=None,
+            protocol="mcp",
+        )
+
+        assert identity.principal_id == "principal_embedded"
+        assert identity.tenant_id == "tenant_embedded"
+        assert identity.auth_token is None
+        assert identity.is_authenticated is True
+        mock_resolve_embedded.assert_called_once_with(headers, tenant_context, True)
+        mock_get_principal.assert_not_called()
+
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
     def test_resolve_localhost_defaults_to_default_tenant(self, mock_get_subdomain, mock_get_vhost):

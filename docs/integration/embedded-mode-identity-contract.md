@@ -87,11 +87,11 @@ The error response body follows the standard `ApiError` shape:
 Because the contract relies on network trust in the default `network` mode, the salesagent's deployment must:
 
 - Bind the salesagent listener to a private interface only — never `0.0.0.0` on an embedded instance.
-- Allow-list the upstream proxy's source IP/range at the salesagent's listener (`BUYER_PROTOCOL_ALLOWED_CIDRS`, `MANAGEMENT_API_ALLOWED_CIDRS`, `ADMIN_UI_ALLOWED_CIDRS` — see deployment docs).
+- Keep listener access restricted to trusted infrastructure. Where stable source ranges are available, configure source IP/range allow-lists at the salesagent's listener (`BUYER_PROTOCOL_ALLOWED_CIDRS`, `MANAGEMENT_API_ALLOWED_CIDRS`, `ADMIN_UI_ALLOWED_CIDRS` — see deployment docs).
 - Reject any request missing the required `X-Identity-*` headers — fail closed.
 - Audit-log the headers on every request for post-hoc detection.
 
-These are non-optional. The salesagent will fail to start if `MANAGED_INSTANCE=true` and the CIDR env vars are unset.
+The privacy and header-stripping requirements are non-optional. For buyer-protocol traffic, `BUYER_PROTOCOL_ALLOWED_CIDRS` is defense in depth: when unset, the service accepts trusted identity headers from the deployment path and logs a warning so operators can decide whether to tighten the network policy later.
 
 ## Audit log capture
 

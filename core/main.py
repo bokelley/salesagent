@@ -89,6 +89,9 @@ from core.stores.accounts import SalesagentAccountStore
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalRow
 from src.core.database.models import Tenant as TenantRow
+from src.core.embedded_identity_tokens import TOKEN_PREFIX, resolve_embedded_identity_token
+from src.core.env import env_bool
+from src.core.middleware.embedded_buyer_auth_bridge import EmbeddedBuyerAuthBridgeMiddleware
 from src.core.middleware.tracing import TracingMiddleware
 from src.core.signing import SigningVerifyMiddleware
 from src.core.telemetry import shutdown_telemetry
@@ -100,10 +103,7 @@ PreValidationHook = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 def _env_bool(name: str, *, default: bool) -> bool:
     """Parse an environment boolean with an explicit default."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.lower() in {"1", "true", "yes", "on"}
+    return env_bool(name, default=default)
 
 
 def _env_optional_positive_float(name: str, *, default: float) -> float | None:
@@ -334,6 +334,14 @@ def _validate_token(token: str) -> Principal | None:
     session. Per-request cost; matches the framework's expected shape.
     """
     if not token:
+        return None
+    embedded_identity = resolve_embedded_identity_token(token)
+    if embedded_identity is not None:
+        return Principal(
+            caller_identity=embedded_identity.principal_id,
+            tenant_id=embedded_identity.tenant_id,
+        )
+    if token.startswith(TOKEN_PREFIX):
         return None
     with get_db_session() as session:
         row = session.scalars(select(PrincipalRow).filter_by(access_token=token)).first()
@@ -599,14 +607,15 @@ def _resolve_public_url(request: Any) -> str:
         return static.rstrip("/") + "/"
 
     headers = request.headers
-    forwarded_host = headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    managed_instance = _env_bool("MANAGED_INSTANCE", default=False)
+    forwarded_host = "" if managed_instance else headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
     host = forwarded_host or headers.get("host", "").split(",", 1)[0].strip()
 
     if not host:
         port = int(os.environ.get("ADCP_PORT") or os.environ.get("PORT") or 3001)
         return f"http://localhost:{port}/"
 
-    forwarded_proto = headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    forwarded_proto = "" if managed_instance else headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
     hostname = host.split(":", 1)[0]
     is_loopback = hostname in ("localhost", "127.0.0.1", "0.0.0.0") or hostname.endswith(".localhost")
     scheme = forwarded_proto or ("http" if is_loopback else "https")
@@ -794,6 +803,7 @@ def _serve_kwargs(
     asgi_middleware: list = [
         (TracingMiddleware, {}),
         (AdminWSGIMount, {"wsgi_app": admin_wsgi}),
+        (EmbeddedBuyerAuthBridgeMiddleware, {}),
         # DualCredentialAuditMiddleware logs WARNING when an inbound
         # request carries two different bearer tokens (one in
         # ``Authorization: Bearer`` and one in ``x-adcp-auth``). Restores
@@ -808,7 +818,9 @@ def _serve_kwargs(
         # Preserve the Origin half for browser-driven MCP/A2A requests.
         (BuyerProtocolOriginGuardMiddleware, {"allowed_origins": allowed_origins}),
     ]
-    if include_subdomain_routing:
+    managed_instance = _env_bool("MANAGED_INSTANCE", default=False)
+    use_subdomain_routing = include_subdomain_routing and not managed_instance
+    if use_subdomain_routing:
         subdomain_router = build_subdomain_router()
         asgi_middleware.append(
             (SubdomainTenantMiddleware, {"router": subdomain_router}),
@@ -873,7 +885,7 @@ def _serve_kwargs(
         "streaming_responses": os.environ.get("ADCP_STREAMING_RESPONSES", "false").lower() == "true",
         "enable_debug_endpoints": os.environ.get("ADCP_ENABLE_DEBUG_ENDPOINTS", "false").lower() == "true",
         "enable_dns_rebinding_protection": _enable_dns_rebinding_protection(
-            include_subdomain_routing=include_subdomain_routing
+            include_subdomain_routing=use_subdomain_routing
         ),
         # MCP streamable-HTTP session mode (adcp>=5.0). Keep stateful mode
         # as the default because reused sessions avoid repeated initialize +

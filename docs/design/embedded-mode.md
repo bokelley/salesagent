@@ -258,12 +258,12 @@ The super-admin backdoor sees all tenants without restriction — embedded mode 
 
 When `MANAGED_INSTANCE=true`:
 
-- Buyer protocol endpoints (`/mcp/`, `/a2a`) accept traffic only from the configured private network range (configurable via `BUYER_PROTOCOL_ALLOWED_CIDR` or similar). Public traffic gets `403`. **No protocol-level auth** — callers identify the principal/tenant via the same `X-Identity-*`/`X-Principal-Id` header contract used for the UI proxy. Network is the trust boundary.
+- Buyer protocol endpoints (`/mcp/`, `/a2a`) accept embedded traffic from the host product's buyer agent. Callers identify the buyer agent and tenant via `X-Principal-Id` plus the same `X-Identity-*` header contract used for the UI proxy. `BUYER_PROTOCOL_ALLOWED_CIDRS` may be set to add a direct source-IP allow-list; when it is unset, the deployment relies on the host proxy/firewall to keep the salesagent private and the service logs a warning.
 - Tenant Management API (`/api/v1/tenant-management`) same network restriction. API key required (the one credential that crosses the boundary on purpose, identifying the host's control plane).
 - Salesagent admin URL same network restriction (super-admin backdoor reachable via VPN or internal hostname only).
 - Reverse-proxied UI traffic from the host product comes through the host's network — also private.
 
-Net result: zero public exposure for the entire salesagent on an embedded instance, and zero per-principal credentials being passed around. Identity flows as headers; trust is established by the network.
+Net result: embedded deployments are expected to keep the salesagent off the public internet, and zero per-principal credentials need to be passed around. Identity flows as headers; trust is established by the host proxy/firewall, with optional CIDR enforcement as defense in depth for buyer-protocol traffic.
 
 **Open-instance behavior is unchanged.** Public MCP/A2A keeps `x-adcp-auth` bearer tokens per principal. The mode is selected by `MANAGED_INSTANCE`; the salesagent's `resolve_identity()` branches on it.
 

@@ -62,6 +62,8 @@ class TenantContext(BaseModel):
     advertising_policy: dict[str, Any] | None = None
     product_ranking_prompt: str | None = None
     creative_pre_approval_gate_enabled: bool = False
+    is_embedded: bool = False
+    external_org_id: str | None = None
 
     # --- Dict-like access for backward compatibility ---
 
@@ -125,6 +127,8 @@ class TenantContext(BaseModel):
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),
             product_ranking_prompt=tenant.product_ranking_prompt,
             creative_pre_approval_gate_enabled=tenant.creative_pre_approval_gate_enabled,
+            is_embedded=tenant.is_embedded,
+            external_org_id=tenant.external_org_id,
         )
 
     @classmethod

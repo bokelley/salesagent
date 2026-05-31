@@ -38,7 +38,6 @@ tenant).
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -51,6 +50,7 @@ from src.admin.middleware.identity_propagation import (
 )
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+from src.core.env import env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def is_managed_instance() -> bool:
     Re-read on every check so tests can flip the env var without process
     restart. Cheap — single env var lookup.
     """
-    return os.environ.get("MANAGED_INSTANCE", "").lower() == "true"
+    return env_bool("MANAGED_INSTANCE", default=False)
 
 
 def _load_tenant(tenant_id: str) -> Tenant | None:

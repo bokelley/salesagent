@@ -134,6 +134,17 @@ def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:
     return tenant_id, tenant_context
 
 
+def _resolve_embedded_buyer_identity(
+    headers: dict,
+    tenant_context: dict | None,
+    require_valid_token: bool,
+) -> str | None:
+    """Resolve trusted embedded buyer identity when no bearer token exists."""
+    from src.core.auth import _try_resolve_embedded_buyer_identity
+
+    return _try_resolve_embedded_buyer_identity(headers, tenant_context, require_valid_token)
+
+
 def resolve_identity(
     headers: dict,
     auth_token: str | None = None,
@@ -191,6 +202,8 @@ def resolve_identity(
             # Tenant discovered from token lookup (no headers matched)
             tenant_context = token_tenant
             tenant_id = token_tenant.get("tenant_id", tenant_id)
+    else:
+        principal_id = _resolve_embedded_buyer_identity(headers, tenant_context, require_valid_token)
 
     # Wrap raw dict in TenantContext if possible (both paths produce typed model)
     tenant_model: Any = tenant_context
