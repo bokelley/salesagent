@@ -808,16 +808,12 @@ class FormatIdRef(BaseModel):
     id: str = Field(..., min_length=1, max_length=255)
 
 
-class WholesalePricingOption(BaseModel):
-    """Deprecated authoring input for backward-compatible requests.
-
-    Wholesale-product pricing metadata is system-owned. Request values are
-    accepted so older clients do not fail schema validation, but authoring
-    routes ignore them and return the Sales Agent projection instead.
-    """
+class WholesalePricingOptionResponse(BaseModel):
+    """One pricing option returned to embedder clients."""
 
     model_config = _config()
 
+    pricing_option_id: str = Field(..., min_length=1, max_length=128)
     pricing_model: str = Field(..., min_length=1, max_length=32)
     currency: str = Field(default="USD", min_length=3, max_length=3)
     is_fixed: bool = True
@@ -825,12 +821,6 @@ class WholesalePricingOption(BaseModel):
     price_guidance: dict[str, Any] | None = None
     parameters: dict[str, Any] | None = None
     min_spend_per_package: Decimal | None = None
-
-
-class WholesalePricingOptionResponse(WholesalePricingOption):
-    """One pricing option returned to embedder clients."""
-
-    pricing_option_id: str = Field(..., min_length=1, max_length=128)
 
 
 class WholesaleSlotRequirement(BaseModel):
@@ -911,13 +901,6 @@ class WholesaleProductBase(BaseModel):
     status: WholesaleProductStatus = "active"
     delivery_type: str = Field(default="non_guaranteed", min_length=1, max_length=50)
     channels: list[str] | None = None
-    forecast: dict[str, Any] | None = Field(
-        default=None,
-        description=(
-            "System-owned forecast metadata. Request values are accepted for backward compatibility but ignored "
-            "by wholesale-product authoring routes; response values are populated by Sales Agent syncs when available."
-        ),
-    )
     inventory: WholesaleInventory
     targeting_capabilities: dict[str, Any] = Field(default_factory=dict)
     optimization_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -929,21 +912,9 @@ class WholesaleProductBase(BaseModel):
 
 
 class WholesaleProductRequest(WholesaleProductBase):
-    """Create/update body for wholesale-product authoring.
-
-    ``forecast`` and ``pricing_options`` remain accepted for backward
-    compatibility but are ignored. Runtime wholesale forecast/pricing metadata
-    is system-owned and projected from inventory-bundle analytics.
-    """
+    """Create/update body for wholesale-product authoring."""
 
     delivery_type: Literal["non_guaranteed"] = "non_guaranteed"
-    pricing_options: list[WholesalePricingOption] = Field(
-        default_factory=list,
-        description=(
-            "Deprecated compatibility field. Values are ignored on wholesale-product authoring; runtime pricing "
-            "is projected from Sales Agent pricing/availability metadata."
-        ),
-    )
 
 
 class WholesaleProductResponse(WholesaleProductBase):
@@ -951,6 +922,10 @@ class WholesaleProductResponse(WholesaleProductBase):
 
     wholesale_product_id: str = Field(..., min_length=1, max_length=100)
     product_id: str = Field(..., min_length=1, max_length=100)
+    forecast: dict[str, Any] | None = Field(
+        default=None,
+        description="System-owned forecast metadata populated by Sales Agent syncs when available.",
+    )
     pricing_options: list[WholesalePricingOptionResponse] = Field(default_factory=list)
     inventory_profile_id: str | None = None
     created_at: datetime | None = None

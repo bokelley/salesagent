@@ -16,11 +16,9 @@ buyer-facing `Product` objects are projected at protocol time. Brief-mode
 
 Wholesale forecast and pricing metadata are derived by the Sales Agent. The
 authoring request describes the inventory bundle, creative eligibility,
-targeting capabilities, and adapter execution selectors. Request-side
-`forecast` and `pricing_options` are compatibility-only fields: the API accepts
-them so older callers do not fail schema validation, reports validation warnings
-from `wholesale-products:validate` and `wholesale-products:preview`, and ignores
-them when persisting the wholesale product.
+targeting capabilities, and adapter execution selectors. `forecast` and
+`pricing_options` are not authoring inputs for wholesale products; they appear
+only on responses and buyer-facing projections as system-owned metadata.
 
 Buyer-facing wholesale pricing is projected as a non-guaranteed CPM auction.
 Wholesale auction floor is always `0.0` in this projection. When
@@ -414,8 +412,8 @@ Important distinctions:
 - `inventory.execution.format_bindings` is adapter-specific execution detail.
 - `forecast` is response-side system metadata populated by Sales Agent syncs.
   Do not send it as part of product setup.
-- `pricing_options` is accepted only for backward compatibility. Do not use it
-  to author wholesale rate, floor, or guidance values.
+- `pricing_options` is response-side system metadata. Do not send it to author
+  wholesale rate, floor, or guidance values.
 
 ## 9. Validate, Preview, And Create
 
@@ -464,10 +462,6 @@ Validation currently checks:
 
 - Selector IDs exist when the adapter inventory cache has data for that
   selector type.
-- Request `forecast` and `pricing_options` produce warning issues
-  (`forecast_ignored`, `pricing_options_ignored`) from `:validate` and
-  `:preview` because forecast and runtime pricing metadata are system-owned.
-  `POST` and `PUT` ignore those fields when persisting.
 
 The response includes `pricing_options`, but they are the derived wholesale
 projection (`cpm_<currency>_auction`, `is_fixed: false`), not caller-supplied

@@ -104,15 +104,6 @@ def _wholesale_payload(**overrides):
         "status": "active",
         "delivery_type": "non_guaranteed",
         "channels": ["display"],
-        "pricing_options": [
-            {
-                "pricing_model": "cpm",
-                "currency": "USD",
-                "is_fixed": True,
-                "rate": "40.00",
-            }
-        ],
-        "forecast": {"impressions": 1000000},
         "inventory": {
             "publisher_properties": [
                 {
@@ -321,7 +312,7 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
     assert validation.status_code == 200, validation.get_data(as_text=True)
     validation_body = validation.get_json()
     assert validation_body["valid"] is True
-    assert {issue["code"] for issue in validation_body["issues"]} >= {"forecast_ignored", "pricing_options_ignored"}
+    assert all(not issue["code"].endswith("_ignored") for issue in validation_body["issues"])
 
     preview = client.post(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:preview",
@@ -371,14 +362,6 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
     updated_payload = _wholesale_payload(
         name="Homepage Takeover Updated",
         status="draft",
-        pricing_options=[
-            {
-                "pricing_model": "cpm",
-                "currency": "USD",
-                "is_fixed": True,
-                "rate": "45.00",
-            }
-        ],
     )
     updated = client.put(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/homepage_takeover",
@@ -415,6 +398,25 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_wholesale_product_authoring_rejects_system_metadata_inputs(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload(
+        forecast={"impressions": 1000000},
+        pricing_options=[{"pricing_model": "cpm", "currency": "USD", "is_fixed": True, "rate": "40.00"}],
+    )
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=payload,
+    )
+
+    assert created.status_code == 422, created.get_data(as_text=True)
+    body = created.get_json()
+    assert {detail["loc"][-1] for detail in body} >= {"forecast", "pricing_options"}
+    assert {detail["type"] for detail in body} == {"extra_forbidden"}
 
 
 def test_local_example_domain_self_heals_existing_fixture_tenant(
@@ -454,7 +456,6 @@ def test_local_example_domain_self_heals_existing_fixture_tenant(
         "description": "Local fixture product using the sample publisher domain.",
         "status": "active",
         "delivery_type": "non_guaranteed",
-        "pricing_options": [{"pricing_model": "cpm", "currency": "USD", "is_fixed": True, "rate": "5.00"}],
         "inventory": {
             "publisher_properties": [{"publisher_domain": "example.com", "selection_type": "all"}],
             "creative_formats": [

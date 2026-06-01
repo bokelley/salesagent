@@ -127,7 +127,6 @@ from src.admin.api_schemas.tenant_management import (
     WholesaleFormatBinding,
     WholesaleInventory,
     WholesaleInventoryExecution,
-    WholesalePricingOption,
     WholesalePricingOptionResponse,
     WholesaleProductPreviewResponse,
     WholesaleProductRequest,
@@ -1226,27 +1225,6 @@ def _publisher_property_dicts(publisher_properties: list[PublisherPropertySelect
     return dump_publisher_property_selectors(publisher_properties)
 
 
-def _pricing_option_rows(
-    tenant_id: str,
-    product_id: str,
-    pricing_options: list[WholesalePricingOption],
-) -> list[PricingOption]:
-    return [
-        PricingOption(
-            tenant_id=tenant_id,
-            product_id=product_id,
-            pricing_model=option.pricing_model,
-            rate=option.rate,
-            currency=option.currency.upper(),
-            is_fixed=option.is_fixed,
-            price_guidance=option.price_guidance,
-            parameters=option.parameters,
-            min_spend_per_package=option.min_spend_per_package,
-        )
-        for option in pricing_options
-    ]
-
-
 def _execution_inventory_config(execution: WholesaleInventoryExecution) -> dict[str, Any]:
     """Persist execution selectors in legacy GAM keys plus generic selector form."""
     selectors = [selector.model_dump(mode="json") for selector in execution.selectors]
@@ -1455,26 +1433,6 @@ def _validation_issues_for_wholesale_product(
     adapter_type: str,
 ) -> list[WholesaleValidationIssue]:
     issues: list[WholesaleValidationIssue] = []
-    if req.forecast is not None:
-        issues.append(
-            _ignored_system_metadata_issue(
-                field="forecast",
-                message=(
-                    "forecast is system-owned read-side metadata and is ignored on wholesale-product authoring. "
-                    "It is populated by Sales Agent syncs when available."
-                ),
-            )
-        )
-    if req.pricing_options:
-        issues.append(
-            _ignored_system_metadata_issue(
-                field="pricing_options",
-                message=(
-                    "pricing_options is accepted for backward compatibility but ignored on wholesale-product "
-                    "authoring. Runtime pricing is projected from Sales Agent pricing/availability metadata."
-                ),
-            )
-        )
     if not req.inventory.publisher_properties:
         issues.append(
             WholesaleValidationIssue(
@@ -1515,15 +1473,6 @@ def _validation_issues_for_wholesale_product(
                 )
             )
     return issues
-
-
-def _ignored_system_metadata_issue(*, field: str, message: str) -> WholesaleValidationIssue:
-    return WholesaleValidationIssue(
-        code=f"{field}_ignored",
-        field=field,
-        message=message,
-        severity="warning",
-    )
 
 
 def _publisher_property_validation_issues(

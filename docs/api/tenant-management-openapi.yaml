@@ -2602,8 +2602,8 @@ components:
           default: null
           title: Rate
       required:
-      - pricing_model
       - pricing_option_id
+      - pricing_model
       title: WholesalePricingOptionResponse
       type: object
     ListWholesaleProductsResponse.f44f287.WholesaleProductResponse:
@@ -2659,9 +2659,8 @@ components:
             type: object
           - type: 'null'
           default: null
-          description: System-owned forecast metadata. Request values are accepted
-            for backward compatibility but ignored by wholesale-product authoring
-            routes; response values are populated by Sales Agent syncs when available.
+          description: System-owned forecast metadata populated by Sales Agent syncs
+            when available.
           title: Forecast
         format_options:
           anyOf:
@@ -5688,14 +5687,7 @@ components:
       type: object
     WholesaleProductRequest.f44f287:
       additionalProperties: false
-      description: 'Create/update body for wholesale-product authoring.
-
-
-        ``forecast`` and ``pricing_options`` remain accepted for backward
-
-        compatibility but are ignored. Runtime wholesale forecast/pricing metadata
-
-        is system-owned and projected from inventory-bundle analytics.'
+      description: Create/update body for wholesale-product authoring.
       properties:
         allowed_actions:
           anyOf:
@@ -5732,16 +5724,6 @@ components:
           - type: 'null'
           default: null
           title: Description
-        forecast:
-          anyOf:
-          - additionalProperties: true
-            type: object
-          - type: 'null'
-          default: null
-          description: System-owned forecast metadata. Request values are accepted
-            for backward compatibility but ignored by wholesale-product authoring
-            routes; response values are populated by Sales Agent syncs when available.
-          title: Forecast
         format_options:
           anyOf:
           - items:
@@ -5762,14 +5744,6 @@ components:
           additionalProperties: true
           title: Optimization Capabilities
           type: object
-        pricing_options:
-          description: Deprecated compatibility field. Values are ignored on wholesale-product
-            authoring; runtime pricing is projected from Sales Agent pricing/availability
-            metadata.
-          items:
-            $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesalePricingOption'
-          title: Pricing Options
-          type: array
         status:
           default: active
           enum:
@@ -5971,66 +5945,6 @@ components:
       - adapter
       title: WholesaleInventoryExecution
       type: object
-    WholesaleProductRequest.f44f287.WholesalePricingOption:
-      additionalProperties: false
-      description: 'Deprecated authoring input for backward-compatible requests.
-
-
-        Wholesale-product pricing metadata is system-owned. Request values are
-
-        accepted so older clients do not fail schema validation, but authoring
-
-        routes ignore them and return the Sales Agent projection instead.'
-      properties:
-        currency:
-          default: USD
-          maxLength: 3
-          minLength: 3
-          title: Currency
-          type: string
-        is_fixed:
-          default: true
-          title: Is Fixed
-          type: boolean
-        min_spend_per_package:
-          anyOf:
-          - type: number
-          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
-            type: string
-          - type: 'null'
-          default: null
-          title: Min Spend Per Package
-        parameters:
-          anyOf:
-          - additionalProperties: true
-            type: object
-          - type: 'null'
-          default: null
-          title: Parameters
-        price_guidance:
-          anyOf:
-          - additionalProperties: true
-            type: object
-          - type: 'null'
-          default: null
-          title: Price Guidance
-        pricing_model:
-          maxLength: 32
-          minLength: 1
-          title: Pricing Model
-          type: string
-        rate:
-          anyOf:
-          - type: number
-          - pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
-            type: string
-          - type: 'null'
-          default: null
-          title: Rate
-      required:
-      - pricing_model
-      title: WholesalePricingOption
-      type: object
     WholesaleProductRequest.f44f287.WholesaleSlotRequirement:
       additionalProperties: false
       description: Optional slot-level requirements for multi-asset formats.
@@ -6143,9 +6057,8 @@ components:
             type: object
           - type: 'null'
           default: null
-          description: System-owned forecast metadata. Request values are accepted
-            for backward compatibility but ignored by wholesale-product authoring
-            routes; response values are populated by Sales Agent syncs when available.
+          description: System-owned forecast metadata populated by Sales Agent syncs
+            when available.
           title: Forecast
         format_options:
           anyOf:
@@ -6443,8 +6356,8 @@ components:
           default: null
           title: Rate
       required:
-      - pricing_model
       - pricing_option_id
+      - pricing_model
       title: WholesalePricingOptionResponse
       type: object
     WholesaleProductResponse.f44f287.WholesaleSlotRequirement:

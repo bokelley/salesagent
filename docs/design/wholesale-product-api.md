@@ -666,13 +666,11 @@ Longer term, the compatibility endpoint can be a thin alias over the same
 service that powers `/wholesale-products`.
 
 For `/wholesale-products`, forecast and runtime pricing metadata are
-system-owned. The request may still contain legacy `forecast` or
-`pricing_options` fields for client compatibility, but the authoring service
-emits warning issues from `:validate` and `:preview`, then ignores those fields
-when persisting. Forecast and percentile pricing guidance come from
-reporting/ad-server syncs or a future explicit operator override surface.
-For wholesale auction projection, the floor remains `0.0`; minimum economic
-size is enforced by minimum package budget/spend validation, not by floor price.
+system-owned response fields, not authoring inputs. Forecast and percentile
+pricing guidance come from reporting/ad-server syncs or a future explicit
+operator override surface. For wholesale auction projection, the floor remains
+`0.0`; minimum economic size is enforced by minimum package budget/spend
+validation, not by floor price.
 
 ## `get_products` Projection
 

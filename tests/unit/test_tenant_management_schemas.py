@@ -35,7 +35,6 @@ from src.admin.api_schemas.tenant_management import (
     TenantSummary,
     UpdateBuyerAdvertiserMappingRequest,
     UpdateTenantRequest,
-    WholesalePricingOption,
     WholesalePricingOptionResponse,
 )
 from src.admin.api_schemas.tenant_management import (
@@ -374,10 +373,7 @@ def test_update_tenant_request_rejects_null_embedded_approval_settings():
         UpdateTenantRequest.model_validate({"media_buy_approval": None})
 
 
-def test_wholesale_pricing_option_id_is_response_only():
-    request_option = WholesalePricingOption.model_validate(
-        {"pricing_model": "cpm", "currency": "USD", "is_fixed": True, "rate": "40.00"}
-    )
+def test_wholesale_pricing_option_is_response_only():
     response_option = WholesalePricingOptionResponse.model_validate(
         {
             "pricing_option_id": "cpm_usd_fixed",
@@ -388,12 +384,10 @@ def test_wholesale_pricing_option_id_is_response_only():
         }
     )
 
-    assert not hasattr(request_option, "pricing_option_id")
     assert response_option.pricing_option_id == "cpm_usd_fixed"
     with pytest.raises(ValidationError):
-        WholesalePricingOption.model_validate(
+        WholesalePricingOptionResponse.model_validate(
             {
-                "pricing_option_id": "premium_cpm",
                 "pricing_model": "cpm",
                 "currency": "USD",
                 "is_fixed": True,
