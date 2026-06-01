@@ -319,7 +319,9 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
         json=payload,
     )
     assert validation.status_code == 200, validation.get_data(as_text=True)
-    assert validation.get_json()["valid"] is True
+    validation_body = validation.get_json()
+    assert validation_body["valid"] is True
+    assert {issue["code"] for issue in validation_body["issues"]} >= {"forecast_ignored", "pricing_options_ignored"}
 
     preview = client.post(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:preview",
@@ -328,6 +330,7 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
     )
     assert preview.status_code == 200, preview.get_data(as_text=True)
     assert preview.get_json()["adapter_projection"]["inventory_config"]["ad_units"] == ["au_home"]
+    assert preview.get_json()["buyer_projection"]["forecast"] is None
 
     created = client.post(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
@@ -339,11 +342,15 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
     assert created_body["product_id"] == "homepage_takeover"
     assert created_body["inventory_profile_id"] == "homepage_takeover"
     assert created_body["delivery_type"] == "non_guaranteed"
+    assert created_body["forecast"] is None
     assert created_body["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
     assert created_body["pricing_options"][0]["is_fixed"] is False
     assert created_body["pricing_options"][0]["price_guidance"] == {"floor": 0.0}
     assert created_body["inventory"]["execution"]["selectors"][0]["selector_type"] == "placement"
     assert ProductRepository(bound_factories, gam_tenant.tenant_id).get_by_id("homepage_takeover") is None
+    profile = InventoryProfileRepository(bound_factories, gam_tenant.tenant_id).get_by_id("homepage_takeover")
+    assert profile is not None
+    assert profile.forecast is None
 
     duplicate = client.post(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
@@ -383,6 +390,7 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
     assert updated_body["name"] == "Homepage Takeover Updated"
     assert updated_body["status"] == "draft"
     assert updated_body["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
+    assert updated_body["forecast"] is None
 
     detail = client.get(
         f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/homepage_takeover",
@@ -696,6 +704,37 @@ def test_wholesale_products_tolerate_extra_stored_publisher_property_fields(
     assert properties[0]["property_ids"] == ["wonderstruck_site"]
     assert "name" not in properties[0]
     assert "property_type" not in properties[0]
+
+
+def test_wholesale_products_do_not_fall_back_to_legacy_product_rows(
+    management_api_client,
+    gam_tenant,
+    bound_factories,
+):
+    client, auth_headers = management_api_client
+    product = ProductFactory(
+        tenant=gam_tenant,
+        product_id="legacy_product_row",
+        name="Legacy Product Row",
+        forecast={"impressions": 100000},
+    )
+    PricingOptionFactory(product=product, pricing_model="cpm", is_fixed=True, rate=40)
+    bound_factories.commit()
+
+    listing = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+    )
+    detail = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/legacy_product_row",
+        headers=auth_headers,
+    )
+
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    assert "legacy_product_row" not in {
+        wholesale_product["product_id"] for wholesale_product in listing.get_json()["wholesale_products"]
+    }
+    assert detail.status_code == 404, detail.get_data(as_text=True)
 
 
 def test_wholesale_validation_checks_authorized_publisher_properties(management_api_client, gam_tenant):

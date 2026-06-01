@@ -65,6 +65,7 @@ async def test_create_media_buy_with_inventory_profile_as_wholesale_product(fact
         tenant_id=tenant.tenant_id,
         profile_id="test_bundle_product_media_buy",
         name="Bundle Product for Media Buy",
+        forecast={"impressions": 100000},
         format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
         publisher_properties=[
             {

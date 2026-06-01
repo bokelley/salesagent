@@ -2659,6 +2659,9 @@ components:
             type: object
           - type: 'null'
           default: null
+          description: System-owned forecast metadata. Request values are accepted
+            for backward compatibility but ignored by wholesale-product authoring
+            routes; response values are populated by Sales Agent syncs when available.
           title: Forecast
         format_options:
           anyOf:
@@ -5688,11 +5691,11 @@ components:
       description: 'Create/update body for wholesale-product authoring.
 
 
-        ``pricing_options`` remains accepted for backward compatibility. Runtime
+        ``forecast`` and ``pricing_options`` remain accepted for backward
 
-        wholesale pricing is derived from the inventory-bundle analytics projection:
+        compatibility but are ignored. Runtime wholesale forecast/pricing metadata
 
-        non-guaranteed CPM auction with a zero floor.'
+        is system-owned and projected from inventory-bundle analytics.'
       properties:
         allowed_actions:
           anyOf:
@@ -5735,6 +5738,9 @@ components:
             type: object
           - type: 'null'
           default: null
+          description: System-owned forecast metadata. Request values are accepted
+            for backward compatibility but ignored by wholesale-product authoring
+            routes; response values are populated by Sales Agent syncs when available.
           title: Forecast
         format_options:
           anyOf:
@@ -5757,6 +5763,9 @@ components:
           title: Optimization Capabilities
           type: object
         pricing_options:
+          description: Deprecated compatibility field. Values are ignored on wholesale-product
+            authoring; runtime pricing is projected from Sales Agent pricing/availability
+            metadata.
           items:
             $ref: '#/components/schemas/WholesaleProductRequest.f44f287.WholesalePricingOption'
           title: Pricing Options
@@ -5964,7 +5973,14 @@ components:
       type: object
     WholesaleProductRequest.f44f287.WholesalePricingOption:
       additionalProperties: false
-      description: One legacy pricing option accepted for backward-compatible requests.
+      description: 'Deprecated authoring input for backward-compatible requests.
+
+
+        Wholesale-product pricing metadata is system-owned. Request values are
+
+        accepted so older clients do not fail schema validation, but authoring
+
+        routes ignore them and return the Sales Agent projection instead.'
       properties:
         currency:
           default: USD
@@ -6127,6 +6143,9 @@ components:
             type: object
           - type: 'null'
           default: null
+          description: System-owned forecast metadata. Request values are accepted
+            for backward compatibility but ignored by wholesale-product authoring
+            routes; response values are populated by Sales Agent syncs when available.
           title: Forecast
         format_options:
           anyOf:

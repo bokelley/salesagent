@@ -203,7 +203,6 @@ from src.core.inventory_profile_projection import (
     default_wholesale_currency,
     inventory_profile_to_product_model,
     is_complete_inventory_profile,
-    is_materialized_wholesale_product,
     is_wholesale_owned_inventory_profile,
 )
 from src.core.security.url_validator import check_url_ssrf
@@ -1417,7 +1416,7 @@ def _wholesale_response_from_profile(
         delivery_type="non_guaranteed",
         channels=constraints.get("channels") or None,
         pricing_options=[_pricing_option_schema(option) for option in product_projection.pricing_options or []],
-        forecast=profile.forecast,
+        forecast=product_projection.forecast,
         inventory=WholesaleInventory(
             publisher_properties=coerce_stored_publisher_property_selectors(profile.publisher_properties or []),
             creative_formats=[
@@ -1456,6 +1455,26 @@ def _validation_issues_for_wholesale_product(
     adapter_type: str,
 ) -> list[WholesaleValidationIssue]:
     issues: list[WholesaleValidationIssue] = []
+    if req.forecast is not None:
+        issues.append(
+            _ignored_system_metadata_issue(
+                field="forecast",
+                message=(
+                    "forecast is system-owned read-side metadata and is ignored on wholesale-product authoring. "
+                    "It is populated by Sales Agent syncs when available."
+                ),
+            )
+        )
+    if req.pricing_options:
+        issues.append(
+            _ignored_system_metadata_issue(
+                field="pricing_options",
+                message=(
+                    "pricing_options is accepted for backward compatibility but ignored on wholesale-product "
+                    "authoring. Runtime pricing is projected from Sales Agent pricing/availability metadata."
+                ),
+            )
+        )
     if not req.inventory.publisher_properties:
         issues.append(
             WholesaleValidationIssue(
@@ -1496,6 +1515,15 @@ def _validation_issues_for_wholesale_product(
                 )
             )
     return issues
+
+
+def _ignored_system_metadata_issue(*, field: str, message: str) -> WholesaleValidationIssue:
+    return WholesaleValidationIssue(
+        code=f"{field}_ignored",
+        field=field,
+        message=message,
+        severity="warning",
+    )
 
 
 def _publisher_property_validation_issues(
@@ -2196,7 +2224,7 @@ def _build_wholesale_product_models(
         reporting_capabilities=dict(PRODUCT_REPORTING_CAPABILITIES_DEFAULT),
         property_targeting_allowed=bool((req.targeting_capabilities or {}).get("allowed_dimensions")),
         signal_targeting_allowed=bool((req.targeting_capabilities or {}).get("allowed_signals")),
-        forecast=req.forecast,
+        forecast=None,
         allowed_actions=req.allowed_actions,
         format_options=req.format_options,
         video_placement_types=req.video_placement_types,
@@ -2230,7 +2258,6 @@ def _update_product_from_wholesale_request(
     product.reporting_capabilities = product.reporting_capabilities or dict(PRODUCT_REPORTING_CAPABILITIES_DEFAULT)
     product.property_targeting_allowed = bool((req.targeting_capabilities or {}).get("allowed_dimensions"))
     product.signal_targeting_allowed = bool((req.targeting_capabilities or {}).get("allowed_signals"))
-    product.forecast = req.forecast
     product.allowed_actions = req.allowed_actions
     product.format_options = req.format_options
     product.video_placement_types = req.video_placement_types
@@ -2277,7 +2304,6 @@ def _build_wholesale_inventory_profile(
     profile.publisher_properties = publisher_properties
     profile.targeting_template = req.targeting_capabilities or {}
     profile.constraints = profile_constraints
-    profile.forecast = req.forecast
     return profile
 
 
@@ -2304,7 +2330,7 @@ def _buyer_projection(req: WholesaleProductRequest, product_id: str, default_cur
         "format_ids": _creative_format_id_dicts(req.inventory.creative_formats),
         "publisher_properties": _publisher_property_dicts(req.inventory.publisher_properties),
         "pricing_options": [_default_wholesale_pricing_response(default_currency).model_dump(mode="json")],
-        "forecast": req.forecast,
+        "forecast": None,
     }
 
 
@@ -3106,18 +3132,11 @@ def list_wholesale_products(tenant_id: str):
             for profile in InventoryProfileRepository(session, tenant_id).list_all()
             if is_complete_inventory_profile(profile) and is_wholesale_owned_inventory_profile(profile)
         ]
-        profile_ids = {profile.profile_id for profile in profiles}
-        legacy_products = [
-            product
-            for product in ProductRepository(session, tenant_id).list_all()
-            if product.product_id not in profile_ids and not is_materialized_wholesale_product(product)
-        ]
         response = ListWholesaleProductsResponse(
             wholesale_products=[
-                *[_wholesale_response_from_profile(profile, adapter_type, default_currency) for profile in profiles],
-                *[_wholesale_response_from_product(product, adapter_type) for product in legacy_products],
+                _wholesale_response_from_profile(profile, adapter_type, default_currency) for profile in profiles
             ],
-            count=len(profiles) + len(legacy_products),
+            count=len(profiles),
         )
         return jsonify(response.model_dump(mode="json"))
 
@@ -3199,11 +3218,7 @@ def get_wholesale_product(tenant_id: str, product_id: str):
             return jsonify(
                 _wholesale_response_from_profile(profile, adapter_type, default_currency).model_dump(mode="json")
             )
-        legacy_product = ProductRepository(session, tenant_id).get_by_id_with_pricing(product_id)
-        if legacy_product is None:
-            return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
-        adapter_type = _tenant_adapter_type(tenant, adapter)
-        return jsonify(_wholesale_response_from_product(legacy_product, adapter_type).model_dump(mode="json"))
+        return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/wholesale-products/<product_id>", methods=["PUT"])

@@ -809,7 +809,12 @@ class FormatIdRef(BaseModel):
 
 
 class WholesalePricingOption(BaseModel):
-    """One legacy pricing option accepted for backward-compatible requests."""
+    """Deprecated authoring input for backward-compatible requests.
+
+    Wholesale-product pricing metadata is system-owned. Request values are
+    accepted so older clients do not fail schema validation, but authoring
+    routes ignore them and return the Sales Agent projection instead.
+    """
 
     model_config = _config()
 
@@ -906,7 +911,13 @@ class WholesaleProductBase(BaseModel):
     status: WholesaleProductStatus = "active"
     delivery_type: str = Field(default="non_guaranteed", min_length=1, max_length=50)
     channels: list[str] | None = None
-    forecast: dict[str, Any] | None = None
+    forecast: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "System-owned forecast metadata. Request values are accepted for backward compatibility but ignored "
+            "by wholesale-product authoring routes; response values are populated by Sales Agent syncs when available."
+        ),
+    )
     inventory: WholesaleInventory
     targeting_capabilities: dict[str, Any] = Field(default_factory=dict)
     optimization_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -920,13 +931,19 @@ class WholesaleProductBase(BaseModel):
 class WholesaleProductRequest(WholesaleProductBase):
     """Create/update body for wholesale-product authoring.
 
-    ``pricing_options`` remains accepted for backward compatibility. Runtime
-    wholesale pricing is derived from the inventory-bundle analytics projection:
-    non-guaranteed CPM auction with a zero floor.
+    ``forecast`` and ``pricing_options`` remain accepted for backward
+    compatibility but are ignored. Runtime wholesale forecast/pricing metadata
+    is system-owned and projected from inventory-bundle analytics.
     """
 
     delivery_type: Literal["non_guaranteed"] = "non_guaranteed"
-    pricing_options: list[WholesalePricingOption] = Field(default_factory=list)
+    pricing_options: list[WholesalePricingOption] = Field(
+        default_factory=list,
+        description=(
+            "Deprecated compatibility field. Values are ignored on wholesale-product authoring; runtime pricing "
+            "is projected from Sales Agent pricing/availability metadata."
+        ),
+    )
 
 
 class WholesaleProductResponse(WholesaleProductBase):

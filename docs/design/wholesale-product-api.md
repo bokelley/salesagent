@@ -17,7 +17,7 @@ object:
 
 1. **Where can this run?** Publisher properties plus ad-server inventory selectors.
 2. **What creative can a buyer send?** Accepted creative format IDs and optional slot requirements.
-3. **What does it cost?** Derived non-guaranteed CPM auction pricing, delivery analytics, and forecast.
+3. **What does it cost?** Zero-floor non-guaranteed CPM auction pricing, plus optional delivery analytics and forecast.
 4. **What composition is allowed?** Targeting and optimization capabilities.
 5. **How does the adapter execute it?** Adapter-specific selector and format-binding configuration.
 
@@ -52,9 +52,7 @@ shadow Product rows for the same sellable object.
     }
   ],
 
-  "forecast": {
-    "impressions": 1000000
-  },
+  "forecast": null,
 
   "inventory": {
     "publisher_properties": [
@@ -667,6 +665,15 @@ inventory bundles and are exposed through `/wholesale-products`:
 Longer term, the compatibility endpoint can be a thin alias over the same
 service that powers `/wholesale-products`.
 
+For `/wholesale-products`, forecast and runtime pricing metadata are
+system-owned. The request may still contain legacy `forecast` or
+`pricing_options` fields for client compatibility, but the authoring service
+emits warning issues from `:validate` and `:preview`, then ignores those fields
+when persisting. Forecast and percentile pricing guidance come from
+reporting/ad-server syncs or a future explicit operator override surface.
+For wholesale auction projection, the floor remains `0.0`; minimum economic
+size is enforced by minimum package budget/spend validation, not by floor price.
+
 ## `get_products` Projection
 
 `get_products` returns buyer/composer-facing data from `WholesaleProduct`.
@@ -679,12 +686,12 @@ Projection rules:
 | `product_id`, `name`, `description` | Wholesale product |
 | `publisher_properties` | `inventory.publisher_properties` |
 | `format_ids` | `inventory.creative_formats[].format_id` |
-| `pricing_options` | Sales Agent wholesale projection: non-guaranteed CPM auction, zero floor, enriched by analytics |
+| `pricing_options` | Sales Agent wholesale projection: non-guaranteed CPM auction with `floor_price: 0.0`; system-owned pricing availability may provide percentile guidance, not a floor |
 | `property_targeting_allowed` | Wholesale product capabilities |
 | `signal_targeting_allowed` | Wholesale product capabilities |
 | `targeting_capabilities` | Wholesale product, if supported by schema extension |
 | `optimization_capabilities` | Wholesale product, if supported by schema extension |
-| `forecast` | InventoryProfile forecast/availability sync |
+| `forecast` | Valid system-owned InventoryProfile forecast/availability sync metadata; invalid or missing optional metadata is omitted |
 | `allowed_actions` | Wholesale product plus adapter |
 
 ## Adapter Coverage

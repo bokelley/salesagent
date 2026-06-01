@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
+from adcp.types import DeliveryForecast
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.orm.attributes import set_committed_value
 
 from src.core.database.models import (
@@ -19,7 +22,10 @@ from src.core.resolved_product import ResolvedProduct
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_WHOLESALE_PRICE_GUIDANCE: dict[str, float] = {"floor": 0.0}
+WHOLESALE_PRICE_GUIDANCE_PERCENTILES = frozenset({"p25", "p50", "p75", "p90"})
 WHOLESALE_PROFILE_MANAGED_BY = "wholesale_products_api"
 
 
@@ -106,7 +112,7 @@ def inventory_profile_to_product_model(profile: InventoryProfile, *, default_cur
         reporting_capabilities=dict(PRODUCT_REPORTING_CAPABILITIES_DEFAULT),
         property_targeting_allowed=bool(constraints.get("targeting_dimensions")),
         signal_targeting_allowed=True,
-        forecast=profile.forecast,
+        forecast=system_owned_profile_forecast(profile),
         allowed_principal_ids=constraints.get("allowed_principal_ids") or None,
         allowed_actions=constraints.get("allowed_actions") or None,
         format_options=constraints.get("format_options") or None,
@@ -178,11 +184,14 @@ def inventory_profiles_to_resolved_products(
 
 
 def _wholesale_price_guidance(profile: InventoryProfile) -> dict[str, float]:
-    guidance: dict[str, float] = dict(DEFAULT_WHOLESALE_PRICE_GUIDANCE)
+    guidance: dict[str, float] = {}
     for key, value in _profile_cpm_analytics(profile).items():
-        if value is not None:
-            guidance[key] = float(value)
-    guidance["floor"] = 0.0
+        if key not in WHOLESALE_PRICE_GUIDANCE_PERCENTILES:
+            continue
+        numeric_value = _optional_float(value)
+        if numeric_value is not None:
+            guidance[key] = numeric_value
+    guidance["floor"] = DEFAULT_WHOLESALE_PRICE_GUIDANCE["floor"]
     return guidance
 
 
@@ -193,3 +202,28 @@ def _profile_cpm_analytics(profile: InventoryProfile) -> dict[str, Any]:
         return {}
     cpm = by_model.get("cpm")
     return cpm if isinstance(cpm, dict) else {}
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def system_owned_profile_forecast(profile: InventoryProfile) -> dict[str, Any] | None:
+    """Return valid system-owned forecast metadata, omitting stale legacy shapes."""
+    if profile.forecast is None:
+        return None
+    try:
+        return DeliveryForecast.model_validate(profile.forecast).model_dump(mode="json", exclude_none=True)
+    except PydanticValidationError:
+        logger.warning(
+            "Ignoring invalid system-owned forecast metadata for inventory profile %s/%s",
+            profile.tenant_id,
+            profile.profile_id,
+            exc_info=True,
+        )
+        return None

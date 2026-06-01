@@ -1028,6 +1028,7 @@ class TestBuyingModeValidation:
                         "cpm": {
                             "p25": 1.25,
                             "p50": 2.0,
+                            "recommended": 3.0,
                         }
                     }
                 },
@@ -1052,11 +1053,40 @@ class TestBuyingModeValidation:
         assert pricing.pricing_model == "cpm"
         assert pricing.floor_price == 0.0
         assert pricing.price_guidance.p25 == 1.25
+        assert not hasattr(pricing.price_guidance, "recommended")
         assert bundle.forecast.points[0].product_id == "homepage_bundle"
         assert getattr(pricing, "fixed_price", None) is None
         first_property = bundle.publisher_properties[0].root
         assert first_property.selection_type == "by_id"
         assert [property_id.root for property_id in first_property.property_ids] == ["homepage"]
+
+    @pytest.mark.asyncio
+    async def test_wholesale_omits_invalid_system_forecast_metadata(self, integration_db, factory_session):
+        """Invalid optional forecast metadata does not make inventory bundles undiscoverable."""
+        with ProductEnv(tenant_id="whole-bundle-legacy-forecast", principal_id="p1") as env:
+            tenant = self._seed_tenant_principal("whole-bundle-legacy-forecast")
+            tenant_id = tenant.tenant_id
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant_id,
+                profile_id="legacy_forecast_bundle",
+                name="Legacy Forecast Bundle",
+                forecast={"impressions": 100000},
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+                publisher_properties=[
+                    {
+                        "publisher_domain": "legacy-forecast.example.com",
+                        "property_ids": ["homepage"],
+                        "selection_type": "by_id",
+                    }
+                ],
+            )
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
+
+        factory_session.expire_all()
+        assert [p.product_id for p in response.products] == ["legacy_forecast_bundle"]
+        assert response.products[0].forecast is None
+        assert ProductRepository(factory_session, tenant_id).get_by_id("legacy_forecast_bundle") is None
 
     @pytest.mark.asyncio
     async def test_wholesale_bundle_pricing_prefers_gam_network_currency(self, integration_db, factory_session):
