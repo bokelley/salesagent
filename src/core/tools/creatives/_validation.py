@@ -173,9 +173,19 @@ def get_registered_creative_agent_urls(registry: Any, tenant_id: str | None) -> 
     if not isinstance(agents, list | tuple):
         return None
 
+    from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
     from src.core.validation import normalize_agent_url
 
-    return {normalize_agent_url(agent.agent_url) for agent in agents if getattr(agent, "enabled", True)}
+    registered = {normalize_agent_url(agent.agent_url) for agent in agents if getattr(agent, "enabled", True)}
+
+    default_agent = getattr(registry, "DEFAULT_AGENT", None)
+    default_agent_url = getattr(default_agent, "agent_url", None)
+    if default_agent_url and normalize_agent_url(default_agent_url) in registered:
+        # The reference creative agent may be configured to a local/service URL in
+        # CI or deployments, while products expose the public canonical AdCP URL.
+        registered.add(DEFAULT_CREATIVE_AGENT_URL)
+
+    return registered
 
 
 def check_provenance_required(
