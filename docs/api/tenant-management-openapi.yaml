@@ -3377,6 +3377,14 @@ components:
           format: email
           title: Contact Email
           type: string
+        creative_approval:
+          default: manual
+          enum:
+          - auto
+          - manual
+          - ai
+          title: Creative Approval
+          type: string
         default_currency:
           default: USD
           maxLength: 3
@@ -3410,6 +3418,13 @@ components:
           - $ref: '#/components/schemas/ProvisionTenantRequest.f44f287.InitialPrincipalRequest'
           - type: 'null'
           default: null
+        media_buy_approval:
+          default: manual
+          enum:
+          - auto
+          - manual
+          title: Media Buy Approval
+          type: string
         name:
           maxLength: 255
           minLength: 1

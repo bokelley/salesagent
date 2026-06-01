@@ -204,6 +204,22 @@ def test_provision_request_with_initial_principal():
     assert req.initial_principal.name == "Default Advertiser"
 
 
+def test_provision_request_accepts_embedded_approval_settings():
+    payload = _provision_payload(creative_approval="auto", media_buy_approval="auto")
+    req = ProvisionTenantRequest.model_validate(payload)
+
+    assert req.creative_approval == "auto"
+    assert req.media_buy_approval == "auto"
+
+
+def test_provision_request_rejects_null_embedded_approval_settings():
+    with pytest.raises(ValidationError):
+        ProvisionTenantRequest.model_validate(_provision_payload(creative_approval=None))
+
+    with pytest.raises(ValidationError):
+        ProvisionTenantRequest.model_validate(_provision_payload(media_buy_approval=None))
+
+
 def test_provision_request_missing_required_field_raises():
     payload = _provision_payload()
     payload.pop("external_org_id")

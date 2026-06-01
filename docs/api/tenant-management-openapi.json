@@ -4940,6 +4940,16 @@
             "title": "Contact Email",
             "type": "string"
           },
+          "creative_approval": {
+            "default": "manual",
+            "enum": [
+              "auto",
+              "manual",
+              "ai"
+            ],
+            "title": "Creative Approval",
+            "type": "string"
+          },
           "default_currency": {
             "default": "USD",
             "maxLength": 3,
@@ -4993,6 +5003,15 @@
               }
             ],
             "default": null
+          },
+          "media_buy_approval": {
+            "default": "manual",
+            "enum": [
+              "auto",
+              "manual"
+            ],
+            "title": "Media Buy Approval",
+            "type": "string"
           },
           "name": {
             "maxLength": 255,

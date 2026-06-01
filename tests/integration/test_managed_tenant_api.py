@@ -51,7 +51,12 @@ from tests.factories import (
     SyncJobFactory,
     TenantFactory,
 )
-from tests.helpers.managed_tenant_api import bind_factories_to_session, install_management_api_key
+from tests.helpers.managed_tenant_api import (
+    bind_factories_to_session,
+    install_management_api_key,
+    read_tenant_and_adapter_manual_approval,
+    read_tenant_and_gam_manual_approval,
+)
 from tests.helpers.publisher_authorization import seed_verified_publisher_authorization
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -283,6 +288,51 @@ class TestProvision:
         # Value is the same string persisted in Principal.access_token.
         assert isinstance(body["initial_principal"]["access_token"], str)
         assert body["initial_principal"]["access_token"]
+
+    def test_provision_accepts_embedded_approval_settings(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(
+            external_org_id="org_provision_approval",
+            creative_approval="auto",
+            media_buy_approval="auto",
+        )
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+
+        assert response.status_code == 201, response.get_data(as_text=True)
+        tenant_id = response.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+
+        detail = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}", headers=auth_headers)
+        assert detail.status_code == 200, detail.get_data(as_text=True)
+        body = detail.get_json()
+        assert body["creative_approval"] == "auto"
+        assert body["media_buy_approval"] == "auto"
+
+        gam_settings = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/adapters/gam/config",
+            headers=auth_headers,
+        )
+        assert gam_settings.status_code == 200, gam_settings.get_data(as_text=True)
+        assert gam_settings.get_json()["manual_approval_required"] is False
+
+    def test_provision_defaults_adapter_to_manual_media_buy_approval(self, client, auth_headers, cleanup_tenants):
+        payload = _provision_payload(external_org_id="org_provision_approval_default")
+        response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+
+        assert response.status_code == 201, response.get_data(as_text=True)
+        tenant_id = response.get_json()["tenant_id"]
+        cleanup_tenants.append(tenant_id)
+
+        detail = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}", headers=auth_headers)
+        assert detail.status_code == 200, detail.get_data(as_text=True)
+        assert detail.get_json()["media_buy_approval"] == "manual"
+
+        gam_settings = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}/adapters/gam/config",
+            headers=auth_headers,
+        )
+        assert gam_settings.status_code == 200, gam_settings.get_data(as_text=True)
+        assert gam_settings.get_json()["manual_approval_required"] is True
+        assert read_tenant_and_gam_manual_approval(tenant_id) == (True, True)
 
     def test_provision_rolls_back_on_adapter_failure(self, client, auth_headers, monkeypatch):
         import src.admin.tenant_management_api as api_module
@@ -767,6 +817,7 @@ class TestAdapterConfig:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         body = resp.get_json()
         assert body["type"] == "mock"
+        assert read_tenant_and_adapter_manual_approval(managed_tenant, "mock") == (True, True)
 
     def test_test_connection_endpoint_does_not_modify_state(self, client, auth_headers, managed_tenant):
         resp = client.post(

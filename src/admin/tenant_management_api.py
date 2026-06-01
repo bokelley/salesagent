@@ -481,6 +481,22 @@ def _tenant_creative_approval_mode(value: str) -> str:
     }[value]
 
 
+def _tenant_media_buy_manual_approval_required(value: str | None, *, default: bool) -> bool:
+    return default if value is None else value == "manual"
+
+
+def _set_adapter_manual_approval_required(adapter: AdapterConfig, manual_approval_required: bool) -> None:
+    if adapter.adapter_type == "google_ad_manager":
+        adapter.gam_manual_approval_required = manual_approval_required
+    elif adapter.adapter_type == "mock":
+        adapter.mock_manual_approval_required = manual_approval_required
+    elif _connection_config_model(adapter.adapter_type) is not None:
+        config_json = dict(adapter.config_json or {})
+        config_json["manual_approval_required"] = manual_approval_required
+        adapter.config_json = config_json
+        attributes.flag_modified(adapter, "config_json")
+
+
 def _tenant_to_detail(tenant: Tenant, adapter_configured: bool) -> dict:
     """Serialize a :class:`Tenant` as a :class:`TenantDetail`-compatible dict."""
     contact_email = tenant.billing_contact if tenant.billing_contact and "@" in (tenant.billing_contact or "") else None
@@ -562,7 +578,12 @@ def _adapter_config_to_dict(adapter: AdapterConfigSchema) -> dict:
     raise ValueError(f"Unsupported adapter type: {type(adapter).__name__}")
 
 
-def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchema) -> AdapterConfig:
+def _persist_adapter_config(
+    session,
+    tenant_id: str,
+    adapter: AdapterConfigSchema,
+    manual_approval_required: bool | None = None,
+) -> AdapterConfig:
     """Create or replace the AdapterConfig row for a tenant from a validated schema."""
     stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
     existing = session.scalars(stmt).first()
@@ -570,6 +591,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
         session.delete(existing)
         session.flush()
 
+    adapter_manual_approval_required = manual_approval_required if manual_approval_required is not None else False
     if isinstance(adapter, GAMAdapterConfig):
         # Service-account JSON is required by the schema; refresh_token is optional.
         # Set gam_auth_method to match the credential that's actually present so
@@ -585,6 +607,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             gam_service_account_email=adapter.service_account_email,
             gam_refresh_token=refresh_token,
             gam_auth_method=auth_method,
+            gam_manual_approval_required=adapter_manual_approval_required,
         )
         # Encryption is wired via the property setter (see models.py:AdapterConfig).
         if sa_json is not None:
@@ -594,6 +617,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             tenant_id=tenant_id,
             adapter_type="mock",
             mock_dry_run=adapter.dry_run,
+            mock_manual_approval_required=adapter_manual_approval_required,
         )
     elif isinstance(adapter, FreeWheelAdapterConfig):
         # Round-trip through the adapter's own connection schema so secret
@@ -607,6 +631,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             api_token=adapter.api_token.get_secret_value() if adapter.api_token else None,
             environment=adapter.environment,
             default_advertiser_id=adapter.default_advertiser_id,
+            manual_approval_required=adapter_manual_approval_required,
         )
         ac = AdapterConfig(
             tenant_id=tenant_id,
@@ -620,6 +645,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             network_id=adapter.network_id,
             api_key=adapter.api_key.get_secret_value(),
             default_advertiser_id=adapter.default_advertiser_id,
+            manual_approval_required=adapter_manual_approval_required,
         )
         ac = AdapterConfig(
             tenant_id=tenant_id,
@@ -640,6 +666,7 @@ def _persist_adapter_config(session, tenant_id: str, adapter: AdapterConfigSchem
             rate_currency=adapter.rate_currency,
             demand_class=adapter.demand_class,
             enable_key_value_targeting=adapter.enable_key_value_targeting,
+            manual_approval_required=adapter_manual_approval_required,
         )
         ac = AdapterConfig(
             tenant_id=tenant_id,
@@ -4350,6 +4377,10 @@ def provision_tenant():
 
     with get_db_session() as session:
         session.info["management_api_caller"] = True
+        media_buy_manual_approval = _tenant_media_buy_manual_approval_required(
+            req.media_buy_approval,
+            default=True,
+        )
 
         new_tenant = Tenant(
             tenant_id=tenant_id,
@@ -4364,19 +4395,25 @@ def provision_tenant():
             external_source=req.external_source,
             public_agent_url=req.public_agent_url,
             default_gam_advertiser_id=req.default_gam_advertiser_id,
+            approval_mode=_tenant_creative_approval_mode(req.creative_approval),
             embed_breadcrumb_root=(
                 req.embed_breadcrumb_root.model_dump() if req.embed_breadcrumb_root is not None else None
             ),
             authorized_emails=[req.contact_email],
             authorized_domains=[],
-            human_review_required=True,
+            human_review_required=media_buy_manual_approval,
             auto_approve_format_ids=[],
             measurement_providers={"providers": ["Publisher Ad Server"], "default": "Publisher Ad Server"},
         )
         session.add(new_tenant)
         session.flush()
 
-        _persist_adapter_config(session, tenant_id, req.adapter)
+        _persist_adapter_config(
+            session,
+            tenant_id,
+            req.adapter,
+            manual_approval_required=media_buy_manual_approval,
+        )
 
         # Default CurrencyLimit (USD or override).
         session.add(
@@ -4594,14 +4631,14 @@ def patch_tenant(tenant_id: str):
         if req.creative_approval is not None:
             tenant.approval_mode = _tenant_creative_approval_mode(req.creative_approval)
         if req.media_buy_approval is not None:
-            manual_approval_required = req.media_buy_approval == "manual"
+            manual_approval_required = _tenant_media_buy_manual_approval_required(
+                req.media_buy_approval,
+                default=bool(tenant.human_review_required),
+            )
             tenant.human_review_required = manual_approval_required
             adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
             if adapter is not None:
-                if adapter.adapter_type == "google_ad_manager":
-                    adapter.gam_manual_approval_required = manual_approval_required
-                elif adapter.adapter_type == "mock":
-                    adapter.mock_manual_approval_required = manual_approval_required
+                _set_adapter_manual_approval_required(adapter, manual_approval_required)
                 adapter.updated_at = datetime.now(UTC)
         tenant.updated_at = datetime.now(UTC)
 
@@ -4719,7 +4756,12 @@ def put_adapter_config(tenant_id: str):
         if not tenant:
             return _api_error("tenant_not_found", f"Tenant {tenant_id!r} does not exist", 404)
 
-        new_adapter = _persist_adapter_config(session, tenant_id, adapter_schema)
+        new_adapter = _persist_adapter_config(
+            session,
+            tenant_id,
+            adapter_schema,
+            manual_approval_required=bool(tenant.human_review_required),
+        )
         try:
             session.commit()
         except EmbeddedTenantWriteError as exc:
