@@ -49,6 +49,39 @@ def canonical_format_ref(format_id: str, **params: Any) -> dict[str, Any]:
     return ref
 
 
+def canonicalize_format_ref(format_ref: Any) -> dict[str, Any]:
+    """Return a FormatId-like dict with the creative-agent URL normalized."""
+    if isinstance(format_ref, dict):
+        raw = dict(format_ref)
+        agent_url = raw.get("agent_url")
+        format_id = raw.get("id", raw.get("format_id"))
+    else:
+        raw = {}
+        agent_url = getattr(format_ref, "agent_url", None)
+        format_id = getattr(format_ref, "id", getattr(format_ref, "format_id", None))
+        for key in ("width", "height", "duration_ms"):
+            value = getattr(format_ref, key, None)
+            if value is not None:
+                raw[key] = value
+
+    if not agent_url or format_id is None:
+        return raw
+
+    raw.pop("format_id", None)
+    raw["agent_url"] = canonicalize_creative_agent_url(agent_url)
+    raw["id"] = str(format_id)
+    return raw
+
+
+def canonicalize_creative_agent_url(agent_url: Any) -> str:
+    """Canonicalize reference creative-agent aliases while preserving custom URLs."""
+    raw_agent_url = str(agent_url)
+    normalized_agent_url = normalize_creative_agent_url(raw_agent_url)
+    if normalized_agent_url == DEFAULT_CREATIVE_AGENT_URL:
+        return DEFAULT_CREATIVE_AGENT_URL
+    return raw_agent_url
+
+
 def normalize_creative_agent_url(agent_url: Any) -> str:
     """Normalize an agent URL for creative-format identity comparisons."""
     if not agent_url:
@@ -84,6 +117,8 @@ __all__ = [
     "LEGACY_REFERENCE_CREATIVE_AGENT_URLS",
     "DISPLAY_FORMAT_LABELS",
     "canonical_format_ref",
+    "canonicalize_creative_agent_url",
+    "canonicalize_format_ref",
     "is_reference_creative_agent_url",
     "normalize_creative_agent_url",
     "normalize_reference_agent_url",

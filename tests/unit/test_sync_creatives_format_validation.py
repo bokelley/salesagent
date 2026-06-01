@@ -314,7 +314,7 @@ class TestSyncCreativesFormatValidation:
                 registered_agent_urls={"https://creative.adcontextprotocol.org"},
             )
 
-        assert str(validated.format_id.agent_url).rstrip("/") == "https://adcontextprotocol.org/agents/formats"
+        assert str(validated.format_id.agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
         assert validated.format_id.id == "display_image"
         assert validated.format_id.width == 300
         assert validated.format_id.height == 250

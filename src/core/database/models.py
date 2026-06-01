@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
 from adcp.types import BrandReference, CreditLimit, Setup
@@ -491,7 +492,7 @@ class Product(Base, JSONValidatorMixin):
 
     # Effective properties - auto-resolve from inventory profile if set
     @property
-    def effective_format_ids(self) -> list[dict[str, str]]:
+    def effective_format_ids(self) -> list[dict[str, Any]]:
         """Get format_ids from inventory profile (if set) or product itself.
 
         Returns format_ids as list of FormatId dicts: [{"agent_url": str, "id": str}, ...]
@@ -500,9 +501,11 @@ class Product(Base, JSONValidatorMixin):
 
         Database validation ensures all format_ids match AdCP FormatId spec.
         """
+        from src.core.canonical_formats import canonicalize_format_ref
+
         if self.inventory_profile_id and self.inventory_profile:
-            return self.inventory_profile.format_ids
-        return self.format_ids
+            return [canonicalize_format_ref(format_ref) for format_ref in self.inventory_profile.format_ids]
+        return [canonicalize_format_ref(format_ref) for format_ref in self.format_ids]
 
     @property
     def effective_properties(self) -> list[dict] | None:

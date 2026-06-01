@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.database.repositories.product import ProductRepository
 from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPInvalidRequestError
 from src.core.resolved_identity import ResolvedIdentity
@@ -1092,6 +1093,41 @@ class TestBuyingModeValidation:
         assert response.products[0].product_id == "currency_bundle"
         assert pricing.pricing_option_id == "cpm_usd_auction"
         assert pricing.currency == "USD"
+
+    @pytest.mark.asyncio
+    async def test_wholesale_wire_payload_canonicalizes_format_url_and_includes_pricing_id(
+        self, integration_db, factory_session
+    ):
+        """Wholesale products advertise sync_creatives-accepted format URLs and pricing IDs."""
+        with ProductEnv(tenant_id="whole-bundle-wire", principal_id="p1") as env:
+            tenant = self._seed_tenant_principal("whole-bundle-wire")
+            tenant_id = tenant.tenant_id
+            InventoryProfileFactory(
+                tenant=tenant,
+                tenant_id=tenant_id,
+                profile_id="wire_bundle",
+                name="Wire Bundle",
+                format_ids=[
+                    {
+                        "agent_url": "https://adcontextprotocol.org/agents/formats",
+                        "id": "display_300x250",
+                    }
+                ],
+                publisher_properties=[
+                    {
+                        "publisher_domain": "whole-bundle.example.com",
+                        "property_ids": ["homepage"],
+                        "selection_type": "by_id",
+                    }
+                ],
+            )
+            response = await self._call_get_products(env, buying_mode="wholesale", brief=None, brand=None, filters=None)
+
+        factory_session.expire_all()
+        wire_product = response.model_dump(mode="json")["products"][0]
+        assert wire_product["product_id"] == "wire_bundle"
+        assert wire_product["format_ids"][0]["agent_url"].rstrip("/") == DEFAULT_CREATIVE_AGENT_URL
+        assert wire_product["pricing_options"][0]["pricing_option_id"] == "cpm_usd_auction"
 
     @pytest.mark.asyncio
     async def test_wholesale_with_empty_string_brief_returns_inventory_bundles(self, integration_db):

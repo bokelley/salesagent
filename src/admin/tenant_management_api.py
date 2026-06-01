@@ -1214,13 +1214,26 @@ def _supported_signal_candidate_types(adapter_type: str) -> set[str]:
 
 
 def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, str]:
-    if isinstance(format_id, FormatIdRef):
-        return {"agent_url": str(format_id.agent_url), "id": str(format_id.id)}
-    return {"agent_url": str(format_id["agent_url"]), "id": str(format_id["id"])}
+    from src.core.canonical_formats import canonicalize_format_ref
+
+    canonical = canonicalize_format_ref(format_id)
+    return {"agent_url": str(canonical["agent_url"]), "id": str(canonical["id"])}
 
 
 def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -> list[dict[str, str]]:
     return [_format_id_dict(fmt.format_id) for fmt in creative_formats]
+
+
+def _wholesale_creative_format_dict(creative_format: WholesaleCreativeFormat) -> dict[str, Any]:
+    data = creative_format.model_dump(mode="json")
+    data["format_id"] = _format_id_dict(creative_format.format_id)
+    return data
+
+
+def _wholesale_format_binding_dict(binding: WholesaleFormatBinding) -> dict[str, Any]:
+    data = binding.model_dump(mode="json")
+    data["format_id"] = _format_id_dict(binding.format_id)
+    return data
 
 
 def _publisher_property_dicts(publisher_properties: list[PublisherPropertySelector]) -> list[dict[str, Any]]:
@@ -1254,7 +1267,7 @@ def _execution_inventory_config(execution: WholesaleInventoryExecution) -> dict[
     config: dict[str, Any] = {
         "adapter": execution.adapter,
         "selectors": selectors,
-        "format_bindings": [binding.model_dump(mode="json") for binding in execution.format_bindings],
+        "format_bindings": [_wholesale_format_binding_dict(binding) for binding in execution.format_bindings],
     }
     if execution.adapter in {"google_ad_manager", "gam"}:
         ad_units = [selector.external_id for selector in execution.selectors if selector.selector_type == "ad_unit"]
@@ -1272,7 +1285,7 @@ def _wholesale_implementation_config(req: WholesaleProductRequest, adapter_type:
     config = _execution_inventory_config(req.inventory.execution)
     config["adapter"] = adapter_type
     config["status"] = req.status
-    config["creative_formats"] = [fmt.model_dump(mode="json") for fmt in req.inventory.creative_formats]
+    config["creative_formats"] = [_wholesale_creative_format_dict(fmt) for fmt in req.inventory.creative_formats]
     config["targeting_capabilities"] = req.targeting_capabilities
     config["optimization_capabilities"] = req.optimization_capabilities
     return config
@@ -1310,23 +1323,22 @@ def _creative_format_schema_from_stored(
     creative_formats: list[dict[str, Any]],
     format_bindings: list[dict[str, Any]],
 ) -> WholesaleCreativeFormat:
+    from src.core.canonical_formats import canonicalize_format_ref
+
+    canonical_format_id = canonicalize_format_ref(format_id)
     for fmt in creative_formats:
-        raw_format_id = fmt.get("format_id") or {}
-        if raw_format_id.get("agent_url") == format_id.get("agent_url") and raw_format_id.get("id") == format_id.get(
-            "id"
-        ):
-            return WholesaleCreativeFormat(**fmt)
+        raw_format_id = canonicalize_format_ref(fmt.get("format_id") or {})
+        if raw_format_id == canonical_format_id:
+            return WholesaleCreativeFormat(**{**fmt, "format_id": raw_format_id})
 
     slot_requirements: list[dict[str, Any]] = []
     for binding in format_bindings:
-        binding_format = binding.get("format_id") or {}
-        if binding_format.get("agent_url") == format_id.get("agent_url") and binding_format.get("id") == format_id.get(
-            "id"
-        ):
+        binding_format = canonicalize_format_ref(binding.get("format_id") or {})
+        if binding_format == canonical_format_id:
             slot_requirements = list(binding.get("slot_requirements") or [])
             break
     return WholesaleCreativeFormat(
-        format_id=FormatIdRef(agent_url=str(format_id["agent_url"]), id=str(format_id["id"])),
+        format_id=FormatIdRef(agent_url=str(canonical_format_id["agent_url"]), id=str(canonical_format_id["id"])),
         slot_requirements=slot_requirements,
     )
 
@@ -1352,7 +1364,10 @@ def _execution_from_config(config: dict[str, Any], adapter_type: str) -> Wholesa
             raw_selectors.append({"selector_type": "placement", "external_id": str(placement_id), "options": {}})
 
     selectors = [InventoryExecutionSelector(**selector) for selector in raw_selectors]
-    bindings = [WholesaleFormatBinding(**binding) for binding in config.get("format_bindings") or []]
+    bindings = [
+        WholesaleFormatBinding(**{**binding, "format_id": _format_id_dict(binding.get("format_id") or {})})
+        for binding in config.get("format_bindings") or []
+    ]
     return WholesaleInventoryExecution(adapter=adapter_type, selectors=selectors, format_bindings=bindings)
 
 
@@ -2128,7 +2143,7 @@ def _wholesale_profile_constraints(
         "status": req.status,
         "delivery_type": "non_guaranteed",
         "adapter": adapter_type,
-        "creative_formats": [fmt.model_dump(mode="json") for fmt in req.inventory.creative_formats],
+        "creative_formats": [_wholesale_creative_format_dict(fmt) for fmt in req.inventory.creative_formats],
         "targeting_capabilities": req.targeting_capabilities,
         "optimization_capabilities": req.optimization_capabilities,
         "allowed_actions": req.allowed_actions,

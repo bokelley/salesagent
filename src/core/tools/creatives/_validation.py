@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.canonical_formats import canonicalize_format_ref
 from src.core.schemas import Creative, CreativeAsset, CreativePolicy, CreativeStatusEnum
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -52,7 +53,7 @@ def _validate_creative_input(
     schema_data: dict[str, Any] = {
         "creative_id": creative.creative_id or str(uuid.uuid4()),
         "name": creative.name,
-        "format_id": creative.format_id,
+        "format_id": canonicalize_format_ref(creative.format_id),
         "assets": creative.assets or {},  # Required by AdCP v1 spec
         # adcp 3.6.0: variants is required by Creative schema (list[CreativeVariant]).
         # CreativeAsset (sync payload) may carry variants as an extra field (extra="allow").

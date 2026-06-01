@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.database.models import AuthorizedProperty
 from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.product import ProductRepository
@@ -407,6 +408,54 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_wholesale_product_api_canonicalizes_legacy_reference_format_refs(
+    management_api_client, gam_tenant, bound_factories
+):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload(wholesale_product_id="legacy_reference_homepage")
+    legacy_url = "https://adcontextprotocol.org/agents/formats"
+    payload["inventory"]["creative_formats"][0]["format_id"]["agent_url"] = legacy_url
+    payload["inventory"]["execution"]["format_bindings"][0]["format_id"]["agent_url"] = legacy_url
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=payload,
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+    created_body = created.get_json()
+    created_format = created_body["inventory"]["creative_formats"][0]
+    assert created_format["format_id"]["agent_url"].rstrip("/") == DEFAULT_CREATIVE_AGENT_URL
+    assert created_format["slot_requirements"][0]["slot_id"] == "leaderboard"
+    assert (
+        created_body["inventory"]["execution"]["format_bindings"][0]["format_id"]["agent_url"].rstrip("/")
+        == DEFAULT_CREATIVE_AGENT_URL
+    )
+
+    listing = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+    )
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    listed_format = listing.get_json()["wholesale_products"][0]["inventory"]["creative_formats"][0]
+    assert listed_format["format_id"]["agent_url"].rstrip("/") == DEFAULT_CREATIVE_AGENT_URL
+    assert listed_format["slot_requirements"][0]["slot_id"] == "leaderboard"
+
+    detail = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/legacy_reference_homepage",
+        headers=auth_headers,
+    )
+    assert detail.status_code == 200, detail.get_data(as_text=True)
+    detail_body = detail.get_json()
+    detail_format = detail_body["inventory"]["creative_formats"][0]
+    assert detail_format["format_id"]["agent_url"].rstrip("/") == DEFAULT_CREATIVE_AGENT_URL
+    assert detail_format["slot_requirements"][0]["slot_id"] == "leaderboard"
+    assert (
+        detail_body["inventory"]["execution"]["format_bindings"][0]["format_id"]["agent_url"].rstrip("/")
+        == DEFAULT_CREATIVE_AGENT_URL
+    )
 
 
 def test_local_example_domain_self_heals_existing_fixture_tenant(
