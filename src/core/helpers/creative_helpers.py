@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from adcp import FormatId as LibraryFormatId
 from pydantic import BaseModel
 
+from src.core.canonical_formats import canonicalize_creative_agent_url
 from src.core.format_cache import canonical_format_satisfies
 
 if TYPE_CHECKING:
@@ -60,7 +61,7 @@ def _extract_format_info(format_value: Any) -> FormatInfo:
         format_id_val = format_value.get("id")
         if not agent_url_val or not format_id_val:
             raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
-        agent_url = str(agent_url_val)
+        agent_url = canonicalize_creative_agent_url(agent_url_val)
         format_id = format_id_val
 
         # Extract optional parameters
@@ -75,7 +76,7 @@ def _extract_format_info(format_value: Any) -> FormatInfo:
             parameters = params
 
     elif isinstance(format_value, LibraryFormatId):
-        agent_url = str(format_value.agent_url)
+        agent_url = canonicalize_creative_agent_url(format_value.agent_url)
         format_id = format_value.id
 
         # Extract optional parameters from object

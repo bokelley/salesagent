@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import TenantManagementConfig
+from src.core.database.models import AdapterConfig, Tenant, TenantManagementConfig
 
 
 def install_management_api_key(api_key: str) -> str:
@@ -70,6 +70,29 @@ def configure_google_ad_manager_adapter(tenant):
         gam_auth_method="service_account",
         gam_service_account_json_plaintext='{"type":"service_account"}',
     )
+
+
+def read_tenant_and_adapter_manual_approval(tenant_id: str, adapter_type: str) -> tuple[bool, bool]:
+    """Return persisted tenant and adapter manual-approval flags."""
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        adapter = session.scalars(
+            select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type=adapter_type)
+        ).first()
+        assert tenant is not None
+        assert adapter is not None
+        if adapter_type == "google_ad_manager":
+            adapter_manual_approval = adapter.gam_manual_approval_required
+        elif adapter_type == "mock":
+            adapter_manual_approval = adapter.mock_manual_approval_required
+        else:
+            adapter_manual_approval = bool((adapter.config_json or {}).get("manual_approval_required"))
+        return bool(tenant.human_review_required), bool(adapter_manual_approval)
+
+
+def read_tenant_and_gam_manual_approval(tenant_id: str) -> tuple[bool, bool]:
+    """Return persisted tenant and GAM adapter manual-approval flags."""
+    return read_tenant_and_adapter_manual_approval(tenant_id, "google_ad_manager")
 
 
 @contextmanager

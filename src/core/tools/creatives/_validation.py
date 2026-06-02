@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.canonical_formats import canonicalize_format_ref
 from src.core.schemas import Creative, CreativeAsset, CreativePolicy, CreativeStatusEnum
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -52,7 +53,7 @@ def _validate_creative_input(
     schema_data: dict[str, Any] = {
         "creative_id": creative.creative_id or str(uuid.uuid4()),
         "name": creative.name,
-        "format_id": creative.format_id,
+        "format_id": canonicalize_format_ref(creative.format_id),
         "assets": creative.assets or {},  # Required by AdCP v1 spec
         # adcp 3.6.0: variants is required by Creative schema (list[CreativeVariant]).
         # CreativeAsset (sync payload) may carry variants as an extra field (extra="allow").
@@ -172,9 +173,19 @@ def get_registered_creative_agent_urls(registry: Any, tenant_id: str | None) -> 
     if not isinstance(agents, list | tuple):
         return None
 
+    from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
     from src.core.validation import normalize_agent_url
 
-    return {normalize_agent_url(agent.agent_url) for agent in agents if getattr(agent, "enabled", True)}
+    registered = {normalize_agent_url(agent.agent_url) for agent in agents if getattr(agent, "enabled", True)}
+
+    default_agent = getattr(registry, "DEFAULT_AGENT", None)
+    default_agent_url = getattr(default_agent, "agent_url", None)
+    if default_agent_url and normalize_agent_url(default_agent_url) in registered:
+        # The reference creative agent may be configured to a local/service URL in
+        # CI or deployments, while products expose the public canonical AdCP URL.
+        registered.add(DEFAULT_CREATIVE_AGENT_URL)
+
+    return registered
 
 
 def check_provenance_required(

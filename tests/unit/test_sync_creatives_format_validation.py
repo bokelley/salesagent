@@ -9,11 +9,11 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
-from src.core.creative_agent_registry import CreativeAgentRegistry
+from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeAsset
 from src.core.tools.creatives import _sync_creatives_impl
-from src.core.tools.creatives._validation import _validate_creative_input
+from src.core.tools.creatives._validation import _validate_creative_input, get_registered_creative_agent_urls
 from tests.harness import make_mock_uow
 
 
@@ -314,11 +314,27 @@ class TestSyncCreativesFormatValidation:
                 registered_agent_urls={"https://creative.adcontextprotocol.org"},
             )
 
-        assert str(validated.format_id.agent_url).rstrip("/") == "https://adcontextprotocol.org/agents/formats"
+        assert str(validated.format_id.agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
         assert validated.format_id.id == "display_image"
         assert validated.format_id.width == 300
         assert validated.format_id.height == 250
         mock_network.assert_not_called()
+
+    def test_reference_agent_alias_registered_when_default_agent_is_local(self):
+        """Canonical product refs validate when the default agent runs at a local URL."""
+        registry = Mock()
+        registry.DEFAULT_AGENT = CreativeAgent(
+            agent_url="http://localhost:9999/api/creative-agent",
+            name="AdCP Standard Creative Agent",
+        )
+        registry._get_tenant_agents.return_value = [registry.DEFAULT_AGENT]
+
+        registered = get_registered_creative_agent_urls(registry, "test_tenant")
+
+        assert registered == {
+            "http://localhost:9999/api/creative-agent",
+            "https://creative.adcontextprotocol.org",
+        }
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""

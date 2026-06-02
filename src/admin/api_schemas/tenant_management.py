@@ -31,6 +31,8 @@ from src.core.config import get_pydantic_extra_mode
 from src.services.catalog_event_types import TENANT_MANAGEMENT_CATALOG_EVENT_TYPES
 
 _EXTRA_MODE = get_pydantic_extra_mode()
+CreativeApprovalSetting = Literal["auto", "manual", "ai"]
+MediaBuyApprovalSetting = Literal["auto", "manual"]
 
 
 def _config() -> ConfigDict:
@@ -56,6 +58,13 @@ def _validate_public_agent_url(value: str) -> str:
             f"public_agent_url must start with 'https://'; got {value!r}. adagents.json fetch is HTTPS-only."
         )
     return stripped
+
+
+def _reject_null_approval_alias(value: str | None) -> str | None:
+    """Reject explicit null for compact embedded approval settings."""
+    if value is None:
+        raise ValueError("omit approval fields to use the default or leave them unchanged; null is not supported")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +530,11 @@ class ProvisionTenantRequest(BaseModel):
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
 
+    # Storefront-facing approval controls. These compact aliases map to the
+    # seller's internal approval fields at provision time.
+    creative_approval: CreativeApprovalSetting = "manual"
+    media_buy_approval: MediaBuyApprovalSetting = "manual"
+
     # Embed-mode breadcrumb root override. Only meaningful when the
     # tenant is embedded inside an upstream host — open-instance
     # tenants ignore this even if set.
@@ -531,6 +545,11 @@ class ProvisionTenantRequest(BaseModel):
     @classmethod
     def _check_public_agent_url(cls, value: str) -> str:
         return _validate_public_agent_url(value)
+
+    @field_validator("creative_approval", "media_buy_approval")
+    @classmethod
+    def _reject_null_approval_aliases(cls, value: str | None) -> str | None:
+        return _reject_null_approval_alias(value)
 
 
 class ProvisionedPrincipalResponse(BaseModel):
@@ -636,8 +655,8 @@ class TenantDetail(TenantSummary):
     embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
     # Storefront-facing approval controls. These are compact aliases for the
     # seller's internal approval fields.
-    creative_approval: Literal["auto", "manual", "ai"] | None = None
-    media_buy_approval: Literal["auto", "manual"] | None = None
+    creative_approval: CreativeApprovalSetting | None = None
+    media_buy_approval: MediaBuyApprovalSetting | None = None
 
 
 class ListTenantsResponse(BaseModel):
@@ -672,15 +691,13 @@ class UpdateTenantRequest(BaseModel):
     # current value alone (other fields use the same omit-to-leave
     # semantic).
     embed_breadcrumb_root: EmbedBreadcrumbRoot | None = None
-    creative_approval: Literal["auto", "manual", "ai"] | SkipJsonSchema[None] = None
-    media_buy_approval: Literal["auto", "manual"] | SkipJsonSchema[None] = None
+    creative_approval: CreativeApprovalSetting | SkipJsonSchema[None] = None
+    media_buy_approval: MediaBuyApprovalSetting | SkipJsonSchema[None] = None
 
     @field_validator("creative_approval", "media_buy_approval")
     @classmethod
     def _reject_null_approval_aliases(cls, value: str | None) -> str | None:
-        if value is None:
-            raise ValueError("omit approval fields to leave them unchanged; null is not supported")
-        return value
+        return _reject_null_approval_alias(value)
 
     # Sprint 1.8 §6: same public_agent_url validator as ProvisionTenantRequest.
     # ``mode='before'`` lets us short-circuit on None (PATCH with field
