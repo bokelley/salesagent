@@ -59,8 +59,13 @@ jobs:
       #   by this application.
       # PYSEC-2026-89: Markdown DoS. No fix released; salesagent doesn't render
       #   untrusted Markdown so the attack surface doesn't apply.
-      # PYSEC-2025-183: PyJWT 2.12.1 (latest). Re-evaluate when upstream ships
-      #   a fix.
+      # PYSEC-2025-183, PYSEC-2026-175, PYSEC-2026-177, PYSEC-2026-178, PYSEC-2026-179:
+      #   PyJWT advisories; fix version 2.13.0 not yet released on PyPI.
+      #   Re-evaluate when upstream ships a fix.
+      # GHSA-jg22-mg44-37j8, GHSA-hg6j-4rv6-33pg: aiohttp advisories; fix
+      #   version 3.14.0 not yet released on PyPI. Re-evaluate when upstream ships.
+      # PYSEC-2026-188: Authlib advisory; fix version 1.6.12 not yet released on
+      #   PyPI. Re-evaluate when upstream ships.
       #
       # Filter scanner-victim packages from the lockfile before scanning.
       # ``uv-secure`` has an internal bug where some packages trigger an
@@ -97,7 +102,7 @@ jobs:
         with open("/tmp/uvscan/uv.lock", "w") as f:
             f.write(text)
         PY
-        uvx uv-secure --allow-unused-ignores --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183 /tmp/uvscan/uv.lock
+        uvx uv-secure --allow-unused-ignores --ignore-vulns GHSA-5239-wwwm-4pmq,PYSEC-2026-89,PYSEC-2025-183,PYSEC-2026-175,PYSEC-2026-177,PYSEC-2026-178,PYSEC-2026-179,GHSA-jg22-mg44-37j8,GHSA-hg6j-4rv6-33pg,PYSEC-2026-188 /tmp/uvscan/uv.lock
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
