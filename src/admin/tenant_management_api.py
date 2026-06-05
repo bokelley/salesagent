@@ -4289,6 +4289,51 @@ def delete_tenant(tenant_id):
 # ---------------------------------------------------------------------------
 
 
+def _auto_provision_gam_default_advertiser(tenant_id: str, adapter_dict: dict) -> None:
+    """Idempotently create the default GAM advertiser and record it on the tenant.
+
+    Side-effect of GAM tenant provisioning. Failures are logged but do not
+    propagate — the tenant is still valid; the operator can call the ensure
+    endpoint to set ``default_gam_advertiser_id`` manually.
+    """
+    try:
+        result = gam_ensure_advertiser_companyservice(
+            network_code=str(adapter_dict["network_code"]),
+            config=adapter_dict,
+            name=_GAM_DEFAULT_ADVERTISER_NAME,
+        )
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            tenant_row = session.get(Tenant, tenant_id)
+            if tenant_row is None:
+                logger.warning("[provision] tenant not found when setting default GAM advertiser tenant=%s", tenant_id)
+                return
+            tenant_row.default_gam_advertiser_id = result.advertiser_id
+            GAMSyncRepository(session, tenant_id).upsert_advertiser(
+                advertiser_id=result.advertiser_id,
+                name=_GAM_DEFAULT_ADVERTISER_NAME,
+                status="active",
+                synced_at=datetime.now(UTC),
+            )
+            if result.created:
+                adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if adapter is not None:
+                    adapter.gam_advertiser_create_permission_proven_at = datetime.now(UTC)
+            session.commit()
+        logger.info(
+            "[provision] default GAM advertiser set tenant=%s advertiser_id=%s created=%s",
+            tenant_id,
+            result.advertiser_id,
+            result.created,
+        )
+    except Exception:
+        logger.exception(
+            "[provision] default GAM advertiser auto-provision failed for tenant=%s — "
+            "tenant is still provisioned; use the ensure endpoint to set default_gam_advertiser_id manually",
+            tenant_id,
+        )
+
+
 @tenant_management_api.route("/tenants/provision", methods=["POST"])
 @require_tenant_management_api_key
 @spec.validate(
@@ -4491,6 +4536,9 @@ def provision_tenant():
             "tenant is still provisioned; next /refresh or cron tick will sync",
             tenant_id,
         )
+
+    if adapter_dict["type"] == "google_ad_manager" and not req.default_gam_advertiser_id:
+        _auto_provision_gam_default_advertiser(tenant_id, adapter_dict)
 
     mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id, subdomain, request.url_root)
     response = ProvisionTenantResponse(
@@ -5865,6 +5913,7 @@ def refresh_targeting_values(tenant_id: str, key_id: str):
 
 _GAM_ADVERTISERS_DEFAULT_LIMIT = 50
 _GAM_ADVERTISERS_MAX_LIMIT = 500
+_GAM_DEFAULT_ADVERTISER_NAME = "Interchange - Default"
 
 
 def _decode_advertisers_cursor(raw: str | None) -> int:
