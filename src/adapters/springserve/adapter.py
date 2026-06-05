@@ -356,11 +356,10 @@ class SpringServeAdapter(AdServerAdapter):
         as a searchable code on the tag.
         """
         product_config = self._product_config_from_package(package)
-        demand_partner_id = self._require_demand_partner_id()
         kwargs: dict[str, Any] = {
             "name": package.name or package.package_id,
             "campaign_id": campaign_id,
-            "demand_partner_id": demand_partner_id,
+            "demand_partner_id": self.demand_partner_id or 0,
             "start_date": start_time,
             "end_date": end_time,
             "format": self._demand_tag_format(package),

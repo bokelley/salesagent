@@ -244,6 +244,24 @@ class TestAdapterDryRun:
         with pytest.raises(ValueError, match="demand_partner_id"):
             adapter._require_demand_partner_id()
 
+    def test_dry_run_create_media_buy_succeeds_without_demand_partner_id(
+        self, sample_request, sample_packages
+    ):
+        # dry_run must succeed even without a demand_partner_id — operators
+        # scaffold adapters in dry-run before provisioning is complete.
+        principal = MagicMock()
+        principal.principal_id = "__sync_orchestrator__"
+        principal.get_adapter_id.return_value = None
+
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        result = invoke_create_media_buy(adapter, sample_request, sample_packages)
+        assert result is not None
+
     def test_default_demand_partner_id_fallback(self):
         principal = MagicMock()
         principal.principal_id = "principal_no_mapping"
