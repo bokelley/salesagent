@@ -82,6 +82,8 @@ jobs:
       #   edge case. Re-evaluate after each ``uv-secure`` bump.
       # ``charset-normalizer``: empty-exception crash on ubuntu-24.04 CI
       #   while scanning 3.4.4 metadata. Re-evaluate after each ``uv-secure`` bump.
+      # ``ag-ui-protocol``: empty-exception crash. Re-evaluate after each ``uv-secure`` bump.
+      # ``grpcio``: empty-exception crash. Re-evaluate after each ``uv-secure`` bump.
       run: |
         mkdir -p /tmp/uvscan
         python3 - <<'PY'
@@ -89,7 +91,7 @@ jobs:
         with open("uv.lock") as f:
             text = f.read()
         # Packages to strip from the scan input — scanner-internal-bug victims.
-        scanner_victims = ["mistralai", "types-psycopg2", "charset-normalizer"]
+        scanner_victims = ["mistralai", "types-psycopg2", "charset-normalizer", "ag-ui-protocol", "grpcio"]
         for name in scanner_victims:
             pattern = re.compile(
                 rf'^\[\[package\]\]\nname = "{re.escape(name)}".*?(?=^\[\[|\Z)',
