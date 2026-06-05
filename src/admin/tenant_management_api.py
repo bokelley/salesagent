@@ -4289,15 +4289,16 @@ def delete_tenant(tenant_id):
 # ---------------------------------------------------------------------------
 
 
-def _auto_provision_gam_default_advertiser(tenant_id: str) -> None:
-    """Set the default GAM advertiser from the local sync cache, if one exists.
+def _auto_provision_gam_default_advertiser(tenant_id: str, adapter_dict: dict) -> None:
+    """Ensure the default GAM advertiser exists and record it on the tenant.
 
-    Checks the GAM advertiser cache for an existing advertiser named
-    ``_GAM_DEFAULT_ADVERTISER_NAME``. If found, records it as the tenant default
-    without any GAM API call. If not found, skips — the operator can set it via
-    the ensure endpoint after provisioning.
+    Checks the local sync cache first. If the advertiser is already cached,
+    records it without a GAM API call. Otherwise calls ensure to find-or-create
+    it in GAM, then records the result.
 
-    Failures are logged but do not propagate — the tenant is still valid.
+    Only called when the caller has explicitly opted in via
+    ``provision_default_resources=True``. Failures are logged but do not
+    propagate — the tenant is still valid.
     """
     try:
         with get_db_session() as session:
@@ -4307,19 +4308,43 @@ def _auto_provision_gam_default_advertiser(tenant_id: str) -> None:
                 logger.warning("[provision] tenant not found when setting default GAM advertiser tenant=%s", tenant_id)
                 return
             cached = GAMSyncRepository(session, tenant_id).find_advertiser_by_name(_GAM_DEFAULT_ADVERTISER_NAME)
-            if cached is None:
+            if cached is not None:
+                tenant_row.default_gam_advertiser_id = cached.advertiser_id
+                session.commit()
                 logger.info(
-                    "[provision] no cached default GAM advertiser found tenant=%s — "
-                    "use the ensure endpoint to set default_gam_advertiser_id",
+                    "[provision] default GAM advertiser set from cache tenant=%s advertiser_id=%s",
                     tenant_id,
+                    cached.advertiser_id,
                 )
                 return
-            tenant_row.default_gam_advertiser_id = cached.advertiser_id
+
+        result = gam_ensure_advertiser_companyservice(
+            network_code=str(adapter_dict["network_code"]),
+            config=adapter_dict,
+            name=_GAM_DEFAULT_ADVERTISER_NAME,
+        )
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            tenant_row = session.get(Tenant, tenant_id)
+            if tenant_row is None:
+                return
+            tenant_row.default_gam_advertiser_id = result.advertiser_id
+            GAMSyncRepository(session, tenant_id).upsert_advertiser(
+                advertiser_id=result.advertiser_id,
+                name=_GAM_DEFAULT_ADVERTISER_NAME,
+                status="active",
+                synced_at=datetime.now(UTC),
+            )
+            if result.created:
+                adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if adapter is not None:
+                    adapter.gam_advertiser_create_permission_proven_at = datetime.now(UTC)
             session.commit()
         logger.info(
-            "[provision] default GAM advertiser set from cache tenant=%s advertiser_id=%s",
+            "[provision] default GAM advertiser set tenant=%s advertiser_id=%s created=%s",
             tenant_id,
-            cached.advertiser_id,
+            result.advertiser_id,
+            result.created,
         )
     except Exception:
         logger.exception(
@@ -4532,8 +4557,9 @@ def provision_tenant():
             tenant_id,
         )
 
-    if adapter_dict["type"] == "google_ad_manager" and not req.default_gam_advertiser_id:
-        _auto_provision_gam_default_advertiser(tenant_id)
+    if req.provision_default_resources and not req.default_gam_advertiser_id:
+        if adapter_dict.get("type") == "google_ad_manager":
+            _auto_provision_gam_default_advertiser(tenant_id, adapter_dict)
 
     mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id, subdomain, request.url_root)
     response = ProvisionTenantResponse(

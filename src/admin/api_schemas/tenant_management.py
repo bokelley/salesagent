@@ -527,6 +527,12 @@ class ProvisionTenantRequest(BaseModel):
     # create_media_buy time, not by an explicit /activate endpoint).
     default_gam_advertiser_id: str | None = Field(default=None, max_length=64)
 
+    # When True, the provision endpoint will ensure adapter-specific default
+    # resources exist (e.g. the Interchange default advertiser for GAM), creating
+    # them if absent. Requires the adapter credentials to have create permission.
+    # Defaults to False — callers must opt in explicitly.
+    provision_default_resources: bool = False
+
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
 

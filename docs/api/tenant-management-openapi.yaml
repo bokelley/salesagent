@@ -3432,6 +3432,10 @@ components:
           minLength: 1
           title: Name
           type: string
+        provision_default_resources:
+          default: false
+          title: Provision Default Resources
+          type: boolean
         public_agent_url:
           default: https://interchange.io
           maxLength: 500
