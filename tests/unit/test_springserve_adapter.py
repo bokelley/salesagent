@@ -244,9 +244,7 @@ class TestAdapterDryRun:
         with pytest.raises(ValueError, match="demand_partner_id"):
             adapter._require_demand_partner_id()
 
-    def test_dry_run_create_media_buy_succeeds_without_demand_partner_id(
-        self, sample_request, sample_packages
-    ):
+    def test_dry_run_create_media_buy_succeeds_without_demand_partner_id(self, sample_request, sample_packages):
         # dry_run must succeed even without a demand_partner_id — operators
         # scaffold adapters in dry-run before provisioning is complete.
         principal = MagicMock()
