@@ -11,6 +11,7 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
+from adcp.types import PushNotificationConfig
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -94,6 +95,7 @@ class GetProductsRequest(LibraryGetProductsRequest):
         None,
         description=("Deprecated catalog_version token accepted for compatibility with earlier v3.1 schema revisions."),
     )
+    push_notification_config: PushNotificationConfig | None = None
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

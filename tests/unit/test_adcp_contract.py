@@ -123,6 +123,7 @@ class TestSchemaMatchesLibrary:
         local_fields = set(GetProductsRequest.model_fields.keys())
         get_products_extensions = {
             "if_catalog_version",
+            "push_notification_config",
         }
         assert lib_fields == local_fields - get_products_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
