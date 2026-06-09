@@ -3175,6 +3175,7 @@ def create_wholesale_product(tenant_id: str):
         if existing_profile is None:
             profile_repo.add(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         publish_product_catalog_change(
             tenant_id=tenant_id,
@@ -3260,6 +3261,7 @@ def put_wholesale_product(tenant_id: str, product_id: str):
         if legacy_product is not None:
             ProductRepository(session, tenant_id).delete(legacy_product)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         publish_product_catalog_change(
             tenant_id=tenant_id,
@@ -3295,6 +3297,7 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
         ):
             ProductRepository(session, tenant_id).delete(legacy_product)
             session.commit()
+            invalidate_status_cache(tenant_id)
             publish_product_record_catalog_change(tenant_id=tenant_id, action="deleted", product=legacy_product)
             response = DeleteWholesaleProductResponse(success=True, message=f"Wholesale product {product_id!r} deleted")
             return jsonify(response.model_dump())
@@ -3308,6 +3311,7 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
             ProductRepository(session, tenant_id).delete(legacy_product)
         profile_repo.delete(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         publish_product_catalog_change(
             tenant_id=tenant_id,

@@ -44,6 +44,7 @@ from tests.factories import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
     GamAdvertiserFactory,
+    InventoryProfileFactory,
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
@@ -1882,11 +1883,11 @@ class TestStatusSetupTasks:
 
 
 class TestStatusProductsBlock:
-    """Sprint 1.8 follow-up — products rollup on the /status response.
+    """Wholesale products rollup on the /status response.
 
-    Distinct from packages: one Product fans out to multiple priced
-    packages, so packages.active_count doesn't answer "what is the
-    publisher selling?". Storefront's homepage card reads from this
+    Distinct from packages: one wholesale product fans out to multiple
+    priced packages, so packages.active_count doesn't answer "what is
+    the publisher selling?". Storefront's homepage card reads from this
     block.
     """
 
@@ -1899,8 +1900,21 @@ class TestStatusProductsBlock:
         cleanup_tenants.append(tid)
         return tid
 
+    @staticmethod
+    def _wholesale_profile(tenant, profile_id: str, *, status: str = "active", **overrides):
+        constraints = {"managed_by": "wholesale_products_api", "owner_product_id": profile_id}
+        if status != "active":
+            constraints["status"] = status
+        return InventoryProfileFactory(
+            tenant=tenant,
+            profile_id=profile_id,
+            name=profile_id.replace("_", " ").title(),
+            constraints=constraints,
+            **overrides,
+        )
+
     def test_products_block_present_with_zero_counts_when_no_products(self, client, auth_headers, managed_tenant):
-        """A freshly-provisioned tenant has no Products → all counters zero."""
+        """A freshly-provisioned tenant has no wholesale InventoryProfiles → all counters zero."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         invalidate_status_cache(managed_tenant)
@@ -1909,49 +1923,104 @@ class TestStatusProductsBlock:
         body = resp.get_json()
         assert "products" in body
         assert body["products"] == {"active_count": 0, "draft_count": 0, "archived_count": 0}
+        assert body["inventory_profiles"] == {
+            "total_count": 0,
+            "complete_count": 0,
+            "incomplete_count": 0,
+            "wholesale_owned_count": 0,
+        }
 
-    def test_active_products_counted(self, client, auth_headers, managed_tenant, bound_factories):
-        """``archived_at IS NULL`` → ``active_count``."""
+    def test_active_wholesale_profiles_counted(self, client, auth_headers, managed_tenant, bound_factories):
+        """Complete wholesale-owned InventoryProfiles with active status count as active products."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_active_1", name="Active 1")
-        ProductFactory(tenant=tenant, product_id="prod_active_2", name="Active 2")
+        self._wholesale_profile(tenant, "prod_active_1")
+        self._wholesale_profile(tenant, "prod_active_2")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         assert resp.get_json()["products"]["active_count"] == 2
 
-    def test_archived_products_split_from_active(self, client, auth_headers, managed_tenant, bound_factories):
-        """``archived_at IS NOT NULL`` → ``archived_count``, not ``active_count``."""
+    def test_wholesale_profile_statuses_split_counts(self, client, auth_headers, managed_tenant, bound_factories):
+        """Wholesale profile lifecycle status drives active/draft/archived counts."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_active", name="Active")
-        archived = ProductFactory(tenant=tenant, product_id="prod_archived", name="Archived")
-        archived.archived_at = datetime.now(UTC)
+        self._wholesale_profile(tenant, "prod_active")
+        self._wholesale_profile(tenant, "prod_draft", status="draft")
+        self._wholesale_profile(tenant, "prod_archived", status="archived")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         body = resp.get_json()["products"]
         assert body["active_count"] == 1
+        assert body["draft_count"] == 1
         assert body["archived_count"] == 1
 
-    def test_draft_count_always_zero(self, client, auth_headers, managed_tenant, bound_factories):
-        """``draft_count`` reserved for a future draft-state column —
-        always 0 today, but the field is in the response shape so
-        Storefront can render a "Drafts" badge without an API change."""
+    def test_legacy_product_rows_do_not_inflate_wholesale_status(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        """Legacy Product rows without matching profiles are not listable wholesale products."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_d_1", name="P1")
+        ProductFactory(tenant=tenant, product_id="orphan_legacy_product", name="Orphan Legacy Product")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
-        assert resp.get_json()["products"]["draft_count"] == 0
+        assert resp.get_json()["products"] == {"active_count": 0, "draft_count": 0, "archived_count": 0}
+
+    def test_inventory_profiles_block_counts_ingredient_layer(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        """Inventory profile counts describe ingredients separately from sellable products."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        self._wholesale_profile(tenant, "complete_wholesale")
+        self._wholesale_profile(tenant, "incomplete_wholesale", format_ids=[])
+        InventoryProfileFactory(tenant=tenant, profile_id="complete_unowned", constraints={"formats": ["display"]})
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        body = resp.get_json()
+        assert body["inventory_profiles"] == {
+            "total_count": 3,
+            "complete_count": 2,
+            "incomplete_count": 1,
+            "wholesale_owned_count": 2,
+        }
+        assert body["products"] == {"active_count": 1, "draft_count": 0, "archived_count": 0}
+
+    def test_status_product_buckets_match_wholesale_products_list_count(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        """Status products count the same listable recipes as the wholesale-products API."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        self._wholesale_profile(tenant, "prod_active")
+        self._wholesale_profile(tenant, "prod_draft", status="draft")
+        self._wholesale_profile(tenant, "prod_archived", status="archived")
+        InventoryProfileFactory(tenant=tenant, profile_id="ingredient_only", constraints={"formats": ["display"]})
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        status_resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        list_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/wholesale-products",
+            headers=auth_headers,
+        )
+
+        assert list_resp.status_code == 200, list_resp.get_data(as_text=True)
+        product_counts = status_resp.get_json()["products"]
+        status_total = product_counts["active_count"] + product_counts["draft_count"] + product_counts["archived_count"]
+        assert status_total == list_resp.get_json()["count"] == 3
 
 
 # ---------------------------------------------------------------------------

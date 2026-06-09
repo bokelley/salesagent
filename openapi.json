@@ -6915,6 +6915,9 @@
             "title": "Fetched At",
             "type": "string"
           },
+          "inventory_profiles": {
+            "$ref": "#/components/schemas/TenantStatusResponse.f44f287.StatusInventoryProfilesBlock"
+          },
           "media_buys": {
             "$ref": "#/components/schemas/TenantStatusResponse.f44f287.StatusMediaBuysBlock"
           },
@@ -7106,6 +7109,34 @@
         "title": "StatusCreativesBlock",
         "type": "object"
       },
+      "TenantStatusResponse.f44f287.StatusInventoryProfilesBlock": {
+        "additionalProperties": false,
+        "description": "Inventory-profile counters.\n\nInventory profiles are the reusable ingredient layer: the ad-server\nselectors, publisher properties, and creative-format constraints that\nwholesale products are composed from. These counts are intentionally\nseparate from :class:`StatusProductsBlock`, which counts sellable\nwholesale products.",
+        "properties": {
+          "complete_count": {
+            "default": 0,
+            "title": "Complete Count",
+            "type": "integer"
+          },
+          "incomplete_count": {
+            "default": 0,
+            "title": "Incomplete Count",
+            "type": "integer"
+          },
+          "total_count": {
+            "default": 0,
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "wholesale_owned_count": {
+            "default": 0,
+            "title": "Wholesale Owned Count",
+            "type": "integer"
+          }
+        },
+        "title": "StatusInventoryProfilesBlock",
+        "type": "object"
+      },
       "TenantStatusResponse.f44f287.StatusMediaBuysBlock": {
         "additionalProperties": false,
         "description": "Top-level media-buy counters (a buy contains 1+ packages).",
@@ -7144,7 +7175,7 @@
       },
       "TenantStatusResponse.f44f287.StatusProductsBlock": {
         "additionalProperties": false,
-        "description": "Product-level counters.\n\nDistinct from :class:`StatusPackagesBlock` \u2014 one product can have\nmultiple priced packages, so package counts don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces ``active_count``\non its homepage as the primary \"what's the publisher doing\" signal.\n\nNote: the Product model doesn't carry an explicit ``status`` field\ntoday. ``archived_at IS NULL`` rows count as active; non-null rows\ncount as archived. ``draft_count`` is 0 until a draft state lands\n(forward-compatible field \u2014 Storefront can render a \"Drafts\" badge\nwithout an API shape change when it does).",
+        "description": "Wholesale product-level counters.\n\nDistinct from :class:`StatusPackagesBlock` \u2014 one product can have\nmultiple priced packages, so package counts don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces ``active_count``\non its homepage as the primary \"what's the publisher doing\" signal.\n\nCounts are based on complete, wholesale-owned InventoryProfile rows,\nwhich are the durable source for the wholesale product feed.",
         "properties": {
           "active_count": {
             "default": 0,

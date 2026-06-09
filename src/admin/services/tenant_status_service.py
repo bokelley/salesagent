@@ -23,6 +23,7 @@ from src.admin.api_schemas.tenant_management import (
     SetupTasksBlock,
     StatusAdapterBlock,
     StatusCreativesBlock,
+    StatusInventoryProfilesBlock,
     StatusMediaBuysBlock,
     StatusPackagesBlock,
     StatusProductsBlock,
@@ -45,14 +46,20 @@ from src.core.database.models import (
     AdapterConfig,
     Context,
     Creative,
+    InventoryProfile,
     MediaBuy,
     MediaPackage,
-    Product,
     SyncJob,
     Tenant,
     WorkflowStep,
 )
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
+from src.core.inventory_profile_projection import (
+    inventory_profile_status,
+    is_complete_inventory_profile,
+    is_wholesale_owned_inventory_profile,
+)
 
 # ---------------------------------------------------------------------------
 # In-memory cache (5-second TTL — see sprint 1.5 design § Caching)
@@ -105,13 +112,15 @@ def get_tenant_status(tenant_id: str) -> TenantStatusResponse | None:
 def _build_status(session: Session, tenant: Tenant) -> TenantStatusResponse:
     tenant_id = tenant.tenant_id
     adapter = _adapter_block(session, tenant_id)
+    inventory_profiles = InventoryProfileRepository(session, tenant_id).list_all()
     return TenantStatusResponse(
         adapter=adapter,
         syncs=_syncs_block(session, tenant, adapter.type),
         workflows=_workflows_block(session, tenant_id),
         media_buys=_media_buys_block(session, tenant_id),
         packages=_packages_block(session, tenant_id),
-        products=_products_block(session, tenant_id),
+        products=_products_block(inventory_profiles),
+        inventory_profiles=_inventory_profiles_block(inventory_profiles),
         creatives=_creatives_block(session, tenant_id),
         webhooks=_webhooks_block(),
         setup_tasks=_setup_tasks_block(session, tenant_id),
@@ -298,31 +307,50 @@ def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
     )
 
 
-def _products_block(session: Session, tenant_id: str) -> StatusProductsBlock:
-    """Product counters split by archived state.
+def _products_block(inventory_profiles: list[InventoryProfile]) -> StatusProductsBlock:
+    """Wholesale product counters split by InventoryProfile lifecycle state.
 
-    Sprint 1.8 follow-up — Storefront's homepage uses ``active_count``
-    as the primary "what's the publisher selling?" signal. Distinct
-    from packages because one product fans out to N priced packages.
-
-    The Product model doesn't carry an explicit status field today;
-    ``archived_at IS NULL`` rows count active, non-null rows count
-    archived. ``draft_count`` always 0 — the field is reserved for
-    when a draft state lands so Storefront can light up a "Drafts"
-    badge without an API shape change.
+    Storefront's homepage uses this block as its "what's the publisher
+    selling?" signal, so it must count the same durable wholesale source
+    that list/create/get wholesale-product surfaces can serve.
     """
-    active = session.scalar(
-        select(func.count()).select_from(Product).where(Product.tenant_id == tenant_id, Product.archived_at.is_(None))
-    )
-    archived = session.scalar(
-        select(func.count())
-        .select_from(Product)
-        .where(Product.tenant_id == tenant_id, Product.archived_at.is_not(None))
-    )
+    active = 0
+    draft = 0
+    archived = 0
+    for profile in inventory_profiles:
+        if not is_complete_inventory_profile(profile) or not is_wholesale_owned_inventory_profile(profile):
+            continue
+        status = inventory_profile_status(profile)
+        if status == "draft":
+            draft += 1
+        elif status == "archived":
+            archived += 1
+        else:
+            active += 1
+
     return StatusProductsBlock(
-        active_count=int(active or 0),
-        draft_count=0,
-        archived_count=int(archived or 0),
+        active_count=active,
+        draft_count=draft,
+        archived_count=archived,
+    )
+
+
+def _inventory_profiles_block(inventory_profiles: list[InventoryProfile]) -> StatusInventoryProfilesBlock:
+    """Ingredient-layer counters for reusable inventory profiles."""
+    complete = 0
+    wholesale_owned = 0
+    for profile in inventory_profiles:
+        if is_complete_inventory_profile(profile):
+            complete += 1
+        if is_wholesale_owned_inventory_profile(profile):
+            wholesale_owned += 1
+
+    total = len(inventory_profiles)
+    return StatusInventoryProfilesBlock(
+        total_count=total,
+        complete_count=complete,
+        incomplete_count=total - complete,
+        wholesale_owned_count=wholesale_owned,
     )
 
 

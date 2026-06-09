@@ -401,6 +401,32 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
     assert missing.status_code == 404
 
 
+def test_wholesale_create_invalidates_cached_status(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    before = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/status",
+        headers=auth_headers,
+    )
+    assert before.status_code == 200, before.get_data(as_text=True)
+    assert before.get_json()["products"]["active_count"] == 0
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=_wholesale_payload(),
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+
+    after = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/status",
+        headers=auth_headers,
+    )
+    assert after.status_code == 200, after.get_data(as_text=True)
+    assert after.get_json()["products"]["active_count"] == 1
+    assert after.get_json()["inventory_profiles"]["total_count"] == 1
+
+
 def test_wholesale_product_authoring_rejects_system_metadata_inputs(management_api_client, gam_tenant):
     client, auth_headers = management_api_client
     payload = _wholesale_payload(
