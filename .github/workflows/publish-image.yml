@@ -90,6 +90,27 @@ jobs:
           # can reuse a stale venv across dep bumps. See CLAUDE.md.
           echo "value=$(shasum -a 256 uv.lock | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
+      - name: Build image for vulnerability scan
+        env:
+          LOCKFILE_HASH: ${{ steps.lockhash.outputs.value }}
+          SCAN_IMAGE: salesagent-scan:${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --tag "${SCAN_IMAGE}" \
+            --build-arg "LOCKFILE_HASH=${LOCKFILE_HASH}" \
+            --build-arg "GIT_SHA=${GITHUB_SHA}" \
+            --build-arg "GIT_BRANCH=${GITHUB_REF_NAME}" \
+            .
+
+      - name: Trivy vulnerability gate
+        env:
+          SCAN_IMAGE: salesagent-scan:${{ github.sha }}
+        run: scripts/ci/trivy_image_gate.sh "${SCAN_IMAGE}"
+
       - name: Build and push
         env:
           TAGS: ${{ steps.meta.outputs.tags }}

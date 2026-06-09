@@ -3,14 +3,14 @@
 # Cache bust: 2026-02-27
 
 # ── supercronic build stage ───────────────────────────────────────────
-# We build from source on Go 1.26.3 rather than pulling the upstream
+# We build from source on a patched Go toolchain rather than pulling the upstream
 # release binary because upstream v0.2.45 is still compiled against
 # Go 1.26.2, which carries 5 stdlib HIGH CVEs (DNS, HTTP/2, mail, Dial):
 #   CVE-2026-3388, CVE-2026-33854, CVE-2026-39820, CVE-2026-39836, CVE-2026-42499
-# All are fixed in Go 1.25.10 / 1.26.3. Pinning the toolchain here lets
-# us clear the gate without waiting on aptible/supercronic to cut a
-# new release.
-FROM golang:1.26.3-alpine AS supercronic-builder
+# CVE-2026-42504 is fixed in Go 1.25.11 / 1.26.4. Pinning the toolchain
+# here lets us clear the gate without waiting on aptible/supercronic to
+# cut a new release.
+FROM golang:1.26.4-alpine AS supercronic-builder
 RUN apk add --no-cache git
 ARG SUPERCRONIC_VERSION=v0.2.45
 RUN git clone --depth 1 --branch ${SUPERCRONIC_VERSION} https://github.com/aptible/supercronic.git /src
@@ -105,9 +105,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5
 
-# Copy the per-arch supercronic binary we just built from source on Go
-# 1.26.3. See the ``supercronic-builder`` stage header for the CVE list
-# that drove this off the upstream release binary.
+# Copy the per-arch supercronic binary we just built from source on a
+# patched Go toolchain. See the ``supercronic-builder`` stage header for
+# the CVE list that drove this off the upstream release binary.
 ARG TARGETARCH
 COPY --from=supercronic-builder /out/supercronic-linux-${TARGETARCH} /usr/local/bin/supercronic
 RUN chmod +x /usr/local/bin/supercronic
