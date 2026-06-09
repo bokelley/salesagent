@@ -3376,6 +3376,59 @@ class TestRefresh:
         # double-spawn the work that just started.
         assert resp.get_json()["sync_run_ids"]["inventory"] == pending_sync_id
 
+    def test_inventory_worker_creates_custom_targeting_companion_for_full_runs(self, bound_factories, monkeypatch):
+        """Scheduler/admin inventory runs do the custom-targeting work too.
+
+        They do not pre-create the ``custom_targeting`` row the way
+        ``/refresh`` does, so the worker must create it or embedded
+        storefront status reads will show stale targeting health even
+        after a successful full inventory run.
+        """
+        import src.services.background_sync_service as bg_mod
+        from tests.factories import AdapterConfigFactory, TenantFactory
+
+        tenant = TenantFactory(
+            tenant_id="tenant_inventory_companion",
+            ad_server="google_ad_manager",
+        )
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type="google_ad_manager",
+            gam_network_code="123456",
+            gam_refresh_token="test-refresh-token",
+        )
+        bound_factories.commit()
+
+        spawned = []
+
+        class _NoopThread:
+            def __init__(self, *args, **kwargs):
+                spawned.append(kwargs)
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(bg_mod.threading, "Thread", _NoopThread)
+
+        sync_id = bg_mod.start_inventory_sync_background(
+            tenant_id=tenant.tenant_id,
+            sync_mode="full",
+            triggered_by="scheduler_inventory",
+        )
+        bg_mod._active_syncs.pop(sync_id, None)
+
+        assert spawned
+        bound_factories.expire_all()
+        jobs = bound_factories.scalars(select(SyncJob).filter_by(tenant_id=tenant.tenant_id)).all()
+
+        assert {job.sync_type for job in jobs} == {"inventory", "custom_targeting"}
+        inventory = next(job for job in jobs if job.sync_type == "inventory")
+        targeting = next(job for job in jobs if job.sync_type == "custom_targeting")
+        assert inventory.sync_id == sync_id
+        assert targeting.status == "running"
+        assert targeting.triggered_by == "scheduler_inventory"
+        assert targeting.progress == {"phase": "Starting", "bundled_with": sync_id}
+
 
 # ---------------------------------------------------------------------------
 # Targeting value lazy refresh

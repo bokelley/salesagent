@@ -7,6 +7,7 @@ and losing progress on container restarts.
 
 import logging
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -56,6 +57,36 @@ def _is_stale_running_sync(sync_job: SyncJob, *, now: datetime | None = None) ->
         started_at = started_at.replace(tzinfo=UTC)
 
     return (now or datetime.now(UTC)) - started_at > STALE_RUNNING_SYNC_AFTER
+
+
+def _sync_types_include(sync_types: list[str] | None, sync_type: str) -> bool:
+    """Return whether an inventory worker run includes a bundled sub-sync."""
+    return sync_types is None or sync_type in sync_types
+
+
+def _new_custom_targeting_sync_id(tenant_id: str) -> str:
+    return f"sync_{tenant_id}_custom_targeting_{uuid.uuid4().hex[:8]}"
+
+
+def _invalidate_inventory_tree_cache(tenant_id: str, sync_id: str) -> None:
+    """Invalidate Flask cache when the worker is running inside an app context."""
+    try:
+        from flask import current_app, has_app_context
+
+        if not has_app_context():
+            logger.debug("[%s] Skipping inventory tree cache invalidation: no Flask app context", sync_id)
+            return
+
+        cache = getattr(current_app, "cache", None)
+        if cache is None:
+            return
+
+        cache_key = f"inventory_tree:v2:{tenant_id}"
+        cache.delete(cache_key)
+        logger.info("[%s] Invalidated inventory tree cache: %s", sync_id, cache_key)
+    except Exception as cache_error:
+        # Don't fail the sync if cache invalidation fails.
+        logger.warning("[%s] Failed to invalidate cache: %s", sync_id, cache_error)
 
 
 def start_inventory_sync_background(
@@ -140,6 +171,8 @@ def start_inventory_sync_background(
 
         # Use the caller-supplied pending row when provided; otherwise create
         # a fresh row (admin-button / cron path).
+        worker_started_at = datetime.now(UTC)
+
         if pending_sync_id is not None:
             pending_row = db.scalars(select(SyncJob).filter_by(sync_id=pending_sync_id)).first()
             if pending_row is None:
@@ -158,7 +191,7 @@ def start_inventory_sync_background(
             # that sat pending for >60s and just transitioned to running
             # would falsely look like a stale in-flight conflict on the
             # next /refresh.
-            pending_row.started_at = datetime.now(UTC)
+            pending_row.started_at = worker_started_at
             pending_row.progress = {
                 "phase": "Starting",
                 "sync_types": sync_types,
@@ -166,14 +199,14 @@ def start_inventory_sync_background(
                 "audience_segment_limit": audience_segment_limit,
             }
         else:
-            sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
+            sync_id = f"sync_{tenant_id}_{int(worker_started_at.timestamp())}"
             sync_job = SyncJob(
                 sync_id=sync_id,
                 tenant_id=tenant_id,
                 adapter_type=adapter_type,
                 sync_type="inventory",
                 status="running",
-                started_at=datetime.now(UTC),
+                started_at=worker_started_at,
                 triggered_by=triggered_by,
                 triggered_by_id=triggered_by_id,
                 progress={
@@ -185,9 +218,13 @@ def start_inventory_sync_background(
             )
             db.add(sync_job)
 
-        # Transition the companion custom_targeting row when /refresh fanned
-        # one out — inventory sync covers targeting internally, so the
-        # companion row tracks the same lifecycle.
+        # Inventory sync covers custom targeting internally. Guarantee a
+        # companion custom_targeting row for every full/bundled run, whether
+        # it came from /refresh (pre-created row) or from scheduler/admin paths
+        # that only enqueue inventory.
+        if targeting_sync_id is None and _sync_types_include(sync_types, "custom_targeting"):
+            targeting_sync_id = _new_custom_targeting_sync_id(tenant_id)
+
         if targeting_sync_id is not None:
             targeting_row = db.scalars(select(SyncJob).filter_by(sync_id=targeting_sync_id)).first()
             if targeting_row is not None:
@@ -195,7 +232,21 @@ def start_inventory_sync_background(
                 # Restamp so the worker-pickup time is what ``/refresh``
                 # idempotency compares against (see comment on
                 # ``pending_row.started_at`` above).
-                targeting_row.started_at = datetime.now(UTC)
+                targeting_row.started_at = worker_started_at
+                targeting_row.progress = {"phase": "Starting", "bundled_with": sync_id}
+            else:
+                targeting_row = SyncJob(
+                    sync_id=targeting_sync_id,
+                    tenant_id=tenant_id,
+                    adapter_type=adapter_type,
+                    sync_type="custom_targeting",
+                    status="running",
+                    started_at=worker_started_at,
+                    triggered_by=triggered_by,
+                    triggered_by_id=triggered_by_id,
+                    progress={"phase": "Starting", "bundled_with": sync_id},
+                )
+                db.add(targeting_row)
 
         db.commit()
 
@@ -539,22 +590,17 @@ def _run_sync_thread(
         # /refresh fanned one out — same lifecycle, bundled work.
         if targeting_sync_id is not None:
             _mark_sync_complete(
-                targeting_sync_id, {"bundled_with": sync_id, "summary": "custom_targeting synced as part of inventory"}
+                targeting_sync_id,
+                {
+                    "bundled_with": sync_id,
+                    "summary": "custom_targeting synced as part of inventory",
+                    "custom_targeting": targeting_summary,
+                },
             )
         logger.info(f"[{sync_id}] Sync completed successfully")
 
-        # Invalidate inventory tree cache after successful sync
-        try:
-            from flask import current_app
-
-            cache = getattr(current_app, "cache", None)
-            if cache:
-                cache_key = f"inventory_tree:v2:{tenant_id}"
-                cache.delete(cache_key)
-                logger.info(f"[{sync_id}] Invalidated inventory tree cache: {cache_key}")
-        except Exception as cache_error:
-            # Don't fail the sync if cache invalidation fails
-            logger.warning(f"[{sync_id}] Failed to invalidate cache: {cache_error}")
+        # Invalidate inventory tree cache after successful sync.
+        _invalidate_inventory_tree_cache(tenant_id, sync_id)
 
     except Exception as e:
         logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
