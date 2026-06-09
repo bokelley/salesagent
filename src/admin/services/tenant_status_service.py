@@ -52,7 +52,12 @@ from src.core.database.models import (
     Tenant,
     WorkflowStep,
 )
+from src.core.database.repositories.inventory_profile import InventoryProfileRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
+from src.core.inventory_profile_projection import (
+    inventory_profile_status,
+    is_buyer_visible_inventory_profile,
+)
 
 # ---------------------------------------------------------------------------
 # In-memory cache (5-second TTL — see sprint 1.5 design § Caching)
@@ -111,7 +116,7 @@ def _build_status(session: Session, tenant: Tenant) -> TenantStatusResponse:
         workflows=_workflows_block(session, tenant_id),
         media_buys=_media_buys_block(session, tenant_id),
         packages=_packages_block(session, tenant_id),
-        products=_products_block(session, tenant_id),
+        products=_products_block(session, tenant),
         creatives=_creatives_block(session, tenant_id),
         webhooks=_webhooks_block(),
         setup_tasks=_setup_tasks_block(session, tenant_id),
@@ -298,31 +303,53 @@ def _packages_block(session: Session, tenant_id: str) -> StatusPackagesBlock:
     )
 
 
-def _products_block(session: Session, tenant_id: str) -> StatusProductsBlock:
-    """Product counters split by archived state.
+def _products_block(session: Session, tenant: Tenant) -> StatusProductsBlock:
+    """Product counters, resolved the same way buyers see the catalog.
 
-    Sprint 1.8 follow-up — Storefront's homepage uses ``active_count``
-    as the primary "what's the publisher selling?" signal. Distinct
-    from packages because one product fans out to N priced packages.
+    Storefront's homepage uses ``active_count`` as the primary "what's the
+    publisher selling?" signal. Critically, *where* that catalog lives depends
+    on the tenant:
 
-    The Product model doesn't carry an explicit status field today;
-    ``archived_at IS NULL`` rows count active, non-null rows count
-    archived. ``draft_count`` always 0 — the field is reserved for
-    when a draft state lands so Storefront can light up a "Drafts"
-    badge without an API shape change.
+    * **Embedded storefronts** sell their wholesale catalog, which is stored as
+      :class:`InventoryProfile` rows and projected into products at read time
+      (see ``get_products`` wholesale mode and ``list_wholesale_products``).
+      Persisted ``Product`` rows are NOT part of an embedded tenant's
+      buyer-facing or operator-facing catalog. Counting them (the old
+      behavior) reported phantom products that the storefront's own product
+      list can never show — the "status says N, list shows 0" split behind
+      issue #3322. So for embedded tenants we count buyer-visible inventory
+      profiles, exactly matching what the wholesale list and ``get_products``
+      return.
+
+    * **Open-instance tenants** author products directly, so we count
+      ``Product`` rows (``archived_at IS NULL`` = active).
+
+    ``draft_count`` stays 0 — reserved for when a first-class draft state lands.
     """
-    active = session.scalar(
-        select(func.count()).select_from(Product).where(Product.tenant_id == tenant_id, Product.archived_at.is_(None))
-    )
-    archived = session.scalar(
+    if tenant.is_embedded:
+        profiles = InventoryProfileRepository(session, tenant.tenant_id).list_all()
+        active_profiles = sum(1 for profile in profiles if is_buyer_visible_inventory_profile(profile))
+        archived_profiles = sum(1 for profile in profiles if inventory_profile_status(profile) == "archived")
+        return StatusProductsBlock(
+            active_count=active_profiles,
+            draft_count=0,
+            archived_count=archived_profiles,
+        )
+
+    active_products = session.scalar(
         select(func.count())
         .select_from(Product)
-        .where(Product.tenant_id == tenant_id, Product.archived_at.is_not(None))
+        .where(Product.tenant_id == tenant.tenant_id, Product.archived_at.is_(None))
+    )
+    archived_products = session.scalar(
+        select(func.count())
+        .select_from(Product)
+        .where(Product.tenant_id == tenant.tenant_id, Product.archived_at.is_not(None))
     )
     return StatusProductsBlock(
-        active_count=int(active or 0),
+        active_count=int(active_products or 0),
         draft_count=0,
-        archived_count=int(archived or 0),
+        archived_count=int(archived_products or 0),
     )
 
 

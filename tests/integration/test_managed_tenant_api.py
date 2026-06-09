@@ -44,6 +44,7 @@ from tests.factories import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
     GamAdvertiserFactory,
+    InventoryProfileFactory,
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
@@ -1911,12 +1912,22 @@ class TestStatusProductsBlock:
         assert body["products"] == {"active_count": 0, "draft_count": 0, "archived_count": 0}
 
     def test_active_products_counted(self, client, auth_headers, managed_tenant, bound_factories):
-        """``archived_at IS NULL`` → ``active_count``."""
+        """Embedded ``active_count`` reflects buyer-visible inventory profiles
+        (the wholesale catalog) — NOT raw ``Product`` rows.
+
+        Regression: issue #3322. A managed tenant had legacy ``Product`` rows
+        that inflated ``status.products.active_count`` to 2 while the wholesale
+        product list (which reads inventory profiles) returned 0, so a healthy
+        storefront looked like it had lost its catalog. A stray legacy Product
+        below must not be counted.
+        """
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_active_1", name="Active 1")
-        ProductFactory(tenant=tenant, product_id="prod_active_2", name="Active 2")
+        InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id, profile_id="prof_active_1", name="Active 1")
+        InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id, profile_id="prof_active_2", name="Active 2")
+        # A stray legacy Product row must NOT inflate the embedded count (#3322).
+        ProductFactory(tenant=tenant, product_id="prod_legacy_orphan", name="Legacy orphan")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
@@ -1924,13 +1935,18 @@ class TestStatusProductsBlock:
         assert resp.get_json()["products"]["active_count"] == 2
 
     def test_archived_products_split_from_active(self, client, auth_headers, managed_tenant, bound_factories):
-        """``archived_at IS NOT NULL`` → ``archived_count``, not ``active_count``."""
+        """An ``archived`` profile → ``archived_count``, not ``active_count``."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_active", name="Active")
-        archived = ProductFactory(tenant=tenant, product_id="prod_archived", name="Archived")
-        archived.archived_at = datetime.now(UTC)
+        InventoryProfileFactory(tenant=tenant, tenant_id=tenant.tenant_id, profile_id="prof_active", name="Active")
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            profile_id="prof_archived",
+            name="Archived",
+            constraints={"status": "archived"},
+        )
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
@@ -1940,18 +1956,28 @@ class TestStatusProductsBlock:
         assert body["archived_count"] == 1
 
     def test_draft_count_always_zero(self, client, auth_headers, managed_tenant, bound_factories):
-        """``draft_count`` reserved for a future draft-state column —
-        always 0 today, but the field is in the response shape so
-        Storefront can render a "Drafts" badge without an API change."""
+        """``draft_count`` reserved for a future draft-state surface — always 0.
+
+        A ``draft`` profile is excluded from ``active_count`` (not buyer-visible)
+        and does not yet light up ``draft_count``.
+        """
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_d_1", name="P1")
+        InventoryProfileFactory(
+            tenant=tenant,
+            tenant_id=tenant.tenant_id,
+            profile_id="prof_draft",
+            name="Draft",
+            constraints={"status": "draft"},
+        )
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
-        assert resp.get_json()["products"]["draft_count"] == 0
+        body = resp.get_json()["products"]
+        assert body["draft_count"] == 0
+        assert body["active_count"] == 0
 
 
 # ---------------------------------------------------------------------------
