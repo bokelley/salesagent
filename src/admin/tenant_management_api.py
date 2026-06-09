@@ -74,6 +74,7 @@ from src.admin.api_schemas.tenant_management import (
     ListAdaptersResponse,
     ListAuditLogResponse,
     ListBuyerAdvertiserMappingsResponse,
+    ListCreativeFormatsForAuthoringQuery,
     ListCreativeFormatsForAuthoringResponse,
     ListGamAdvertisersResponse,
     ListInventorySelectorsResponse,
@@ -2773,8 +2774,11 @@ def lookup_publisher_properties_for_authoring(tenant_id: str):
 
 @tenant_management_api.route("/tenants/<tenant_id>/creative-formats", methods=["GET"])
 @require_tenant_management_api_key
-@spec.validate(resp=Response(HTTP_200=ListCreativeFormatsForAuthoringResponse, HTTP_404=ApiError))
-def list_creative_formats_for_authoring(tenant_id: str):
+@spec.validate(
+    query=ListCreativeFormatsForAuthoringQuery,
+    resp=Response(HTTP_200=ListCreativeFormatsForAuthoringResponse, HTTP_404=ApiError),
+)
+def list_creative_formats_for_authoring(tenant_id: str, query: ListCreativeFormatsForAuthoringQuery):
     """Return creative formats usable in wholesale-product authoring."""
     with get_db_session() as session:
         tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
@@ -2782,15 +2786,15 @@ def list_creative_formats_for_authoring(tenant_id: str):
             return error
         assert tenant is not None
 
-    from src.admin.blueprints.products import get_creative_formats
+    from src.admin.blueprints.products import get_creative_format_catalog
 
-    formats = get_creative_formats(
+    catalog = get_creative_format_catalog(
         tenant_id=tenant_id,
-        name_search=request.args.get("q"),
-        asset_types=request.args.getlist("asset_type") or None,
+        name_search=query.q,
+        asset_types=query.asset_type or None,
     )
     response_formats: list[CreativeFormatSummary] = []
-    for fmt in formats:
+    for fmt in catalog.formats:
         raw_format_id = fmt.get("format_id") or {}
         if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
             raw_format_id = {"agent_url": fmt["agent_url"], "id": fmt["id"]}
@@ -2809,8 +2813,9 @@ def list_creative_formats_for_authoring(tenant_id: str):
     response = ListCreativeFormatsForAuthoringResponse(
         creative_formats=response_formats,
         count=len(response_formats),
+        errors=catalog.errors,
     )
-    return jsonify(response.model_dump())
+    return jsonify(response.model_dump(mode="json"))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/signals/adapter-capabilities", methods=["GET"])

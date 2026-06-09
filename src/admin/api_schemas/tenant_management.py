@@ -12,6 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal, cast
 
+from adcp.types import Error as LibraryError
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
@@ -1261,6 +1262,21 @@ class CreativeFormatSummary(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreativeFormatDiscoveryError(LibraryError):
+    """Creative-format discovery error context for authoring clients."""
+
+    model_config = _config()
+
+
+class ListCreativeFormatsForAuthoringQuery(BaseModel):
+    """Filters for creative-format discovery in wholesale-product authoring."""
+
+    model_config = _config()
+
+    q: str | None = Field(default=None, max_length=255)
+    asset_type: list[str] = Field(default_factory=list)
+
+
 class ListCreativeFormatsForAuthoringResponse(BaseModel):
     """Creative-format discovery for wholesale-product authoring."""
 
@@ -1268,6 +1284,7 @@ class ListCreativeFormatsForAuthoringResponse(BaseModel):
 
     creative_formats: list[CreativeFormatSummary]
     count: int
+    errors: list[CreativeFormatDiscoveryError] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

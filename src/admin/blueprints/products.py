@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
@@ -30,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 products_bp = Blueprint("products", __name__)
+
+
+@dataclass(frozen=True)
+class CreativeFormatCatalog:
+    """Frontend-ready creative formats plus any discovery errors."""
+
+    formats: list[dict[str, Any]]
+    errors: list[dict[str, Any]]
 
 
 def _require_compose_products():
@@ -146,6 +156,84 @@ def _format_id_to_display_name(format_id: str) -> str:
         return base_name
 
 
+def _format_error_to_dict(error: Any) -> dict[str, Any]:
+    """Serialize an AdCP error object for tenant-management/admin responses."""
+    if hasattr(error, "model_dump"):
+        data = error.model_dump(mode="json", exclude_none=True)
+    elif isinstance(error, dict):
+        data = {key: value for key, value in error.items() if value is not None}
+    else:
+        data = {}
+
+    code = data.get("code") or getattr(error, "code", None) or "FORMAT_DISCOVERY_ERROR"
+    message = data.get("message") or getattr(error, "message", None) or str(error)
+    data["code"] = str(code)
+    data["message"] = str(message)
+    return data
+
+
+def _format_catalog_for_product_form(formats: list[Format]) -> list[dict[str, Any]]:
+    """Convert Format models to sorted dictionaries used by admin/product forms."""
+    formats_list = []
+    for idx, fmt in enumerate(formats):
+        # Use helper function for consistent serialization
+        format_dict = _format_to_dict(fmt)
+
+        # Debug: Log first few formats
+        if idx < 5:
+            logger.info(
+                f"[DEBUG] Format {idx}: {fmt.name} - "
+                f"format_id={format_dict['format_id']}, "
+                f"dimensions={format_dict.get('dimensions')}"
+            )
+
+        # Add duration for video/audio formats from internal requirements field
+        if fmt.requirements and "duration" in fmt.requirements:
+            format_dict["duration"] = f"{fmt.requirements['duration']}s"
+        elif fmt.requirements and "duration_max" in fmt.requirements:
+            format_dict["duration"] = f"{fmt.requirements['duration_max']}s"
+
+        formats_list.append(format_dict)
+
+    # Sort by name (type field was removed from Format in adcp 3.12)
+    formats_list.sort(key=lambda x: x["name"])
+    return formats_list
+
+
+def get_creative_format_catalog(
+    tenant_id: str | None = None,
+    max_width: int | None = None,
+    max_height: int | None = None,
+    min_width: int | None = None,
+    min_height: int | None = None,
+    is_responsive: bool | None = None,
+    asset_types: list[str] | None = None,
+    name_search: str | None = None,
+) -> CreativeFormatCatalog:
+    """Get frontend-ready creative formats and discovery errors."""
+    from src.core.format_resolver import list_available_formats_with_errors
+
+    result = list_available_formats_with_errors(
+        tenant_id=tenant_id,
+        max_width=max_width,
+        max_height=max_height,
+        min_width=min_width,
+        min_height=min_height,
+        is_responsive=is_responsive,
+        asset_types=asset_types,
+        name_search=name_search,
+    )
+    formats = _format_catalog_for_product_form(result.formats)
+    errors = [_format_error_to_dict(error) for error in result.errors]
+
+    logger.info(
+        f"get_creative_formats: Returning {len(formats)} formatted formats "
+        f"and {len(errors)} discovery errors for tenant {tenant_id}"
+    )
+
+    return CreativeFormatCatalog(formats=formats, errors=errors)
+
+
 def get_creative_formats(
     tenant_id: str | None = None,
     max_width: int | None = None,
@@ -174,11 +262,9 @@ def get_creative_formats(
     Returns:
         List of format dictionaries for frontend
     """
-    from src.core.format_resolver import list_available_formats
-
     # Get formats from creative agent registry with optional filtering
     try:
-        formats = list_available_formats(
+        catalog = get_creative_format_catalog(
             tenant_id=tenant_id,
             max_width=max_width,
             max_height=max_height,
@@ -190,43 +276,15 @@ def get_creative_formats(
         )
     except (asyncio.CancelledError, TimeoutError, ADCPTimeoutError) as e:
         logger.warning(f"Timeout fetching formats from creative agent registry: {e}")
-        formats = []  # Return empty list if format fetching fails
+        return []  # Return empty list if format fetching fails
     except (ADCPConnectionError, ADCPError) as e:
         logger.warning(f"Failed to connect to creative agent registry: {e}")
-        formats = []  # Return empty list if format fetching fails
+        return []  # Return empty list if format fetching fails
     except RuntimeError as e:
         logger.warning(f"Runtime error fetching formats (event loop issue): {e}")
-        formats = []  # Return empty list if format fetching fails
+        return []  # Return empty list if format fetching fails
 
-    logger.info(f"get_creative_formats: Fetched {len(formats)} formats from registry for tenant {tenant_id}")
-
-    formats_list = []
-    for idx, fmt in enumerate(formats):
-        # Use helper function for consistent serialization
-        format_dict = _format_to_dict(fmt)
-
-        # Debug: Log first few formats
-        if idx < 5:
-            logger.info(
-                f"[DEBUG] Format {idx}: {fmt.name} - "
-                f"format_id={format_dict['format_id']}, "
-                f"dimensions={format_dict.get('dimensions')}"
-            )
-
-        # Add duration for video/audio formats from internal requirements field
-        if fmt.requirements and "duration" in fmt.requirements:
-            format_dict["duration"] = f"{fmt.requirements['duration']}s"
-        elif fmt.requirements and "duration_max" in fmt.requirements:
-            format_dict["duration"] = f"{fmt.requirements['duration_max']}s"
-
-        formats_list.append(format_dict)
-
-    # Sort by name (type field was removed from Format in adcp 3.12)
-    formats_list.sort(key=lambda x: x["name"])
-
-    logger.info(f"get_creative_formats: Returning {len(formats_list)} formatted formats")
-
-    return formats_list
+    return catalog.formats
 
 
 def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
