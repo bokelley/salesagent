@@ -24,14 +24,14 @@ def _job(status: str, completed_at: datetime | None = None) -> SimpleNamespace:
     return SimpleNamespace(status=status, completed_at=completed_at)
 
 
-def test_list_eligible_tenants_includes_gam_tenants_with_product_placements() -> None:
+def test_list_eligible_tenants_includes_gam_tenants_with_inventory_targets() -> None:
     now = datetime(2026, 5, 28, tzinfo=UTC)
     with (
         patch("src.services.gam_pricing_availability_scheduler.get_db_session"),
         patch("src.services.gam_pricing_availability_scheduler.AdapterConfigAdminRepository") as adapter_repo,
         patch("src.services.gam_pricing_availability_scheduler.SyncJobAdminRepository") as sync_repo,
         patch(
-            "src.services.gam_pricing_availability_scheduler.tenant_has_pricing_availability_placements"
+            "src.services.gam_pricing_availability_scheduler.tenant_has_pricing_availability_targets"
         ) as has_products,
     ):
         adapter_repo.return_value.list_all.return_value = [_pair("tenant_1"), _pair("tenant_2", "mock")]
@@ -51,7 +51,7 @@ def test_list_eligible_tenants_skips_fresh_completed_run() -> None:
         patch("src.services.gam_pricing_availability_scheduler.AdapterConfigAdminRepository") as adapter_repo,
         patch("src.services.gam_pricing_availability_scheduler.SyncJobAdminRepository") as sync_repo,
         patch(
-            "src.services.gam_pricing_availability_scheduler.tenant_has_pricing_availability_placements",
+            "src.services.gam_pricing_availability_scheduler.tenant_has_pricing_availability_targets",
             return_value=True,
         ),
     ):

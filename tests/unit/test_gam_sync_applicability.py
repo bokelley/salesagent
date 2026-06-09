@@ -9,7 +9,7 @@ from src.services.gam_sync_applicability import (
     gam_pricing_availability_applicable,
     gam_signal_coverage_applicable,
     tenant_has_custom_key_value_signals,
-    tenant_has_pricing_availability_placements,
+    tenant_has_pricing_availability_targets,
 )
 
 
@@ -41,11 +41,11 @@ def test_signal_coverage_is_not_applicable_without_custom_key_value_signals() ->
         assert tenant_has_custom_key_value_signals(SimpleNamespace(), "tenant_1") is False
 
 
-def test_pricing_availability_is_not_applicable_for_ad_unit_only_products() -> None:
+def test_pricing_availability_is_applicable_for_ad_unit_only_products() -> None:
     with patch("src.services.gam_sync_applicability.ProductRepository") as repo:
         repo.return_value.list_all_with_inventory.return_value = [_product({"targeted_ad_unit_ids": ["23313239368"]})]
 
-        assert tenant_has_pricing_availability_placements(SimpleNamespace(), "tenant_1") is False
+        assert tenant_has_pricing_availability_targets(SimpleNamespace(), "tenant_1") is True
 
 
 def test_pricing_availability_is_applicable_for_placement_products() -> None:
@@ -54,7 +54,14 @@ def test_pricing_availability_is_applicable_for_placement_products() -> None:
             _product({"targeted_ad_unit_ids": ["23313239368"], "targeted_placement_ids": ["31999908"]})
         ]
 
-        assert tenant_has_pricing_availability_placements(SimpleNamespace(), "tenant_1") is True
+        assert tenant_has_pricing_availability_targets(SimpleNamespace(), "tenant_1") is True
+
+
+def test_pricing_availability_is_not_applicable_without_inventory_targets() -> None:
+    with patch("src.services.gam_sync_applicability.ProductRepository") as repo:
+        repo.return_value.list_all_with_inventory.return_value = [_product({})]
+
+        assert tenant_has_pricing_availability_targets(SimpleNamespace(), "tenant_1") is False
 
 
 def test_gam_derived_streams_are_applicable_for_non_gam_adapters() -> None:

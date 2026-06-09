@@ -1508,8 +1508,8 @@ class TestTenantStatus:
         )
         ProductFactory(
             tenant=tenant,
-            product_id="ad_unit_only",
-            implementation_config={"targeted_ad_unit_ids": ["23313239368"]},
+            product_id="untargeted_product",
+            implementation_config={},
         )
         TenantSignalFactory(
             tenant=tenant,

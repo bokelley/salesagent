@@ -283,7 +283,7 @@ Public status normalization:
 Applicability is evaluated before freshness for platform-derived streams. For
 example, a GAM tenant with no mapped `custom_key_value` signals has no
 `signal_coverage` stream to run, and a GAM tenant whose products do not target
-placements has no placement-based `pricing_availability` stream to run. In
+placements or ad units has no `pricing_availability` stream to run. In
 those cases `/status.syncs.<type>` may return `status: "success"`,
 `severity: "ok"`, and `item_count: 0` even when no `SyncJob` row exists.
 

@@ -21,17 +21,12 @@ def tenant_has_custom_key_value_signals(session: Session, tenant_id: str) -> boo
     return any((signal.adapter_config or {}).get("kind") == "custom_key_value" for signal in repo.list_all())
 
 
-def tenant_has_pricing_availability_placements(session: Session, tenant_id: str) -> bool:
-    """Return whether pricing/availability can run with the current GAM report.
-
-    The current pricing/availability report is placement-based. Products that
-    only target ad units are valid GAM products, but this derived stream cannot
-    produce guidance for them until the report path supports ad-unit selectors.
-    """
+def tenant_has_pricing_availability_targets(session: Session, tenant_id: str) -> bool:
+    """Return whether pricing/availability can run for this GAM tenant."""
     products = ProductRepository(session, tenant_id).list_all_with_inventory()
     for product in products:
         config = product.effective_implementation_config
-        if config.get("targeted_placement_ids"):
+        if config.get("targeted_placement_ids") or config.get("targeted_ad_unit_ids"):
             return True
     return False
 
@@ -45,4 +40,4 @@ def gam_signal_coverage_applicable(session: Session, *, tenant_id: str, adapter_
 def gam_pricing_availability_applicable(session: Session, *, tenant_id: str, adapter_type: str) -> bool:
     if adapter_type != GAM_ADAPTER_TYPE:
         return True
-    return tenant_has_pricing_availability_placements(session, tenant_id)
+    return tenant_has_pricing_availability_targets(session, tenant_id)
