@@ -908,7 +908,19 @@ def test_wholesale_validation_checks_discovered_creative_formats(management_api_
     assert {issue["code"] for issue in body["issues"]} >= {"creative_format_not_found"}
 
 
-def test_wholesale_validation_canonicalizes_catalog_format_refs(management_api_client, gam_tenant):
+@pytest.mark.parametrize(
+    "catalog_agent_url",
+    [
+        "https://creative.adcontextprotocol.org/",  # trailing slash
+        "https://creative.adcontextprotocol.org/mcp",  # /mcp transport suffix
+        "https://adcontextprotocol.org/agents/formats",  # legacy reference alias
+    ],
+)
+def test_wholesale_validation_canonicalizes_catalog_format_refs(management_api_client, gam_tenant, catalog_agent_url):
+    # The catalog reports agent_url verbatim from the creative agent — any
+    # non-canonical-but-equivalent form of the reference agent (trailing slash,
+    # /mcp suffix, legacy alias) must still match the canonicalized draft ref,
+    # otherwise every format from that agent is falsely rejected.
     client, auth_headers = management_api_client
     payload = _wholesale_payload()
     payload["inventory"]["creative_formats"][0]["format_id"] = {
@@ -921,7 +933,7 @@ def test_wholesale_validation_canonicalizes_catalog_format_refs(management_api_c
         return_value=[
             {
                 "format_id": {
-                    "agent_url": "https://creative.adcontextprotocol.org/",
+                    "agent_url": catalog_agent_url,
                     "id": "homepage_takeover",
                 },
                 "name": "Homepage Takeover",
