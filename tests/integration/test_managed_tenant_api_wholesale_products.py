@@ -1182,6 +1182,46 @@ def test_wholesale_validation_accepts_parameterized_creative_format_refs(managem
     assert body["issues"] == []
 
 
+@pytest.mark.parametrize(
+    "catalog_agent_url",
+    [
+        "https://creative.adcontextprotocol.org/mcp",  # /mcp transport suffix
+        "https://adcontextprotocol.org/agents/formats",  # legacy reference alias
+    ],
+)
+def test_wholesale_validation_canonicalizes_non_canonical_catalog_format_refs(
+    management_api_client, gam_tenant, catalog_agent_url
+):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+    payload["inventory"]["creative_formats"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "homepage_takeover",
+    }
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_formats",
+        return_value=[
+            {
+                "format_id": {
+                    "agent_url": catalog_agent_url,
+                    "id": "homepage_takeover",
+                },
+                "name": "Homepage Takeover",
+            }
+        ],
+    ):
+        validation = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert "creative_format_not_found" not in {issue["code"] for issue in body["issues"]}
+
+
 def test_wholesale_create_rejects_existing_unowned_inventory_profile(
     management_api_client, gam_tenant, bound_factories
 ):
