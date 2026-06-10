@@ -1541,6 +1541,7 @@ def _publisher_property_validation_issues(
 
 def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None:
     from src.admin.blueprints.products import get_creative_formats
+    from src.core.canonical_formats import canonicalize_format_ref
 
     try:
         formats = get_creative_formats(tenant_id=tenant_id)
@@ -1553,8 +1554,9 @@ def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None
         raw_format_id = fmt.get("format_id") or {}
         if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
             raw_format_id = {"agent_url": fmt["agent_url"], "id": fmt["id"]}
-        agent_url = raw_format_id.get("agent_url")
-        format_id = raw_format_id.get("id")
+        canonical = canonicalize_format_ref(raw_format_id)
+        agent_url = canonical.get("agent_url")
+        format_id = canonical.get("id")
         if agent_url and format_id:
             refs.add((str(agent_url), str(format_id)))
     return refs
