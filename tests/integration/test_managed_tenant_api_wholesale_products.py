@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from adcp.types import Error as AdCPResponseError
 
 from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.database.models import AuthorizedProperty
@@ -192,6 +194,54 @@ def test_inventory_discovery_surfaces_adapter_selectors_and_publisher_properties
     assert body["domains"][0]["publisher_domain"] == "wonderstruck.com"
     assert body["properties"][0]["property_id"] == "wonderstruck_site"
     assert {selector["selection_type"] for selector in body["allowed_selectors"]} == {"all", "by_id", "by_tag"}
+
+
+def test_creative_formats_authoring_endpoint_surfaces_discovery_errors(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    discovery_error = AdCPResponseError(
+        code="REGISTRY_ERROR",
+        message="Creative agent registry initialization failed: registry unavailable",
+        recovery="transient",
+        retry_after=5,
+    )
+
+    with patch(
+        "src.core.format_resolver.list_available_formats_with_errors",
+        return_value=SimpleNamespace(formats=[], errors=[discovery_error]),
+    ):
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/creative-formats",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["creative_formats"] == []
+    assert body["count"] == 0
+    assert len(body["errors"]) == 1
+    error = body["errors"][0]
+    assert error["code"] == discovery_error.code
+    assert error["message"] == discovery_error.message
+    assert error["recovery"] == discovery_error.recovery.value
+    assert error["retry_after"] == 5
+
+
+def test_creative_formats_authoring_endpoint_filters_standard_catalog_locally(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    response = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/creative-formats?asset_type=display&q=Display",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["count"] > 0
+    assert body["creative_formats"]
+    assert body["errors"] == []
+    assert all("display" in format_summary["name"].lower() for format_summary in body["creative_formats"])
+    assert all(format_summary["raw"].get("type") == "display" for format_summary in body["creative_formats"])
+    assert "video_standard" not in {format_summary["format_id"]["id"] for format_summary in body["creative_formats"]}
 
 
 def test_publisher_properties_lookup_enables_api_only_product_authoring(management_api_client, bound_factories):
@@ -399,6 +449,32 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_wholesale_create_invalidates_cached_status(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    before = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/status",
+        headers=auth_headers,
+    )
+    assert before.status_code == 200, before.get_data(as_text=True)
+    assert before.get_json()["products"]["active_count"] == 0
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=_wholesale_payload(),
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+
+    after = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/status",
+        headers=auth_headers,
+    )
+    assert after.status_code == 200, after.get_data(as_text=True)
+    assert after.get_json()["products"]["active_count"] == 1
+    assert after.get_json()["inventory_profiles"]["total_count"] == 1
 
 
 def test_wholesale_product_authoring_rejects_system_metadata_inputs(management_api_client, gam_tenant):

@@ -12,6 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal, cast
 
+from adcp.types import Error as LibraryError
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
@@ -526,6 +527,12 @@ class ProvisionTenantRequest(BaseModel):
     # required before activation (enforced by the routing chain at
     # create_media_buy time, not by an explicit /activate endpoint).
     default_gam_advertiser_id: str | None = Field(default=None, max_length=64)
+
+    # When True, the provision endpoint will ensure adapter-specific default
+    # resources exist (e.g. the Interchange default advertiser for GAM), creating
+    # them if absent. Requires the adapter credentials to have create permission.
+    # Defaults to False — callers must opt in explicitly.
+    provision_default_resources: bool = False
 
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
@@ -1255,6 +1262,21 @@ class CreativeFormatSummary(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreativeFormatDiscoveryError(LibraryError):
+    """Creative-format discovery error context for authoring clients."""
+
+    model_config = _config()
+
+
+class ListCreativeFormatsForAuthoringQuery(BaseModel):
+    """Filters for creative-format discovery in wholesale-product authoring."""
+
+    model_config = _config()
+
+    q: str | None = Field(default=None, max_length=255)
+    asset_type: list[str] = Field(default_factory=list)
+
+
 class ListCreativeFormatsForAuthoringResponse(BaseModel):
     """Creative-format discovery for wholesale-product authoring."""
 
@@ -1262,6 +1284,7 @@ class ListCreativeFormatsForAuthoringResponse(BaseModel):
 
     creative_formats: list[CreativeFormatSummary]
     count: int
+    errors: list[CreativeFormatDiscoveryError] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1364,18 +1387,15 @@ class StatusCreativesBlock(BaseModel):
 
 
 class StatusProductsBlock(BaseModel):
-    """Product-level counters.
+    """Wholesale product-level counters.
 
     Distinct from :class:`StatusPackagesBlock` — one product can have
     multiple priced packages, so package counts don't answer "what is
     the publisher actually selling?". Storefront surfaces ``active_count``
     on its homepage as the primary "what's the publisher doing" signal.
 
-    Note: the Product model doesn't carry an explicit ``status`` field
-    today. ``archived_at IS NULL`` rows count as active; non-null rows
-    count as archived. ``draft_count`` is 0 until a draft state lands
-    (forward-compatible field — Storefront can render a "Drafts" badge
-    without an API shape change when it does).
+    Counts are based on complete, wholesale-owned InventoryProfile rows,
+    which are the durable source for the wholesale product feed.
     """
 
     model_config = _config()
@@ -1383,6 +1403,24 @@ class StatusProductsBlock(BaseModel):
     active_count: int = 0
     draft_count: int = 0
     archived_count: int = 0
+
+
+class StatusInventoryProfilesBlock(BaseModel):
+    """Inventory-profile counters.
+
+    Inventory profiles are the reusable ingredient layer: the ad-server
+    selectors, publisher properties, and creative-format constraints that
+    wholesale products are composed from. These counts are intentionally
+    separate from :class:`StatusProductsBlock`, which counts sellable
+    wholesale products.
+    """
+
+    model_config = _config()
+
+    total_count: int = 0
+    complete_count: int = 0
+    incomplete_count: int = 0
+    wholesale_owned_count: int = 0
 
 
 class StatusWebhooksBlock(BaseModel):
@@ -1452,6 +1490,7 @@ class TenantStatusResponse(BaseModel):
     media_buys: StatusMediaBuysBlock = Field(default_factory=StatusMediaBuysBlock)
     packages: StatusPackagesBlock = Field(default_factory=StatusPackagesBlock)
     products: StatusProductsBlock = Field(default_factory=StatusProductsBlock)
+    inventory_profiles: StatusInventoryProfilesBlock = Field(default_factory=StatusInventoryProfilesBlock)
     creatives: StatusCreativesBlock = Field(default_factory=StatusCreativesBlock)
     webhooks: StatusWebhooksBlock | None = None
     setup_tasks: SetupTasksBlock = Field(default_factory=SetupTasksBlock)

@@ -260,15 +260,15 @@ class TestExtractUserInfo:
 
         from src.admin.blueprints.auth import extract_user_info
 
-        # Create a simple JWT (unsigned for testing)
+        # Create a simple JWT; extraction decodes it without signature verification.
         id_token_payload = {
             "email": "user@example.com",
             "name": "ID Token User",
             "picture": "https://example.com/photo.jpg",
         }
         # Throwaway HMAC key — extract_user_info decodes with verify_signature=False,
-        # so the key value is irrelevant. (PyJWT >=2.13 rejects an empty HMAC key.)
-        id_token = jwt.encode(id_token_payload, key="test-secret", algorithm="HS256")
+        # so the key value is irrelevant. (PyJWT >=2.13 rejects an empty/short HMAC key.)
+        id_token = jwt.encode(id_token_payload, key="test-secret-at-least-32-bytes-long", algorithm="HS256")
 
         token = {"id_token": id_token}
 
