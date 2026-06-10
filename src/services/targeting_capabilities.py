@@ -234,22 +234,28 @@ def _extract_simple_values(items: list) -> set[str]:
 
 
 def _extract_system_values(items: list) -> dict[str, set[str]]:
-    """Extract {system: set(values)} from a list of GeoMetro/GeoPostalArea objects or dicts."""
-    from adcp.types import GeoMetro, GeoPostalArea
+    """Extract {system: set(values)} from geo metro/postal-area items or dicts.
 
+    Duck-types on ``system``/``values`` rather than isinstance: adcp 6.3 retyped
+    geo_postal_areas to a ``PostalArea`` RootModel union (and ``GeoPostalArea`` now
+    aliases only the legacy exclusion arm), so an isinstance gate silently skipped
+    inclusion items — a geo-overlap validation regression. The RootModel proxies
+    ``.system``/``.values`` via attribute delegation, so attribute access works for
+    both arms and for ``GeoMetro``.
+    """
     from src.core.validation_helpers import resolve_enum_value
 
     by_system: dict[str, set[str]] = {}
     for item in items:
-        if isinstance(item, (GeoMetro, GeoPostalArea)):
-            system = resolve_enum_value(item.system)
-            vals = set(item.values)
-        elif isinstance(item, dict):
-            system = resolve_enum_value(item.get("system", ""))
-            vals = set(item.get("values", []))
+        if isinstance(item, dict):
+            raw_system = item.get("system", "")
+            raw_vals = item.get("values", [])
         else:
+            raw_system = getattr(item, "system", None)
+            raw_vals = getattr(item, "values", None)
+        if raw_system is None or raw_vals is None:
             continue
-        by_system.setdefault(system, set()).update(vals)
+        by_system.setdefault(resolve_enum_value(raw_system), set()).update(raw_vals)
     return by_system
 
 

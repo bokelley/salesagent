@@ -474,8 +474,9 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         default_factory=list, description="Validation or processing errors (for 'failed' action)"
     )
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-    assigned_to: list[Any] | None = Field(default=None, description="Packages this creative was assigned to")
-    assignment_errors: dict[str, str] | None = Field(default=None, description="Assignment errors for this creative")
+    # assigned_to / assignment_errors are inherited from the adcp 6.3 library parent
+    # (promoted into Creative/sync_creatives_response). Our prior redeclarations only
+    # widened the lib types; production assigns values that satisfy the stricter parent.
 
     @field_validator("action", mode="before")
     @classmethod

@@ -666,11 +666,11 @@ async def _delegate_create_media_buy(req: Any, ctx: RequestContext[Any]) -> dict
         pnc_dict = dict(pnc)
     response = await _create_media_buy_impl(req_model, push_notification_config=pnc_dict, identity=identity)
     response = _with_create_media_buy_idempotency_key(response, req_model)
-    _emit_media_buy_created_if_success(identity.tenant_id, response)
+    _emit_media_buy_created_if_success(identity.tenant_id, response, req_model)
     return _to_wire(response, requested_adcp_version=requested_adcp_version, tool_name="create_media_buy")
 
 
-def _emit_media_buy_created_if_success(tenant_id: str, result: Any) -> None:
+def _emit_media_buy_created_if_success(tenant_id: str, result: Any, req_model: Any = None) -> None:
     """Fire ``media_buy.created`` when a buy was actually committed.
 
     The wrapper sits at the framework/_impl boundary (not inside _impl)
@@ -701,7 +701,10 @@ def _emit_media_buy_created_if_success(tenant_id: str, result: Any) -> None:
         "media_buy.created",
         {
             "media_buy_id": media_buy_id,
-            "buyer_ref": getattr(inner, "buyer_ref", None),
+            # adcp 6.3 dropped buyer_ref from the success response; its successor is
+            # po_number on the request. Source it from there and keep the payload key
+            # stable for downstream media_buy.created consumers.
+            "buyer_ref": getattr(req_model, "po_number", None),
             "status": getattr(inner, "media_buy_status", None) or getattr(inner, "status", None),
         },
     )

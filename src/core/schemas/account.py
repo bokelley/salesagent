@@ -150,7 +150,11 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    accounts: list[SyncResponseAccount]
+    # SyncResponseAccount is-a Account; we narrow the inherited list element type so
+    # nested dumps carry our stable optional keys. adcp 6.3 tightened the parent to
+    # list[Account], so mypy flags list invariance — safe here (response field is only
+    # constructed + serialized, never appended to as a list[Account]).
+    accounts: list[SyncResponseAccount]  # type: ignore[assignment]
     dry_run: bool | None = None
     context: Any | None = None
 

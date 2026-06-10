@@ -31,15 +31,17 @@ class TestMediaBuyCreatedEmission:
 
         success = CreateMediaBuySuccess.model_construct(
             media_buy_id="mb_123",
-            buyer_ref="po_456",
             status="pending_start",
             packages=[],
             creative_deadline=None,
         )
         result = SimpleNamespace(status="completed", response=success)
+        # adcp b9 dropped buyer_ref from the success response; the emitted
+        # payload now sources buyer_ref from the request's po_number.
+        req_model = SimpleNamespace(po_number="po_456")
 
         with patch("src.admin.services.webhook_publisher.emit_event") as mock_emit:
-            _emit_media_buy_created_if_success("t1", result)
+            _emit_media_buy_created_if_success("t1", result, req_model)
 
         mock_emit.assert_called_once_with(
             "t1",
