@@ -24,6 +24,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.format_references import format_id_identity, format_id_storage_dict, try_format_id_from_ref
 from src.core.schemas import Format
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -103,31 +104,40 @@ def _format_to_dict(fmt: Format) -> dict:
 
 
 def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
-    """Parse format entries from form JSON without validation.
-
-    Extracts agent_url, id, and optional dimension/duration parameters
-    from each parsed format dict. Used when validation is skipped
-    (creative agent unreachable or returned no formats).
-    """
+    """Parse format entries from form JSON through the typed FormatId model."""
     entries = []
     for fmt in formats_parsed:
-        if not fmt.get("agent_url"):
+        format_id = try_format_id_from_ref(fmt)
+        if format_id is None:
             continue
-        format_id = fmt.get("id") or fmt.get("format_id")
-        if not format_id:
-            continue
-        format_entry: dict = {"agent_url": fmt["agent_url"], "id": format_id}
-        if fmt.get("width") is not None:
-            format_entry["width"] = int(fmt["width"])
-        if fmt.get("height") is not None:
-            format_entry["height"] = int(fmt["height"])
-        for key in ("min_width", "max_width", "min_height", "max_height"):
-            if fmt.get(key) is not None:
-                format_entry[key] = int(fmt[key])
-        if fmt.get("duration_ms") is not None:
-            format_entry["duration_ms"] = float(fmt["duration_ms"])
-        entries.append(format_entry)
+        entries.append(format_id_storage_dict(format_id))
     return entries
+
+
+def _validate_format_entries(
+    formats_parsed: list[dict],
+    available_formats: list[Format],
+) -> tuple[list[dict], list[str]]:
+    """Validate submitted FormatId entries against discovered creative formats."""
+    valid_format_identities = {
+        format_id_identity(format_id)
+        for fmt in available_formats
+        if (format_id := try_format_id_from_ref(getattr(fmt, "format_id", None))) is not None
+    }
+
+    validated_formats: list[dict] = []
+    invalid_formats: list[str] = []
+    for entry in formats_parsed:
+        format_id = try_format_id_from_ref(entry)
+        if format_id is None:
+            continue
+        submitted_identity = format_id_identity(format_id)
+        if submitted_identity in valid_format_identities:
+            validated_formats.append(format_id_storage_dict(format_id))
+        else:
+            invalid_formats.append(f"{submitted_identity[0]}/{submitted_identity[1]}")
+
+    return validated_formats, invalid_formats
 
 
 def _format_id_to_display_name(format_id: str) -> str:
@@ -846,12 +856,11 @@ def add_product(tenant_id):
                                     "warning",
                                 )
                             else:
-                                # Agent reachable — validate format IDs
-                                valid_format_ids = {fmt.format_id.id for fmt in result.formats}
-
-                                all_entries = _parse_format_entries(formats_parsed)
-                                invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                                formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
+                                # Agent reachable — validate format IDs in their agent namespace
+                                validated_formats, invalid_formats = _validate_format_entries(
+                                    formats_parsed, result.formats
+                                )
+                                formats.extend(validated_formats)
 
                                 if invalid_formats:
                                     flash(
@@ -1482,12 +1491,9 @@ def edit_product(tenant_id, product_id):
                             "warning",
                         )
                     else:
-                        # Agent reachable — validate format IDs
-                        valid_format_ids = {fmt.format_id.id for fmt in result.formats}
-
-                        all_entries = _parse_format_entries(formats_parsed)
-                        invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                        validated_formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
+                        # Agent reachable — validate format IDs in their agent namespace
+                        valid_entries, invalid_formats = _validate_format_entries(formats_parsed, result.formats)
+                        validated_formats.extend(valid_entries)
 
                         if invalid_formats:
                             flash(
