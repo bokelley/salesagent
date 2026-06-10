@@ -62,6 +62,7 @@ from src.core.inventory_profile_projection import (
 )
 from src.services.gam_sync_applicability import (
     gam_pricing_availability_applicable,
+    gam_reporting_applicable,
     gam_signal_coverage_applicable,
 )
 
@@ -176,11 +177,12 @@ def _syncs_block(session: Session, tenant: Tenant, adapter_type: str) -> StatusS
             adapter_type=adapter_type,
             sync_type="advertisers",
         ),
-        reporting=_sync_run_block(
+        reporting=_applicability_aware_sync_run_block(
             repo.health_inputs_for_stream(adapter_type=adapter_type, sync_type="reporting"),
             tenant=tenant,
             adapter_type=adapter_type,
             sync_type="reporting",
+            is_applicable=gam_reporting_applicable(adapter_type=adapter_type),
         ),
         signal_coverage=_applicability_aware_sync_run_block(
             repo.health_inputs_for_stream(adapter_type=adapter_type, sync_type="signal_coverage"),

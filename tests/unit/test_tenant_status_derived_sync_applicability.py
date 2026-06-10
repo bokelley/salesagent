@@ -25,11 +25,17 @@ def test_inapplicable_gam_derived_streams_do_not_report_critical_never_run() -> 
         patch("src.admin.services.tenant_status_service.SyncJobRepository", _EmptySyncJobRepository),
         patch("src.admin.services.tenant_status_service.gam_signal_coverage_applicable", return_value=False),
         patch("src.admin.services.tenant_status_service.gam_pricing_availability_applicable", return_value=False),
+        patch("src.admin.services.tenant_status_service.gam_reporting_applicable", return_value=False),
     ):
         syncs = _syncs_block(SimpleNamespace(), tenant, "google_ad_manager")
 
     assert syncs.inventory.status == "never_run"
     assert syncs.inventory.severity == "critical"
+
+    assert syncs.reporting.status == "success"
+    assert syncs.reporting.severity == "ok"
+    assert syncs.reporting.issue is None
+    assert syncs.reporting.item_count == 0
 
     assert syncs.signal_coverage.status == "success"
     assert syncs.signal_coverage.severity == "ok"

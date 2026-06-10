@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from src.services.gam_sync_applicability import (
     gam_pricing_availability_applicable,
+    gam_reporting_applicable,
     gam_signal_coverage_applicable,
     tenant_has_custom_key_value_signals,
     tenant_has_pricing_availability_targets,
@@ -69,3 +70,12 @@ def test_gam_derived_streams_are_applicable_for_non_gam_adapters() -> None:
 
     assert gam_signal_coverage_applicable(session, tenant_id="tenant_1", adapter_type="freewheel") is True
     assert gam_pricing_availability_applicable(session, tenant_id="tenant_1", adapter_type="freewheel") is True
+
+
+def test_reporting_is_not_applicable_for_gam() -> None:
+    assert gam_reporting_applicable(adapter_type="google_ad_manager") is False
+
+
+def test_reporting_is_applicable_for_non_gam_adapters() -> None:
+    assert gam_reporting_applicable(adapter_type="freewheel") is True
+    assert gam_reporting_applicable(adapter_type="springserve") is True

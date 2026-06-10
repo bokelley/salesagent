@@ -31,6 +31,16 @@ def tenant_has_pricing_availability_targets(session: Session, tenant_id: str) ->
     return False
 
 
+def gam_reporting_applicable(*, adapter_type: str) -> bool:
+    """Return whether a separate reporting sync is applicable for this adapter.
+
+    GAM bundles delivery reporting into its inventory sync — there is no
+    dedicated reporting sync job for GAM tenants. Non-GAM adapters run
+    reporting as a distinct scheduled sync and remain applicable.
+    """
+    return adapter_type != GAM_ADAPTER_TYPE
+
+
 def gam_signal_coverage_applicable(session: Session, *, tenant_id: str, adapter_type: str) -> bool:
     if adapter_type != GAM_ADAPTER_TYPE:
         return True
