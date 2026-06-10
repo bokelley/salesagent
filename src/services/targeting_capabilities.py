@@ -240,8 +240,12 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
     geo_postal_areas to a ``PostalArea`` RootModel union (and ``GeoPostalArea`` now
     aliases only the legacy exclusion arm), so an isinstance gate silently skipped
     inclusion items — a geo-overlap validation regression. The RootModel proxies
-    ``.system``/``.values`` via attribute delegation, so attribute access works for
-    both arms and for ``GeoMetro``.
+    ``.system``/``.values`` (and ``.country``) via attribute delegation, so attribute
+    access works for both arms and for ``GeoMetro``.
+
+    Normalizes the b9 native postal arm — which carries a country-stripped ``system``
+    (e.g. ``zip``) plus a separate ``country`` — to the legacy country-fused token
+    (``us_zip``), so a native inclusion overlapping a legacy exclusion is detected.
     """
     from src.core.validation_helpers import resolve_enum_value
 
@@ -250,12 +254,18 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
         if isinstance(item, dict):
             raw_system = item.get("system", "")
             raw_vals = item.get("values", [])
+            raw_country = item.get("country")
         else:
             raw_system = getattr(item, "system", None)
             raw_vals = getattr(item, "values", None)
+            raw_country = getattr(item, "country", None)
         if raw_system is None or raw_vals is None:
             continue
-        by_system.setdefault(resolve_enum_value(raw_system), set()).update(raw_vals)
+        system = resolve_enum_value(raw_system)
+        country = resolve_enum_value(raw_country) if raw_country is not None else None
+        if country and not system.startswith(f"{country.lower()}_"):
+            system = f"{country.lower()}_{system}"
+        by_system.setdefault(system, set()).update(raw_vals)
     return by_system
 
 

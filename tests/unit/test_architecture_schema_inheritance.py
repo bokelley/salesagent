@@ -237,8 +237,6 @@ class TestSchemaInheritance:
             # Schema overrides for partial-construction tolerance / wider types
             ("Creative", "variants"),
             ("SyncCreativeResult", "status"),
-            # b9 promoted platform_id to the parent without exclude; we keep it internal-only (exclude=True).
-            ("SyncCreativeResult", "platform_id"),
             # TargetingOverlay overrides:
             # - frequency_cap: Pattern #4, override to use local FrequencyCap subclass
             # - geo_*_exclude: widen from library's *ExcludeItem subclass to the include-side

@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-from adcp.types import ContextObject, MediaBuyStatus
+from adcp.types import Account, ContextObject, MediaBuyStatus
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
@@ -2321,6 +2321,63 @@ def _package_from_config(db_package: Any) -> Package:
     return Package(**kwargs)
 
 
+def _buyer_safe_account(tenant_id: str, account_id: str | None) -> Account | None:
+    """Buyer-safe account projection for the create-media-buy success response.
+
+    Constructed with ONLY non-sensitive identity fields (account_id, name, status) —
+    seller financials (rate_card, credit_limit, payment_terms, billing, billing_proxy,
+    operator, governance_agents, setup, …) are never set, so they cannot leak via the
+    wire dump (redaction by construction, not by stripping). The status is projected
+    through ``wire_status`` so internal lifecycle states surface identically to the
+    get_accounts flow (e.g. ``pending_provision`` → ``pending_approval``, #332).
+
+    Returns None and never raises if the account can't be resolved/projected —
+    account context is response enrichment, never load-bearing for the buy.
+    """
+    if not account_id:
+        return None
+    try:
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.database.repositories.account import AccountRepository
+        from src.core.tools.account_status import wire_status
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.session is not None
+            row = AccountRepository(uow.session, tenant_id).get_by_id(account_id)
+            if row is None or not getattr(row, "name", None):
+                return None
+            # Construct inside the UoW: reading row.name/row.status after the
+            # session closes would raise DetachedInstanceError.
+            return Account(account_id=account_id, name=row.name, status=wire_status(row.status))
+    except ValidationError:
+        # Status (or other field) the AdCP Account model can't represent — skip
+        # the enrichment quietly; it is never load-bearing for the buy.
+        logger.debug("create_media_buy: account %r not buyer-projectable", account_id, exc_info=True)
+        return None
+    except Exception:
+        # DB/repository failure — surface it (warning) so a systemic regression
+        # is visible, but still never break the buy over response enrichment.
+        logger.warning("create_media_buy: account projection failed for %r", account_id, exc_info=True)
+        return None
+
+
+def _success_response_extras(*, req: Any, sandbox_mode: Any, tenant_id: str, account_id: str | None) -> dict[str, Any]:
+    """Fields echoed onto every CreateMediaBuySuccess in the create flow (adcp 6.3).
+
+    - ``context``: request context echoed unchanged (BR-RULE-043-01, all response paths)
+    - ``sandbox``: present only when the tenant is in sandbox mode (UC-002-UPG-09)
+    - ``account``: buyer-safe {account_id, name, status} projection (UC-002-UPG-07)
+
+    None values are dropped by ``exclude_none`` on serialization, so non-sandbox / no-
+    account buys are unaffected. Splatted via ``**`` into each success construction.
+    """
+    return {
+        "context": getattr(req, "context", None),
+        "sandbox": True if getattr(sandbox_mode, "active", False) else None,
+        "account": _buyer_safe_account(tenant_id, account_id),
+    }
+
+
 @traced
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
@@ -2408,6 +2465,15 @@ async def _create_media_buy_impl(
     sandbox_mode = sandbox_mode_for_request(identity=identity, account_ref=account_ref_from_request(req))
     if sandbox_mode.active:
         logger.info("[SANDBOX] create_media_buy will traffic with zero economics: %s", sandbox_mode.diagnostic)
+
+    # Fields echoed onto every CreateMediaBuySuccess in this flow — see
+    # _success_response_extras (context echo / sandbox flag / buyer-safe account).
+    _success_extras: dict[str, Any] = _success_response_extras(
+        req=req,
+        sandbox_mode=sandbox_mode,
+        tenant_id=tenant["tenant_id"],
+        account_id=identity.account_id if identity else None,
+    )
 
     # Account-scoped buyers route through Account.platform_mappings (or the
     # sandbox advertiser cache) by stamping the resolved advertiser on the
@@ -3415,6 +3481,7 @@ async def _create_media_buy_impl(
                 revision=1,
                 confirmed_at=datetime.now(UTC),
                 workflow_step_id=step.step_id,
+                **_success_extras,
             )
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -3637,6 +3704,7 @@ async def _create_media_buy_impl(
                 revision=1,
                 confirmed_at=datetime.now(UTC),
                 workflow_step_id=step.step_id,
+                **_success_extras,
             )
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -3937,6 +4005,7 @@ async def _create_media_buy_impl(
                 else MediaBuyStatus.pending_creatives,
                 revision=1,
                 confirmed_at=datetime.now(UTC),
+                **_success_extras,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -4581,6 +4650,7 @@ async def _create_media_buy_impl(
             creative_deadline=response.creative_deadline,
             revision=1,
             confirmed_at=confirmed_at,
+            **_success_extras,
         )
 
         # Log activity

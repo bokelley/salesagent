@@ -454,11 +454,10 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         exclude=True,
         description="Legacy internal approval status accepted for compatibility with existing result construction.",
     )
-    platform_id: str | None = Field(
-        None,
-        exclude=True,
-        description="Legacy internal platform creative ID accepted for compatibility with existing result construction.",
-    )
+    # platform_id is inherited from the adcp 6.3 library parent as a wire-visible
+    # field (we no longer override it with exclude=True). Exposing the ad-server's
+    # creative ID lets buyers reconcile creatives that exist on the platform —
+    # including ones created before this account onboarded to AdCP.
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
