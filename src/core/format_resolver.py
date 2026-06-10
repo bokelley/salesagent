@@ -16,6 +16,7 @@ from adcp.utils.format_assets import get_format_assets
 
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPNotFoundError
+from src.core.format_cache import canonical_format_satisfies
 from src.core.schemas import Format
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -79,6 +80,10 @@ def _format_matches_asset_types(fmt: Format, requested_types: set[str]) -> bool:
     if legacy_category is not None and _string_value(legacy_category) in requested_types:
         return True
     return bool(_format_asset_types(fmt) & requested_types)
+
+
+def _format_ref_has_parameters(format_ref: object) -> bool:
+    return any(getattr(format_ref, key, None) is not None for key in ("width", "height", "duration_ms"))
 
 
 def _filter_available_formats(
@@ -166,7 +171,13 @@ def get_format(
         # Search all agents for this format
         all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id))
         for fmt in all_formats:
-            if fmt.format_id == format_id:
+            discovered_format_ref = fmt.format_id
+            discovered_format_id = getattr(discovered_format_ref, "id", discovered_format_ref)
+            if discovered_format_id == format_id and not _format_ref_has_parameters(discovered_format_ref):
+                return fmt
+            if not isinstance(discovered_format_ref, str) and canonical_format_satisfies(
+                format_id, discovered_format_ref
+            ):
                 return fmt
 
     # Not found anywhere

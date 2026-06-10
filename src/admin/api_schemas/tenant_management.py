@@ -830,6 +830,9 @@ class FormatIdRef(BaseModel):
 
     agent_url: str = Field(..., min_length=1, max_length=2048)
     id: str = Field(..., min_length=1, max_length=255)
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    duration_ms: int | None = Field(default=None, ge=1)
 
 
 class WholesalePricingOptionResponse(BaseModel):

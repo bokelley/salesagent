@@ -1837,11 +1837,32 @@ components:
           minLength: 1
           title: Agent Url
           type: string
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
         id:
           maxLength: 255
           minLength: 1
           title: Id
           type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
       required:
       - agent_url
       - id
@@ -2711,11 +2732,32 @@ components:
           minLength: 1
           title: Agent Url
           type: string
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
         id:
           maxLength: 255
           minLength: 1
           title: Id
           type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
       required:
       - agent_url
       - id
@@ -6158,11 +6200,32 @@ components:
           minLength: 1
           title: Agent Url
           type: string
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
         id:
           maxLength: 255
           minLength: 1
           title: Id
           type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
       required:
       - agent_url
       - id
@@ -6516,11 +6579,32 @@ components:
           minLength: 1
           title: Agent Url
           type: string
+        duration_ms:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Duration Ms
+        height:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Height
         id:
           maxLength: 255
           minLength: 1
           title: Id
           type: string
+        width:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Width
       required:
       - agent_url
       - id

@@ -275,15 +275,8 @@ class TestGetFormat:
         assert result.name == "Agent Format"
 
     def test_search_all_agents_no_agent_url(self):
-        """get_format searches all agents when agent_url is None.
-
-        Note: The search loop at L53-56 compares Format.format_id (FormatId)
-        with the string parameter. To match, we use a mock with matching
-        format_id attribute instead of a real Format object.
-        """
-        mock_fmt = MagicMock()
-        mock_fmt.format_id = "display_300x250"  # Plain string to match parameter
-        mock_fmt.name = "Found Format"
+        """get_format searches all agents when agent_url is None."""
+        mock_fmt = _make_format("display_300x250", name="Found Format")
 
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
@@ -294,6 +287,37 @@ class TestGetFormat:
             result = get_format("display_300x250", tenant_id="t1")
 
         assert result.name == "Found Format"
+
+    def test_search_all_agents_matches_legacy_request_to_canonical_parameters(self):
+        """get_format maps legacy fixed-size IDs to canonical parameterized formats."""
+        mock_fmt = _make_format("display_image", name="Found Format")
+        mock_fmt.format_id.width = 300
+        mock_fmt.format_id.height = 250
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[mock_fmt]),
+        ):
+            from src.core.format_resolver import get_format
+
+            result = get_format("display_300x250", tenant_id="t1")
+
+        assert result.name == "Found Format"
+
+    def test_search_all_agents_does_not_match_generic_request_to_parameterized_variant(self):
+        """A generic format lookup should not choose an arbitrary fixed-size variant."""
+        mock_fmt = _make_format("display_image", name="Found Format")
+        mock_fmt.format_id.width = 300
+        mock_fmt.format_id.height = 250
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[mock_fmt]),
+        ):
+            from src.core.format_resolver import get_format
+
+            with pytest.raises(AdCPNotFoundError, match="Unknown format_id 'display_image'"):
+                get_format("display_image", tenant_id="t1")
 
     def test_search_all_agents_no_match_raises_not_found(self):
         """get_format raises AdCPNotFoundError when format not found in any agent."""

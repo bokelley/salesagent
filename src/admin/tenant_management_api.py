@@ -1239,14 +1239,18 @@ def _supported_signal_candidate_types(adapter_type: str) -> set[str]:
     return candidate_types
 
 
-def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, str]:
+def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, Any]:
     from src.core.canonical_formats import canonicalize_format_ref
 
     canonical = canonicalize_format_ref(format_id)
-    return {"agent_url": str(canonical["agent_url"]), "id": str(canonical["id"])}
+    result: dict[str, Any] = {"agent_url": str(canonical["agent_url"]), "id": str(canonical["id"])}
+    for key in ("width", "height", "duration_ms"):
+        if canonical.get(key) is not None:
+            result[key] = canonical[key]
+    return result
 
 
-def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -> list[dict[str, str]]:
+def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -> list[dict[str, Any]]:
     return [_format_id_dict(fmt.format_id) for fmt in creative_formats]
 
 
@@ -1343,7 +1347,7 @@ def _creative_format_schema_from_stored(
             slot_requirements = list(binding.get("slot_requirements") or [])
             break
     return WholesaleCreativeFormat(
-        format_id=FormatIdRef(agent_url=str(canonical_format_id["agent_url"]), id=str(canonical_format_id["id"])),
+        format_id=FormatIdRef.model_validate(canonical_format_id),
         slot_requirements=slot_requirements,
     )
 
@@ -1539,8 +1543,15 @@ def _publisher_property_validation_issues(
     ]
 
 
-def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None:
+def _creative_format_identity(format_id: FormatIdRef | dict[str, Any]):
+    from src.core.format_cache import canonical_format_identity
+
+    return canonical_format_identity(_format_id_dict(format_id))
+
+
+def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str, int | None, int | None, int | None]] | None:
     from src.admin.blueprints.products import get_creative_formats
+    from src.core.format_cache import canonical_format_identity
 
     try:
         formats = get_creative_formats(tenant_id=tenant_id)
@@ -1548,7 +1559,7 @@ def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None
         logger.warning("Unable to validate wholesale creative format IDs for tenant %s", tenant_id, exc_info=True)
         return None
 
-    refs: set[tuple[str, str]] = set()
+    refs: set[tuple[str, str, int | None, int | None, int | None]] = set()
     for fmt in formats:
         raw_format_id = fmt.get("format_id") or {}
         if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
@@ -1556,7 +1567,7 @@ def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None
         agent_url = raw_format_id.get("agent_url")
         format_id = raw_format_id.get("id")
         if agent_url and format_id:
-            refs.add((str(agent_url), str(format_id)))
+            refs.add(canonical_format_identity(raw_format_id))
     return refs
 
 
@@ -1581,7 +1592,7 @@ def _creative_format_validation_issues(
     issues: list[WholesaleValidationIssue] = []
     for idx, creative_format in enumerate(req.inventory.creative_formats):
         raw_format_id = _format_id_dict(creative_format.format_id)
-        if (raw_format_id["agent_url"], raw_format_id["id"]) not in catalog_refs:
+        if _creative_format_identity(creative_format.format_id) not in catalog_refs:
             issues.append(
                 WholesaleValidationIssue(
                     code="creative_format_not_found",
@@ -2800,10 +2811,11 @@ def list_creative_formats_for_authoring(tenant_id: str, query: ListCreativeForma
             raw_format_id = {"agent_url": fmt["agent_url"], "id": fmt["id"]}
         if not raw_format_id.get("agent_url") or not raw_format_id.get("id"):
             continue
+        canonical_format_id = _format_id_dict(raw_format_id)
         response_formats.append(
             CreativeFormatSummary(
-                format_id=FormatIdRef(agent_url=str(raw_format_id["agent_url"]), id=str(raw_format_id["id"])),
-                name=str(fmt.get("name") or raw_format_id["id"]),
+                format_id=FormatIdRef.model_validate(canonical_format_id),
+                name=str(fmt.get("name") or canonical_format_id["id"]),
                 dimensions=fmt.get("dimensions"),
                 asset_types=list(fmt.get("asset_types") or []),
                 requirements=dict(fmt.get("requirements") or {}),
@@ -2815,7 +2827,7 @@ def list_creative_formats_for_authoring(tenant_id: str, query: ListCreativeForma
         count=len(response_formats),
         errors=catalog.errors,
     )
-    return jsonify(response.model_dump(mode="json"))
+    return jsonify(response.model_dump(mode="json", exclude_none=True))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/signals/adapter-capabilities", methods=["GET"])
