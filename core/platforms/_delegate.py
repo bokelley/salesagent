@@ -696,15 +696,18 @@ def _emit_media_buy_created_if_success(tenant_id: str, result: Any, req_model: A
 
     from src.admin.services.webhook_publisher import emit_event
 
+    # adcp 6.3 dropped top-level buyer_ref from the request/response. Its documented
+    # v3 correlation successor is context.buyer_ref (the ContextObject is extra=allow,
+    # so buyer_ref rides as an extra) — NOT po_number, which is a financial PO number.
+    ctx = getattr(req_model, "context", None)
+    buyer_ref = ctx.get("buyer_ref") if isinstance(ctx, dict) else getattr(ctx, "buyer_ref", None)
+
     emit_event(
         tenant_id,
         "media_buy.created",
         {
             "media_buy_id": media_buy_id,
-            # adcp 6.3 dropped buyer_ref from the success response; its successor is
-            # po_number on the request. Source it from there and keep the payload key
-            # stable for downstream media_buy.created consumers.
-            "buyer_ref": getattr(req_model, "po_number", None),
+            "buyer_ref": buyer_ref,
             "status": getattr(inner, "media_buy_status", None) or getattr(inner, "status", None),
         },
     )

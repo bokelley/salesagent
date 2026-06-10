@@ -150,10 +150,12 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # SyncResponseAccount is-a Account; we narrow the inherited list element type so
-    # nested dumps carry our stable optional keys. adcp 6.3 tightened the parent to
-    # list[Account], so mypy flags list invariance — safe here (response field is only
-    # constructed + serialized, never appended to as a list[Account]).
+    # SyncResponseAccount is an independent local row model (extends AdCPBaseModel,
+    # NOT a subclass of the parent's element type). adcp 6.3 retyped the parent's
+    # accounts to list[Account], so redeclaring the element type is an incompatible
+    # override and mypy needs the ignore. Safe because this response field is only
+    # ever constructed and serialized with SyncResponseAccount rows, never read back
+    # or appended to as list[Account].
     accounts: list[SyncResponseAccount]  # type: ignore[assignment]
     dry_run: bool | None = None
     context: Any | None = None

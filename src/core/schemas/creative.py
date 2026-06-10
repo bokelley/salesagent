@@ -475,8 +475,11 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     )
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
     # assigned_to / assignment_errors are inherited from the adcp 6.3 library parent
-    # (promoted into Creative/sync_creatives_response). Our prior redeclarations only
-    # widened the lib types; production assigns values that satisfy the stricter parent.
+    # (promoted onto SyncCreativeResult). Our prior redeclarations only widened the
+    # lib types; production assigns values that satisfy the stricter parent. NOTE: the
+    # parent constrains assignment_errors keys to ^[a-zA-Z0-9_-]+$ — fine for current
+    # paths (set to None or via attribute assignment, neither validated), but a future
+    # validating construct with buyer-supplied package_id keys would now be checked.
 
     @field_validator("action", mode="before")
     @classmethod
