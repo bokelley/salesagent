@@ -2519,9 +2519,9 @@ def get_inventory_adapter_capabilities(tenant_id: str):
 @spec.validate(resp=Response(HTTP_200=ListInventorySelectorsResponse, HTTP_400=ApiError, HTTP_404=ApiError))
 def list_inventory_selectors(tenant_id: str):
     """Search cached ad-server inventory selectors for wholesale-product setup."""
-    selector_type = request.args.get("selector_type")
+    selector_type = request.args.get("selector_type") or request.args.get("selectorType")
     q = request.args.get("q")
-    parent_id = request.args.get("parent_id")
+    parent_id = request.args.get("parent_id") or request.args.get("parentId")
     try:
         limit = min(max(int(request.args.get("limit", "50")), 1), 100)
         offset = max(int(request.args.get("cursor", "0")), 0)

@@ -22,6 +22,7 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
     PublisherPartnerFactory,
+    SpringServeInventoryFactory,
     TenantFactory,
 )
 from tests.helpers.managed_tenant_api import (
@@ -194,6 +195,91 @@ def test_inventory_discovery_surfaces_adapter_selectors_and_publisher_properties
     assert body["domains"][0]["publisher_domain"] == "wonderstruck.com"
     assert body["properties"][0]["property_id"] == "wonderstruck_site"
     assert {selector["selection_type"] for selector in body["allowed_selectors"]} == {"all", "by_id", "by_tag"}
+
+
+def test_inventory_discovery_surfaces_springserve_selectors(management_api_client, bound_factories):
+    def assert_single_selector_response(response, expected_selector):
+        assert response.status_code == 200, response.get_data(as_text=True)
+        body = response.get_json()
+        assert set(body) == {"selectors", "count", "next_cursor"}
+        assert body["count"] == 1
+        assert body["selectors"] == [expected_selector]
+
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_wholesale_springserve_selectors",
+        name="Wonderstruck SpringServe",
+        subdomain="wonderstruck-springserve",
+        ad_server="springserve",
+        is_embedded=True,
+    )
+    AdapterConfigFactory(tenant=tenant, adapter_type="springserve")
+    SpringServeInventoryFactory(
+        tenant=tenant,
+        entity_type="supply_partner",
+        entity_id="63440",
+        name="Talpa Media",
+        supply_partner_id=None,
+        supply_router_id=None,
+        key_id=None,
+        raw_json={"id": 63440, "name": "Talpa Media", "account_id": 1730},
+    )
+    SpringServeInventoryFactory(
+        tenant=tenant,
+        entity_type="supply_tag",
+        entity_id="945295",
+        name="KIJK CTV",
+        supply_partner_id="63440",
+        supply_router_id="148010",
+        key_id=None,
+        raw_json={
+            "id": 945295,
+            "name": "KIJK CTV",
+            "supply_partner_id": 63440,
+            "format": "video",
+        },
+    )
+    bound_factories.commit()
+
+    partner_response = client.get(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/inventory/selectors?selectorType=supply_partner&q=Talpa",
+        headers=auth_headers,
+    )
+    tag_response = client.get(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/inventory/selectors"
+        "?selectorType=supply_tag&parentId=148010&q=KIJK",
+        headers=auth_headers,
+    )
+
+    assert_single_selector_response(
+        partner_response,
+        {
+            "selector_type": "supply_partner",
+            "external_id": "63440",
+            "name": "Talpa Media",
+            "path": None,
+            "parent_id": None,
+            "status": None,
+            "metadata": {"id": 63440, "name": "Talpa Media", "account_id": 1730},
+        },
+    )
+    assert_single_selector_response(
+        tag_response,
+        {
+            "selector_type": "supply_tag",
+            "external_id": "945295",
+            "name": "KIJK CTV",
+            "path": None,
+            "parent_id": "148010",
+            "status": None,
+            "metadata": {
+                "id": 945295,
+                "name": "KIJK CTV",
+                "supply_partner_id": 63440,
+                "format": "video",
+            },
+        },
+    )
 
 
 def test_creative_formats_authoring_endpoint_surfaces_discovery_errors(management_api_client, gam_tenant):
