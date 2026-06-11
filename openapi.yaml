@@ -4612,14 +4612,32 @@ components:
         adapter:
           title: Adapter
           type: string
+        candidate_types:
+          items:
+            $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287.SignalCandidateTypeCapability'
+          title: Candidate Types
+          type: array
+        default_candidate_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Default Candidate Type
         mapping_kinds:
           items:
             $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindCapability'
           title: Mapping Kinds
           type: array
+        supported_candidate_types:
+          items:
+            type: string
+          title: Supported Candidate Types
+          type: array
         supports_signal_mapping_authoring:
           title: Supports Signal Mapping Authoring
           type: boolean
+        targeting_semantics:
+          $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287.SignalTargetingSemantics'
         value_types:
           items:
             type: string
@@ -4629,6 +4647,70 @@ components:
       - adapter
       - supports_signal_mapping_authoring
       title: SignalAdapterCapabilitiesResponse
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287.SignalCandidateTypeCapability:
+      additionalProperties: false
+      description: One adapter candidate type that a signal-authoring client can browse.
+      properties:
+        browse_only:
+          default: false
+          title: Browse Only
+          type: boolean
+        candidate_type:
+          maxLength: 80
+          minLength: 1
+          title: Candidate Type
+          type: string
+        child_candidate_types:
+          items:
+            type: string
+          title: Child Candidate Types
+          type: array
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Description
+        directly_mappable:
+          default: false
+          title: Directly Mappable
+          type: boolean
+        label:
+          maxLength: 200
+          minLength: 1
+          title: Label
+          type: string
+        mapping_kind:
+          anyOf:
+          - maxLength: 80
+            type: string
+          - type: 'null'
+          default: null
+          title: Mapping Kind
+        parent_candidate_type:
+          anyOf:
+          - maxLength: 80
+            type: string
+          - type: 'null'
+          default: null
+          title: Parent Candidate Type
+        supports_pagination:
+          default: true
+          title: Supports Pagination
+          type: boolean
+        supports_parent_filter:
+          default: false
+          title: Supports Parent Filter
+          type: boolean
+        supports_search:
+          default: true
+          title: Supports Search
+          type: boolean
+      required:
+      - candidate_type
+      - label
+      title: SignalCandidateTypeCapability
       type: object
     SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindCapability:
       additionalProperties: false
@@ -4673,6 +4755,82 @@ components:
       - mapping_kind
       - label
       title: SignalMappingKindCapability
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindTargetingSemantics:
+      additionalProperties: false
+      description: Targeting behavior for one signal mapping kind.
+      properties:
+        buyer_targeting_fields:
+          items:
+            type: string
+          title: Buyer Targeting Fields
+          type: array
+        composition_models:
+          items:
+            type: string
+          title: Composition Models
+          type: array
+        exclusive_with_other_signals:
+          default: false
+          title: Exclusive With Other Signals
+          type: boolean
+        mapping_kind:
+          maxLength: 80
+          minLength: 1
+          title: Mapping Kind
+          type: string
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Notes
+        participates_in_composed_authoring:
+          default: false
+          title: Participates In Composed Authoring
+          type: boolean
+        supported_modes:
+          items:
+            type: string
+          title: Supported Modes
+          type: array
+        supports_composed:
+          default: false
+          title: Supports Composed
+          type: boolean
+      required:
+      - mapping_kind
+      title: SignalMappingKindTargetingSemantics
+      type: object
+    SignalAdapterCapabilitiesResponse.f44f287.SignalTargetingSemantics:
+      additionalProperties: false
+      description: Adapter-level signal targeting and composition behavior.
+      properties:
+        buyer_targeting_fields:
+          items:
+            type: string
+          title: Buyer Targeting Fields
+          type: array
+        composition_models:
+          items:
+            type: string
+          title: Composition Models
+          type: array
+        mapping_kinds:
+          items:
+            $ref: '#/components/schemas/SignalAdapterCapabilitiesResponse.f44f287.SignalMappingKindTargetingSemantics'
+          title: Mapping Kinds
+          type: array
+        supported_modes:
+          items:
+            type: string
+          title: Supported Modes
+          type: array
+        supports_composed:
+          default: false
+          title: Supports Composed
+          type: boolean
+      title: SignalTargetingSemantics
       type: object
     SignalMappingRequest.f44f287:
       additionalProperties: false

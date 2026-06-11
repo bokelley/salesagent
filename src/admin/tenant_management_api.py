@@ -106,11 +106,14 @@ from src.admin.api_schemas.tenant_management import (
     RejectWorkflowRequest,
     SignalAdapterCapabilitiesResponse,
     SignalCandidateSummary,
+    SignalCandidateTypeCapability,
     SignalMappingKindCapability,
+    SignalMappingKindTargetingSemantics,
     SignalMappingRequest,
     SignalMappingResponse,
     SignalMappingValidationIssue,
     SignalMappingValidationResponse,
+    SignalTargetingSemantics,
     SpringServeAdapterConfig,
     SpringServeSettings,
     TargetingValuesRefreshResponse,
@@ -1132,7 +1135,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
             mapping_kind="freewheel_viewership_profile",
             label="FreeWheel Viewership Profile",
             description="FreeWheel viewership profile ID exposed as a binary buyer-facing signal.",
-            candidate_type="standard_attribute",
+            candidate_type="viewership_profile",
             adapter_config_schema={
                 "type": "object",
                 "required": ["kind", "profile_id"],
@@ -1140,7 +1143,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                     "type": {"const": "passthrough"},
                     "kind": {"const": "freewheel_viewership_profile"},
                     "profile_id": {"type": "string"},
-                    "mode": {"enum": ["include", "exclude"]},
+                    "mode": {"enum": ["include"]},
                 },
             },
         ),
@@ -1157,7 +1160,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                     "type": {"const": "passthrough"},
                     "kind": {"const": "freewheel_audience_item"},
                     "item_id": {"type": "string"},
-                    "mode": {"enum": ["include", "exclude"]},
+                    "mode": {"enum": ["include"]},
                 },
             },
         ),
@@ -1175,7 +1178,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                     "kind": {"const": "freewheel_custom_kv"},
                     "key": {"type": "string"},
                     "value_id": {"type": "string"},
-                    "mode": {"enum": ["include", "exclude"]},
+                    "mode": {"enum": ["include"]},
                 },
             },
         ),
@@ -1205,6 +1208,207 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
 }
 
 
+def _candidate_type_capability(
+    *,
+    candidate_type: str,
+    label: str,
+    description: str | None = None,
+    mapping_kind: str | None = None,
+    parent_candidate_type: str | None = None,
+    child_candidate_types: list[str] | None = None,
+    supports_search: bool = True,
+    supports_pagination: bool = True,
+    supports_parent_filter: bool = False,
+) -> SignalCandidateTypeCapability:
+    directly_mappable = mapping_kind is not None
+    return SignalCandidateTypeCapability(
+        candidate_type=candidate_type,
+        label=label,
+        description=description,
+        mapping_kind=mapping_kind,
+        directly_mappable=directly_mappable,
+        browse_only=not directly_mappable,
+        parent_candidate_type=parent_candidate_type,
+        child_candidate_types=list(child_candidate_types or []),
+        supports_search=supports_search,
+        supports_pagination=supports_pagination,
+        supports_parent_filter=supports_parent_filter,
+    )
+
+
+_SIGNAL_CANDIDATE_TYPE_CAPABILITIES: dict[str, list[SignalCandidateTypeCapability]] = {
+    "google_ad_manager": [
+        _candidate_type_capability(
+            candidate_type="audience_segment",
+            label="GAM Audience Segment",
+            description="Directly mappable Google Ad Manager audience segment.",
+            mapping_kind="audience_segment",
+        ),
+        _candidate_type_capability(
+            candidate_type="custom_targeting_key",
+            label="GAM Custom Targeting Key",
+            description="Browse-only parent key used to discover custom targeting values.",
+            child_candidate_types=["custom_targeting_value"],
+        ),
+        _candidate_type_capability(
+            candidate_type="custom_targeting_value",
+            label="GAM Custom Targeting Value",
+            description="Directly mappable value under a custom targeting key.",
+            mapping_kind="custom_key_value",
+            parent_candidate_type="custom_targeting_key",
+            supports_parent_filter=True,
+        ),
+    ],
+    "springserve": [
+        _candidate_type_capability(
+            candidate_type="key",
+            label="SpringServe Key",
+            description="Browse-only parent key used to discover value lists.",
+            child_candidate_types=["value_list"],
+        ),
+        _candidate_type_capability(
+            candidate_type="value_list",
+            label="SpringServe Value List",
+            description="Directly mappable value list under a SpringServe key.",
+            mapping_kind="springserve_value_list",
+            parent_candidate_type="key",
+            supports_parent_filter=True,
+        ),
+    ],
+    "freewheel": [
+        _candidate_type_capability(
+            candidate_type="viewership_profile",
+            label="FreeWheel Viewership Profile",
+            description="Directly mappable FreeWheel viewership profile candidate.",
+            mapping_kind="freewheel_viewership_profile",
+        ),
+    ],
+    "broadstreet": [],
+    "mock": [],
+}
+
+
+def _mapping_targeting_semantics(
+    *,
+    mapping_kind: str,
+    supports_composed: bool,
+    composition_models: list[str],
+    supported_modes: list[str],
+    buyer_targeting_fields: list[str],
+    participates_in_composed_authoring: bool,
+    exclusive_with_other_signals: bool = False,
+    notes: str | None = None,
+) -> SignalMappingKindTargetingSemantics:
+    return SignalMappingKindTargetingSemantics(
+        mapping_kind=mapping_kind,
+        supports_composed=supports_composed,
+        composition_models=composition_models,
+        supported_modes=supported_modes,
+        buyer_targeting_fields=buyer_targeting_fields,
+        participates_in_composed_authoring=participates_in_composed_authoring,
+        exclusive_with_other_signals=exclusive_with_other_signals,
+        notes=notes,
+    )
+
+
+_AUDIENCE_TARGETING_FIELDS = ["audience_include", "audience_exclude"]
+
+_SIGNAL_TARGETING_SEMANTICS: dict[str, SignalTargetingSemantics] = {
+    "google_ad_manager": SignalTargetingSemantics(
+        supports_composed=True,
+        composition_models=["flat_criteria", "groups"],
+        supported_modes=["include", "exclude"],
+        buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+        mapping_kinds=[
+            _mapping_targeting_semantics(
+                mapping_kind="audience_segment",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="custom_key_value",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="gam_targeting_groups",
+                supports_composed=True,
+                composition_models=["groups"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=True,
+                exclusive_with_other_signals=True,
+                notes="Group-based GAM targeting signals must be selected alone in a media-buy audience list.",
+            ),
+        ],
+    ),
+    "springserve": SignalTargetingSemantics(
+        supports_composed=False,
+        composition_models=["passthrough"],
+        supported_modes=["include", "exclude"],
+        buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+        mapping_kinds=[
+            _mapping_targeting_semantics(
+                mapping_kind="springserve_value_list",
+                supports_composed=False,
+                composition_models=["passthrough"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=False,
+                notes="SpringServe resolves one publisher-curated value list per signal; composed signals are not supported.",
+            ),
+        ],
+    ),
+    "freewheel": SignalTargetingSemantics(
+        supports_composed=True,
+        composition_models=["flat_criteria"],
+        supported_modes=["include"],
+        buyer_targeting_fields=["audience_include"],
+        mapping_kinds=[
+            _mapping_targeting_semantics(
+                mapping_kind="freewheel_viewership_profile",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include"],
+                buyer_targeting_fields=["audience_include"],
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="freewheel_audience_item",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include"],
+                buyer_targeting_fields=["audience_include"],
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="freewheel_custom_kv",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include"],
+                buyer_targeting_fields=["audience_include"],
+                participates_in_composed_authoring=True,
+                notes="FreeWheel has no native signal exclusion; audience_exclude references are rejected.",
+            ),
+        ],
+    ),
+    "broadstreet": SignalTargetingSemantics(),
+    "mock": SignalTargetingSemantics(),
+}
+
+_DEFAULT_SIGNAL_CANDIDATE_TYPE: dict[str, str] = {
+    "google_ad_manager": "audience_segment",
+    "springserve": "key",
+    "freewheel": "viewership_profile",
+}
+
+
 def _tenant_adapter_type(tenant: Tenant, adapter: AdapterConfig | None = None) -> str:
     """Return the canonical adapter type for a tenant."""
     configured = adapter.adapter_type if adapter is not None else tenant.ad_server
@@ -1229,14 +1433,7 @@ def _supported_signal_mapping_kinds(adapter_type: str) -> set[str]:
 
 
 def _supported_signal_candidate_types(adapter_type: str) -> set[str]:
-    candidate_types = {
-        cap.candidate_type for cap in _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, []) if cap.candidate_type
-    }
-    if adapter_type == "google_ad_manager":
-        candidate_types.add("custom_targeting_key")
-    if adapter_type == "springserve":
-        candidate_types.add("key")
-    return candidate_types
+    return {cap.candidate_type for cap in _SIGNAL_CANDIDATE_TYPE_CAPABILITIES.get(adapter_type, [])}
 
 
 def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, Any]:
@@ -1822,7 +2019,7 @@ def _springserve_signal_candidate(row: SpringServeInventory) -> SignalCandidateS
     )
 
 
-def _freewheel_signal_candidate(row: FreeWheelInventory) -> SignalCandidateSummary:
+def _freewheel_signal_candidate(row: FreeWheelInventory, candidate_type: str | None = None) -> SignalCandidateSummary:
     metadata = dict(row.raw_json or {})
     raw_id = str(metadata.get("id") or row.entity_id.split(":")[-1])
     adapter_config: dict[str, Any] | None = None
@@ -1838,7 +2035,7 @@ def _freewheel_signal_candidate(row: FreeWheelInventory) -> SignalCandidateSumma
             adapter_config=adapter_config,
         )
     return SignalCandidateSummary(
-        candidate_type=row.entity_type,
+        candidate_type=candidate_type or row.entity_type,
         external_id=row.entity_id,
         name=row.name,
         parent_id=row.parent_id,
@@ -1894,6 +2091,15 @@ def _signal_candidate_rows(
         )
         return [_springserve_signal_candidate(row) for row in rows]
     if adapter_type == "freewheel":
+        if candidate_type == "viewership_profile":
+            rows = FreeWheelInventoryRepository(session, tenant_id).search(
+                "standard_attribute",
+                q=q,
+                parent_id="viewership_profiles",
+                offset=offset,
+                limit=limit,
+            )
+            return [_freewheel_signal_candidate(row, candidate_type="viewership_profile") for row in rows]
         rows = FreeWheelInventoryRepository(session, tenant_id).search(
             candidate_type,
             q=q,
@@ -1965,6 +2171,19 @@ def _signal_config_atoms(adapter_config: dict[str, Any]) -> list[dict[str, Any]]
     return [adapter_config]
 
 
+def _signal_mapping_semantics_for_kind(
+    adapter_type: str,
+    mapping_kind: str,
+) -> SignalMappingKindTargetingSemantics | None:
+    semantics = _SIGNAL_TARGETING_SEMANTICS.get(adapter_type)
+    if semantics is None:
+        return None
+    for mapping_semantics in semantics.mapping_kinds:
+        if mapping_semantics.mapping_kind == mapping_kind:
+            return mapping_semantics
+    return None
+
+
 def _validate_signal_config_shape(
     req: SignalMappingRequest,
     adapter_type: str,
@@ -2005,6 +2224,19 @@ def _validate_signal_config_shape(
                 message="adapter_config.type='composed' requires a non-empty criteria list.",
             )
         )
+    composed_config = req.adapter_config.get("type") == "composed"
+    adapter_supports_composed = True
+    if composed_config:
+        adapter_semantics = _SIGNAL_TARGETING_SEMANTICS.get(adapter_type, SignalTargetingSemantics())
+        adapter_supports_composed = adapter_semantics.supports_composed
+        if not adapter_supports_composed:
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="unsupported_composed_config",
+                    field="adapter_config.type",
+                    message=f"Adapter {adapter_type!r} does not support composed signal mappings.",
+                )
+            )
     if not atoms:
         issues.append(
             SignalMappingValidationIssue(
@@ -2028,6 +2260,20 @@ def _validate_signal_config_shape(
                 )
             )
             continue
+        mapping_semantics = _signal_mapping_semantics_for_kind(adapter_type, str(kind))
+        if (
+            composed_config
+            and adapter_supports_composed
+            and mapping_semantics
+            and "flat_criteria" not in mapping_semantics.composition_models
+        ):
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="unsupported_signal_composed_mapping_kind",
+                    field=f"{field_prefix}.kind",
+                    message=(f"Signal mapping kind {kind!r} cannot be used inside adapter_config.type='composed'."),
+                )
+            )
         if atom.get("mode", "include") not in {"include", "exclude"}:
             issues.append(
                 SignalMappingValidationIssue(
@@ -2036,6 +2282,17 @@ def _validate_signal_config_shape(
                     message="mode must be either 'include' or 'exclude'.",
                 )
             )
+        else:
+            supported_modes = set(mapping_semantics.supported_modes if mapping_semantics else [])
+            mode = atom.get("mode", "include")
+            if supported_modes and mode not in supported_modes:
+                issues.append(
+                    SignalMappingValidationIssue(
+                        code="unsupported_signal_mapping_mode",
+                        field=f"{field_prefix}.mode",
+                        message=f"Signal mapping kind {kind!r} supports mode(s): {', '.join(sorted(supported_modes))}.",
+                    )
+                )
         for required_field in _required_signal_config_fields(str(kind)):
             if not atom.get(required_field):
                 issues.append(
@@ -2842,10 +3099,15 @@ def get_signal_adapter_capabilities(tenant_id: str):
         assert tenant is not None
         adapter_type = _tenant_adapter_type(tenant, adapter)
         mapping_kinds = _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, [])
+        candidate_types = _SIGNAL_CANDIDATE_TYPE_CAPABILITIES.get(adapter_type, [])
         response = SignalAdapterCapabilitiesResponse(
             adapter=adapter_type,
             supports_signal_mapping_authoring=bool(mapping_kinds),
             mapping_kinds=mapping_kinds,
+            supported_candidate_types=[cap.candidate_type for cap in candidate_types],
+            candidate_types=candidate_types,
+            default_candidate_type=_DEFAULT_SIGNAL_CANDIDATE_TYPE.get(adapter_type),
+            targeting_semantics=_SIGNAL_TARGETING_SEMANTICS.get(adapter_type, SignalTargetingSemantics()),
         )
         return jsonify(response.model_dump())
 
