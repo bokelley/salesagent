@@ -1085,7 +1085,13 @@ class SignalMappingKindCapability(BaseModel):
     candidate_type: str | None = Field(default=None, max_length=80)
     supports_search: bool = True
     supports_parent_filter: bool = False
-    adapter_config_schema: dict[str, Any] = Field(default_factory=dict)
+    adapter_config_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "JSON Schema for adapter_config. Mapping kinds may include x-authoring metadata "
+            "for generic signal-authoring UI construction."
+        ),
+    )
 
 
 class SignalCandidateTypeCapability(BaseModel):

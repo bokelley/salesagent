@@ -1124,8 +1124,67 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                 "properties": {
                     "type": {"const": "passthrough"},
                     "kind": {"const": "gam_targeting_groups"},
-                    "groups": {"type": "array", "minItems": 1},
+                    "groups": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "OR-ed targeting groups. Criteria within one group are AND-ed.",
+                        "items": {
+                            "type": "object",
+                            "required": ["criteria"],
+                            "properties": {
+                                "criteria": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "description": "AND-ed criteria for one group.",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["keyId", "values"],
+                                        "properties": {
+                                            "keyId": {
+                                                "type": "string",
+                                                "description": (
+                                                    "GAM custom targeting key ID. Browse keys with "
+                                                    "candidate_type=custom_targeting_key."
+                                                ),
+                                            },
+                                            "values": {
+                                                "type": "array",
+                                                "minItems": 1,
+                                                "description": (
+                                                    "OR-ed GAM custom targeting value IDs or names under keyId. "
+                                                    "Browse values with candidate_type=custom_targeting_value "
+                                                    "and parent_id={keyId}."
+                                                ),
+                                                "items": {"type": "string"},
+                                            },
+                                            "exclude": {
+                                                "type": "boolean",
+                                                "default": False,
+                                                "description": "When true, negates this criterion in GAM targeting.",
+                                            },
+                                        },
+                                        "additionalProperties": False,
+                                    },
+                                }
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
                     "mode": {"enum": ["include", "exclude"]},
+                },
+                "x-authoring": {
+                    "composition_model": "groups",
+                    "canonical_criterion_casing": "camelCase",
+                    "operators": {
+                        "groups": "OR",
+                        "criteria": "AND",
+                        "values": "OR",
+                    },
+                    "candidate_browser": {
+                        "key_candidate_type": "custom_targeting_key",
+                        "value_candidate_type": "custom_targeting_value",
+                        "value_parent_filter": "keyId",
+                    },
                 },
             },
         ),

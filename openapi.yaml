@@ -4718,6 +4718,8 @@ components:
       properties:
         adapter_config_schema:
           additionalProperties: true
+          description: JSON Schema for adapter_config. Mapping kinds may include x-authoring
+            metadata for generic signal-authoring UI construction.
           title: Adapter Config Schema
           type: object
         candidate_type:

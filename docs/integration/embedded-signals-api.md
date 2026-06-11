@@ -61,7 +61,35 @@ GAM supports:
   `segment_id`.
 - `custom_key_value`: candidate type `custom_targeting_value`, requires
   `key_id` and `value_id`. Search values with `parent_id={key_id}`.
-- `gam_targeting_groups`: advanced manually-authored targeting groups.
+- `gam_targeting_groups`: advanced manually-authored targeting groups. This
+  mapping is exclusive with other selected signals in one audience list.
+
+GAM targeting-group authoring uses the TargetingWidget/GAM materializer shape:
+
+```json
+{
+  "type": "passthrough",
+  "kind": "gam_targeting_groups",
+  "groups": [
+    {
+      "criteria": [
+        {
+          "keyId": "key_interest",
+          "values": ["val_sports", "val_news"],
+          "exclude": false
+        }
+      ]
+    }
+  ]
+}
+```
+
+The boolean model is `groups` OR, `criteria` within a group AND, and `values`
+within one criterion OR. Set `exclude: true` to negate that criterion. The
+canonical group criterion casing is camelCase: `keyId`, `values`, `exclude`.
+Browse keys with `candidate_type=custom_targeting_key`; browse values with
+`candidate_type=custom_targeting_value&parent_id={keyId}`. The simpler
+`custom_key_value` mapping keeps its snake_case `key_id` / `value_id` payload.
 
 SpringServe supports:
 

@@ -110,6 +110,19 @@ def test_signal_capabilities_and_candidates_surface_adapter_mapping_templates(ma
     capabilities_body = capabilities.get_json()
     mapping_kinds = {mapping["mapping_kind"] for mapping in capabilities_body["mapping_kinds"]}
     assert {"audience_segment", "custom_key_value", "gam_targeting_groups"} <= mapping_kinds
+    mapping_capabilities = {mapping["mapping_kind"]: mapping for mapping in capabilities_body["mapping_kinds"]}
+    groups_schema = mapping_capabilities["gam_targeting_groups"]["adapter_config_schema"]
+    assert groups_schema["x-authoring"]["operators"] == {"groups": "OR", "criteria": "AND", "values": "OR"}
+    assert groups_schema["x-authoring"]["candidate_browser"] == {
+        "key_candidate_type": "custom_targeting_key",
+        "value_candidate_type": "custom_targeting_value",
+        "value_parent_filter": "keyId",
+    }
+    assert groups_schema["x-authoring"]["canonical_criterion_casing"] == "camelCase"
+    criterion_schema = groups_schema["properties"]["groups"]["items"]["properties"]["criteria"]["items"]
+    assert criterion_schema["required"] == ["keyId", "values"]
+    assert {"keyId", "values", "exclude"} <= set(criterion_schema["properties"])
+    assert "key_id" not in criterion_schema["properties"]
     assert capabilities_body["supported_candidate_types"] == [
         "audience_segment",
         "custom_targeting_key",
