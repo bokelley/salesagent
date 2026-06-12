@@ -841,13 +841,44 @@ class TestSyncTerminalEmission:
             "class": None,
             "category": "auth",
         }
+        assert envelope["data"]["item_count"] is None
+        assert envelope["data"]["summary"] is None
         # Failure envelope carries the run identity for receiver correlation.
         assert envelope["data"]["sync_run_id"] == sync_id
         # Envelope-level schema version pins the wire format so future
         # breaking changes can be gated by receivers.
-        assert envelope["event_schema_version"] == "1"
+        assert envelope["event_schema_version"] == "2"
         # Plaintext secret was returned at create time and used for signing.
         assert plaintext_secret  # smoke
+
+    def test_advertiser_incomplete_result_failed_webhook_carries_count_and_summary(
+        self, client, auth_headers, tenant, bound_factories, monkeypatch
+    ):
+        self._subscribe(client, auth_headers, tenant.tenant_id, "sync_run.failed")
+        receiver = self._install_capture(monkeypatch)
+
+        from src.services.gam_advertisers_sync import sync_advertisers
+        from tests.integration.test_gam_advertisers_cache import _make_factory, _mock_gam_client_pages
+
+        client_partial_empty = _mock_gam_client_pages(
+            pages=[[{"id": "1001", "name": "Stays"}], []],
+            total=2,
+        )
+        with pytest.raises(RuntimeError, match="incomplete advertisers page"):
+            sync_advertisers(tenant.tenant_id, client_factory=_make_factory(client_partial_empty))
+
+        wait_for_dispatch()
+
+        assert len(receiver.calls) == 1
+        envelope = json.loads(receiver.calls[0]["content"])
+        assert envelope["event_type"] == "sync_run.failed"
+        data = envelope["data"]
+        assert data["sync_type"] == "advertisers"
+        assert data["status"] == "failed"
+        assert data["item_count"] == 1
+        assert json.loads(data["summary"])["cache_preserved"] is True
+        assert data["error"]["category"] == "transient"
+        assert "cache preserved" in data["error"]["message"]
 
     def test_health_change_fires_only_when_severity_changes(
         self, client, auth_headers, tenant, bound_factories, monkeypatch

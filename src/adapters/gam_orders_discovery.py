@@ -16,6 +16,7 @@ from typing import Any
 from googleads import ad_manager
 from zeep.helpers import serialize_object
 
+from src.adapters.gam.pagination import iter_gam_statement_results
 from src.adapters.gam.utils.error_handler import with_retry
 from src.adapters.gam.utils.logging import GAMOperation, log_gam_operation, logger
 
@@ -529,29 +530,24 @@ class GAMOrdersDiscovery:
 
         discovered_orders = []
 
-        while True:
-            response = order_service.getOrdersByStatement(statement_builder.ToStatement())
-
-            if "results" in response and response["results"]:
-                for gam_order in response["results"]:
-                    try:
-                        # Serialize SUDS object to dict
-                        order_dict = serialize_object(gam_order)
-                        order = Order.from_gam_object(order_dict)
-                        self.orders[order.order_id] = order
-                        discovered_orders.append(order)
-                    except Exception as e:
-                        order_id = str(getattr(gam_order, "id", "unknown"))
-                        logger.error(
-                            f"Error processing order {order_id}: {e}",
-                            exc_info=True,
-                        )
-                        continue
-
-                statement_builder.offset += len(response["results"])
-                logger.info(f"Fetched {len(response['results'])} orders (total: {len(discovered_orders)})")
-            else:
-                break
+        for gam_order in iter_gam_statement_results(
+            order_service.getOrdersByStatement,
+            statement_builder,
+            label="orders",
+        ):
+            try:
+                # Serialize SUDS object to dict
+                order_dict = serialize_object(gam_order)
+                order = Order.from_gam_object(order_dict)
+                self.orders[order.order_id] = order
+                discovered_orders.append(order)
+            except Exception as e:
+                order_id = str(getattr(gam_order, "id", "unknown"))
+                logger.error(
+                    f"Error processing order {order_id}: {e}",
+                    exc_info=True,
+                )
+                continue
 
         logger.info(f"Discovered {len(discovered_orders)} orders")
         return discovered_orders
@@ -584,29 +580,24 @@ class GAMOrdersDiscovery:
 
         discovered_line_items = []
 
-        while True:
-            response = line_item_service.getLineItemsByStatement(statement_builder.ToStatement())
-
-            if "results" in response and response["results"]:
-                for gam_line_item in response["results"]:
-                    try:
-                        # Serialize SUDS object to dict
-                        line_item_dict = serialize_object(gam_line_item)
-                        line_item = LineItem.from_gam_object(line_item_dict)
-                        self.line_items[line_item.line_item_id] = line_item
-                        discovered_line_items.append(line_item)
-                    except Exception as e:
-                        li_id = str(getattr(gam_line_item, "id", "unknown"))
-                        logger.error(
-                            f"Error processing line item {li_id}: {e}",
-                            exc_info=True,
-                        )
-                        continue
-
-                statement_builder.offset += len(response["results"])
-                logger.info(f"Fetched {len(response['results'])} line items (total: {len(discovered_line_items)})")
-            else:
-                break
+        for gam_line_item in iter_gam_statement_results(
+            line_item_service.getLineItemsByStatement,
+            statement_builder,
+            label="line items",
+        ):
+            try:
+                # Serialize SUDS object to dict
+                line_item_dict = serialize_object(gam_line_item)
+                line_item = LineItem.from_gam_object(line_item_dict)
+                self.line_items[line_item.line_item_id] = line_item
+                discovered_line_items.append(line_item)
+            except Exception as e:
+                li_id = str(getattr(gam_line_item, "id", "unknown"))
+                logger.error(
+                    f"Error processing line item {li_id}: {e}",
+                    exc_info=True,
+                )
+                continue
 
         logger.info(f"Discovered {len(discovered_line_items)} line items")
         return discovered_line_items

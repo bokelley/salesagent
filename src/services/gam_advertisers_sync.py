@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from src.adapters.gam.pagination import IncompleteGAMPage, iter_gam_statement_results
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, GamAdvertiser, SyncJob
 
@@ -43,16 +44,24 @@ logger = logging.getLogger(__name__)
 # stream progress updates and recover from transient timeouts without
 # refetching from offset zero.
 _GAM_PAGE_SIZE = 500
+_INCOMPLETE_ADVERTISERS_ERROR = (
+    "GAM temporarily returned an incomplete advertisers page; cache preserved. "
+    "Retry the advertisers sync before changing buyer-routing advertisers."
+)
 
 
 class GamClientUnavailable(RuntimeError):
     """Tenant has no working GAM auth — the worker cannot run."""
 
 
-class _EmptyAdvertiserResult(RuntimeError):
-    """GAM returned zero advertisers. Skip the soft-delete sweep so a
-    transient API hiccup doesn't silently empty the cache.
+class _IncompleteAdvertiserResult(RuntimeError):
+    """GAM returned an incomplete page. Skip writes so a transient API
+    hiccup doesn't silently corrupt the cache.
     """
+
+    def __init__(self, message: str, partial_advertisers: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.partial_advertisers = partial_advertisers or []
 
 
 def _build_gam_client_for_tenant(tenant_id: str) -> Any:
@@ -80,8 +89,8 @@ def _build_gam_client_for_tenant(tenant_id: str) -> Any:
         return GAMClientManager(config, network_code=adapter.gam_network_code).get_client()
 
 
-def _iter_advertisers_from_gam(client: Any) -> Iterable[dict[str, Any]]:
-    """Yield ``{id, name, status, currency_code}`` dicts from GAM.
+def _fetch_advertisers_from_gam(client: Any) -> list[dict[str, Any]]:
+    """Return ``{id, name, status, currency_code}`` dicts from GAM.
 
     Pages through ``CompanyService.getCompaniesByStatement WHERE
     type = 'ADVERTISER'`` until the totalResultSetSize is exhausted.
@@ -94,38 +103,27 @@ def _iter_advertisers_from_gam(client: Any) -> Iterable[dict[str, Any]]:
     statement_builder.WithBindVariable("type", "ADVERTISER")
     statement_builder.Limit(_GAM_PAGE_SIZE)
 
-    total = None
-    fetched = 0
-    saw_any_page = False
-    while True:
-        result = company_service.getCompaniesByStatement(statement_builder.ToStatement())
-        results = getattr(result, "results", None) if result else None
-        if total is None and result is not None:
-            total = int(getattr(result, "totalResultSetSize", 0))
-        if not results:
-            # No rows on this page. If we've never seen results AND the
-            # total reported by GAM is zero, signal "intentionally empty"
-            # via raising EmptyAdvertiserResult so the caller can skip the
-            # soft-delete sweep — a transient API blip that returns
-            # zero rows must not silently empty the whole cache.
-            if not saw_any_page and (total is None or total == 0):
-                raise _EmptyAdvertiserResult("GAM returned no advertisers")
-            break
-        saw_any_page = True
-        for company in result.results:
-            yield {
-                "id": str(company.id),
-                "name": company.name,
-                "status": (getattr(company, "creditStatus", None) or "active"),
-                # GAM Company has no per-advertiser currency; currency is
-                # network-level. Left None until we surface it from
-                # NetworkService or LineItem state if/when a need arises.
-                "currency_code": None,
-            }
-        fetched += len(result.results)
-        if total is None or fetched >= total:
-            break
-        statement_builder.offset += len(result.results)
+    advertisers: list[dict[str, Any]] = []
+    try:
+        for company in iter_gam_statement_results(
+            company_service.getCompaniesByStatement,
+            statement_builder,
+            label="advertisers",
+        ):
+            advertisers.append(
+                {
+                    "id": str(company.id),
+                    "name": company.name,
+                    "status": (getattr(company, "creditStatus", None) or "active"),
+                    # GAM Company has no per-advertiser currency; currency is
+                    # network-level. Left None until we surface it from
+                    # NetworkService or LineItem state if/when a need arises.
+                    "currency_code": None,
+                }
+            )
+    except IncompleteGAMPage as exc:
+        raise _IncompleteAdvertiserResult(str(exc), advertisers) from exc
+    return advertisers
 
 
 def _upsert_advertisers(
@@ -242,21 +240,22 @@ def sync_advertisers(
             job.started_at = datetime.now(UTC)
         session.commit()
 
+    incomplete_result = False
     try:
         client = factory(tenant_id)
         try:
-            advertisers = list(_iter_advertisers_from_gam(client))
-        except _EmptyAdvertiserResult:
-            # GAM returned zero advertisers and zero totalResultSetSize.
-            # Skip the upsert (no rows) AND skip the soft-delete sweep —
-            # marking every cached row inactive on a transient empty
-            # response would silently empty the Buyer Routing picker.
+            advertisers = _fetch_advertisers_from_gam(client)
+        except _IncompleteAdvertiserResult as exc:
+            # GAM returned an inconsistent page before the expected total was
+            # exhausted. Skip writes entirely: upserting the partial page or
+            # soft-deleting the unseen rows would make the cache less true.
             logger.warning(
-                "[%s] GAM returned zero advertisers; preserving cache (soft-delete sweep skipped)",
+                "[%s] GAM returned an incomplete advertisers page; preserving cache (soft-delete sweep skipped)",
                 sync_id,
             )
             upserted, soft_deleted = 0, 0
-            advertisers = []
+            advertisers = exc.partial_advertisers
+            incomplete_result = True
         else:
             upserted, soft_deleted = _upsert_advertisers(tenant_id, advertisers, sync_time)
     except Exception as exc:  # pragma: no cover - error-path tested separately
@@ -277,13 +276,27 @@ def sync_advertisers(
         "soft_deleted": soft_deleted,
         "total_seen": len(advertisers),
     }
+    if incomplete_result:
+        summary["cache_preserved"] = True
     with get_db_session() as session:
         job = session.scalars(select(SyncJob).filter_by(sync_id=sync_id)).first()
         if job is not None:
-            job.status = "completed"
+            job.status = "failed" if incomplete_result else "completed"
             job.completed_at = datetime.now(UTC)
             job.summary = json.dumps(summary)
+            job.error_message = _INCOMPLETE_ADVERTISERS_ERROR if incomplete_result else None
+            job.progress = {
+                "item_count": len(advertisers),
+                "counts": {
+                    "advertisers_seen": len(advertisers),
+                    "advertisers_upserted": upserted,
+                    "advertisers_soft_deleted": soft_deleted,
+                },
+                "cache_preserved": incomplete_result,
+            }
             session.commit()
+    if incomplete_result:
+        raise _IncompleteAdvertiserResult(_INCOMPLETE_ADVERTISERS_ERROR, advertisers)
     logger.info("[%s] advertisers sync complete: %s", sync_id, summary)
     return summary
 

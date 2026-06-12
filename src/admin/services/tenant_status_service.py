@@ -40,6 +40,7 @@ from src.admin.services.sync_health import (
     public_sync_error_message,
     sync_run_snapshot_from_job,
 )
+from src.admin.services.sync_item_counts import sync_item_count_from_progress
 from src.admin.utils.embedded_capabilities import publisher_owns
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -251,12 +252,9 @@ def _sync_detail_run(runs: list[SyncJob], health: SyncHealth) -> SyncJob | None:
 
 
 def _sync_item_count(run: SyncJob | None) -> int | None:
-    if run is None or not run.progress:
+    if run is None:
         return None
-    progress = run.progress if isinstance(run.progress, dict) else {}
-    raw_counts = progress.get("counts")
-    counts = raw_counts if isinstance(raw_counts, dict) else {}
-    return progress.get("item_count") or counts.get("products_updated") or counts.get("signals_updated")
+    return sync_item_count_from_progress(run.progress)
 
 
 def _status_issue(health: SyncHealth) -> StatusSyncIssue | None:

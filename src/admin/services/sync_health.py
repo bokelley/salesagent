@@ -139,6 +139,8 @@ def classify_sync_error(message: str | None) -> SyncIssueCategory:
             "502",
             "500",
             "temporarily unavailable",
+            "returned zero advertisers",
+            "incomplete advertisers page",
         )
     ):
         return "transient"

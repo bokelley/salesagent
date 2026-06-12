@@ -12,6 +12,7 @@ Covers the three deliverables:
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from src.core.database.models import (
     AdapterConfig,
     AdvertiserRoutingRule,
     GamAdvertiser,
+    SyncJob,
     Tenant,
 )
 from src.services.gam_advertisers_sync import sync_advertisers
@@ -92,7 +94,7 @@ def tenant_factory(integration_db, bound_factories):
 
     def _make() -> str:
         tid = f"tenant_advsync_{datetime.now(UTC).timestamp():.6f}_{len(created)}"
-        TenantFactory(
+        tenant = TenantFactory(
             tenant_id=tid,
             name=f"Adv Sync {tid}",
             subdomain=tid.replace("_", "-").replace(".", "-"),
@@ -109,7 +111,7 @@ def tenant_factory(integration_db, bound_factories):
             auto_approve_format_ids=[],
         )
         AdapterConfigFactory(
-            tenant_id=tid,
+            tenant=tenant,
             adapter_type="google_ad_manager",
             gam_network_code="12345",
         )
@@ -162,6 +164,32 @@ def _mock_gam_client(advertisers: list[dict]) -> MagicMock:
     return client
 
 
+def _mock_gam_client_pages(pages: list[list[dict]], total: int) -> MagicMock:
+    page_idx = {"i": 0}
+
+    def _get_companies(_statement):
+        idx = page_idx["i"]
+        page = pages[idx] if idx < len(pages) else []
+        page_idx["i"] += 1
+        return SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    id=int(a["id"]) if a["id"].isdigit() else a["id"],
+                    name=a["name"],
+                    creditStatus=a.get("status", "active"),
+                )
+                for a in page
+            ],
+            totalResultSetSize=total,
+        )
+
+    company_service = MagicMock()
+    company_service.getCompaniesByStatement = MagicMock(side_effect=_get_companies)
+    client = MagicMock()
+    client.GetService = MagicMock(return_value=company_service)
+    return client
+
+
 def _make_factory(client: MagicMock):
     return lambda _tenant_id: client
 
@@ -187,9 +215,16 @@ class TestSyncWorker:
         assert summary["soft_deleted"] == 0
         with get_db_session() as session:
             rows = session.scalars(select(GamAdvertiser).where(GamAdvertiser.tenant_id == tid)).all()
+            job = session.scalars(
+                select(SyncJob).filter_by(tenant_id=tid, sync_type="advertisers").order_by(SyncJob.started_at.desc())
+            ).first()
         assert {r.advertiser_id for r in rows} == {"1001", "1002", "1003"}
         assert {r.name for r in rows} == {"Acme Sports", "Beta Foods", "Gamma Pictures"}
         assert all(r.status == "active" for r in rows)
+        assert job is not None
+        assert job.status == "completed"
+        assert job.progress is not None
+        assert job.progress["item_count"] == 3
 
     def test_re_sync_updates_renamed_advertiser(self, tenant_factory):
         tid = tenant_factory()
@@ -238,13 +273,38 @@ class TestSyncWorker:
             rows = session.scalars(select(GamAdvertiser).where(GamAdvertiser.tenant_id == tid)).all()
         assert len(rows) == 501
 
-    def test_empty_result_preserves_existing_cache(self, tenant_factory):
-        """A transient empty GAM response must NOT empty the cache.
+    def test_legitimate_empty_result_completes_with_zero_count(self, tenant_factory):
+        tid = tenant_factory()
 
-        Earlier the soft-delete sweep treated zero-row responses as "every
-        cached advertiser disappeared," silently emptying the Buyer Routing
-        picker on a single API hiccup. The worker now skips the sweep when
-        GAM reports zero advertisers.
+        client_empty = _mock_gam_client([])
+        summary = sync_advertisers(tid, client_factory=_make_factory(client_empty))
+
+        with get_db_session() as session:
+            rows = session.scalars(select(GamAdvertiser).filter_by(tenant_id=tid)).all()
+            job = session.scalars(
+                select(SyncJob).filter_by(tenant_id=tid, sync_type="advertisers").order_by(SyncJob.started_at.desc())
+            ).first()
+        assert summary["total_seen"] == 0
+        assert rows == []
+        assert job is not None
+        assert job.status == "completed"
+        assert job.summary is not None
+        stored_summary = json.loads(job.summary)
+        assert stored_summary["total_seen"] == 0
+        assert stored_summary["soft_deleted"] == 0
+        assert stored_summary["upserted"] == 0
+        assert "cache_preserved" not in stored_summary
+        assert job.progress is not None
+        assert job.progress["item_count"] == 0
+        assert job.error_message is None
+
+    def test_unexpected_empty_page_preserves_existing_cache(self, tenant_factory):
+        """A transient partial GAM response must NOT empty the cache.
+
+        Earlier the soft-delete sweep treated missing rows as "every cached
+        advertiser disappeared," silently emptying the Buyer Routing picker on
+        a single API hiccup. The worker now skips writes when GAM returns an
+        empty page before the reported total is exhausted.
         """
         tid = tenant_factory()
         client_full = _mock_gam_client(
@@ -255,16 +315,70 @@ class TestSyncWorker:
         )
         sync_advertisers(tid, client_factory=_make_factory(client_full))
 
-        client_empty = _mock_gam_client([])
-        summary = sync_advertisers(tid, client_factory=_make_factory(client_empty))
+        client_partial_empty = _mock_gam_client_pages(
+            pages=[[{"id": "1001", "name": "Stays"}], []],
+            total=2,
+        )
+        with pytest.raises(RuntimeError, match="incomplete advertisers page"):
+            sync_advertisers(tid, client_factory=_make_factory(client_partial_empty))
 
-        assert summary["soft_deleted"] == 0
-        assert summary["upserted"] == 0
         with get_db_session() as session:
             rows = session.scalars(select(GamAdvertiser).filter_by(tenant_id=tid)).all()
-        # Both rows still active — the empty response did not touch them.
+            job = session.scalars(
+                select(SyncJob).filter_by(tenant_id=tid, sync_type="advertisers").order_by(SyncJob.started_at.desc())
+            ).first()
+        # Both rows still active — the incomplete response did not touch them.
         assert {r.advertiser_id for r in rows} == {"1001", "1002"}
         assert all(r.status == "active" for r in rows)
+        assert job is not None
+        assert job.status == "failed"
+        assert job.summary is not None
+        summary = json.loads(job.summary)
+        assert summary["total_seen"] == 1
+        assert summary["soft_deleted"] == 0
+        assert summary["upserted"] == 0
+        assert summary["cache_preserved"] is True
+        assert job.progress is not None
+        assert job.progress["item_count"] == 1
+        assert job.progress["counts"]["advertisers_seen"] == 1
+        assert job.progress["cache_preserved"] is True
+        assert "incomplete advertisers page" in (job.error_message or "")
+
+    def test_status_reports_advertiser_item_count_for_success_and_empty_failure(
+        self, client, auth_headers, tenant_factory
+    ):
+        tid = tenant_factory()
+        client_full = _mock_gam_client(
+            [
+                {"id": "1001", "name": "Stays"},
+                {"id": "1002", "name": "Also Stays"},
+            ]
+        )
+        sync_advertisers(tid, client_factory=_make_factory(client_full))
+
+        status_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/status", headers=auth_headers)
+        assert status_resp.status_code == 200
+        advertisers_status = status_resp.get_json()["syncs"]["advertisers"]
+        assert advertisers_status["status"] == "success"
+        assert advertisers_status["item_count"] == 2
+
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        invalidate_status_cache(tid)
+        client_partial_empty = _mock_gam_client_pages(
+            pages=[[{"id": "1001", "name": "Stays"}], []],
+            total=2,
+        )
+        with pytest.raises(RuntimeError, match="incomplete advertisers page"):
+            sync_advertisers(tid, client_factory=_make_factory(client_partial_empty))
+
+        status_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}/status", headers=auth_headers)
+        assert status_resp.status_code == 200
+        advertisers_status = status_resp.get_json()["syncs"]["advertisers"]
+        assert advertisers_status["status"] == "failed"
+        assert advertisers_status["severity"] == "warning"
+        assert advertisers_status["item_count"] == 1
+        assert "cache preserved" in advertisers_status["error"]
 
 
 # ---------------------------------------------------------------------------

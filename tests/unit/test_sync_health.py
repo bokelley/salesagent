@@ -67,6 +67,12 @@ class TestClassifySyncError:
     def test_gam_permission_reason_codes_are_auth_issues(self, message):
         assert classify_sync_error(message) == "auth"
 
+    def test_incomplete_advertiser_page_is_transient(self):
+        assert (
+            classify_sync_error("GAM temporarily returned an incomplete advertisers page; cache preserved.")
+            == "transient"
+        )
+
 
 class TestDeriveSyncHealth:
     def test_fresh_success_is_ok_with_no_issue(self):
