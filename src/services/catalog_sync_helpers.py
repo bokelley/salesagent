@@ -14,6 +14,7 @@ from typing import TypeVar
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.services.adapter_sync_orchestration import _sanitize_error_message
+from src.services.sync_progress import build_sync_progress
 
 T = TypeVar("T")
 
@@ -98,9 +99,7 @@ def fail_catalog_sync_job(
 ) -> tuple[datetime, str]:
     completed_at = finished_at or datetime.now(UTC)
     error_message = _sanitize_error_message(f"{type(exc).__name__}: {exc}")
-    progress: dict = {"counts": {}, "errors": {"sync": error_message}}
-    if item_count is not None:
-        progress["item_count"] = item_count
+    progress = build_sync_progress(counts={}, errors={"sync": error_message}, item_count=item_count)
     with get_db_session() as session:
         session.info["platform_background_worker"] = True
         SyncJobRepository(session, tenant_id).mark_failed(

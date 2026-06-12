@@ -31,6 +31,7 @@ from src.services.catalog_sync_helpers import (
 )
 from src.services.gam_reporting_sync_helpers import build_gam_reporting_service_for_tenant
 from src.services.protocol_change_webhooks import notify_signal_catalog_changes
+from src.services.sync_progress import build_sync_progress
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,12 @@ def run_gam_signal_coverage_sync(
         )
         succeeded = not errors
         finished_at = datetime.now(UTC)
-        progress = {"counts": counts, "errors": errors, "updated_signal_ids": updated_signal_ids}
+        progress = build_sync_progress(
+            counts=counts,
+            errors=errors,
+            item_count=counts.get("signals_updated", 0),
+            updated_signal_ids=updated_signal_ids,
+        )
         summary = {"updated_signals": len(updated_signal_ids), "keys_queried": counts.get("keys_queried", 0)}
         finish_catalog_sync_job(tenant_id, sync_id, succeeded, counts, errors, summary, progress, finished_at)
 

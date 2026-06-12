@@ -37,6 +37,7 @@ from src.services.catalog_sync_helpers import (
 )
 from src.services.gam_reporting_sync_helpers import build_gam_reporting_service_for_tenant
 from src.services.protocol_change_webhooks import notify_product_catalog_changed
+from src.services.sync_progress import build_sync_progress
 
 logger = logging.getLogger(__name__)
 
@@ -105,12 +106,12 @@ def run_gam_pricing_availability_sync(
         )
         succeeded = not errors
         finished_at = datetime.now(UTC)
-        progress = {
-            "item_count": counts.get("products_updated", 0),
-            "counts": counts,
-            "errors": errors,
-            "updated_product_ids": updated_product_ids,
-        }
+        progress = build_sync_progress(
+            counts=counts,
+            errors=errors,
+            item_count=counts.get("products_updated", 0),
+            updated_product_ids=updated_product_ids,
+        )
         summary = {
             "updated_products": len(updated_product_ids),
             "placement_ids_queried": counts.get("placement_ids_queried", 0),

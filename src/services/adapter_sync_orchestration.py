@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 from src.adapters.base import AdapterSyncResult, AdServerAdapter
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.services.sync_progress import build_sync_progress
 
 logger = logging.getLogger(__name__)
 
@@ -506,11 +507,12 @@ def _finalize(
     caller-facing SyncExecutionResult."""
     job.completed_at = result.finished_at or datetime.now(UTC)
     job.status = "completed" if result.succeeded else "failed"
-    job.progress = {
-        "counts": dict(result.counts),
-        "errors": dict(result.errors),
-        "metadata": dict(result.metadata),
-    }
+    job.progress = build_sync_progress(
+        counts=dict(result.counts),
+        errors=dict(result.errors),
+        metadata=dict(result.metadata),
+        item_count=result.total_count,
+    )
     if not result.succeeded and result.errors:
         # Pick the first error message as the human-readable summary;
         # full per-kind errors live in ``progress`` for the UI.

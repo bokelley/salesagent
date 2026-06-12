@@ -23,6 +23,7 @@ import pytz
 from googleads import ad_manager
 from zeep.helpers import serialize_object
 
+from src.adapters.gam.pagination import iter_gam_statement_results
 from src.adapters.gam.utils.error_handler import with_retry
 from src.adapters.gam.utils.logging import logger
 from src.adapters.gam.utils.timeout_handler import timeout
@@ -292,21 +293,16 @@ class GAMInventoryDiscovery:
             )
             logger.info(f"Incremental sync: fetching ad units modified since {since} (active only)")
 
-        # Page through results
-        while True:
-            response = inventory_service.getAdUnitsByStatement(statement_builder.ToStatement())
-
-            if "results" in response and response["results"]:
-                for gam_ad_unit in response["results"]:
-                    # Convert SUDS object to dictionary
-                    gam_ad_unit_dict = serialize_object(gam_ad_unit)
-                    ad_unit = AdUnit.from_gam_object(gam_ad_unit_dict)
-                    discovered_units.append(ad_unit)
-                    self.ad_units[ad_unit.id] = ad_unit
-
-                statement_builder.offset += len(response["results"])
-            else:
-                break
+        for gam_ad_unit in iter_gam_statement_results(
+            inventory_service.getAdUnitsByStatement,
+            statement_builder,
+            label="ad units",
+        ):
+            # Convert SUDS object to dictionary
+            gam_ad_unit_dict = serialize_object(gam_ad_unit)
+            ad_unit = AdUnit.from_gam_object(gam_ad_unit_dict)
+            discovered_units.append(ad_unit)
+            self.ad_units[ad_unit.id] = ad_unit
 
         logger.info(f"Discovered {len(discovered_units)} ad units")
         return discovered_units
@@ -345,20 +341,16 @@ class GAMInventoryDiscovery:
                 .WithBindVariable("archived", "ARCHIVED")
             )
 
-        while True:
-            response = placement_service.getPlacementsByStatement(statement_builder.ToStatement())
-
-            if "results" in response and response["results"]:
-                for gam_placement in response["results"]:
-                    # Convert SUDS object to dictionary
-                    gam_placement_dict = serialize_object(gam_placement)
-                    placement = Placement.from_gam_object(gam_placement_dict)
-                    discovered_placements.append(placement)
-                    self.placements[placement.id] = placement
-
-                statement_builder.offset += len(response["results"])
-            else:
-                break
+        for gam_placement in iter_gam_statement_results(
+            placement_service.getPlacementsByStatement,
+            statement_builder,
+            label="placements",
+        ):
+            # Convert SUDS object to dictionary
+            gam_placement_dict = serialize_object(gam_placement)
+            placement = Placement.from_gam_object(gam_placement_dict)
+            discovered_placements.append(placement)
+            self.placements[placement.id] = placement
 
         logger.info(f"Discovered {len(discovered_placements)} placements")
         return discovered_placements
@@ -388,20 +380,16 @@ class GAMInventoryDiscovery:
         # 3. The fetch is fast
 
         try:
-            while True:
-                response = label_service.getLabelsByStatement(statement_builder.ToStatement())
-
-                if "results" in response and response["results"]:
-                    for gam_label in response["results"]:
-                        # Convert SUDS object to dictionary
-                        gam_label_dict = serialize_object(gam_label)
-                        label = Label.from_gam_object(gam_label_dict)
-                        discovered_labels.append(label)
-                        self.labels[label.id] = label
-
-                    statement_builder.offset += len(response["results"])
-                else:
-                    break
+            for gam_label in iter_gam_statement_results(
+                label_service.getLabelsByStatement,
+                statement_builder,
+                label="labels",
+            ):
+                # Convert SUDS object to dictionary
+                gam_label_dict = serialize_object(gam_label)
+                label = Label.from_gam_object(gam_label_dict)
+                discovered_labels.append(label)
+                self.labels[label.id] = label
         except TypeError as e:
             # Handle googleads library bug with error parsing when no labels exist
             # Error: "argument should be integer or bytes-like object, not 'str'"
@@ -450,21 +438,17 @@ class GAMInventoryDiscovery:
         # 3. The fetch is reasonably fast
         # 4. Keys are small objects
 
-        while True:
-            response = custom_targeting_service.getCustomTargetingKeysByStatement(statement_builder.ToStatement())
-
-            if "results" in response and response["results"]:
-                for gam_key in response["results"]:
-                    # Convert SUDS object to dictionary
-                    gam_key_dict = serialize_object(gam_key)
-                    key = CustomTargetingKey.from_gam_object(gam_key_dict)
-                    discovered_keys.append(key)
-                    self.custom_targeting_keys[key.id] = key
-                    self.custom_targeting_values[key.id] = []
-
-                statement_builder.offset += len(response["results"])
-            else:
-                break
+        for gam_key in iter_gam_statement_results(
+            custom_targeting_service.getCustomTargetingKeysByStatement,
+            statement_builder,
+            label="custom targeting keys",
+        ):
+            # Convert SUDS object to dictionary
+            gam_key_dict = serialize_object(gam_key)
+            key = CustomTargetingKey.from_gam_object(gam_key_dict)
+            discovered_keys.append(key)
+            self.custom_targeting_keys[key.id] = key
+            self.custom_targeting_values[key.id] = []
 
         logger.info(f"Discovered {len(discovered_keys)} custom targeting keys")
 

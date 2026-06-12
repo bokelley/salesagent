@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from src.adapters.gam.pagination import IncompleteGAMPage, iter_gam_statement_results
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, GamAdvertiser, SyncJob
 
@@ -102,25 +103,13 @@ def _fetch_advertisers_from_gam(client: Any) -> list[dict[str, Any]]:
     statement_builder.WithBindVariable("type", "ADVERTISER")
     statement_builder.Limit(_GAM_PAGE_SIZE)
 
-    total = None
-    fetched = 0
     advertisers: list[dict[str, Any]] = []
-    while True:
-        result = company_service.getCompaniesByStatement(statement_builder.ToStatement())
-        results = getattr(result, "results", None) if result else None
-        if total is None and result is not None:
-            total = int(getattr(result, "totalResultSetSize", 0))
-        if not results:
-            # A first page with totalResultSetSize=0 is a legitimate empty
-            # network. Any other empty page before the expected total is
-            # exhausted is unsafe: preserve the cache rather than soft-deleting
-            # rows we did not actually see.
-            if total is not None and total == 0 and fetched == 0:
-                break
-            if total is None or fetched < total:
-                raise _IncompleteAdvertiserResult("GAM returned incomplete advertisers page", advertisers)
-            break
-        for company in result.results:
+    try:
+        for company in iter_gam_statement_results(
+            company_service.getCompaniesByStatement,
+            statement_builder,
+            label="advertisers",
+        ):
             advertisers.append(
                 {
                     "id": str(company.id),
@@ -132,10 +121,8 @@ def _fetch_advertisers_from_gam(client: Any) -> list[dict[str, Any]]:
                     "currency_code": None,
                 }
             )
-        fetched += len(result.results)
-        if total is None or fetched >= total:
-            break
-        statement_builder.offset += len(result.results)
+    except IncompleteGAMPage as exc:
+        raise _IncompleteAdvertiserResult(str(exc), advertisers) from exc
     return advertisers
 
 
