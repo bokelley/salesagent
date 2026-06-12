@@ -84,7 +84,7 @@ If you see `session = uow.session` in existing code, that is tracked debt. If yo
 
 ## 3. Structural Guards and Allowlists
 
-AST-scanning tests enforce architecture invariants on every `make quality` run. See [`docs/development/structural-guards.md`](structural-guards.md) for the full inventory.
+AST-scanning tests enforce architecture invariants on every `make quality` run. The slow duplication ratchet runs via `make duplication` and `make quality-full`. See [`docs/development/structural-guards.md`](structural-guards.md) for the full inventory.
 
 ### Core rules
 
@@ -95,7 +95,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 Guards use `(file_path, function_name)` tuples in their allowlists, not line numbers. This makes them resilient to line shifts from unrelated changes.
 
-**Enforced by:** `review-architecture` (references all 14 guards), CI (`make quality`)
+**Enforced by:** `review-architecture` (references all 14 guards), CI (`make quality`, `make duplication`)
 
 ## 4. Writing Tests — The Test Harness
 
@@ -328,7 +328,7 @@ if budget_amount < min_package_budget:
 
 Same check, two implementations, different error handling. When the validation rule changes, one gets updated and the other doesn't.
 
-**Enforced by:** `review-dry` (Category 4: Database Query Patterns, Category 3: Error Handling), `check_code_duplication.py` (pre-commit + make quality)
+**Enforced by:** `review-dry` (Category 4: Database Query Patterns, Category 3: Error Handling), `check_code_duplication.py` (pre-commit + `make duplication`)
 
 ## Quick Reference: Where to Look
 

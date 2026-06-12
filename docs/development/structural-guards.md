@@ -1,8 +1,10 @@
 # Structural Guards
 
-Automated architecture enforcement tests that run on every `make quality`.
-Each guard uses AST scanning and introspection to detect violations at the
-source level — no runtime execution of business logic needed.
+Automated architecture enforcement tests run on every `make quality`. The
+slower duplication ratchet runs through `make duplication` and
+`make quality-full`. Each guard uses AST scanning and introspection to detect
+violations at the source level — no runtime execution of business logic
+needed.
 
 ## Why These Exist
 
@@ -497,8 +499,14 @@ providing coverage in the CI smoke-tests job before unit tests run.
 ## Running Guards
 
 ```bash
-# All guards (part of make quality)
+# Unit-test-backed guards (part of make quality)
 make quality
+
+# Slow duplication ratchet
+make duplication
+
+# Local quality plus slow/full checks
+make quality-full
 
 # Just the architecture guards
 uv run pytest tests/unit/test_architecture_*.py tests/unit/test_*impl*.py -v

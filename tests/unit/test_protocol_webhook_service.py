@@ -26,6 +26,15 @@ class _Session:
         return _Response()
 
 
+@pytest.fixture
+def allow_protocol_webhook_url(monkeypatch):
+    monkeypatch.setattr(
+        protocol_webhook_service.WebhookURLValidator,
+        "validate_delivery_url",
+        classmethod(lambda cls, url: (True, "")),
+    )
+
+
 def test_redact_webhook_url_removes_secret_bearing_parts() -> None:
     assert (
         protocol_webhook_service._redact_webhook_url("https://user:pass@example.com:8443/hook?sig=secret#frag")
@@ -34,7 +43,9 @@ def test_redact_webhook_url_removes_secret_bearing_parts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_protocol_webhook_service_signs_rfc9421_payload_with_exact_body(monkeypatch) -> None:
+async def test_protocol_webhook_service_signs_rfc9421_payload_with_exact_body(
+    monkeypatch, allow_protocol_webhook_url
+) -> None:
     loaded_credential = object()
     captured = {}
 
@@ -77,7 +88,7 @@ async def test_protocol_webhook_service_signs_rfc9421_payload_with_exact_body(mo
 
 
 @pytest.mark.asyncio
-async def test_protocol_webhook_service_legacy_hmac_body_verifies() -> None:
+async def test_protocol_webhook_service_legacy_hmac_body_verifies(allow_protocol_webhook_url) -> None:
     service = ProtocolWebhookService()
     session = _Session()
     service._session = session
@@ -107,7 +118,7 @@ async def test_protocol_webhook_service_legacy_hmac_body_verifies() -> None:
 
 
 @pytest.mark.asyncio
-async def test_protocol_webhook_service_adds_idempotency_key_to_a2a_payload() -> None:
+async def test_protocol_webhook_service_adds_idempotency_key_to_a2a_payload(allow_protocol_webhook_url) -> None:
     service = ProtocolWebhookService()
     session = _Session()
     service._session = session

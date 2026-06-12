@@ -495,6 +495,7 @@ def print_summary(report: SetupReport, port: int) -> None:
         print("\nNext steps:")
         print("  docker compose logs -f    # View logs")
         print("  make quality              # Run checks before committing")
+        print("  make duplication          # Run slow duplication guard before PR")
         print("  docker compose down       # Stop services")
 
 

@@ -343,13 +343,23 @@ class TestProvision:
         def _fail(adapter_type, config):
             return ProbeResult.fail(CONNECTION_FAILED, "auth boom")
 
+        sentry_messages: list[tuple[tuple, dict]] = []
         monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
+        monkeypatch.setattr(
+            api_module,
+            "capture_sentry_operation_message",
+            lambda *args, **kwargs: sentry_messages.append((args, kwargs)),
+        )
 
         payload = _provision_payload(external_org_id="org_provision_fail")
         response = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
         assert response.status_code == 400
         body = response.get_json()
         assert body["error"] == "adapter_connection_failed"
+        assert sentry_messages[0][1]["operation"] == "provision_adapter_probe"
+        assert sentry_messages[0][1]["tags"]["adapter_type"] == "google_ad_manager"
+        assert sentry_messages[0][1]["tags"]["upstream_error_code"] == CONNECTION_FAILED
+        assert "error_message" not in sentry_messages[0][1]["extra"]
         # Verify NOTHING was written.
         with get_db_session() as session:
             assert session.scalars(select(Tenant).filter_by(external_org_id="org_provision_fail")).first() is None
@@ -785,7 +795,13 @@ class TestAdapterConfig:
         def _fail(adapter_type, config):
             return ProbeResult.fail(INVALID_CREDENTIALS, "credentials rejected")
 
+        sentry_messages: list[tuple[tuple, dict]] = []
         monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
+        monkeypatch.setattr(
+            api_module,
+            "capture_sentry_operation_message",
+            lambda *args, **kwargs: sentry_messages.append((args, kwargs)),
+        )
 
         payload = {
             "type": "google_ad_manager",
@@ -800,6 +816,9 @@ class TestAdapterConfig:
         )
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "adapter_invalid_credentials"
+        assert sentry_messages[0][1]["operation"] == "put_adapter_config_probe"
+        assert sentry_messages[0][1]["tags"]["tenant_id"] == managed_tenant
+        assert sentry_messages[0][1]["tags"]["network_identifier"] == "67890"
 
         # Existing adapter config unchanged.
         with get_db_session() as session:
@@ -834,14 +853,52 @@ class TestAdapterConfig:
         create_check = next(c for c in body["capability_checks"] if c["capability"] == "create_gam_advertiser")
         assert create_check["status"] == "not_checked"
 
+    def test_test_connection_probe_failure_captures_sentry(self, client, auth_headers, managed_tenant, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+        from src.admin.services.adapter_connection_tester import PERMISSION_DENIED, ProbeResult
+
+        def _fail(adapter_type, config):
+            return ProbeResult.fail(PERMISSION_DENIED, "scope missing")
+
+        sentry_messages: list[tuple[tuple, dict]] = []
+        monkeypatch.setattr(api_module, "probe_adapter_connection", _fail)
+        monkeypatch.setattr(
+            api_module,
+            "capture_sentry_operation_message",
+            lambda *args, **kwargs: sentry_messages.append((args, kwargs)),
+        )
+
+        resp = client.post(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/adapter-config/test-connection",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["success"] is False
+        assert body["error_code"] == PERMISSION_DENIED
+        assert sentry_messages[0][1]["operation"] == "adapter_test_connection"
+        assert sentry_messages[0][1]["tags"]["tenant_id"] == managed_tenant
+        assert sentry_messages[0][1]["tags"]["upstream_error_code"] == PERMISSION_DENIED
+
 
 class TestGamAdvertiserEnsure:
     @staticmethod
-    def _post_ensure(client, auth_headers, tenant_id: str, name: str):
+    def _post_ensure(
+        client,
+        auth_headers,
+        tenant_id: str,
+        name: str,
+        *,
+        dry_run: bool | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ):
+        payload: dict[str, object] = {"name": name}
+        if dry_run is not None:
+            payload["dry_run"] = dry_run
         return client.post(
             f"/api/v1/tenant-management/tenants/{tenant_id}/gam/advertisers:ensure",
-            headers=auth_headers,
-            json={"name": name},
+            headers={**auth_headers, **(extra_headers or {})},
+            json=payload,
         )
 
     @staticmethod
@@ -973,7 +1030,12 @@ class TestGamAdvertiserEnsure:
         resp = self._post_ensure(client, auth_headers, tid, "Interchange-WPP")
 
         assert resp.status_code == 403
-        assert resp.get_json()["error"] == "adapter_permission_denied"
+        body = resp.get_json()
+        assert body["error"] == "adapter_permission_denied"
+        assert body["details"]["remediation_code"] == "customer_rebinds_account"
+        assert body["details"]["upstream_error_code"] == "permission_denied"
+        assert body["details"]["upstream_error_category"] == "AuthenticationError"
+        assert "create the advertiser manually in GAM" in body["details"]["remediation"]
 
     def test_ensure_maps_network_not_found_failure(self, client, auth_headers, tid, monkeypatch):
         self._stub_ensure_error(
@@ -989,6 +1051,8 @@ class TestGamAdvertiserEnsure:
         fault = body["details"]["vendor_fault"]
         assert fault["vendor_message"] == "AuthenticationError.NETWORK_NOT_FOUND"
         assert fault["gam"]["reason"] == "NETWORK_NOT_FOUND"
+        assert body["details"]["gam_fault"]["reason"] == "NETWORK_NOT_FOUND"
+        assert body["details"]["upstream_error_code"] == "network_not_found"
         assert "internal-gam-proxy" not in str(body)
 
     def test_ensure_maps_no_networks_to_permission_failure(self, client, auth_headers, tid, monkeypatch):
@@ -1000,6 +1064,70 @@ class TestGamAdvertiserEnsure:
         body = resp.get_json()
         assert body["error"] == "adapter_permission_denied"
         assert body["details"]["vendor_fault"]["gam"]["reason"] == "NO_NETWORKS_TO_ACCESS"
+
+    def test_ensure_maps_unknown_create_failure_to_actionable_code(self, client, auth_headers, tid, monkeypatch):
+        self._stub_ensure_error(monkeypatch, "CompanyService.createCompanies returned empty")
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-Unknown")
+
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["error"] == "adapter_advertiser_create_failed"
+        assert body["details"]["upstream_error_code"] == "connection_failed"
+        assert body["details"]["upstream_error_category"] == "gam"
+        assert "refresh advertisers in Sales Agent" in body["details"]["remediation"]
+
+    def test_ensure_captures_live_failure_with_correlation_tags(self, client, auth_headers, tid, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        self._stub_ensure_error(
+            monkeypatch,
+            "[AuthenticationError.NOT_ALLOWED @ networkCode; trigger:'12345'] request id: req-gam response-id=resp-gam",
+        )
+        capture = MagicMock(return_value="sentry-event")
+        monkeypatch.setattr(api_module, "capture_sentry_exception", capture)
+
+        resp = self._post_ensure(
+            client,
+            auth_headers,
+            tid,
+            "Interchange-Correlated",
+            extra_headers={
+                "x-request-id": "req-storefront-1",
+                "x-inventory-source-id": "invsrc-20",
+                "traceparent": "00-abcd1234abcd1234abcd1234abcd1234-0102030405060708-01",
+            },
+        )
+
+        assert resp.status_code == 403
+        capture.assert_called_once()
+        kwargs = capture.call_args.kwargs
+        assert kwargs["tags"] == {
+            "area": "tenant-management",
+            "operation": "ensure_gam_advertiser",
+            "tenant_id": tid,
+            "inventory_source_id": "invsrc-20",
+            "network_code": "12345",
+            "dry_run": False,
+            "upstream_error_code": "permission_denied",
+            "upstream_error_category": "AuthenticationError",
+        }
+        assert kwargs["extra"]["request_id"] == "req-storefront-1"
+        assert kwargs["extra"]["traceparent"] == "00-abcd1234abcd1234abcd1234abcd1234-0102030405060708-01"
+        assert kwargs["extra"]["gam_fault"]["request_id"] == "req-gam"
+        assert kwargs["extra"]["gam_fault"]["response_id"] == "resp-gam"
+
+    def test_ensure_dry_run_failure_does_not_capture_sentry(self, client, auth_headers, tid, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        self._stub_ensure_error(monkeypatch, "[AuthenticationError.NOT_ALLOWED @ networkCode]")
+        capture = MagicMock(return_value="sentry-event")
+        monkeypatch.setattr(api_module, "capture_sentry_exception", capture)
+
+        resp = self._post_ensure(client, auth_headers, tid, "Interchange-DryRun", dry_run=True)
+
+        assert resp.status_code == 403
+        capture.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1357,12 +1485,24 @@ class TestPreviewAdapter:
     def test_bad_creds_return_200_with_ok_false(self, client, auth_headers, monkeypatch):
         """Bad creds are a normal flow — surface as 200 + ok=false, not 4xx."""
         import src.admin.tenant_management_api as api_module
-        from src.admin.services.adapter_connection_tester import AdapterPreview
+        from src.admin.services.adapter_connection_tester import INVALID_CREDENTIALS, AdapterPreview
 
         monkeypatch.setattr(
             api_module,
             "preview_adapter",
-            lambda atype, cfg: AdapterPreview(ok=False, error="invalid_grant", inventory_reachable=False),
+            lambda atype, cfg: AdapterPreview(
+                ok=False,
+                error="invalid_grant",
+                error_code=INVALID_CREDENTIALS,
+                network_code="123456",
+                inventory_reachable=False,
+            ),
+        )
+        sentry_messages: list[tuple[tuple, dict]] = []
+        monkeypatch.setattr(
+            api_module,
+            "capture_sentry_operation_message",
+            lambda *args, **kwargs: sentry_messages.append((args, kwargs)),
         )
 
         resp = client.post(
@@ -1382,6 +1522,9 @@ class TestPreviewAdapter:
         assert body["ok"] is False
         assert body["inventory_reachable"] is False
         assert body["error"] == "invalid_grant"
+        assert sentry_messages[0][1]["operation"] == "preview_adapter"
+        assert sentry_messages[0][1]["tags"]["network_identifier"] == "123456"
+        assert sentry_messages[0][1]["tags"]["upstream_error_code"] == INVALID_CREDENTIALS
 
     def test_no_tenant_row_created(self, client, auth_headers, real_adapter_test_disabled):
         """Preview must not create any tenant row as a side effect."""

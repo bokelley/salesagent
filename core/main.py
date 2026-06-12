@@ -93,6 +93,7 @@ from src.core.embedded_identity_tokens import TOKEN_PREFIX, resolve_embedded_ide
 from src.core.env import env_bool
 from src.core.middleware.embedded_buyer_auth_bridge import EmbeddedBuyerAuthBridgeMiddleware
 from src.core.middleware.tracing import TracingMiddleware
+from src.core.sentry import flush_sentry
 from src.core.signing import SigningVerifyMiddleware
 from src.core.telemetry import shutdown_telemetry
 
@@ -664,6 +665,10 @@ async def _shutdown_telemetry_hook() -> None:
     shutdown_telemetry()
 
 
+async def _shutdown_sentry_hook() -> None:
+    flush_sentry()
+
+
 DEFAULT_DEV_TENANT_SUBDOMAINS: tuple[str, ...] = (
     "default",
     "acme",
@@ -846,9 +851,9 @@ def _serve_kwargs(
     # on shutdown drains in-flight connections before serve() exits.
     on_startup = [_start_schedulers] if include_scheduler else None
     on_shutdown = (
-        [_stop_schedulers, close_proposal_store, _shutdown_telemetry_hook]
+        [_stop_schedulers, close_proposal_store, _shutdown_telemetry_hook, _shutdown_sentry_hook]
         if include_scheduler
-        else [close_proposal_store, _shutdown_telemetry_hook]
+        else [close_proposal_store, _shutdown_telemetry_hook, _shutdown_sentry_hook]
     )
 
     return {
@@ -1022,6 +1027,9 @@ def main() -> None:
     via ``python -m core.main`` is supported for local dev.
     """
     logging.basicConfig(level=logging.INFO)
+    from src.core.sentry import initialize_sentry
+
+    initialize_sentry()
 
     kwargs = _serve_kwargs(include_scheduler=True)
     router = kwargs.pop("router")

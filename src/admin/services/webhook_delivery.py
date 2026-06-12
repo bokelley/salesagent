@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -46,6 +47,14 @@ from src.core.database.repositories import WebhookSubscriptionRepository
 from src.core.database.repositories.webhook_subscription import hash_secret  # noqa: F401  (re-export)
 
 logger = logging.getLogger(__name__)
+
+_TRANSPORT_ERROR_MAX_LENGTH = 240
+_URL_RE = re.compile(r"https?://[^\s'\"<>]+")
+_RELATIVE_URL_RE = re.compile(r"(?<!\w)/(?:[^\s'\"<>])+")
+_HOST_RE = re.compile(r"(?i)(host\s*[:=]\s*)(['\"]?)[^,'\")\s]+(['\"]?)")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(authorization|api[_-]?key|code|cookie|password|secret|state|token)=([^&\s]+)"
+)
 
 
 class WebhookDeliveryTarget(Protocol):
@@ -229,6 +238,21 @@ def _allowed_extra_headers(headers: dict[str, str] | None) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in blocked}
 
 
+def _transport_error_message(exc: BaseException) -> str:
+    """Preserve the failure mode while removing endpoint and secret material."""
+    message = str(exc).strip()
+    if not message:
+        return type(exc).__name__
+    message = _URL_RE.sub("[url]", message)
+    message = _RELATIVE_URL_RE.sub("[url]", message)
+    message = _HOST_RE.sub(r"\1\2[host]\3", message)
+    message = _SECRET_ASSIGNMENT_RE.sub(r"\1=[redacted]", message)
+    message = " ".join(message.split())
+    if len(message) > _TRANSPORT_ERROR_MAX_LENGTH:
+        message = f"{message[: _TRANSPORT_ERROR_MAX_LENGTH - 3]}..."
+    return f"{type(exc).__name__}: {message}"
+
+
 async def _post_signed(
     url: str,
     secret: str,
@@ -241,7 +265,7 @@ async def _post_signed(
     """Sign + POST one envelope. Returns ``(status_code, latency_ms, error)``.
 
     ``status_code`` is None on a transport error (timeout, connection
-    refused) — the ``error`` string carries the diagnostic.
+    refused) — the ``error`` string carries a scrubbed failure summary.
 
     Uses :func:`adcp.webhooks.sign_legacy_webhook` so the bytes signed match
     the bytes posted. The caller may pass ``client=`` to share a connection
@@ -261,7 +285,7 @@ async def _post_signed(
             response = await client.post(url, content=body, headers=headers)
     except (httpx.HTTPError, OSError) as exc:
         latency = int((time.monotonic() - t0) * 1000)
-        return None, latency, f"{type(exc).__name__}: {exc}"
+        return None, latency, _transport_error_message(exc)
 
     latency = int((time.monotonic() - t0) * 1000)
     return response.status_code, latency, None

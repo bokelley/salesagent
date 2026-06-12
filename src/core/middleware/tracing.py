@@ -1,7 +1,7 @@
 """ASGI middleware that creates a root span per HTTP request.
 
 Reads W3C traceparent from incoming headers to continue a distributed trace.
-Adds x-trace-id to response headers for log correlation.
+Adds x-trace-id and traceparent response headers for log correlation.
 No-op when tracing is disabled.
 """
 
@@ -61,6 +61,9 @@ class TracingMiddleware:
                     if trace_id:
                         existing = list(message.get("headers", []))
                         existing.append((b"x-trace-id", trace_id.encode()))
+                        traceparent = _format_traceparent(span)
+                        if traceparent:
+                            existing.append((b"traceparent", traceparent.encode()))
                         message = {**message, "headers": existing}
 
                 await send(message)
@@ -78,3 +81,11 @@ def _format_trace_id(span: trace.Span) -> str | None:
     if ctx and ctx.is_valid:
         return format(ctx.trace_id, "032x")
     return None
+
+
+def _format_traceparent(span: trace.Span) -> str | None:
+    ctx = span.get_span_context()
+    if not ctx or not ctx.is_valid:
+        return None
+    flags = int(getattr(ctx, "trace_flags", 0)) & 1
+    return f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-{flags:02x}"

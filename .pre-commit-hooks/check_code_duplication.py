@@ -2,25 +2,17 @@
 """
 Pre-commit hook to detect and prevent code duplication using pylint's similarities checker.
 
-Enforces a ratcheting approach — only NEW duplicate blocks fail the build:
-- Each duplicate block is fingerprinted by the set of modules involved
-- The baseline stores the SET of known fingerprints
-- A new fingerprint not in the baseline → fail
-- A fingerprint that disappears (because the duplication was fixed or files
-  involved were deleted) → auto-removed from baseline
+Enforces a count-based ratchet:
+- The baseline stores the duplicate fingerprints reported by pylint.
+- A scope fails only when its current duplicate count is above the baseline
+  count.
+- A scope auto-ratchets downward when its current count is below the baseline
+  count.
+- Fingerprint churn with an equal or lower count is reported but does not fail
+  the build. Pylint's R0801 output can vary by platform and file traversal
+  order, so exact fingerprint matching made CI noisy even when duplication
+  did not increase.
 - Separate baselines for src/ and tests/
-
-Why module-set fingerprints, not counts: the previous implementation compared
-raw counts. That caused spurious failures when files were deleted because
-pylint's similarity detector compares against a different file set, surfacing
-pre-existing duplicates that were previously masked. Fingerprinting by which
-modules participate in each duplicate is invariant to file deletions in
-unrelated parts of the tree.
-
-Trade-off: if modules A and B share two distinct duplicate blocks, both
-collapse to one fingerprint, so adding a third duplicate between A and B
-won't be caught. Acceptable — that pair is already a known offender and
-will surface in any inspection of pylint output.
 
 Uses pylint R0801 (duplicate-code) with these filters:
 - Ignores imports, docstrings, comments, and function signatures
@@ -134,12 +126,12 @@ def scan_scopes(scopes: list[str]) -> dict[str, list[str]]:
         return {scope: futures[scope].result() for scope in scopes}
 
 
-def read_baseline(baseline_file: Path) -> dict[str, list[str]] | None:
+def read_baseline(baseline_file: Path) -> dict[str, list[str] | int] | None:
     """Read baseline fingerprint sets from the baseline file (JSON format).
 
-    Supports legacy integer-count baselines (``{"src": 48, "tests": 96}``) by
-    treating them as missing — the next successful run rewrites the baseline
-    in the new format.
+    Supports legacy integer-count baselines (``{"src": 48, "tests": 96}``) for
+    count comparison. The next downward ratchet or ``--update-baseline`` rewrites
+    the touched scopes in the fingerprint-list format.
     """
     if not baseline_file.exists():
         return None
@@ -147,16 +139,6 @@ def read_baseline(baseline_file: Path) -> dict[str, list[str]] | None:
         raw = json.loads(baseline_file.read_text())
     except (ValueError, OSError) as e:
         print(f"Warning: Could not read baseline from {baseline_file}: {e}", file=sys.stderr)
-        return None
-
-    # Legacy format detection: values are ints, not lists. Migrate by
-    # signalling "no baseline" so the first run with this script seeds it.
-    if any(isinstance(v, int) for v in raw.values()):
-        print(
-            f"Note: legacy count-based baseline in {BASELINE_FILE} detected; "
-            "regenerating with fingerprint-based format.",
-            file=sys.stderr,
-        )
         return None
 
     return raw
@@ -168,8 +150,16 @@ def write_baseline(baseline_file: Path, fingerprints: dict[str, list[str]]) -> N
     baseline_file.write_text(json.dumps(sorted_fingerprints, indent=2) + "\n")
 
 
+def baseline_count(baseline: dict[str, list[str] | int], scope: str) -> int:
+    """Return the baseline duplicate count for a scope, supporting legacy int values."""
+    value = baseline.get(scope, [])
+    if isinstance(value, int):
+        return value
+    return len(set(value))
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check that no NEW code duplication blocks were introduced")
+    parser = argparse.ArgumentParser(description="Check that code duplication counts did not increase")
     parser.add_argument("--update-baseline", action="store_true", help="Force update baseline to current fingerprints")
     parser.add_argument("--scope", choices=("src", "tests"), action="append", help="Limit scan to one or more scopes")
     parser.add_argument("paths", nargs="*", help="Changed files, usually passed by pre-commit")
@@ -196,30 +186,33 @@ def main() -> int:
         return 0
 
     if args.update_baseline:
-        updated = {**baseline, **current}
+        updated = {scope: ([] if isinstance(fps, int) else fps) for scope, fps in baseline.items()}
+        updated.update(current)
         for scope in scopes:
-            old_count = len(set(baseline.get(scope, [])))
+            old_count = baseline_count(baseline, scope)
             print(f"Updating baseline: {scope}/ {old_count} -> {len(set(current[scope]))}")
         write_baseline(baseline_file, updated)
         return 0
 
     failed = False
     changed = False
-    updated = {**baseline}
+    updated = {scope: ([] if isinstance(fps, int) else fps) for scope, fps in baseline.items()}
     for scope in scopes:
-        baseline_set = set(baseline.get(scope, []))
+        baseline_value = baseline.get(scope, [])
+        baseline_set = set() if isinstance(baseline_value, int) else set(baseline_value)
+        old_count = baseline_count(baseline, scope)
         current_set = set(current[scope])
 
-        new = current_set - baseline_set
-        removed = baseline_set - current_set
-
-        if new:
-            print(f"  {scope}/:  {len(current_set)} duplicate blocks (+{len(new)} NEW)", file=sys.stderr)
+        if len(current_set) > old_count:
+            increase = len(current_set) - old_count
+            print(f"  {scope}/:  {len(current_set)} duplicate blocks (+{increase} over baseline)", file=sys.stderr)
             failed = True
-        elif removed:
-            print(f"  {scope}/:  {len(current_set)} duplicate blocks (-{len(removed)} fixed)")
+        elif len(current_set) < old_count:
+            print(f"  {scope}/:  {len(current_set)} duplicate blocks (-{old_count - len(current_set)} fixed)")
             changed = True
             updated[scope] = current[scope]
+        elif baseline_set and current_set != baseline_set:
+            print(f"  {scope}/:  {len(current_set)} duplicate blocks (fingerprints changed, count unchanged)")
         else:
             print(f"  {scope}/:  {len(current_set)} duplicate blocks (unchanged)")
 
@@ -233,8 +226,8 @@ def main() -> int:
         print("  uv run pylint --disable=all --enable=R0801 tests/", file=sys.stderr)
         return 1
 
-    # Auto-update baseline when fingerprints disappeared (fixes or file
-    # deletions that masked duplicates) so the ratchet keeps shrinking.
+    # Auto-update baseline only when the count shrinks so the ratchet keeps
+    # moving downward without failing on platform-specific fingerprint churn.
     if changed:
         print(f"Automatically updating {BASELINE_FILE}...")
         write_baseline(baseline_file, updated)

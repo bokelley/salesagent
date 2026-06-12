@@ -180,6 +180,25 @@ The SSO requirement varies based on deployment mode:
 |----------|---------|-------------|
 | `APPROXIMATED_API_KEY` | - | Approximated proxy service API key |
 
+### Error Reporting
+
+When `SENTRY_DSN` is set, API/request exceptions, scheduler/background-job
+exceptions, and explicit operation captures for handled failures are sent to
+Sentry. Logging integration records warning-and-above breadcrumbs only; log
+records are not reported as standalone Sentry error events, and breadcrumbs
+containing secret-bearing terms are dropped before they leave the process.
+Breadcrumb URL and transport-host fields are scrubbed before reporting.
+Request events also promote `x-request-id`, `x-inventory-source-id`, and
+`traceparent` headers into Sentry tags when those headers are present, so
+correlation works consistently across APIs. Request bodies are never sent to
+Sentry.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SENTRY_DSN` | - | Enables Sentry error reporting when set |
+| `SENTRY_ENVIRONMENT` | `ENVIRONMENT` | Environment label sent to Sentry |
+| `SENTRY_TRACES_SAMPLE_RATE` | disabled | Optional Sentry performance tracing sample rate |
+
 ---
 
 ## Development & Debugging
@@ -224,6 +243,7 @@ Non-sensitive configuration:
 - `ADCP_MULTI_TENANT`, `BASE_DOMAIN`, `SALES_AGENT_DOMAIN`
 - `ADMIN_UI_URL`
 - `CREATE_DEMO_TENANT`
+- `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`
 - `SKIP_NGINX`, `SKIP_CRON`
 
 ### Variables with Sensible Defaults (usually don't need to set)

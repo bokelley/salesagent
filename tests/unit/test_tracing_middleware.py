@@ -53,6 +53,8 @@ async def test_middleware_extracts_traceparent_header():
         mock_span.is_recording.return_value = True
         mock_span.get_span_context.return_value = MagicMock(
             trace_id=0xABCD1234ABCD1234ABCD1234ABCD1234,
+            span_id=0x0102030405060708,
+            trace_flags=1,
             is_valid=True,
         )
         mock_tracer = MagicMock()
@@ -83,6 +85,11 @@ async def test_middleware_extracts_traceparent_header():
         await middleware(scope, AsyncMock(), capturing_send)
 
         mock_propagate.extract.assert_called_once_with(ANY)
+        assert (b"x-trace-id", b"abcd1234abcd1234abcd1234abcd1234") in response_headers
+        assert (
+            b"traceparent",
+            b"00-abcd1234abcd1234abcd1234abcd1234-0102030405060708-01",
+        ) in response_headers
 
 
 @pytest.mark.asyncio
