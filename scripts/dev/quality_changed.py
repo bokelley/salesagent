@@ -138,7 +138,7 @@ def main() -> int:
             print("\n== duplication ==\nNo changed src/tests Python files; skipped.")
     else:
         print(
-            "\n== duplication ==\nSkipped for speed. Run `make quality` or add `--with-duplication` for the full ratchet."
+            "\n== duplication ==\nSkipped for speed. Run `make duplication` or add `--with-duplication` for the ratchet."
         )
 
     if args.no_tests:

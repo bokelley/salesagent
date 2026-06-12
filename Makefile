@@ -17,7 +17,6 @@ quality:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
-	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run pytest tests/unit/ -x -q --tb=short
 
 quality-fast:
@@ -25,11 +24,12 @@ quality-fast:
 
 quality-full:
 	$(MAKE) quality
+	$(MAKE) duplication
 	./run_all_tests.sh ci
 
 pre-pr: quality-full
 	@echo ""
-	@echo "✅ All CI checks passed — safe to push and create PR"
+	@echo "Local PR checks passed — push and let GitHub CI run smoke/compose jobs"
 
 lint-fix:
 	uv run ruff format .

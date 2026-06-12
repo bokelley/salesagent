@@ -4,6 +4,8 @@ import logging
 
 from src.core.config import validate_configuration
 from src.core.logging_config import setup_oauth_logging, setup_structured_logging
+from src.core.sentry import capture_exception as capture_sentry_exception
+from src.core.sentry import flush_sentry, initialize_sentry
 from src.core.telemetry import init_telemetry
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,7 @@ def initialize_application() -> None:
         # This ensures production environments get JSON logs
         setup_structured_logging()
 
+        initialize_sentry()
         init_telemetry()
         instrument_sqlalchemy()
 
@@ -53,7 +56,19 @@ def initialize_application() -> None:
         logger.info("Application initialization completed successfully")
 
     except Exception as e:
-        logger.error(f"Application initialization failed: {str(e)}")
+        logger.exception("Application initialization failed")
+        try:
+            capture_sentry_exception(
+                e,
+                tags={"area": "startup", "operation": "initialize_application"},
+                extra={"exception_type": type(e).__name__},
+            )
+        except Exception:
+            logger.warning("Sentry capture failed during startup error handling", exc_info=True)
+        try:
+            flush_sentry()
+        except Exception:
+            logger.warning("Sentry flush failed during startup error handling", exc_info=True)
         raise SystemExit(1) from e
 
 

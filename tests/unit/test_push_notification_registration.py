@@ -25,6 +25,11 @@ class RecordingPushNotificationRepo:
         return 0
 
 
+@pytest.fixture
+def allow_registration_webhook_url(monkeypatch):
+    monkeypatch.setattr("src.services.push_notification_registration._validate_registration_url", lambda url: None)
+
+
 def _account_registration() -> PushNotificationRegistration:
     return PushNotificationRegistration(
         config_id="pnc_1",
@@ -73,7 +78,7 @@ def test_normalizes_default_push_notification_config_to_rfc9421() -> None:
     assert registration.signing_mode == "rfc9421"
 
 
-def test_register_push_notification_config_in_repo_upserts_normalized_values() -> None:
+def test_register_push_notification_config_in_repo_upserts_normalized_values(allow_registration_webhook_url) -> None:
     repo = RecordingPushNotificationRepo()
     registration = normalize_push_notification_config(
         {
@@ -129,7 +134,7 @@ def test_sdk_push_notification_config_gets_stable_generated_id() -> None:
     assert second.config_id is None
 
 
-def test_generated_id_is_stable_per_principal_not_url_or_operation() -> None:
+def test_generated_id_is_stable_per_principal_not_url_or_operation(allow_registration_webhook_url) -> None:
     repo = RecordingPushNotificationRepo()
     first = normalize_push_notification_config(
         {
@@ -158,7 +163,7 @@ def test_generated_id_is_stable_per_principal_not_url_or_operation() -> None:
     assert repo.deactivations == []
 
 
-def test_generated_id_is_scoped_by_principal() -> None:
+def test_generated_id_is_scoped_by_principal(allow_registration_webhook_url) -> None:
     repo = RecordingPushNotificationRepo()
     registration = normalize_push_notification_config(
         {
@@ -174,7 +179,9 @@ def test_generated_id_is_scoped_by_principal() -> None:
     assert repo.calls[0]["config_id"] != repo.calls[1]["config_id"]
 
 
-def test_account_notification_configs_are_account_scoped_and_replace_active_set(monkeypatch) -> None:
+def test_account_notification_configs_are_account_scoped_and_replace_active_set(
+    monkeypatch, allow_registration_webhook_url
+) -> None:
     repo = RecordingPushNotificationRepo()
     monkeypatch.setattr(
         "src.services.push_notification_registration._verify_webhook_control", lambda registration: None
@@ -304,7 +311,7 @@ def test_account_notification_configs_reject_media_buy_event_types() -> None:
         )
 
 
-def test_rfc9421_registration_requires_signing_credential(monkeypatch) -> None:
+def test_rfc9421_registration_requires_signing_credential(monkeypatch, allow_registration_webhook_url) -> None:
     def fail_load(*, tenant_id, signing_mode):
         from src.services.webhook_signing import SigningConfigurationError
 

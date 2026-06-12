@@ -41,7 +41,9 @@ def middleware_classes() -> list[type]:
         patch.object(core_main, "build_router", return_value=MagicMock()),
         patch("src.admin.app.create_app", return_value=MagicMock()),
         patch("core.main.build_subdomain_router", return_value=MagicMock()),
+        patch.dict(os.environ, {}, clear=False),
     ):
+        os.environ.pop("SENTRY_DSN", None)
         kwargs = core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
     return [entry[0] for entry in kwargs["asgi_middleware"]]
 
@@ -223,6 +225,8 @@ def _kwargs_with(env: dict[str, str]) -> dict:
         patch("core.main.build_subdomain_router", return_value=MagicMock()),
         patch.dict("os.environ", env, clear=False),
     ):
+        if "SENTRY_DSN" not in env:
+            os.environ.pop("SENTRY_DSN", None)
         return core_main._serve_kwargs(include_scheduler=False, include_subdomain_routing=True)
 
 

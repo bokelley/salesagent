@@ -44,7 +44,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
     ("tests/unit/test_order_approval_service.py", "test_start_approval_creates_sync_job"),
-    ("tests/unit/test_order_approval_service.py", "test_webhook_notification_sent_on_success"),
     ("tests/unit/test_performance_index_behavioral.py", "test_batch_multiple_products"),
     ("tests/unit/test_performance_index_behavioral.py", "test_empty_performance_data_succeeds"),
     ("tests/unit/test_performance_index_behavioral.py", "test_product_to_package_mapping"),

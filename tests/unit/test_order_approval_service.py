@@ -64,6 +64,17 @@ def mock_gam_client():
         }
 
 
+@pytest.fixture
+def allow_approval_webhook_url(monkeypatch):
+    import src.services.order_approval_service as service_module
+
+    monkeypatch.setattr(
+        service_module.WebhookURLValidator,
+        "validate_delivery_url",
+        classmethod(lambda cls, url: (True, "")),
+    )
+
+
 def test_start_approval_creates_sync_job(mock_db_session):
     """Test that starting approval creates a SyncJob record."""
     from src.core.database.models import SyncJob
@@ -204,7 +215,7 @@ def test_get_approval_status_not_found(mock_db_session):
     assert status is None
 
 
-def test_webhook_notification_sent_on_success():
+def test_webhook_notification_sent_on_success(allow_approval_webhook_url):
     """Test webhook notification is sent when approval succeeds."""
     from src.services.order_approval_service import _send_approval_webhook
 
@@ -244,13 +255,9 @@ def test_webhook_notification_sent_on_success():
             attempts=3,
         )
 
-        # Verify HTTP POST was made
-        mock_client_instance.post.assert_called_once()
-        call_args = mock_client_instance.post.call_args
-
         # Check webhook payload
-        assert call_args[0][0] == "https://example.com/webhook"
-        payload = call_args[1]["json"]
+        call_kwargs = mock_client_instance.post.call_args.kwargs
+        payload = call_kwargs["json"]
         assert payload["event"] == "order_approval_update"
         assert payload["media_buy_id"] == "mb_123"
         assert payload["status"] == "approved"
@@ -258,8 +265,13 @@ def test_webhook_notification_sent_on_success():
         assert payload["attempts"] == 3
 
         # Check authentication header
-        headers = call_args[1]["headers"]
+        headers = call_kwargs["headers"]
         assert headers["Authorization"] == "Bearer test_token"
+        mock_client_instance.post.assert_called_once_with(
+            "https://example.com/webhook",
+            json=payload,
+            headers=headers,
+        )
 
 
 def test_webhook_notification_refuses_public_http_url(monkeypatch):
@@ -284,7 +296,7 @@ def test_webhook_notification_refuses_public_http_url(monkeypatch):
 
 
 @patch("src.services.order_approval_service.time.sleep")
-def test_webhook_retries_on_failure(mock_sleep):
+def test_webhook_retries_on_failure(mock_sleep, allow_approval_webhook_url):
     """Test webhook retries on HTTP failure."""
     import src.services.order_approval_service as service_module
 

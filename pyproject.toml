@@ -74,6 +74,7 @@ dependencies = [
     # (CVE-2026-3xxxx QUIC DoS) and rustls-webpki 0.103.13 (GHSA-82j2-j2ch-gfr8).
     "temporalio>=1.27.0",
     "starlette>=1.0.1",
+    "sentry-sdk[flask,starlette]>=2.0.0",
 ]
 
 

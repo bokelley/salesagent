@@ -112,6 +112,9 @@ for the full list. Key testing guards:
 - **BDD trivial assertions** — Then steps must compare values, not just check truthiness
 - **BDD no dict registry** — Given steps must use factories, not raw dicts
 
+The slower pylint duplication ratchet is separate from local `make quality`.
+Run it explicitly with `make duplication`, or use `make quality-full` before PRs.
+
 ## Markers
 
 - `@pytest.mark.requires_db` — needs PostgreSQL (integration, BDD)

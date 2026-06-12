@@ -147,6 +147,7 @@ from src.admin.api_schemas.tenant_management import (
 )
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.services.adapter_connection_tester import (
+    CONNECTION_FAILED,
     ProbeResult,
     _classify_gam_message,
     _vendor_fault,
@@ -208,6 +209,15 @@ from src.core.inventory_profile_projection import (
     is_wholesale_authoring_inventory_profile,
 )
 from src.core.security.url_validator import check_url_ssrf
+from src.core.sentry import (
+    capture_exception as capture_sentry_exception,
+)
+from src.core.sentry import (
+    capture_operation_exception as capture_sentry_operation_exception,
+)
+from src.core.sentry import (
+    capture_operation_message as capture_sentry_operation_message,
+)
 from src.services.aao_lookup_service import get_publisher_partner_status
 from src.services.agent_url_resolver import resolve_agent_url
 from src.services.property_discovery_service import get_property_discovery_service
@@ -290,6 +300,21 @@ def _api_error(code: str, message: str, status: int, details: dict | None = None
     """Build a (jsonified, status) tuple matching the :class:`ApiError` schema."""
     body = ApiError(error=code, message=message, details=details).model_dump(exclude_none=True)
     return jsonify(body), status
+
+
+def _request_correlation_fields() -> dict[str, str]:
+    """Return request correlation fields accepted from management API callers."""
+    headers = request.headers
+    fields: dict[str, str] = {}
+    for header, key in (
+        ("x-request-id", "request_id"),
+        ("x-inventory-source-id", "inventory_source_id"),
+        ("traceparent", "traceparent"),
+    ):
+        value = headers.get(header)
+        if value and value.strip():
+            fields[key] = value.strip()
+    return fields
 
 
 def _pydantic_error_details(exc: PydanticValidationError) -> list[dict[str, Any]]:
@@ -412,6 +437,63 @@ def _canonical_agent_url(value: str | None) -> str | None:
 def _agent_urls_match(left: str | None, right: str | None) -> bool:
     """Compare effective agent URLs using canonical host/path normalization."""
     return _canonical_agent_url(left) == _canonical_agent_url(right)
+
+
+def _adapter_network_identifier(config: dict[str, Any]) -> str | None:
+    for key in ("network_code", "network_id", "publisher_id"):
+        value = config.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _sentry_safe_vendor_fault(details: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Copy structured vendor fault fields that are safe for Sentry extras."""
+    vendor_fault = (details or {}).get("vendor_fault")
+    if not isinstance(vendor_fault, dict):
+        return None
+    safe_fault = {
+        key: value
+        for key, value in vendor_fault.items()
+        if key in {"vendor", "phase", "endpoint", "vendor_status"} and value is not None
+    }
+    return safe_fault or None
+
+
+def _capture_adapter_health_failure(
+    *,
+    operation: str,
+    adapter_type: str,
+    error_message: str | None,
+    error_code: str | None = None,
+    remediation: str | None = None,
+    details: dict[str, Any] | None = None,
+    tenant_id: str | None = None,
+    network_identifier: str | None = None,
+) -> None:
+    """Capture handled adapter health failures that otherwise return inline API errors."""
+    del error_message
+    sentry_extra: dict[str, Any] = {
+        "error_code": error_code,
+        "remediation": remediation,
+    }
+    safe_vendor_fault = _sentry_safe_vendor_fault(details)
+    if safe_vendor_fault is not None:
+        sentry_extra["vendor_fault"] = safe_vendor_fault
+
+    capture_sentry_operation_message(
+        f"Adapter {adapter_type!r} health check failed",
+        area="tenant-management",
+        operation=operation,
+        tags={
+            "tenant_id": tenant_id,
+            "adapter_type": adapter_type,
+            "network_identifier": network_identifier,
+            "upstream_error_code": error_code,
+            "remediation_code": remediation,
+        },
+        extra=sentry_extra,
+    )
 
 
 def _adapter_probe_error(adapter_type: str, probe: ProbeResult):
@@ -4722,11 +4804,21 @@ def _auto_provision_gam_default_advertiser(tenant_id: str, adapter_dict: dict) -
             result.advertiser_id,
             result.created,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "[provision] default GAM advertiser auto-provision failed for tenant=%s — "
             "tenant is still provisioned; use the ensure endpoint to set default_gam_advertiser_id manually",
             tenant_id,
+        )
+        capture_sentry_operation_exception(
+            exc,
+            area="tenant-management",
+            operation="auto_provision_gam_default_advertiser",
+            tags={
+                "tenant_id": tenant_id,
+                "adapter_type": adapter_dict.get("type"),
+                "network_code": adapter_dict.get("network_code"),
+            },
         )
 
 
@@ -4784,6 +4876,15 @@ def provision_tenant():
     adapter_dict = _adapter_config_to_dict(req.adapter)
     probe = probe_adapter_connection(adapter_dict["type"], adapter_dict)
     if not probe.success:
+        _capture_adapter_health_failure(
+            operation="provision_adapter_probe",
+            adapter_type=adapter_dict["type"],
+            error_message=probe.error_message,
+            error_code=probe.error_code,
+            remediation=probe.remediation,
+            details=probe.details,
+            network_identifier=_adapter_network_identifier(adapter_dict),
+        )
         return _adapter_probe_error(adapter_dict["type"], probe)
 
     # Step 3: open a transaction; create everything in one commit.
@@ -4926,11 +5027,17 @@ def provision_tenant():
             tenant_id=tenant_id,
             triggered_by_id="tenant_management_api:provision",
         )
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "[provision] first-sync kickoff failed for tenant=%s — "
             "tenant is still provisioned; next /refresh or cron tick will sync",
             tenant_id,
+        )
+        capture_sentry_operation_exception(
+            exc,
+            area="tenant-management",
+            operation="provision_first_sync_kickoff_failed",
+            tags={"tenant_id": tenant_id},
         )
 
     if req.provision_default_resources and not req.default_gam_advertiser_id:
@@ -4986,6 +5093,16 @@ def preview_adapter_endpoint():
     req: PreviewAdapterRequest = _validated_json_payload()
     adapter_dict = _adapter_config_to_dict(req.adapter)
     preview = preview_adapter(adapter_dict["type"], adapter_dict)
+    if not preview.ok:
+        _capture_adapter_health_failure(
+            operation="preview_adapter",
+            adapter_type=adapter_dict["type"],
+            error_message=preview.error,
+            error_code=preview.error_code,
+            remediation=preview.remediation,
+            details=preview.details,
+            network_identifier=preview.network_code or _adapter_network_identifier(adapter_dict),
+        )
     response = PreviewAdapterResponse(
         ok=preview.ok,
         network_name=preview.network_name,
@@ -5171,6 +5288,16 @@ def put_adapter_config(tenant_id: str):
 
     probe = probe_adapter_connection(adapter_dict["type"], adapter_dict)
     if not probe.success:
+        _capture_adapter_health_failure(
+            operation="put_adapter_config_probe",
+            adapter_type=adapter_dict["type"],
+            error_message=probe.error_message,
+            error_code=probe.error_code,
+            remediation=probe.remediation,
+            details=probe.details,
+            tenant_id=tenant_id,
+            network_identifier=_adapter_network_identifier(adapter_dict),
+        )
         return _adapter_probe_error(adapter_dict["type"], probe)
 
     with get_db_session() as session:
@@ -5215,6 +5342,17 @@ def adapter_test_connection(tenant_id: str):
             )
 
         probe = probe_adapter_connection(adapter.adapter_type, _adapter_probe_config(adapter))
+        if not probe.success:
+            _capture_adapter_health_failure(
+                operation="adapter_test_connection",
+                adapter_type=adapter.adapter_type,
+                error_message=probe.error_message,
+                error_code=probe.error_code,
+                remediation=probe.remediation,
+                details=probe.details,
+                tenant_id=tenant_id,
+                network_identifier=adapter.gam_network_code,
+            )
         invalidate_status_cache(tenant_id)
         return jsonify(
             TestConnectionResponse(
@@ -5931,6 +6069,20 @@ def _mark_sync_failed_on_spawn(
     if tb_summary:
         error_message = f"{error_message}\n\nTraceback (most recent calls):\n{tb_summary}"
 
+    capture_sentry_operation_exception(
+        exc,
+        area="tenant-management",
+        operation="refresh_worker_spawn_failed",
+        tags={
+            "tenant_id": tenant_id,
+            "sync_type": spawn_label,
+        },
+        extra={
+            "sync_ids": sync_ids,
+            "exception_type": type(exc).__name__,
+        },
+    )
+
     try:
         with get_db_session() as session:
             repo = SyncJobRepository(session, tenant_id)
@@ -6040,12 +6192,22 @@ def _spawn_refresh_workers(tenant_id: str, sync_run_ids: dict[str, str]) -> None
                 truth, not the thread's stack."""
                 try:
                     sync_advertisers(tenant_id=tenant_id, sync_id=sync_id)
-                except Exception:
+                except Exception as exc:
                     logger.exception(
                         "[refresh] advertisers worker thread failed for tenant=%s sync_id=%s "
                         "(SyncJob row already marked failed)",
                         tenant_id,
                         sync_id,
+                    )
+                    capture_sentry_operation_exception(
+                        exc,
+                        area="tenant-management",
+                        operation="advertisers_sync_worker_failed",
+                        tags={
+                            "tenant_id": tenant_id,
+                            "sync_id": sync_id,
+                            "sync_type": "advertisers",
+                        },
                     )
 
             thread = threading.Thread(
@@ -6292,11 +6454,47 @@ def refresh_targeting_values(tenant_id: str, key_id: str):
                 tenant_id,
                 key_id,
             )
+            error_code, remediation, gam_extra = _classify_gam_message(str(exc))
+            vendor_fault = _vendor_fault(
+                "gam",
+                "refresh_targeting_values",
+                "CustomTargetingService.getCustomTargetingValuesByStatement",
+                message=type(exc).__name__,
+                extra=gam_extra or None,
+            )
+            capture_sentry_operation_exception(
+                exc,
+                area="tenant-management",
+                operation="refresh_targeting_values",
+                tags={
+                    "tenant_id": tenant_id,
+                    "key_id": key_id,
+                    "adapter_type": "google_ad_manager",
+                    "network_code": adapter_config.gam_network_code,
+                    "upstream_error_code": error_code,
+                    "remediation_code": remediation,
+                },
+                extra={
+                    "vendor_fault": vendor_fault["vendor_fault"],
+                    "gam_fault": gam_extra or None,
+                },
+            )
+            details: dict[str, Any] = {
+                "tenant_id": tenant_id,
+                "key_id": key_id,
+                "error": str(exc),
+                "upstream_error_code": error_code,
+                **vendor_fault,
+            }
+            if remediation:
+                details["remediation"] = remediation
+            if gam_extra:
+                details["gam_fault"] = gam_extra
             return _api_error(
                 "targeting_values_refresh_failed",
                 f"Failed to refresh targeting values for key {key_id!r}",
                 502,
-                details={"tenant_id": tenant_id, "key_id": key_id, "error": str(exc)},
+                details=details,
             )
 
     response = TargetingValuesRefreshResponse(key_id=key_id, synced=len(values))
@@ -6349,10 +6547,49 @@ def _gam_advertiser_schema(row: GamAdvertiser) -> GamAdvertiserSchema:
     )
 
 
-def _gam_create_error_response(exc: Exception):
-    """Map GAM advertiser creation failures to tenant-management API errors."""
+_GAM_ADVERTISER_ENSURE_OPERATION = "ensure_gam_advertiser"
+_GAM_ADVERTISER_CREATE_ENDPOINT = "CompanyService.createCompanies"
+_GAM_ADVERTISER_CREATE_FAILED = "advertiser_create_failed"
+_GAM_ADVERTISER_REMEDIATION: dict[str, str] = {
+    "network_not_found": "Verify the GAM network_code configured for this tenant.",
+    "permission_denied": (
+        "Grant the configured GAM credential permission to create advertiser companies on this network, "
+        "or create the advertiser manually in GAM, refresh advertisers, and set the default advertiser."
+    ),
+    "invalid_credentials": (
+        "Reconnect or rotate the GAM credential, then retry advertiser creation. As a fallback, create the "
+        "advertiser manually in GAM, refresh advertisers, and set the default advertiser."
+    ),
+    _GAM_ADVERTISER_CREATE_FAILED: (
+        "Create the advertiser manually in GAM, refresh advertisers in Sales Agent, and set the default "
+        "advertiser while the live create failure is investigated."
+    ),
+}
+_GAM_CORRELATION_ID_RE = re.compile(
+    r"\b(?P<key>request[_ -]?id|response[_ -]?id)\b\s*[:=]\s*['\"]?(?P<value>[A-Za-z0-9_.:-]{1,128})",
+    re.IGNORECASE,
+)
+
+
+def _extract_gam_correlation_ids(message: str) -> dict[str, str]:
+    """Extract sanitized GAM request/response IDs from exception text when present."""
+    ids: dict[str, str] = {}
+    for match in _GAM_CORRELATION_ID_RE.finditer(message or ""):
+        key = (
+            "request_id"
+            if match.group("key").lower().replace("-", "_").replace(" ", "_").startswith("request")
+            else "response_id"
+        )
+        ids.setdefault(key, match.group("value"))
+    return ids
+
+
+def _gam_create_failure_metadata(exc: Exception) -> dict[str, Any]:
+    """Map GAM advertiser creation failures to typed API/Sentry metadata."""
     message = str(exc)
     code, remediation, gam_extra = _classify_gam_message(message)
+    gam_extra = {**gam_extra, **_extract_gam_correlation_ids(message)}
+    surface_code = _GAM_ADVERTISER_CREATE_FAILED if code == CONNECTION_FAILED else code
     safe_message = (
         f"{gam_extra.get('service')}.{gam_extra.get('reason')}"
         if gam_extra.get("service") and gam_extra.get("reason")
@@ -6361,19 +6598,29 @@ def _gam_create_error_response(exc: Exception):
     details = _vendor_fault(
         "gam",
         "create_advertiser",
-        "CompanyService.createCompanies",
+        _GAM_ADVERTISER_CREATE_ENDPOINT,
         message=safe_message,
         extra=gam_extra or None,
     )
-    if remediation:
-        details["remediation"] = remediation
-
-    return _api_error(
-        f"adapter_{code}",
-        "GAM advertiser ensure failed.",
-        403 if code == "permission_denied" else 400,
-        details=details,
+    details["remediation"] = _GAM_ADVERTISER_REMEDIATION.get(
+        surface_code, _GAM_ADVERTISER_REMEDIATION[_GAM_ADVERTISER_CREATE_FAILED]
     )
+    if remediation is not None:
+        details["remediation_code"] = remediation
+    if gam_extra:
+        details["gam_fault"] = gam_extra
+    upstream_category = gam_extra.get("service") or "gam"
+    details["upstream_error_code"] = code
+    details["upstream_error_category"] = upstream_category
+
+    return {
+        "surface_code": surface_code,
+        "status": 403 if code == "permission_denied" else 400,
+        "details": details,
+        "upstream_error_code": code,
+        "upstream_error_category": upstream_category,
+        "gam_fault": gam_extra or None,
+    }
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/gam/advertisers", methods=["GET"])
@@ -6487,9 +6734,26 @@ def ensure_gam_advertiser(tenant_id: str):
         if not adapter.gam_network_code:
             return _api_error("adapter_invalid_config", "GAM network_code is required", 400)
 
+        correlation = _request_correlation_fields()
+        ensure_context: dict[str, Any] = {
+            "area": "tenant-management",
+            "operation": _GAM_ADVERTISER_ENSURE_OPERATION,
+            "tenant_id": tenant_id,
+            "inventory_source_id": correlation.get("inventory_source_id"),
+            "network_code": str(adapter.gam_network_code),
+            "dry_run": req.dry_run,
+            "request_id": correlation.get("request_id"),
+            "traceparent": correlation.get("traceparent"),
+        }
+        logger.info("GAM advertiser ensure requested", extra=ensure_context)
+
         gam_repo = GAMSyncRepository(session, tenant_id)
         cached = gam_repo.find_advertiser_by_name(name)
         if cached is not None and cached.status == "active":
+            logger.info(
+                "GAM advertiser ensure satisfied from cache",
+                extra={**ensure_context, "advertiser_created": False, "cache_hit": True},
+            )
             response = EnsureGamAdvertiserResponse(
                 advertiser=_gam_advertiser_schema(cached),
                 created=False,
@@ -6505,14 +6769,47 @@ def ensure_gam_advertiser(tenant_id: str):
                 dry_run=req.dry_run,
             )
         except Exception as exc:
+            failure = _gam_create_failure_metadata(exc)
+            failure_context = {
+                **ensure_context,
+                "upstream_error_code": failure["upstream_error_code"],
+                "upstream_error_category": failure["upstream_error_category"],
+            }
             logger.warning(
-                "GAM advertiser ensure failed for tenant_id=%s name=%r error_type=%s",
-                tenant_id,
-                name,
-                type(exc).__name__,
+                "GAM advertiser ensure failed",
+                extra={**failure_context, "error_type": type(exc).__name__},
             )
-            return _gam_create_error_response(exc)
+            if not req.dry_run:
+                capture_sentry_exception(
+                    exc,
+                    tags={
+                        "area": "tenant-management",
+                        "operation": _GAM_ADVERTISER_ENSURE_OPERATION,
+                        "tenant_id": tenant_id,
+                        "inventory_source_id": correlation.get("inventory_source_id"),
+                        "network_code": str(adapter.gam_network_code),
+                        "dry_run": req.dry_run,
+                        "upstream_error_code": failure["upstream_error_code"],
+                        "upstream_error_category": failure["upstream_error_category"],
+                    },
+                    extra={
+                        "request_id": correlation.get("request_id"),
+                        "traceparent": correlation.get("traceparent"),
+                        "vendor_fault": failure["details"].get("vendor_fault"),
+                        "gam_fault": failure["gam_fault"],
+                    },
+                )
+            return _api_error(
+                f"adapter_{failure['surface_code']}",
+                "GAM advertiser ensure failed.",
+                failure["status"],
+                details=failure["details"],
+            )
 
+        logger.info(
+            "GAM advertiser ensure completed",
+            extra={**ensure_context, "advertiser_created": result.created, "cache_hit": False},
+        )
         if result.dry_run:
             response = EnsureGamAdvertiserResponse(
                 advertiser=GamAdvertiserSchema(
@@ -7374,6 +7671,7 @@ def test_webhook(tenant_id: str, webhook_id: str):
 
     results: list[dict] = []
     overall_ok = True
+    captured_delivery_failure = False
 
     # Reuse a single subscription-like object reference for bookkeeping. The
     # delivery service refreshes its DB state each time anyway.
@@ -7396,6 +7694,25 @@ def test_webhook(tenant_id: str, webhook_id: str):
         delivered = status_code is not None and 200 <= status_code < 300
         if not delivered:
             overall_ok = False
+            if not captured_delivery_failure:
+                capture_sentry_operation_message(
+                    "Webhook test delivery failed",
+                    area="tenant-management",
+                    operation="test_webhook_delivery",
+                    tags={
+                        "tenant_id": tenant_id,
+                        "webhook_id": webhook_id,
+                        "event_type": event_type,
+                        "response_status": status_code,
+                    },
+                    extra={
+                        "event_id": envelope["event_id"],
+                        "latency_ms": latency_ms,
+                        "error_type": error,
+                        "target_count": len(targets),
+                    },
+                )
+                captured_delivery_failure = True
         results.append(
             WebhookTestDeliveryResult(
                 event_type=event_type,
