@@ -7770,7 +7770,7 @@
       },
       "TenantStatusResponse.f44f287.StatusProductsBlock": {
         "additionalProperties": false,
-        "description": "Wholesale product-level counters.\n\nDistinct from :class:`StatusPackagesBlock` \u2014 one product can have\nmultiple priced packages, so package counts don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces ``active_count``\non its homepage as the primary \"what's the publisher doing\" signal.\n\nCounts are based on complete, wholesale-owned InventoryProfile rows,\nwhich are the durable source for the wholesale product feed.",
+        "description": "Wholesale product-level counters.\n\nDistinct from :class:`StatusPackagesBlock` \u2014 one product can have\nmultiple priced packages, so package counts don't answer \"what is\nthe publisher actually selling?\". Storefront surfaces ``active_count``\non its homepage as the primary \"what's the publisher doing\" signal.\n\nCounts are based on wholesale authoring InventoryProfile rows, including\nowned rows that are not buyer-visible yet.",
         "properties": {
           "active_count": {
             "default": 0,

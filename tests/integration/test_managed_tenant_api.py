@@ -2035,7 +2035,7 @@ class TestStatusProductsBlock:
             "incomplete_count": 1,
             "wholesale_owned_count": 2,
         }
-        assert body["products"] == {"active_count": 1, "draft_count": 0, "archived_count": 0}
+        assert body["products"] == {"active_count": 2, "draft_count": 0, "archived_count": 0}
 
     def test_status_product_buckets_match_wholesale_products_list_count(
         self, client, auth_headers, managed_tenant, bound_factories

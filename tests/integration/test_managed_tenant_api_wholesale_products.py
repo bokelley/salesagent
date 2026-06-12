@@ -1017,6 +1017,110 @@ def test_wholesale_products_do_not_fall_back_to_legacy_product_rows(
     assert detail.status_code == 404, detail.get_data(as_text=True)
 
 
+def test_wholesale_products_surface_owned_incomplete_inventory_profiles(
+    management_api_client,
+    gam_tenant,
+    bound_factories,
+):
+    client, auth_headers = management_api_client
+    product_id = "owned_incomplete_profile"
+    InventoryProfileFactory(
+        tenant=gam_tenant,
+        profile_id=product_id,
+        inventory_config={"adapter": "google_ad_manager", "selectors": []},
+        format_ids=[],
+        publisher_properties=[],
+        constraints={
+            "managed_by": "wholesale_products_api",
+            "owner_product_id": product_id,
+            "status": "active",
+        },
+    )
+    bound_factories.commit()
+
+    listing = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+    )
+    detail = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/{product_id}",
+        headers=auth_headers,
+    )
+
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    assert listing.get_json()["count"] == 1
+    listed_product = listing.get_json()["wholesale_products"][0]
+    assert listed_product["product_id"] == product_id
+    assert listed_product["inventory"]["publisher_properties"] == []
+    assert listed_product["inventory"]["creative_formats"] == []
+    assert detail.status_code == 200, detail.get_data(as_text=True)
+    assert detail.get_json()["product_id"] == product_id
+
+
+def test_wholesale_products_surface_legacy_owner_stamped_inventory_profiles(
+    management_api_client,
+    gam_tenant,
+    bound_factories,
+):
+    client, auth_headers = management_api_client
+    product_id = "legacy_owner_stamped_profile"
+    InventoryProfileFactory(
+        tenant=gam_tenant,
+        profile_id=product_id,
+        inventory_config={"adapter": "google_ad_manager", "selectors": []},
+        format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+        publisher_properties=[
+            {
+                "publisher_domain": "wonderstruck.com",
+                "selection_type": "by_id",
+                "property_ids": ["wonderstruck_site"],
+            }
+        ],
+        constraints={
+            "owner_product_id": product_id,
+            "status": "active",
+        },
+    )
+    bound_factories.commit()
+
+    listing = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+    )
+    detail = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products/{product_id}",
+        headers=auth_headers,
+    )
+
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    assert product_id in {product["product_id"] for product in listing.get_json()["wholesale_products"]}
+    assert detail.status_code == 200, detail.get_data(as_text=True)
+    assert detail.get_json()["product_id"] == product_id
+
+
+def test_wholesale_create_rejects_profile_that_projects_incomplete(
+    management_api_client,
+    gam_tenant,
+    bound_factories,
+):
+    client, auth_headers = management_api_client
+    product_id = "projection_lost_properties"
+    payload = _wholesale_payload(wholesale_product_id=product_id)
+
+    with patch("src.admin.tenant_management_api._publisher_property_dicts", return_value=[]):
+        created = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert created.status_code == 400, created.get_data(as_text=True)
+    body = created.get_json()
+    assert body["error"] == "invalid_wholesale_product"
+    assert {issue["code"] for issue in body["details"]["issues"]} == {"missing_publisher_properties"}
+    assert InventoryProfileRepository(bound_factories, gam_tenant.tenant_id).get_by_id(product_id) is None
+
+
 def test_wholesale_validation_checks_authorized_publisher_properties(management_api_client, gam_tenant):
     client, auth_headers = management_api_client
     payload = _wholesale_payload()
