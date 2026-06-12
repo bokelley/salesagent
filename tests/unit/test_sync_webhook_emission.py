@@ -239,8 +239,8 @@ class TestBuildPayload:
         snap = self._snapshot(
             _status="failed",
             error_message="Refresh token revoked",
-            item_count=None,
-            summary=None,
+            item_count=0,
+            summary='{"cache_preserved": true}',
             completed_at=datetime(2026, 5, 17, 18, 24, 0, tzinfo=UTC),
         )
         payload = _build_payload(snap, "sync_run.failed")
@@ -252,9 +252,8 @@ class TestBuildPayload:
             "class": None,
             "category": "auth",
         }
-        # item_count and summary are completed-only fields
-        assert "item_count" not in payload
-        assert "summary" not in payload
+        assert payload["item_count"] == 0
+        assert payload["summary"] == '{"cache_preserved": true}'
 
     def test_failed_payload_carries_required_envelope_fields(self):
         snap = self._snapshot(_status="failed", error_message="boom")
@@ -283,6 +282,8 @@ class TestBuildPayload:
             "class": None,
             "category": "permanent",
         }
+        assert payload["item_count"] is None
+        assert payload["summary"] is None
 
     def test_failed_payload_scrubs_traceback_from_error_message(self):
         """Stack frames stored in ``SyncJob.error_message`` (e.g. from the

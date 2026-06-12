@@ -338,8 +338,13 @@ the full event taxonomy.
 
 Use raw run events for correlation:
 
-- `sync_run.completed`
-- `sync_run.failed`
+- `sync_run.completed`: includes `item_count` and `summary` when available.
+- `sync_run.failed`: includes `error` plus nullable `item_count` and `summary`;
+  use these fields to render partial or empty-run diagnostics without waiting
+  for the next `/status` poll.
+- `summary` is a nullable string. Some sync workers store JSON object text for
+  machine-readable diagnostics, so parse it as JSON only after checking that it
+  contains JSON.
 
 Use derived health events for storefront alerts:
 

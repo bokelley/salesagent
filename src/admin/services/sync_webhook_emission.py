@@ -63,6 +63,7 @@ from src.admin.services.sync_health import (
     public_sync_error_message,
     sync_run_snapshot_from_job,
 )
+from src.admin.services.sync_item_counts import sync_item_count_from_progress
 
 logger = logging.getLogger(__name__)
 
@@ -452,13 +453,6 @@ def _snapshot(
     or missing data. Bare ``dict`` instead of a dataclass — this only
     travels across two callbacks in the same session.
     """
-    progress = job.progress if isinstance(job.progress, dict) else {}
-    raw_counts = progress.get("counts")
-    counts = raw_counts if isinstance(raw_counts, dict) else {}
-    item_count = None
-    if isinstance(progress, dict):
-        item_count = progress.get("item_count") or counts.get("products_updated") or counts.get("signals_updated")
-
     return {
         "_status": job.status,
         "_old_status": old_status,
@@ -475,7 +469,7 @@ def _snapshot(
         "error_message": job.error_message,
         "triggered_by": job.triggered_by,
         "triggered_by_id": job.triggered_by_id,
-        "item_count": item_count,
+        "item_count": sync_item_count_from_progress(job.progress),
     }
 
 
@@ -616,12 +610,16 @@ def _build_payload(snap: dict[str, Any], event_type: str) -> dict[str, Any]:
         payload["summary"] = snap.get("summary")
         return payload
 
-    # sync_run.failed — ``error.message`` is scrubbed (first line,
+    # sync_run.failed — item_count/summary mirror completion payloads so
+    # receivers can distinguish "failed after zero rows" from an opaque
+    # failure without an immediate status refetch. ``error.message`` is scrubbed (first line,
     # length-capped). ``error.class`` is reserved for the future
     # structured-exception capture work and emitted as ``null`` today
     # so codegen'd TS types stay stable when it lands. ``error.category``
     # is bucketed crudely from the error_message so storefront UIs can
     # pick a CTA without substring-matching our exception strings.
+    payload["item_count"] = snap.get("item_count")
+    payload["summary"] = snap.get("summary")
     public_message = _public_error_message(snap.get("error_message"))
     payload["error"] = {
         "message": public_message,

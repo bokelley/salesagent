@@ -29,6 +29,7 @@ from src.admin.api_schemas.tenant_management import (
     WorkflowDetail,
     WorkflowSummary,
 )
+from src.admin.services.sync_item_counts import sync_item_count_from_progress
 from src.core.database.models import AuditLog, MediaBuy, SyncJob, WorkflowStep
 
 # ---------------------------------------------------------------------------
@@ -469,13 +470,9 @@ def sync_to_run_info(row: SyncJob) -> SyncRunInfo:
     progress = row.progress if isinstance(row.progress, dict) else {}
     raw_counts = progress.get("counts")
     counts = raw_counts if isinstance(raw_counts, dict) else {}
-    items_processed = int(
-        progress.get("item_count")
-        or progress.get("items_processed")
-        or counts.get("products_updated")
-        or counts.get("signals_updated")
-        or 0
-    )
+    items_processed = sync_item_count_from_progress(progress, include_items_processed=True)
+    if items_processed is None:
+        items_processed = 0
     items_failed = int(progress.get("items_failed") or counts.get("keys_failed") or 0)
 
     # Map DB statuses to wire-side enum values. The DB uses ``running``,

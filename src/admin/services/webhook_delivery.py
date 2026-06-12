@@ -168,9 +168,9 @@ def _extract_host(url: str) -> str:
 # Envelope-level schema version. Bumps when any event's ``data`` block
 # shape changes in a breaking way (added required field, removed field,
 # renamed key, changed type). Receivers can use this to gate consumption
-# of the wire format. Today only one version exists; the field is here
-# so future bumps don't require parallel webhook URLs to roll out.
-EVENT_SCHEMA_VERSION = "1"
+# of the wire format. Version 2 adds nullable ``item_count`` and ``summary``
+# to ``sync_run.failed`` payloads.
+EVENT_SCHEMA_VERSION = "2"
 
 
 def build_envelope(

@@ -42,7 +42,9 @@ Sync status and webhooks:
   - sync_run.failed
 - On product.updated or signal.updated, refresh get_products/get_signals.
 - On sync_run.failed, use error.category where available to decide whether the
-  UI should offer retry, reconnect, or contact-admin guidance.
+  UI should offer retry, reconnect, or contact-admin guidance. Failed sync
+  events also carry nullable item_count and summary fields so the UI can show
+  partial or empty-run diagnostics.
 
 UX rules:
 - Label all values as estimates/guidance unless the API explicitly says fixed.
