@@ -1452,8 +1452,8 @@ class StatusProductsBlock(BaseModel):
     the publisher actually selling?". Storefront surfaces ``active_count``
     on its homepage as the primary "what's the publisher doing" signal.
 
-    Counts are based on complete, wholesale-owned InventoryProfile rows,
-    which are the durable source for the wholesale product feed.
+    Counts are based on wholesale authoring InventoryProfile rows, including
+    owned rows that are not buyer-visible yet.
     """
 
     model_config = _config()

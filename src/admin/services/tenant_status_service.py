@@ -58,7 +58,7 @@ from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.inventory_profile_projection import (
     inventory_profile_status,
     is_complete_inventory_profile,
-    is_wholesale_owned_inventory_profile,
+    is_wholesale_authoring_inventory_profile,
 )
 from src.services.gam_sync_applicability import (
     gam_pricing_availability_applicable,
@@ -343,7 +343,7 @@ def _products_block(inventory_profiles: list[InventoryProfile]) -> StatusProduct
     draft = 0
     archived = 0
     for profile in inventory_profiles:
-        if not is_complete_inventory_profile(profile) or not is_wholesale_owned_inventory_profile(profile):
+        if not is_wholesale_authoring_inventory_profile(profile):
             continue
         status = inventory_profile_status(profile)
         if status == "draft":
@@ -367,7 +367,7 @@ def _inventory_profiles_block(inventory_profiles: list[InventoryProfile]) -> Sta
     for profile in inventory_profiles:
         if is_complete_inventory_profile(profile):
             complete += 1
-        if is_wholesale_owned_inventory_profile(profile):
+        if is_wholesale_authoring_inventory_profile(profile):
             wholesale_owned += 1
 
     total = len(inventory_profiles)

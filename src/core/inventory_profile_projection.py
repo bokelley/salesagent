@@ -53,6 +53,22 @@ def is_wholesale_owned_inventory_profile(profile: InventoryProfile, product_id: 
     return product_id is None or constraints.get("owner_product_id") == product_id
 
 
+def is_wholesale_authoring_inventory_profile(profile: InventoryProfile, product_id: str | None = None) -> bool:
+    """Return whether a bundle should be visible in wholesale-product authoring APIs.
+
+    Authoring reads need to surface durable wholesale-owned bundles even when
+    they are not buyer-visible yet. Legacy migration windows also produced
+    profiles with ``owner_product_id`` but no ``managed_by`` stamp; treat those
+    as wholesale-owned only when the owner matches the profile/path id.
+    """
+    constraints = profile.constraints if isinstance(profile.constraints, dict) else {}
+    candidate_product_id = product_id or profile.profile_id
+    owner_product_id = constraints.get("owner_product_id")
+    if constraints.get("managed_by") == WHOLESALE_PROFILE_MANAGED_BY:
+        return owner_product_id in (None, candidate_product_id)
+    return owner_product_id == candidate_product_id
+
+
 def is_materialized_wholesale_product(product: Product) -> bool:
     """Return whether a legacy Product row is only a wholesale-bundle materialization."""
     profile = getattr(product, "inventory_profile", None)

@@ -205,8 +205,7 @@ from src.core.inventory_profile_projection import (
     WHOLESALE_PROFILE_MANAGED_BY,
     default_wholesale_currency,
     inventory_profile_to_product_model,
-    is_complete_inventory_profile,
-    is_wholesale_owned_inventory_profile,
+    is_wholesale_authoring_inventory_profile,
 )
 from src.core.security.url_validator import check_url_ssrf
 from src.services.aao_lookup_service import get_publisher_partner_status
@@ -2494,6 +2493,39 @@ def _inventory_profile_conflict(product_id: str):
     )
 
 
+def _wholesale_profile_completeness_issues(profile: InventoryProfile) -> list[WholesaleValidationIssue]:
+    issues: list[WholesaleValidationIssue] = []
+    if not profile.publisher_properties:
+        issues.append(
+            WholesaleValidationIssue(
+                code="missing_publisher_properties",
+                field="inventory.publisher_properties",
+                message="At least one publisher property selector is required.",
+            )
+        )
+    if not profile.format_ids:
+        issues.append(
+            WholesaleValidationIssue(
+                code="missing_creative_formats",
+                field="inventory.creative_formats",
+                message="At least one creative format is required.",
+            )
+        )
+    return issues
+
+
+def _wholesale_profile_completeness_error(profile: InventoryProfile):
+    issues = _wholesale_profile_completeness_issues(profile)
+    if not issues:
+        return None
+    return _api_error(
+        "invalid_wholesale_product",
+        "Wholesale product failed validation",
+        400,
+        details={"issues": [issue.model_dump() for issue in issues]},
+    )
+
+
 def _build_wholesale_product_models(
     tenant_id: str,
     product_id: str,
@@ -3459,7 +3491,7 @@ def list_wholesale_products(tenant_id: str):
         profiles = [
             profile
             for profile in InventoryProfileRepository(session, tenant_id).list_all()
-            if is_complete_inventory_profile(profile) and is_wholesale_owned_inventory_profile(profile)
+            if is_wholesale_authoring_inventory_profile(profile)
         ]
         response = ListWholesaleProductsResponse(
             wholesale_products=[
@@ -3499,9 +3531,9 @@ def create_wholesale_product(tenant_id: str):
             return _api_error("wholesale_product_exists", f"Wholesale product {product_id!r} already exists", 409)
         profile_repo = InventoryProfileRepository(session, tenant_id)
         existing_profile = profile_repo.get_by_id(product_id)
-        if existing_profile is not None and is_wholesale_owned_inventory_profile(existing_profile, product_id):
+        if existing_profile is not None and is_wholesale_authoring_inventory_profile(existing_profile, product_id):
             return _api_error("wholesale_product_exists", f"Wholesale product {product_id!r} already exists", 409)
-        if existing_profile is not None and not is_wholesale_owned_inventory_profile(existing_profile, product_id):
+        if existing_profile is not None and not is_wholesale_authoring_inventory_profile(existing_profile, product_id):
             return _inventory_profile_conflict(product_id)
         profile = _build_wholesale_inventory_profile(
             tenant_id,
@@ -3510,6 +3542,9 @@ def create_wholesale_product(tenant_id: str):
             adapter_type,
             existing_profile=existing_profile,
         )
+        completeness_error = _wholesale_profile_completeness_error(profile)
+        if completeness_error is not None:
+            return completeness_error
         if existing_profile is None:
             profile_repo.add(profile)
         session.commit()
@@ -3538,11 +3573,7 @@ def get_wholesale_product(tenant_id: str, product_id: str):
             return error
         assert tenant is not None
         profile = InventoryProfileRepository(session, tenant_id).get_by_id(product_id)
-        if (
-            profile is not None
-            and is_complete_inventory_profile(profile)
-            and is_wholesale_owned_inventory_profile(profile, product_id)
-        ):
+        if profile is not None and is_wholesale_authoring_inventory_profile(profile, product_id):
             adapter_type = _tenant_adapter_type(tenant, adapter)
             default_currency = _default_wholesale_currency_for_authoring(session, tenant_id, adapter)
             return jsonify(
@@ -3585,7 +3616,7 @@ def put_wholesale_product(tenant_id: str, product_id: str):
         profile = profile_repo.get_by_id(product_id)
         if profile is None:
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
-        if not is_wholesale_owned_inventory_profile(profile, product_id):
+        if not is_wholesale_authoring_inventory_profile(profile, product_id):
             return _inventory_profile_conflict(product_id)
         previous_allowed_principal_ids = list(_profile_constraints(profile).get("allowed_principal_ids") or [])
         profile = _build_wholesale_inventory_profile(
@@ -3595,6 +3626,9 @@ def put_wholesale_product(tenant_id: str, product_id: str):
             adapter_type,
             existing_profile=profile,
         )
+        completeness_error = _wholesale_profile_completeness_error(profile)
+        if completeness_error is not None:
+            return completeness_error
         legacy_product = ProductRepository(session, tenant_id).get_by_id(product_id)
         if legacy_product is not None:
             ProductRepository(session, tenant_id).delete(legacy_product)
@@ -3631,7 +3665,7 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
         if profile is None and legacy_product is None:
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
         if legacy_product is not None and (
-            profile is None or not is_wholesale_owned_inventory_profile(profile, product_id)
+            profile is None or not is_wholesale_authoring_inventory_profile(profile, product_id)
         ):
             ProductRepository(session, tenant_id).delete(legacy_product)
             session.commit()
@@ -3639,7 +3673,7 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
             publish_product_record_catalog_change(tenant_id=tenant_id, action="deleted", product=legacy_product)
             response = DeleteWholesaleProductResponse(success=True, message=f"Wholesale product {product_id!r} deleted")
             return jsonify(response.model_dump())
-        if profile is not None and not is_wholesale_owned_inventory_profile(profile, product_id):
+        if profile is not None and not is_wholesale_authoring_inventory_profile(profile, product_id):
             return _api_error("wholesale_product_not_found", f"Wholesale product {product_id!r} was not found", 404)
 
         assert profile is not None
