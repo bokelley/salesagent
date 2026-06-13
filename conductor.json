@@ -1,6 +1,0 @@
-{
-  "scripts": {
-    "setup": "scripts/setup/setup_conductor_workspace.sh\ncp $CONDUCTOR_ROOT_PATH/.gam-test-config.json .",
-    "archive": "bash scripts/setup/cleanup_conductor_workspace.sh"
-  }
-}
